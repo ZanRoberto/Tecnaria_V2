@@ -48,8 +48,14 @@ def scraper_esteso():
             for item in items:
                 titolo = item.find("h3")
                 descrizione = item.find("p")
+                prezzo = re.search(r"€(\d+[\.,]?\d*)", descrizione.text if descrizione else "")  # Estrazione del prezzo
                 if titolo and descrizione:
-                    risultati.append(f"Prodotto: {titolo.text.strip()} – {descrizione.text.strip()}")
+                    risultato = f"Prodotto: {titolo.text.strip()} – {descrizione.text.strip()}"
+                    if prezzo:
+                        risultato += f" – Prezzo: €{prezzo.group(1)}"
+                    else:
+                        risultato += " – ⚠️ Prezzo non disponibile online."
+                    risultati.append(risultato)
 
         elif "faq" in url:
             print(f"Scraping della FAQ {url}")
@@ -69,9 +75,7 @@ def scraper_esteso():
     if not risultati:
         return "⚠️ Nessun dato trovato durante lo scraping."
 
-    return "
-
-".join(risultati)
+    return "\n".join(risultati)
 
 # Funzione di scraping integrato nel main.py
 def get_contenuto_tecnaria():
@@ -89,17 +93,12 @@ def ask():
     user_message = request.json.get("message", "").strip()
     contenuto_scraping = get_contenuto_tecnaria()
 
-    prompt_dinamico = BASE_SYSTEM_PROMPT + "
+    prompt_dinamico = BASE_SYSTEM_PROMPT + "\n\nContenuti tecnici estratti dal sito Tecnaria:\n" + contenuto_scraping
 
-Contenuti tecnici estratti dal sito Tecnaria:
-" + contenuto_scraping
-
-    print("
-" + "="*40)
+    print("\n" + "="*40)
     print("🟠 PROMPT INVIATO A GPT-4:")
     print(prompt_dinamico)
-    print("="*40 + "
-")
+    print("="*40 + "\n")
 
     try:
         response = openai.chat.completions.create(
