@@ -49,6 +49,11 @@ def ask():
 
     prompt_dinamico = BASE_SYSTEM_PROMPT + "\n\nContenuti tecnici estratti dal sito Tecnaria:\n" + contenuto_scraping
 
+    print("\n" + "="*40)
+    print("🟠 PROMPT INVIATO A GPT-4:")
+    print(prompt_dinamico)
+    print("="*40 + "\n")
+
     try:
         response = openai.chat.completions.create(
             model="gpt-4o",
