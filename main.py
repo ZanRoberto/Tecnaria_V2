@@ -16,50 +16,69 @@ BASE_SYSTEM_PROMPT = (
     "anche se non presente nei cataloghi, purché rilevante per Tecnaria S.p.A. "
 )
 
-# Fallback statico nel caso in cui lo scraping fallisca
-DATI_FALLBACK_CHIODATRICI = '''
-Tecnaria fornisce la chiodatrice Spit P560, progettata per il fissaggio dei connettori CTF e DIAPASON. 
-Il modello P560 è disponibile sia in vendita che a noleggio, con accessori dedicati: pistone, guidapunte e anello ammortizzatore. 
-Il peso medio della chiodatrice è di circa 4,1 kg. Questi strumenti garantiscono un'installazione rapida e sicura dei connettori su lamiere grecate o acciaio.
-'''
-
-def get_contenuto_tecnaria():
+# Funzione di scraping avanzato integrato nel main
+def scraper_esteso():
     session = requests.Session()
-    session.headers.update({"User-Agent":"Mozilla/5.0"})
-    pagine = [
-        "https://www.tecnaria.com/prodotto/chiodatrice-p560-per-connettori-ctf/",
-        "https://www.tecnaria.com/prodotto/chiodatrice-p560-per-connettori-diapason/",
-        "https://www.tecnaria.com/en/prodotto/spit-p560-for-the-installation-of-metal-sheet/"
+    session.headers.update({"User-Agent": "Mozilla/5.0"})
+
+    # URL principali da cui partire
+    urls = [
+        "https://www.tecnaria.com/it/prodotti/",
+        "https://www.tecnaria.com/it/faq/",
+        "https://www.tecnaria.com/it/documentazione/",
+        "https://www.tecnaria.com/it/connettori-ctf/"
     ]
+
     risultati = []
 
-    for url in pagine:
+    for url in urls:
         try:
-            resp = session.get(url, timeout=10)
-            resp.raise_for_status()
-        except Exception as e:
-            print(f"⚠️ Errore {url}: {e}")
+            response = session.get(url, timeout=10)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            print(f"Errore nella richiesta {url}: {e}")
             continue
 
-        soup = BeautifulSoup(resp.text, "html.parser")
-        titolo = soup.find(["h1", "h2", "h3"])
-        text = soup.get_text(separator=" ").replace("\n", " ")
+        soup = BeautifulSoup(response.text, "html.parser")
 
-        codice = re.search(r"Cod\.\s*0*(\d+)", text)
-        peso = re.search(r"peso\s*(\d+,\d+)\s*Kg", text, flags=re.IGNORECASE)
+        # Estrazione di titoli e descrizioni da prodotti e FAQ
+        if "prodotti" in url:
+            print(f"Scraping della pagina {url}")
+            items = soup.select('div.prodotto, div.item, .product-info')  # Selettore variabile
+            for item in items:
+                titolo = item.find("h3")
+                descrizione = item.find("p")
+                if titolo and descrizione:
+                    risultati.append(f"Prodotto: {titolo.text.strip()} – {descrizione.text.strip()}")
 
-        risultati.append(
-            f"{titolo.text.strip() if titolo else 'Prodotto'} – "
-            f"codice {codice.group(1) if codice else '?'} – "
-            f"peso {peso.group(1) + ' kg' if peso else '?'} – "
-            f"info: {text[:400]}..."
-        )
+        elif "faq" in url:
+            print(f"Scraping della FAQ {url}")
+            faq_items = soup.select('div.faq-item, .question')
+            for faq in faq_items:
+                domanda = faq.find("h4")
+                risposta = faq.find("p")
+                if domanda and risposta:
+                    risultati.append(f"Domanda: {domanda.text.strip()} – Risposta: {risposta.text.strip()}")
 
-    if risultati:
-        return "\n\n".join(risultati)
-    else:
-        print("⚠️ Nessun contenuto trovato. Uso fallback locale.")
-        return DATI_FALLBACK_CHIODATRICI
+        elif "documentazione" in url:
+            print(f"Scraping della documentazione {url}")
+            docs = soup.select('a[href$=".pdf"]')  # Link ai PDF
+            for doc in docs:
+                risultati.append(f"PDF: {doc['href']} – {doc.text.strip()}")
+
+    if not risultati:
+        return "⚠️ Nessun dato trovato durante lo scraping."
+
+    return "
+
+".join(risultati)
+
+# Funzione di scraping integrato nel main.py
+def get_contenuto_tecnaria():
+    try:
+        return scraper_esteso()  # Usando la funzione di scraping avanzato
+    except Exception as e:
+        return f"⚠️ Errore nello scraping esteso: {e}"
 
 @app.route("/")
 def home():
@@ -70,12 +89,17 @@ def ask():
     user_message = request.json.get("message", "").strip()
     contenuto_scraping = get_contenuto_tecnaria()
 
-    prompt_dinamico = BASE_SYSTEM_PROMPT + "\n\nContenuti tecnici estratti dal sito Tecnaria:\n" + contenuto_scraping
+    prompt_dinamico = BASE_SYSTEM_PROMPT + "
 
-    print("\n" + "="*40)
+Contenuti tecnici estratti dal sito Tecnaria:
+" + contenuto_scraping
+
+    print("
+" + "="*40)
     print("🟠 PROMPT INVIATO A GPT-4:")
     print(prompt_dinamico)
-    print("="*40 + "\n")
+    print("="*40 + "
+")
 
     try:
         response = openai.chat.completions.create(
