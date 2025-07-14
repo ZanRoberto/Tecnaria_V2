@@ -69,7 +69,9 @@ def scraper_esteso():
     if not risultati:
         return "⚠️ Nessun dato trovato durante lo scraping."
 
-    return "\n".join(risultati)
+    return "
+
+".join(risultati)
 
 # Funzione di scraping integrato nel main.py
 def get_contenuto_tecnaria():
@@ -87,12 +89,17 @@ def ask():
     user_message = request.json.get("message", "").strip()
     contenuto_scraping = get_contenuto_tecnaria()
 
-    prompt_dinamico = BASE_SYSTEM_PROMPT + "\n\nContenuti tecnici estratti dal sito Tecnaria:\n" + contenuto_scraping
+    prompt_dinamico = BASE_SYSTEM_PROMPT + "
 
-    print("\n" + "="*40)
+Contenuti tecnici estratti dal sito Tecnaria:
+" + contenuto_scraping
+
+    print("
+" + "="*40)
     print("🟠 PROMPT INVIATO A GPT-4:")
     print(prompt_dinamico)
-    print("="*40 + "\n")
+    print("="*40 + "
+")
 
     try:
         response = openai.chat.completions.create(
