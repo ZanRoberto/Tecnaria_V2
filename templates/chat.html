@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tecnaria - Chatbot</title>
+  <style>
+    body {
+      background-color: #f4f4f4;
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    .chat-container {
+      background-color: #ffffff;
+      width: 90%;
+      max-width: 600px;
+      padding: 20px 30px;
+      border-radius: 12px;
+      box-shadow: 0 0 25px rgba(0,0,0,0.1);
+    }
+    .logo {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .logo h1 {
+      margin: 0;
+      font-size: 24px;
+      color: #333;
+    }
+    .logo h1 span {
+      color: #f05100;
+    }
+    .logo img {
+      height: 40px;
+    }
+    .entry {
+      margin: 10px 0;
+    }
+    .entry strong {
+      color: #222;
+    }
+    input[type="text"] {
+      width: calc(100% - 130px);
+      padding: 10px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      font-size: 15px;
+    }
+    button {
+      padding: 10px 14px;
+      background-color: #f05100;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-left: 6px;
+    }
+    button:hover {
+      background-color: #d04300;
+    }
+    audio {
+      margin-top: 10px;
+      width: 100%;
+    }
+  </style>
+</head>
+<body>
+  <div class="chat-container">
+    <div class="logo">
+      <h1><span>T</span>ECNARIA</h1>
+      <img src="/static/img/logo.jpg" alt="Logo Tecnaria">
+    </div>
+    <div id="chat"></div>
+    <div style="display: flex; align-items: center; margin-top: 10px;">
+      <input type="text" id="user-input" placeholder="Scrivi la tua domanda...">
+      <button onclick="startVoice()">🎤</button>
+      <button onclick="sendMessage()">Invia</button>
+    </div>
+    <audio id="audio-player" controls style="display:none;"></audio>
+  </div>
+
+  <script>
+    function sendMessage() {
+      const input = document.getElementById("user-input");
+      const message = input.value.trim();
+      if (!message) return;
+
+      const chat = document.getElementById("chat");
+      chat.innerHTML += `<div class="entry"><strong>Tu:</strong> ${message}</div>`;
+      input.value = "";
+
+      fetch("/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message })
+      })
+      .then(res => res.json())
+      .then(data => {
+        const risposta = data.response;
+        chat.innerHTML += `<div class="entry"><strong>Bot:</strong> ${risposta}</div>`;
+        chat.scrollTop = chat.scrollHeight;
+
+        // Chiamata alla route audio
+        fetch("/audio", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: risposta })
+        })
+        .then(res => res.blob())
+        .then(blob => {
+          const audioURL = URL.createObjectURL(blob);
+          const audio = document.getElementById("audio-player");
+          audio.src = audioURL;
+          audio.style.display = "block";
+          audio.play();
+        });
+      });
+    }
+
+    function startVoice() {
+      if (!('webkitSpeechRecognition' in window)) {
+        alert("Il tuo browser non supporta la dettatura vocale.");
+        return;
+      }
+
+      const recognition = new webkitSpeechRecognition();
+      recognition.lang = "it-IT";
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.start();
+
+      recognition.onresult = function(event) {
+        const transcript = event.results[0][0].transcript;
+        document.getElementById("user-input").value = transcript;
+        sendMessage();
+      };
+
+      recognition.onerror = function(event) {
+        console.error("Errore riconoscimento vocale:", event.error);
+      };
+    }
+  </script>
+</body>
+</html>
