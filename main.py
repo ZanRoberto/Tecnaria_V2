@@ -26,7 +26,8 @@ def scraper_esteso():
         "https://www.tecnaria.com/it/prodotti/",
         "https://www.tecnaria.com/it/faq/",
         "https://www.tecnaria.com/it/documentazione/",
-        "https://www.tecnaria.com/it/connettori-ctf/"
+        "https://www.tecnaria.com/it/connettori-ctf/",
+        "https://www.tecnaria.com/it/listino-prezzi/"  # Aggiunto URL per lista prezzi
     ]
 
     risultati = []
@@ -72,6 +73,12 @@ def scraper_esteso():
             for doc in docs:
                 risultati.append(f"PDF: {doc['href']} – {doc.text.strip()}")
 
+        elif "listino-prezzi" in url:
+            print(f"Scraping della pagina dei prezzi {url}")
+            prezzo_items = soup.select('div.price, span.price')  # Selettore per i prezzi
+            for price in prezzo_items:
+                risultati.append(f"Prezzo trovato: {price.text.strip()}")
+
     if not risultati:
         return "⚠️ Nessun dato trovato durante lo scraping."
 
@@ -92,6 +99,10 @@ def home():
 def ask():
     user_message = request.json.get("message", "").strip()
     contenuto_scraping = get_contenuto_tecnaria()
+
+    # Risposta più bella se il prezzo non viene trovato
+    if "⚠️ Prezzo non disponibile" in contenuto_scraping:
+        contenuto_scraping += "\n\nI prezzi dipendono dal modello e dalla quantità ordinata. Contatta il nostro ufficio commerciale per un preventivo personalizzato."
 
     prompt_dinamico = BASE_SYSTEM_PROMPT + "\n\nContenuti tecnici estratti dal sito Tecnaria:\n" + contenuto_scraping
 
