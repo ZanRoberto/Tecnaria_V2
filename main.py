@@ -20,7 +20,6 @@ BASE_SYSTEM_PROMPT = (
 def scraper_esteso():
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0"})
-
     # URL principali da cui partire
     urls = [
         "https://www.tecnaria.com/it/prodotti/",
