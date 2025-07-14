@@ -3,6 +3,7 @@ import requests
 from flask import Flask, render_template, request, jsonify, send_file
 import openai
 from bs4 import BeautifulSoup
+import re
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 app = Flask(__name__)
@@ -16,43 +17,38 @@ BASE_SYSTEM_PROMPT = (
 )
 
 def get_contenuto_tecnaria():
-    url = "https://www.tecnaria.com/it/prodotti/"
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, timeout=10, headers=headers)
-        response.raise_for_status()
-    except Exception as e:
-        print(f"⚠️ Errore richiesta HTTP: {e}")
-        return f"⚠️ Errore nello scraping: {e}"
-
-    soup = BeautifulSoup(response.text, "html.parser")
-
-    # Diagnostica: stampa titolo pagina
-    print("🔍 Titolo pagina HTML:", soup.title.string if soup.title else "nessun titolo trovato")
-
-    # Provo diversi selettori
-    selettori = [
-        "div.prodotto",
-        "div.box-prodotto",
-        "div.product",
-        "div[class*='prodotto']"
+    session = requests.Session()
+    session.headers.update({"User-Agent":"Mozilla/5.0"})
+    pagine = [
+        "https://www.tecnaria.com/prodotto/chiodatrice-p560-per-connettori-ctf/",
+        "https://www.tecnaria.com/prodotto/chiodatrice-p560-per-connettori-diapason/",
+        "https://www.tecnaria.com/en/prodotto/spit-p560-for-the-installation-of-metal-sheet/"
     ]
-
     risultati = []
-    for selector in selettori:
-        blocchi = soup.select(selector)
-        print(f"🔎 Trovati {len(blocchi)} blocchi con selettore '{selector}'")
-        for blocco in blocchi:
-            titolo = blocco.find("h3")
-            descrizione = blocco.find("p")
-            if titolo and descrizione:
-                risultati.append(f"{titolo.text.strip()}: {descrizione.text.strip()}")
 
-    if not risultati:
-        return "⚠️ Nessun contenuto trovato durante lo scraping (nessun blocco utile trovato)."
+    for url in pagine:
+        try:
+            resp = session.get(url, timeout=10)
+            resp.raise_for_status()
+        except Exception as e:
+            risultati.append(f"⚠️ Errore {url}: {e}")
+            continue
 
-    print(f"✅ Trovati {len(risultati)} prodotti.")
-    return "\n\n".join(risultati)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        titolo = soup.find(["h1", "h2", "h3"])
+        text = soup.get_text(separator=" ").replace("\n", " ")
+
+        codice = re.search(r"Cod\.\s*0*(\d+)", text)
+        peso = re.search(r"peso\s*(\d+,\d+)\s*Kg", text, flags=re.IGNORECASE)
+
+        risultati.append(
+            f"{titolo.text.strip() if titolo else 'Prodotto'} – "
+            f"codice {codice.group(1) if codice else '?'} – "
+            f"peso {peso.group(1) + ' kg' if peso else '?'} – "
+            f"info: {text[:400]}..."
+        )
+
+    return "\n\n".join(risultati) if risultati else "⚠️ Nessun contenuto trovato da scraping."
 
 @app.route("/")
 def home():
