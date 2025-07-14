@@ -18,24 +18,40 @@ BASE_SYSTEM_PROMPT = (
 def get_contenuto_tecnaria():
     url = "https://www.tecnaria.com/it/prodotti/"
     try:
-        response = requests.get(url, timeout=10)
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, timeout=10, headers=headers)
         response.raise_for_status()
     except Exception as e:
+        print(f"⚠️ Errore richiesta HTTP: {e}")
         return f"⚠️ Errore nello scraping: {e}"
 
     soup = BeautifulSoup(response.text, "html.parser")
-    sezioni = soup.select("div.prodotto")
-    risultati = []
 
-    for sezione in sezioni:
-        titolo = sezione.find("h3")
-        descrizione = sezione.find("p")
-        if titolo and descrizione:
-            risultati.append(f"{titolo.text.strip()}: {descrizione.text.strip()}")
+    # Diagnostica: stampa titolo pagina
+    print("🔍 Titolo pagina HTML:", soup.title.string if soup.title else "nessun titolo trovato")
+
+    # Provo diversi selettori
+    selettori = [
+        "div.prodotto",
+        "div.box-prodotto",
+        "div.product",
+        "div[class*='prodotto']"
+    ]
+
+    risultati = []
+    for selector in selettori:
+        blocchi = soup.select(selector)
+        print(f"🔎 Trovati {len(blocchi)} blocchi con selettore '{selector}'")
+        for blocco in blocchi:
+            titolo = blocco.find("h3")
+            descrizione = blocco.find("p")
+            if titolo and descrizione:
+                risultati.append(f"{titolo.text.strip()}: {descrizione.text.strip()}")
 
     if not risultati:
-        return "⚠️ Nessun contenuto trovato durante lo scraping."
+        return "⚠️ Nessun contenuto trovato durante lo scraping (nessun blocco utile trovato)."
 
+    print(f"✅ Trovati {len(risultati)} prodotti.")
     return "\n\n".join(risultati)
 
 @app.route("/")
