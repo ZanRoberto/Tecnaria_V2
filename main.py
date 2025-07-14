@@ -16,6 +16,13 @@ BASE_SYSTEM_PROMPT = (
     "anche se non presente nei cataloghi, purché rilevante per Tecnaria S.p.A. "
 )
 
+# Fallback statico nel caso in cui lo scraping fallisca
+DATI_FALLBACK_CHIODATRICI = '''
+Tecnaria fornisce la chiodatrice Spit P560, progettata per il fissaggio dei connettori CTF e DIAPASON. 
+Il modello P560 è disponibile sia in vendita che a noleggio, con accessori dedicati: pistone, guidapunte e anello ammortizzatore. 
+Il peso medio della chiodatrice è di circa 4,1 kg. Questi strumenti garantiscono un'installazione rapida e sicura dei connettori su lamiere grecate o acciaio.
+'''
+
 def get_contenuto_tecnaria():
     session = requests.Session()
     session.headers.update({"User-Agent":"Mozilla/5.0"})
@@ -31,7 +38,7 @@ def get_contenuto_tecnaria():
             resp = session.get(url, timeout=10)
             resp.raise_for_status()
         except Exception as e:
-            risultati.append(f"⚠️ Errore {url}: {e}")
+            print(f"⚠️ Errore {url}: {e}")
             continue
 
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -48,7 +55,11 @@ def get_contenuto_tecnaria():
             f"info: {text[:400]}..."
         )
 
-    return "\n\n".join(risultati) if risultati else "⚠️ Nessun contenuto trovato da scraping."
+    if risultati:
+        return "\n\n".join(risultati)
+    else:
+        print("⚠️ Nessun contenuto trovato. Uso fallback locale.")
+        return DATI_FALLBACK_CHIODATRICI
 
 @app.route("/")
 def home():
