@@ -1,9 +1,7 @@
 import os
-import requests
 from flask import Flask, render_template, request, jsonify, send_file
 import openai
-from bs4 import BeautifulSoup
-import re
+from bridge_scraper import estrai_testo_vocami
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 app = Flask(__name__)
@@ -16,19 +14,6 @@ BASE_SYSTEM_PROMPT = (
     "anche se non presente nei cataloghi, purché rilevante per Tecnaria S.p.A. "
 )
 
-def scraping_vocami_silenzioso():
-    url = "https://www.vocami.it/mirami/?qr=63AE29D71905EF509A564E58E576D123"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        testo = soup.get_text(separator=" ", strip=True)
-        testo_pulito = re.sub(r"\s+", " ", testo)
-        return testo_pulito
-    except Exception as e:
-        return "⚠️ Non è stato possibile accedere temporaneamente alle informazioni tecniche interne sulle chiodatrici."
-
 @app.route("/")
 def home():
     return render_template("chat.html")
@@ -36,9 +21,11 @@ def home():
 @app.route("/ask", methods=["POST"])
 def ask():
     user_message = request.json.get("message", "").strip()
-    contenuto_hidden = scraping_vocami_silenzioso()
+    contenuto_chiodatrici = estrai_testo_vocami()
+    if not contenuto_chiodatrici:
+        contenuto_chiodatrici = "⚠️ I contenuti aggiornati sulle chiodatrici non sono temporaneamente disponibili."
 
-    prompt_completo = BASE_SYSTEM_PROMPT + "\n\nInformazioni aggiornate (riservate):\n" + contenuto_hidden
+    prompt_completo = BASE_SYSTEM_PROMPT + "\n\nInformazioni riservate sulle chiodatrici:\n" + contenuto_chiodatrici
 
     try:
         response = openai.chat.completions.create(
