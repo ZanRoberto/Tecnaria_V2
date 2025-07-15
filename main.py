@@ -16,18 +16,16 @@ BASE_SYSTEM_PROMPT = (
     "anche se non presente nei cataloghi, purché rilevante per Tecnaria S.p.A. "
 )
 
-# Funzione di scraping avanzato integrato nel main
 def scraper_esteso():
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0"})
 
-    # URL principali da cui partire
     urls = [
         "https://www.tecnaria.com/it/prodotti/",
         "https://www.tecnaria.com/it/faq/",
         "https://www.tecnaria.com/it/documentazione/",
         "https://www.tecnaria.com/it/connettori-ctf/",
-        "https://www.tecnaria.com/it/listino-prezzi/"  # Aggiunto URL per lista prezzi
+        "https://www.tecnaria.com/it/listino-prezzi/"
     ]
 
     risultati = []
@@ -42,14 +40,12 @@ def scraper_esteso():
 
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Estrazione di titoli e descrizioni da prodotti e FAQ
         if "prodotti" in url:
-            print(f"Scraping della pagina {url}")
-            items = soup.select('div.prodotto, div.item, .product-info')  # Selettore variabile
+            items = soup.select('div.prodotto, div.item, .product-info')
             for item in items:
                 titolo = item.find("h3")
                 descrizione = item.find("p")
-                prezzo = re.search(r"€(\d+[\.,]?\d*)", descrizione.text if descrizione else "")  # Estrazione del prezzo
+                prezzo = re.search(r"€(\d+[\.,]?\d*)", descrizione.text if descrizione else "")
                 if titolo and descrizione:
                     risultato = f"Prodotto: {titolo.text.strip()} – {descrizione.text.strip()}"
                     if prezzo:
@@ -59,7 +55,6 @@ def scraper_esteso():
                     risultati.append(risultato)
 
         elif "faq" in url:
-            print(f"Scraping della FAQ {url}")
             faq_items = soup.select('div.faq-item, .question')
             for faq in faq_items:
                 domanda = faq.find("h4")
@@ -68,14 +63,12 @@ def scraper_esteso():
                     risultati.append(f"Domanda: {domanda.text.strip()} – Risposta: {risposta.text.strip()}")
 
         elif "documentazione" in url:
-            print(f"Scraping della documentazione {url}")
-            docs = soup.select('a[href$=".pdf"]')  # Link ai PDF
+            docs = soup.select('a[href$=".pdf"]')
             for doc in docs:
                 risultati.append(f"PDF: {doc['href']} – {doc.text.strip()}")
 
         elif "listino-prezzi" in url:
-            print(f"Scraping della pagina dei prezzi {url}")
-            prezzo_items = soup.select('div.price, span.price')  # Selettore per i prezzi
+            prezzo_items = soup.select('div.price, span.price')
             for price in prezzo_items:
                 risultati.append(f"Prezzo trovato: {price.text.strip()}")
 
@@ -84,10 +77,9 @@ def scraper_esteso():
 
     return "\n".join(risultati)
 
-# Funzione di scraping integrato nel main.py
 def get_contenuto_tecnaria():
     try:
-        return scraper_esteso()  # Usando la funzione di scraping avanzato
+        return scraper_esteso()
     except Exception as e:
         return f"⚠️ Errore nello scraping esteso: {e}"
 
@@ -100,9 +92,8 @@ def ask():
     user_message = request.json.get("message", "").strip()
     contenuto_scraping = get_contenuto_tecnaria()
 
-    # Risposta più bella se il prezzo non viene trovato
     if "⚠️ Prezzo non disponibile" in contenuto_scraping:
-        contenuto_scraping += "\n\nI prezzi dipendono dal modello e dalla quantità ordinata. Contatta il nostro ufficio commerciale per un preventivo personalizzato."
+        contenuto_scraping += "\n\nNota: I prezzi dei prodotti Tecnaria variano in base al modello e alla quantità ordinata. Per ottenere un preventivo, contatta direttamente l’ufficio commerciale."
 
     prompt_dinamico = BASE_SYSTEM_PROMPT + "\n\nContenuti tecnici estratti dal sito Tecnaria:\n" + contenuto_scraping
 
