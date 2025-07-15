@@ -13,4 +13,4 @@ def estrai_testo_vocami():
         testo_pulito = re.sub(r"\s+", " ", testo)
         return testo_pulito
     except Exception as e:
-        return ""C
+        return ""
