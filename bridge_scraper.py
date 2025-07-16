@@ -9,24 +9,14 @@ def estrai_testo_vocami():
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-
-        output = []
-        for elem in soup.find_all(["p", "li", "a", "span"]):
-            if elem.name == "a" and elem.has_attr("href"):
-                text = elem.get_text(strip=True)
-                link = elem["href"]
-                if re.search(r"\.(jpg|jpeg|png|gif)$", link, re.IGNORECASE):
-                    output.append(f"Immagine: {link}")
-                elif text:
-                    output.append(f"{text}: {link}")
-            else:
-                text = elem.get_text(strip=True)
-                if text:
-                    output.append(text)
-
-        testo = " ".join(output)
+        for a in soup.find_all("a"):
+            href = a.get("href")
+            if href:
+                a.insert_after(f" ({href})")
+        testo = soup.get_text(separator=" ", strip=True)
         testo_pulito = re.sub(r"\s+", " ", testo)
+        print(f"[BRIDGE] Testo estratto ({len(testo_pulito)} caratteri)")
         return testo_pulito
-
     except Exception as e:
+        print(f"[BRIDGE ERROR] {e}")
         return ""
