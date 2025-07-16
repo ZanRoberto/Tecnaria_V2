@@ -1,3 +1,4 @@
+# main.py
 from flask import Flask, request, jsonify, render_template
 from bridge_scraper import estrai_testo_vocami
 import openai
@@ -15,13 +16,22 @@ def rileva_lingua_sicura(testo):
     except LangDetectException:
         return "it"
 
-def prepara_contenuto():
-    testo = estrai_testo_vocami()
-    print(f"[DEBUG] TESTO ESTRATTO ({len(testo)} caratteri):")
-    print(testo[:1000] + ("..." if len(testo) > 1000 else ""))
-    if not testo.strip():
-        return "⚠️ Nessun contenuto tecnico disponibile al momento."
-    return testo[:3000] + "..."
+def split_testo_per_blocchi(testo, max_length=2000):
+    parole = testo.split()
+    blocchi = []
+    blocco_corrente = []
+    lunghezza_corrente = 0
+    for parola in parole:
+        lunghezza_corrente += len(parola) + 1
+        if lunghezza_corrente > max_length:
+            blocchi.append(" ".join(blocco_corrente))
+            blocco_corrente = [parola]
+            lunghezza_corrente = len(parola) + 1
+        else:
+            blocco_corrente.append(parola)
+    if blocco_corrente:
+        blocchi.append(" ".join(blocco_corrente))
+    return blocchi
 
 @app.route("/", methods=["GET", "POST"])
 def home():
@@ -29,27 +39,52 @@ def home():
     if request.method == "POST":
         prompt = request.form["prompt"]
         lingua = rileva_lingua_sicura(prompt)
-        contenuto = prepara_contenuto()
-        print(f"[DEBUG] PROMPT: {prompt}")
-        print(f"[DEBUG] LINGUA: {lingua}")
-        print(f"[DEBUG] LUNGHEZZA CONTENUTO INVIATO A GPT: {len(contenuto)}")
+        contenuto = estrai_testo_vocami()
+        if not contenuto.strip():
+            contenuto = "⚠️ Nessun contenuto tecnico disponibile al momento."
 
+        print(f"[DEBUG] Prompt: {prompt}")
+        print(f"[DEBUG] Contenuto estratto ({len(contenuto)} caratteri)")
+
+        contenuto_tradotto = contenuto
         try:
-            completamento = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "Rispondi solo usando le informazioni tecniche fornite da Tecnaria S.p.A."},
-                    {"role": "user", "content": f"{contenuto}\n\nDomanda: {prompt}"}
-                ],
-                temperature=0.5
-            )
-            risposta = completamento.choices[0].message["content"]
-
-            if "chiodatrice" in prompt.lower():
-                risposta += "\n\n🖼️ Immagine: https://tecnaria.com/wp-content/uploads/2020/07/chiodatrice_p560_connettori_ctf_tecnaria.jpg"
+            if lingua != "it":
+                response = openai.ChatCompletion.create(
+                    model="gpt-4",
+                    messages=[
+                        {"role": "system", "content": f"Traduci questo testo in {lingua} mantenendo tono tecnico:"},
+                        {"role": "user", "content": contenuto}
+                    ],
+                    temperature=0.3
+                )
+                contenuto_tradotto = response.choices[0].message["content"]
         except Exception as e:
-            print(f"[GPT ERROR - CHIAMATA GPT-4 FALLITA] {e}")
-            risposta = "⚠️ Errore durante la generazione della risposta."
+            print(f"[ERRORE TRADUZIONE] {e}")
+
+        blocchi = split_testo_per_blocchi(contenuto_tradotto)
+        print(f"[DEBUG] Numero blocchi da inviare a GPT: {len(blocchi)}")
+
+        risposte_blocchi = []
+        try:
+            for i, blocco in enumerate(blocchi):
+                print(f"[DEBUG] Invio blocco {i+1} / {len(blocchi)}")
+                completamento = openai.ChatCompletion.create(
+                    model="gpt-4",
+                    messages=[
+                        {"role": "system", "content": "Rispondi solo usando le informazioni tecniche fornite da Tecnaria S.p.A."},
+                        {"role": "user", "content": f"{blocco}\n\nDomanda: {prompt}"}
+                    ],
+                    temperature=0.5
+                )
+                risposte_blocchi.append(completamento.choices[0].message["content"])
+        except Exception as e:
+            print(f"[ERRORE GPT] {e}")
+            risposte_blocchi.append("⚠️ Errore durante la generazione della risposta.")
+
+        risposta = "\n\n".join(risposte_blocchi)
+
+        if "chiodatrice" in prompt.lower() and "tecnaria.com/wp-content/uploads" in contenuto:
+            risposta += "\n\n🖼️ Immagine: https://tecnaria.com/wp-content/uploads/2020/07/chiodatrice_p560_connettori_ctf_tecnaria.jpg"
 
         return render_template("chat.html", messages=[
             {"role": "user", "text": prompt},
@@ -62,28 +97,54 @@ def ask():
     data = request.get_json()
     prompt = data.get("message", "")
     lingua = rileva_lingua_sicura(prompt)
-    contenuto = prepara_contenuto()
-    print(f"[DEBUG] API - PROMPT: {prompt}")
-    print(f"[DEBUG] API - LINGUA: {lingua}")
-    print(f"[DEBUG] API - LUNGHEZZA CONTENUTO A GPT: {len(contenuto)}")
+    contenuto = estrai_testo_vocami()
+    if not contenuto.strip():
+        contenuto = "⚠️ Nessun contenuto tecnico disponibile al momento."
 
+    print(f"[API DEBUG] Prompt: {prompt}")
+    print(f"[API DEBUG] Contenuto estratto ({len(contenuto)} caratteri)")
+
+    contenuto_tradotto = contenuto
     try:
-        completamento = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "Rispondi solo usando le informazioni tecniche fornite da Tecnaria S.p.A."},
-                {"role": "user", "content": f"{contenuto}\n\nDomanda: {prompt}"}
-            ],
-            temperature=0.5
-        )
-        risposta = completamento.choices[0].message["content"]
+        if lingua != "it":
+            response = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": f"Traduci questo testo in {lingua} mantenendo tono tecnico:"},
+                    {"role": "user", "content": contenuto}
+                ],
+                temperature=0.3
+            )
+            contenuto_tradotto = response.choices[0].message["content"]
+    except Exception as e:
+        print(f"[ERRORE TRADUZIONE] {e}")
 
-        if "chiodatrice" in prompt.lower():
-            risposta += "\n\n🖼️ Immagine: https://tecnaria.com/wp-content/uploads/2020/07/chiodatrice_p560_connettori_ctf_tecnaria.jpg"
-        return jsonify({"response": risposta})
+    blocchi = split_testo_per_blocchi(contenuto_tradotto)
+    print(f"[API DEBUG] Numero blocchi: {len(blocchi)}")
+
+    risposte_blocchi = []
+    try:
+        for i, blocco in enumerate(blocchi):
+            print(f"[API DEBUG] Invio blocco {i+1} / {len(blocchi)}")
+            completamento = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "Rispondi solo usando le informazioni tecniche fornite da Tecnaria S.p.A."},
+                    {"role": "user", "content": f"{blocco}\n\nDomanda: {prompt}"}
+                ],
+                temperature=0.5
+            )
+            risposte_blocchi.append(completamento.choices[0].message["content"])
     except Exception as e:
         print(f"[GPT API ERROR] {e}")
-        return jsonify({"response": "⚠️ Errore durante la generazione della risposta."})
+        risposte_blocchi.append("⚠️ Errore durante la generazione della risposta.")
+
+    risposta = "\n\n".join(risposte_blocchi)
+
+    if "chiodatrice" in prompt.lower() and "tecnaria.com/wp-content/uploads" in contenuto:
+        risposta += "\n\n🖼️ Immagine: https://tecnaria.com/wp-content/uploads/2020/07/chiodatrice_p560_connettori_ctf_tecnaria.jpg"
+
+    return jsonify({"response": risposta})
 
 @app.route("/audio", methods=["POST"])
 def audio():
