@@ -2,3 +2,4 @@ Flask
 openai
 beautifulsoup4
 requests
+langdetect
