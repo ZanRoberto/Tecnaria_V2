@@ -46,6 +46,10 @@
     .entry strong {
       color: #222;
     }
+    .entry a {
+      color: #0066cc;
+      text-decoration: underline;
+    }
     input[type="text"] {
       width: calc(100% - 130px);
       padding: 10px;
@@ -87,6 +91,12 @@
   </div>
 
   <script>
+    function linkify(text) {
+      return text.replace(/(https?:\/\/[^\s]+)/g, function(url) {
+        return '<a href="' + url + '" target="_blank">' + url + '</a>';
+      });
+    }
+
     function sendMessage() {
       const input = document.getElementById("user-input");
       const message = input.value.trim();
@@ -103,7 +113,7 @@
       })
       .then(res => res.json())
       .then(data => {
-        const risposta = data.response;
+        const risposta = linkify(data.response);
         chat.innerHTML += `<div class="entry"><strong>Bot:</strong> ${risposta}</div>`;
         chat.scrollTop = chat.scrollHeight;
 
@@ -111,7 +121,7 @@
         fetch("/audio", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: risposta })
+          body: JSON.stringify({ text: data.response })
         })
         .then(res => res.blob())
         .then(blob => {
