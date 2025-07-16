@@ -17,6 +17,8 @@ def rileva_lingua_sicura(testo):
 
 def prepara_contenuto():
     testo = estrai_testo_vocami()
+    print(f"[DEBUG] TESTO ESTRATTO ({len(testo)} caratteri):")
+    print(testo[:1000] + ("..." if len(testo) > 1000 else ""))
     if not testo.strip():
         return "⚠️ Nessun contenuto tecnico disponibile al momento."
     return testo[:3000] + "..."
@@ -28,8 +30,9 @@ def home():
         prompt = request.form["prompt"]
         lingua = rileva_lingua_sicura(prompt)
         contenuto = prepara_contenuto()
-        print(f"[MAIN] Prompt ricevuto: {prompt}")
-        print(f"[MAIN] Contenuto caricato: {len(contenuto)} caratteri")
+        print(f"[DEBUG] PROMPT: {prompt}")
+        print(f"[DEBUG] LINGUA: {lingua}")
+        print(f"[DEBUG] LUNGHEZZA CONTENUTO INVIATO A GPT: {len(contenuto)}")
 
         try:
             completamento = openai.ChatCompletion.create(
@@ -45,7 +48,7 @@ def home():
             if "chiodatrice" in prompt.lower():
                 risposta += "\n\n🖼️ Immagine: https://tecnaria.com/wp-content/uploads/2020/07/chiodatrice_p560_connettori_ctf_tecnaria.jpg"
         except Exception as e:
-            print(f"[GPT ERROR] {e}")
+            print(f"[GPT ERROR - CHIAMATA GPT-4 FALLITA] {e}")
             risposta = "⚠️ Errore durante la generazione della risposta."
 
         return render_template("chat.html", messages=[
@@ -60,8 +63,9 @@ def ask():
     prompt = data.get("message", "")
     lingua = rileva_lingua_sicura(prompt)
     contenuto = prepara_contenuto()
-    print(f"[API] Prompt ricevuto: {prompt}")
-    print(f"[API] Contenuto caricato: {len(contenuto)} caratteri")
+    print(f"[DEBUG] API - PROMPT: {prompt}")
+    print(f"[DEBUG] API - LINGUA: {lingua}")
+    print(f"[DEBUG] API - LUNGHEZZA CONTENUTO A GPT: {len(contenuto)}")
 
     try:
         completamento = openai.ChatCompletion.create(
