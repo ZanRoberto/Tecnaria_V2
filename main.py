@@ -5,7 +5,7 @@ import os
 from langdetect import detect, DetectorFactory
 from langdetect.lang_detect_exception import LangDetectException
 
-DetectorFactory.seed = 42  # per rendere la lingua sempre rilevabile ugualmente
+DetectorFactory.seed = 42
 
 app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -40,7 +40,12 @@ def home():
         prompt = request.form["prompt"]
         lingua = rileva_lingua_sicura(prompt)
         contenuto = estrai_testo_vocami()
+        print(f"[DEBUG] Contenuto originale estratto: {contenuto[:300]}...")
+        if not contenuto.strip():
+            contenuto = "Il documento non ha contenuti validi."
+
         contenuto_tradotto = traduci_testo(contenuto, lingua)
+        print(f"[DEBUG] Contenuto tradotto: {contenuto_tradotto[:300]}...")
 
         try:
             completamento = openai.ChatCompletion.create(
@@ -72,7 +77,12 @@ def ask():
     prompt = data.get("message", "")
     lingua = rileva_lingua_sicura(prompt)
     contenuto = estrai_testo_vocami()
+    print(f"[DEBUG] Contenuto originale estratto: {contenuto[:300]}...")
+    if not contenuto.strip():
+        contenuto = "Il documento non ha contenuti validi."
+
     contenuto_tradotto = traduci_testo(contenuto, lingua)
+    print(f"[DEBUG] Contenuto tradotto: {contenuto_tradotto[:300]}...")
 
     try:
         completamento = openai.ChatCompletion.create(
