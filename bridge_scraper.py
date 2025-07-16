@@ -9,8 +9,22 @@ def estrai_testo_vocami():
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
-        testo = soup.get_text(separator=" ", strip=True)
+
+        output = []
+        for elem in soup.find_all(["p", "li", "a"]):
+            if elem.name == "a" and elem.has_attr("href"):
+                text = elem.get_text(strip=True)
+                link = elem["href"]
+                if text:
+                    output.append(f"{text}: {link}")
+            else:
+                text = elem.get_text(strip=True)
+                if text:
+                    output.append(text)
+
+        testo = " ".join(output)
         testo_pulito = re.sub(r"\s+", " ", testo)
         return testo_pulito
+
     except Exception as e:
         return ""
