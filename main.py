@@ -6,7 +6,6 @@ from langdetect import detect, DetectorFactory
 from langdetect.lang_detect_exception import LangDetectException
 
 DetectorFactory.seed = 42
-
 app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -33,19 +32,21 @@ def rileva_lingua_sicura(testo):
     except LangDetectException:
         return "it"
 
+def prepara_contenuto():
+    testo = estrai_testo_vocami()
+    print(f"[DEBUG] Estratto: {len(testo)} caratteri")
+    if not testo.strip():
+        return "⚠️ Nessun contenuto tecnico disponibile al momento."
+    return testo[:3000] + "..."
+
 @app.route("/", methods=["GET", "POST"])
 def home():
     risposta = ""
     if request.method == "POST":
         prompt = request.form["prompt"]
         lingua = rileva_lingua_sicura(prompt)
-        contenuto = estrai_testo_vocami()
-        print(f"[DEBUG] Contenuto originale estratto: {contenuto[:300]}...")
-        if not contenuto.strip():
-            contenuto = "Il documento non ha contenuti validi."
-
+        contenuto = prepara_contenuto()
         contenuto_tradotto = traduci_testo(contenuto, lingua)
-        print(f"[DEBUG] Contenuto tradotto: {contenuto_tradotto[:300]}...")
 
         try:
             completamento = openai.ChatCompletion.create(
@@ -57,13 +58,11 @@ def home():
                 temperature=0.5
             )
             risposta = completamento.choices[0].message["content"]
-
             if "chiodatrice" in prompt.lower() and "tecnaria.com/wp-content/uploads" in contenuto:
                 risposta += "\n\n🖼️ Immagine: https://tecnaria.com/wp-content/uploads/2020/07/chiodatrice_p560_connettori_ctf_tecnaria.jpg"
-
         except Exception as e:
             print(f"[ERRORE GPT] {e}")
-            risposta = "⚠️ Si è verificato un errore nel generare la risposta. Prova a riformulare o riprovare più tardi."
+            risposta = "⚠️ Errore durante la generazione della risposta. Il contenuto potrebbe essere troppo lungo o complesso."
 
         return render_template("chat.html", messages=[
             {"role": "user", "text": prompt},
@@ -76,13 +75,8 @@ def ask():
     data = request.get_json()
     prompt = data.get("message", "")
     lingua = rileva_lingua_sicura(prompt)
-    contenuto = estrai_testo_vocami()
-    print(f"[DEBUG] Contenuto originale estratto: {contenuto[:300]}...")
-    if not contenuto.strip():
-        contenuto = "Il documento non ha contenuti validi."
-
+    contenuto = prepara_contenuto()
     contenuto_tradotto = traduci_testo(contenuto, lingua)
-    print(f"[DEBUG] Contenuto tradotto: {contenuto_tradotto[:300]}...")
 
     try:
         completamento = openai.ChatCompletion.create(
@@ -94,20 +88,17 @@ def ask():
             temperature=0.5
         )
         risposta = completamento.choices[0].message["content"]
-
         if "chiodatrice" in prompt.lower() and "tecnaria.com/wp-content/uploads" in contenuto:
             risposta += "\n\n🖼️ Immagine: https://tecnaria.com/wp-content/uploads/2020/07/chiodatrice_p560_connettori_ctf_tecnaria.jpg"
-
         return jsonify({"response": risposta})
     except Exception as e:
         print(f"[ERRORE GPT] {e}")
-        return jsonify({"response": "⚠️ Si è verificato un errore nel generare la risposta."})
+        return jsonify({"response": "⚠️ Errore durante la generazione della risposta. Il contenuto potrebbe essere troppo lungo o complesso."})
 
 @app.route("/audio", methods=["POST"])
 def audio():
     try:
         import pyttsx3
-        from io import BytesIO
         from flask import send_file
 
         text = request.get_json().get("text", "")
