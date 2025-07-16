@@ -9,23 +9,6 @@ DetectorFactory.seed = 42
 app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-def traduci_testo(testo, lingua_target):
-    if lingua_target == "it":
-        return testo
-    try:
-        risposta = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": f"Traduci il seguente testo in {lingua_target} con tono tecnico professionale:"},
-                {"role": "user", "content": testo}
-            ],
-            temperature=0.3
-        )
-        return risposta.choices[0].message["content"]
-    except Exception as e:
-        print(f"[ERRORE TRADUZIONE] {e}")
-        return testo
-
 def rileva_lingua_sicura(testo):
     try:
         return detect(testo)
@@ -34,7 +17,6 @@ def rileva_lingua_sicura(testo):
 
 def prepara_contenuto():
     testo = estrai_testo_vocami()
-    print(f"[DEBUG] Estratto: {len(testo)} caratteri")
     if not testo.strip():
         return "⚠️ Nessun contenuto tecnico disponibile al momento."
     return testo[:3000] + "..."
@@ -46,23 +28,25 @@ def home():
         prompt = request.form["prompt"]
         lingua = rileva_lingua_sicura(prompt)
         contenuto = prepara_contenuto()
-        contenuto_tradotto = traduci_testo(contenuto, lingua)
+        print(f"[MAIN] Prompt ricevuto: {prompt}")
+        print(f"[MAIN] Contenuto caricato: {len(contenuto)} caratteri")
 
         try:
             completamento = openai.ChatCompletion.create(
                 model="gpt-4",
                 messages=[
                     {"role": "system", "content": "Rispondi solo usando le informazioni tecniche fornite da Tecnaria S.p.A."},
-                    {"role": "user", "content": f"{contenuto_tradotto}\n\nDomanda: {prompt}"}
+                    {"role": "user", "content": f"{contenuto}\n\nDomanda: {prompt}"}
                 ],
                 temperature=0.5
             )
             risposta = completamento.choices[0].message["content"]
-            if "chiodatrice" in prompt.lower() and "tecnaria.com/wp-content/uploads" in contenuto:
+
+            if "chiodatrice" in prompt.lower():
                 risposta += "\n\n🖼️ Immagine: https://tecnaria.com/wp-content/uploads/2020/07/chiodatrice_p560_connettori_ctf_tecnaria.jpg"
         except Exception as e:
-            print(f"[ERRORE GPT] {e}")
-            risposta = "⚠️ Errore durante la generazione della risposta. Il contenuto potrebbe essere troppo lungo o complesso."
+            print(f"[GPT ERROR] {e}")
+            risposta = "⚠️ Errore durante la generazione della risposta."
 
         return render_template("chat.html", messages=[
             {"role": "user", "text": prompt},
@@ -76,24 +60,26 @@ def ask():
     prompt = data.get("message", "")
     lingua = rileva_lingua_sicura(prompt)
     contenuto = prepara_contenuto()
-    contenuto_tradotto = traduci_testo(contenuto, lingua)
+    print(f"[API] Prompt ricevuto: {prompt}")
+    print(f"[API] Contenuto caricato: {len(contenuto)} caratteri")
 
     try:
         completamento = openai.ChatCompletion.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "Rispondi solo usando le informazioni tecniche fornite da Tecnaria S.p.A."},
-                {"role": "user", "content": f"{contenuto_tradotto}\n\nDomanda: {prompt}"}
+                {"role": "user", "content": f"{contenuto}\n\nDomanda: {prompt}"}
             ],
             temperature=0.5
         )
         risposta = completamento.choices[0].message["content"]
-        if "chiodatrice" in prompt.lower() and "tecnaria.com/wp-content/uploads" in contenuto:
+
+        if "chiodatrice" in prompt.lower():
             risposta += "\n\n🖼️ Immagine: https://tecnaria.com/wp-content/uploads/2020/07/chiodatrice_p560_connettori_ctf_tecnaria.jpg"
         return jsonify({"response": risposta})
     except Exception as e:
-        print(f"[ERRORE GPT] {e}")
-        return jsonify({"response": "⚠️ Errore durante la generazione della risposta. Il contenuto potrebbe essere troppo lungo o complesso."})
+        print(f"[GPT API ERROR] {e}")
+        return jsonify({"response": "⚠️ Errore durante la generazione della risposta."})
 
 @app.route("/audio", methods=["POST"])
 def audio():
