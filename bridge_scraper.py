@@ -11,11 +11,13 @@ def estrai_testo_vocami():
         soup = BeautifulSoup(response.text, "html.parser")
 
         output = []
-        for elem in soup.find_all(["p", "li", "a"]):
+        for elem in soup.find_all(["p", "li", "a", "span"]):
             if elem.name == "a" and elem.has_attr("href"):
                 text = elem.get_text(strip=True)
                 link = elem["href"]
-                if text:
+                if re.search(r"\.(jpg|jpeg|png|gif)$", link, re.IGNORECASE):
+                    output.append(f"Immagine: {link}")
+                elif text:
                     output.append(f"{text}: {link}")
             else:
                 text = elem.get_text(strip=True)
