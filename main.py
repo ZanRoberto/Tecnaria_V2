@@ -91,4 +91,25 @@ def ask():
         return jsonify({"response": risposta})
     except Exception as e:
         print(f"[ERRORE GPT] {e}")
-        return jsonify({"response": "⚠️ Si è verificato un errore nel gener
+        return jsonify({"response": "⚠️ Si è verificato un errore nel generare la risposta."})
+
+@app.route("/audio", methods=["POST"])
+def audio():
+    try:
+        import pyttsx3
+        from io import BytesIO
+        from flask import send_file
+
+        text = request.get_json().get("text", "")
+        engine = pyttsx3.init()
+        engine.setProperty("rate", 150)
+        audio_file = "output.mp3"
+        engine.save_to_file(text, audio_file)
+        engine.runAndWait()
+        return send_file(audio_file, mimetype="audio/mpeg")
+    except Exception as e:
+        print(f"[ERRORE AUDIO] {e}")
+        return jsonify({"error": "Errore nella sintesi vocale."}), 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000, debug=False)
