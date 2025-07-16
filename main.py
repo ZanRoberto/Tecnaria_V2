@@ -99,4 +99,5 @@ def audio():
         return jsonify({"error": "Errore nella sintesi vocale."}), 500
 
 if __name__ == "__main__":
-    app.run(debug=False, port=10000)
+    app.run(host="0.0.0.0", port=10000, debug=False)
+
