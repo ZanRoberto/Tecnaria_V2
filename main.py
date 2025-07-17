@@ -5,10 +5,10 @@ from scraper_tecnaria import scrape_tecnaria_results
 
 app = Flask(__name__)
 
-# Carica API key da variabile ambiente
+# Carica la chiave API da variabile ambiente
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Risposte fallback predefinite
+# Risposte fallback se lo scraping fallisce
 FALLBACK_RISPOSTE = {
     "chiodatrice": """
 Tecnaria consiglia l’uso della chiodatrice a gas Spit Pulsa 560 (P560) per l’installazione dei suoi connettori strutturali, in particolare per i sistemi CTF e DIAPASON.
@@ -40,19 +40,17 @@ Tecnaria consiglia l’uso della chiodatrice a gas Spit Pulsa 560 (P560) per l�
 """
 }
 
-# Home route
 @app.route("/")
 def index():
     return render_template("chat.html")
 
-# Route per domanda/risposta
 @app.route("/ask", methods=["POST"])
 def ask():
     try:
         user_prompt = request.json.get("prompt", "").strip()
         context = scrape_tecnaria_results(user_prompt)
 
-        # Fallback se scraping fallisce o è vuoto
+        # Se lo scraping non trova nulla, attiva fallback
         if not context.strip():
             for keyword in FALLBACK_RISPOSTE:
                 if keyword in user_prompt.lower():
@@ -62,11 +60,9 @@ def ask():
         if not context.strip():
             return jsonify({"error": "Nessuna informazione trovata. Riprova con una domanda diversa."}), 400
 
-        # Prompt combinato
         full_prompt = f"Contesto tecnico:\n{context}\n\nDomanda:\n{user_prompt}\n\nRisposta tecnica:"
 
-        # Chiamata a OpenAI
-        completion = openai.ChatCompletion.create(
+        response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": "Sei un esperto tecnico dei prodotti Tecnaria. Rispondi con precisione e chiarezza."},
@@ -75,11 +71,13 @@ def ask():
             temperature=0.3
         )
 
-        answer = completion.choices[0].message.content
+        answer = response.choices[0].message.content
         return jsonify({"answer": answer})
 
     except Exception as e:
         return jsonify({"error": f"Errore durante la generazione della risposta: {str(e)}"}), 500
 
+# ✅ Compatibile con RENDER (usa porta dinamica e host visibile)
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
