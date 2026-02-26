@@ -65,7 +65,7 @@ TRADING_CONFIG = {
     "META_ACC_THRESHOLD": 0.55,
     "META_REDUCTION": 0.8,
 
-    # ========== EXIT DINAMICHE ==========
+    # ========== EXIT ==========
     "TAKE_PROFIT_R": 0.65,
     "TRAILING_STEP": 0.25,
     "ATR_PERIOD": 10,
@@ -74,12 +74,9 @@ TRADING_CONFIG = {
     "R_VITA": -0.30,
     "R_MORTE": -0.50,
 
-    # ========== VARIE ==========
-    "NORMAL_SIZE_MULT": 0.30,
-
     # ========== METADATA ==========
     "last_updated": None,
-    "version": "13.6d"
+    "version": "13.6d-full"
 }
 
 BOT_STATUS = {
@@ -90,7 +87,7 @@ BOT_STATUS = {
 }
 
 # ============================================================
-# ENDPOINTS TRADING
+# ENDPOINTS TRADING (identici, ma con allowed_params esteso)
 # ============================================================
 
 @app.route("/trading/log", methods=["POST"])
@@ -183,15 +180,15 @@ def trading_config_get():
 
 @app.route("/trading/config", methods=["POST"])
 def trading_config_update():
-    """Permette a Kimi di modificare i parametri in tempo reale."""
+    """Permette a Kimi di modificare qualsiasi parametro in tempo reale."""
     try:
         data = request.get_json()
         if not data:
             return jsonify({"error": "No JSON payload"}), 400
 
-        # Tutti i parametri di TRADING_CONFIG sono modificabili, tranne i metadati
+        # Ora allowed_params contiene TUTTI i parametri del config
         allowed_params = list(TRADING_CONFIG.keys())
-        # Rimuoviamo i metadati dalla lista se non vogliamo che vengano modificati
+        # Rimuoviamo i metadati che non vogliamo modificare direttamente
         allowed_params.remove("last_updated")
         allowed_params.remove("version")
 
@@ -202,9 +199,9 @@ def trading_config_update():
                 TRADING_CONFIG[key] = value
                 updated[key] = {"old": old, "new": value}
 
-        TRADING_CONFIG["last_updated"] = datetime.now().isoformat()
-
         if updated:
+            TRADING_CONFIG["last_updated"] = datetime.now().isoformat()
+
             TRADING_EVENTS.append({
                 "timestamp": datetime.now().isoformat(),
                 "event_type": "CONFIG_UPDATE",
@@ -223,7 +220,7 @@ def trading_config_update():
 
 @app.route("/trading/dashboard")
 def trading_dashboard():
-    """Dashboard HTML minimale."""
+    """Dashboard HTML minimale (identica)."""
     return """
     <!DOCTYPE html>
     <html>
