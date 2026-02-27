@@ -100,13 +100,13 @@ def analizza_e_genera_capsule(trades: list) -> list:
     Analizza batch di trade e genera capsule nuove.
     Ritorna lista di dict (capsule JSON-serializzabili).
     """
-    if len(trades) < 20:
+    if len(trades) < 25:
         return []
 
     capsule = []
     wr_globale, _ = _wr_pnl(trades)
     ids_esistenti = {c['capsule_id'] for c in CAPSULE_ATTIVE}
-    MIN_CAMP = 20
+    MIN_CAMP = 25
     MIN_DELTA = 0.12
 
     # --- ANALISI REGIME ---
