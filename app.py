@@ -69,7 +69,7 @@ TRADING_CONFIG = {
     "TAKE_PROFIT_R":         0.65,
     "MIN_HOLD_TIME_SL":      2.0,
     "last_updated":          None,
-    "version":               "3.0-MERCATO",
+    "version":               "3.1-GRAFICO",
     "capsules":              [],       # <-- capsule per il bot
 }
 
@@ -638,6 +638,52 @@ def forza_analisi():
     })
 
 
+@app.route("/trading/chart_data")
+def chart_data():
+    """Dati per il grafico equity + entry/exit."""
+    with _lock:
+        trades = list(TRADES_COMPLETI)
+        events = list(TRADING_EVENTS)
+
+    # Costruisci curva equity
+    equity = []
+    capitale = 10000.0
+    for t in trades:
+        capitale += t.get('pnl', 0)
+        equity.append({
+            "ts":      t.get('timestamp', time.time()),
+            "equity":  round(capitale, 2),
+            "pnl":     round(t.get('pnl', 0), 4),
+            "win":     t.get('win', False),
+            "reason":  t.get('reason', ''),
+            "regime":  t.get('regime', ''),
+            "modalita":t.get('modalita', ''),
+        })
+
+    # Entry/exit dagli eventi
+    markers = []
+    for e in events:
+        if e.get('event_type') in ('ENTRY', 'EXIT', 'BLOCK'):
+            markers.append({
+                "ts":    e.get('timestamp', e.get('received_at', '')),
+                "type":  e.get('event_type'),
+                "price": e.get('entry_price', e.get('exit_price', 0)),
+                "pnl":   e.get('pnl', 0),
+                "reason":e.get('reason', e.get('block_reason', '')),
+            })
+
+    return jsonify({
+        "equity":  equity,
+        "markers": markers[-200:],
+        "summary": {
+            "capitale_attuale": round(capitale, 2),
+            "trade_totali":     len(trades),
+            "wins":             sum(1 for t in trades if t.get('win')),
+            "losses":           sum(1 for t in trades if not t.get('win')),
+        }
+    })
+
+
 @app.route("/trading/dashboard")
 def dashboard():
     """Dashboard HTML in tempo reale."""
@@ -767,6 +813,9 @@ def dashboard():
                 <h2>📋 LOG ANALISI</h2>
                 <pre>${log_html || 'Nessuna analisi ancora'}</pre>
 
+                <h2>📈 GRAFICO EQUITY</h2>
+                <canvas id="equityChart" style="width:100%;height:300px;background:#111;border-radius:6px;"></canvas>
+
                 <h2>📊 ULTIMI 10 TRADE</h2>
                 <pre>${trades_html}</pre>
 
@@ -791,8 +840,114 @@ def dashboard():
         .then(d => { alert(JSON.stringify(d, null, 2)); aggiorna(); });
     }
 
+    // ============ GRAFICO EQUITY ============
+    let chartCanvas = null;
+    let chartCtx    = null;
+    let equityData  = [];
+
+    function disegnaGrafico(data) {
+        const canvas = document.getElementById('equityChart');
+        if (!canvas) return;
+        canvas.width  = canvas.offsetWidth  || 1200;
+        canvas.height = 300;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (!data || data.length === 0) {
+            ctx.fillStyle = '#333';
+            ctx.font = '14px monospace';
+            ctx.fillText('Nessun trade ancora...', 20, 150);
+            return;
+        }
+
+        const valori  = data.map(d => d.equity);
+        const minVal  = Math.min(...valori) - 5;
+        const maxVal  = Math.max(...valori) + 5;
+        const range   = maxVal - minVal || 1;
+        const W = canvas.width;
+        const H = canvas.height;
+        const PAD = 50;
+
+        // Griglia
+        ctx.strokeStyle = '#222';
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= 4; i++) {
+            const y = PAD + (H - PAD*2) * i / 4;
+            ctx.beginPath();
+            ctx.moveTo(PAD, y);
+            ctx.lineTo(W - PAD, y);
+            ctx.stroke();
+            const val = maxVal - range * i / 4;
+            ctx.fillStyle = '#555';
+            ctx.font = '11px monospace';
+            ctx.fillText('$' + val.toFixed(0), 2, y + 4);
+        }
+
+        // Linea baseline $10000
+        const baseY = PAD + (H - PAD*2) * (maxVal - 10000) / range;
+        ctx.strokeStyle = '#333';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(PAD, baseY);
+        ctx.lineTo(W - PAD, baseY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#555';
+        ctx.fillText('$10000', 2, baseY + 4);
+
+        // Curva equity
+        ctx.beginPath();
+        ctx.lineWidth = 2;
+        data.forEach((d, i) => {
+            const x = PAD + (W - PAD*2) * i / Math.max(data.length - 1, 1);
+            const y = PAD + (H - PAD*2) * (maxVal - d.equity) / range;
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        const ultimo = data[data.length-1].equity;
+        ctx.strokeStyle = ultimo >= 10000 ? '#00ff00' : '#ff4444';
+        ctx.stroke();
+
+        // Fill sotto la curva
+        const lastX = PAD + (W - PAD*2);
+        const firstX = PAD;
+        ctx.lineTo(lastX, H - PAD);
+        ctx.lineTo(firstX, H - PAD);
+        ctx.closePath();
+        ctx.fillStyle = ultimo >= 10000 ? 'rgba(0,255,0,0.05)' : 'rgba(255,68,68,0.05)';
+        ctx.fill();
+
+        // Punti WIN/LOSS
+        data.forEach((d, i) => {
+            const x = PAD + (W - PAD*2) * i / Math.max(data.length - 1, 1);
+            const y = PAD + (H - PAD*2) * (maxVal - d.equity) / range;
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, Math.PI * 2);
+            ctx.fillStyle = d.win ? '#00ff00' : '#ff4444';
+            ctx.fill();
+        });
+
+        // Label equity attuale
+        ctx.fillStyle = ultimo >= 10000 ? '#00ff00' : '#ff4444';
+        ctx.font = 'bold 14px monospace';
+        ctx.fillText('$' + ultimo.toFixed(2), W - PAD - 80, PAD - 10);
+    }
+
+    function aggiornaGrafico() {
+        fetch('/trading/chart_data')
+        .then(r => r.json())
+        .then(d => {
+            equityData = d.equity || [];
+            disegnaGrafico(equityData);
+        })
+        .catch(() => {});
+    }
+
     aggiorna();
+    aggiornaGrafico();
     setInterval(aggiorna, 10000);
+    setInterval(aggiornaGrafico, 10000);
+    window.addEventListener('resize', () => disegnaGrafico(equityData));
     </script>
 </body>
 </html>"""
