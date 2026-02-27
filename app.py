@@ -69,7 +69,7 @@ TRADING_CONFIG = {
     "TAKE_PROFIT_R":         0.65,
     "MIN_HOLD_TIME_SL":      2.0,
     "last_updated":          None,
-    "version":               "3.1-GRAFICO",
+    "version":               "3.2-CHART",
     "capsules":              [],       # <-- capsule per il bot
 }
 
@@ -638,6 +638,60 @@ def forza_analisi():
     })
 
 
+@app.route("/trading/candles")
+def candles():
+    """Candele OHLCV BTC + trade markers per il grafico live."""
+    with _lock:
+        events = list(TRADING_EVENTS)
+
+    # Costruisci candele da tick (aggregati a 1 minuto)
+    # Usiamo i prezzi degli eventi ENTRY/EXIT per ricostruire
+    trade_markers = []
+    for e in events:
+        et = e.get('event_type')
+        ts_raw = e.get('timestamp', e.get('received_at', ''))
+        try:
+            if isinstance(ts_raw, str):
+                ts = datetime.fromisoformat(ts_raw).timestamp()
+            else:
+                ts = float(ts_raw)
+        except:
+            ts = time.time()
+
+        if et == 'ENTRY':
+            trade_markers.append({
+                "ts":    ts * 1000,
+                "type":  "buy",
+                "price": e.get('entry_price', 0),
+                "size":  e.get('size', 0),
+                "seed":  e.get('seed', 0),
+                "label": f"ENTRY {e.get('modalita','')} F:{e.get('forza',0):.2f}",
+            })
+        elif et == 'EXIT':
+            pnl = e.get('pnl', 0)
+            trade_markers.append({
+                "ts":    ts * 1000,
+                "type":  "sell",
+                "price": e.get('exit_price', 0),
+                "pnl":   pnl,
+                "win":   pnl > 0,
+                "label": f"EXIT {e.get('reason','')} {'+' if pnl>0 else ''}{pnl:.2f}$",
+            })
+        elif et == 'BLOCK':
+            trade_markers.append({
+                "ts":    ts * 1000,
+                "type":  "block",
+                "price": 0,
+                "label": str(e.get('block_reason', ''))[:30],
+            })
+
+    return jsonify({
+        "markers":      trade_markers[-100:],
+        "last_market":  dict(LAST_MARKET),
+        "bot_status":   dict(BOT_STATUS),
+    })
+
+
 @app.route("/trading/chart_data")
 def chart_data():
     """Dati per il grafico equity + entry/exit."""
@@ -686,269 +740,313 @@ def chart_data():
 
 @app.route("/trading/dashboard")
 def dashboard():
-    """Dashboard HTML in tempo reale."""
+    """Dashboard HTML con grafico candele live."""
     return """<!DOCTYPE html>
 <html>
 <head>
     <title>Mission Control — OVERTOP BASSANO</title>
-    <meta http-equiv="refresh" content="10">
     <style>
-        body { font-family: monospace; background: #0a0a0a; color: #00ff00; padding: 20px; margin: 0; }
-        h1 { color: #00ffff; border-bottom: 1px solid #333; padding-bottom: 10px; }
-        h2 { color: #ffff00; margin-top: 20px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 10px 0; }
-        .card { background: #1a1a1a; padding: 12px; border-radius: 6px; border: 1px solid #333; }
-        .label { color: #888; font-size: 11px; }
-        .value { font-size: 18px; font-weight: bold; }
-        .profit { color: #00ff00; }
-        .loss { color: #ff4444; }
-        .warn { color: #ffaa00; }
-        pre { background: #111; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; max-height: 300px; overflow-y: auto; }
-        .capsule { background: #0a1a0a; border: 1px solid #0f5; padding: 8px; margin: 4px 0; border-radius: 4px; font-size: 12px; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: monospace; background: #0a0a0a; color: #00ff00; }
+        .header { padding: 15px 20px; border-bottom: 1px solid #1a1a1a; display:flex; align-items:center; gap:20px; }
+        h1 { color: #00ffff; font-size: 18px; }
+        .status-dot { width:10px; height:10px; border-radius:50%; background:#00ff00; display:inline-block; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; padding: 10px 20px; }
+        .card { background: #111; padding: 10px; border-radius: 6px; border: 1px solid #1a1a1a; }
+        .label { color: #555; font-size: 10px; text-transform:uppercase; }
+        .value { font-size: 20px; font-weight: bold; margin-top:2px; }
+        .profit { color: #00ff00; } .loss { color: #ff4444; } .warn { color: #ffaa00; }
+        #chartContainer { margin: 10px 20px; background: #0d0d0d; border-radius: 8px; border: 1px solid #1a1a1a; position:relative; }
+        #priceChart { width: 100%; height: 400px; display:block; }
+        #chartInfo { position:absolute; top:8px; left:8px; font-size:11px; color:#888; pointer-events:none; }
+        #currentPrice { position:absolute; top:8px; right:8px; font-size:16px; font-weight:bold; }
+        .section { padding: 8px 20px; }
+        .section h2 { color: #ffff00; font-size: 13px; margin-bottom: 6px; }
+        .capsule { background: #0a1a0a; border: 1px solid #0f5; padding: 6px 10px; margin: 3px 0; border-radius: 4px; font-size: 11px; }
         .capsule.blocca { border-color: #f44; background: #1a0a0a; }
-        .capsule.modifica { border-color: #0f0; }
-        button { background: #1a3a1a; color: #0f0; border: 1px solid #0f0; padding: 8px 16px; cursor: pointer; border-radius: 4px; margin: 4px; }
-        button:hover { background: #2a5a2a; }
+        pre { background: #111; padding: 8px; border-radius: 4px; font-size: 11px; max-height:200px; overflow-y:auto; }
+        button { background: #1a3a1a; color: #0f0; border: 1px solid #0f0; padding: 6px 12px; cursor: pointer; border-radius: 4px; margin: 2px; font-size:11px; }
         button.danger { background: #3a1a1a; color: #f44; border-color: #f44; }
+        .trade-log { max-height: 150px; overflow-y:auto; }
+        .trade-entry { padding: 3px 0; border-bottom: 1px solid #111; font-size: 11px; }
     </style>
 </head>
 <body>
-    <h1>🚀 MISSION CONTROL — OVERTOP BASSANO</h1>
-    <div id="content">Caricamento...</div>
-    <script>
-    function aggiorna() {
-        fetch('/trading/status?minutes=60')
-        .then(r => r.json())
-        .then(d => {
-            const m = d.metriche;
-            const b = d.bot_status;
-            const wr_class = m.win_rate >= 50 ? 'profit' : 'loss';
-            const pnl_class = b.total_pnl >= 0 ? 'profit' : 'loss';
+    <div class="header">
+        <span class="status-dot" id="dot"></span>
+        <h1>🚀 MISSION CONTROL — OVERTOP BASSANO</h1>
+        <span id="lastUpdate" style="color:#555;font-size:11px;margin-left:auto"></span>
+    </div>
 
-            let capsule_html = '';
-            if (d.capsule_attive && d.capsule_attive.length > 0) {
-                d.capsule_attive.forEach(c => {
-                    const tipo = c.azione && c.azione.type === 'blocca_entry' ? 'blocca' : 'modifica';
-                    const icona = tipo === 'blocca' ? '🔴' : '🟢';
-                    const stato = c.enabled ? '' : ' [DISABILITATA]';
-                    capsule_html += `<div class="capsule ${tipo}">
-                        ${icona} <b>${c.capsule_id}</b>${stato}<br>
-                        <span style="color:#888">${c.descrizione}</span><br>
-                        Hit: ${c.hits || 0} | Win: ${c.wins_after || 0} | Loss: ${c.losses_after || 0}
-                        <button class="danger" onclick="disabilita('${c.capsule_id}')">✕</button>
-                    </div>`;
-                });
-            } else {
-                capsule_html = '<span style="color:#555">Nessuna capsula attiva</span>';
-            }
+    <div class="grid" id="metriche"></div>
 
-            let log_html = (d.ultimi_log_analisi || []).map(l => `<div>${l}</div>`).join('');
-            let trades_html = JSON.stringify(d.ultimi_10_trade, null, 2);
+    <div id="chartContainer">
+        <canvas id="priceChart"></canvas>
+        <div id="chartInfo">BTC/USDC — 1min live</div>
+        <div id="currentPrice" class="profit">--</div>
+    </div>
 
-            let blocks_html = '';
-            if (m.block_types) {
-                Object.entries(m.block_types).forEach(([k,v]) => {
-                    blocks_html += `<div>${k}: <b>${v}</b></div>`;
-                });
-            }
+    <div class="section">
+        <h2>📡 MERCATO</h2>
+        <div class="grid" id="mercatoGrid" style="padding:0"></div>
+    </div>
 
-            document.getElementById('content').innerHTML = `
-                <div class="grid">
-                    <div class="card">
-                        <div class="label">STATUS BOT</div>
-                        <div class="value">${b.is_running ? '🟢 RUNNING' : '🔴 OFFLINE'}</div>
-                        <div class="label">Last ping: ${b.last_ping ? b.last_ping.substring(11,19) : 'N/A'}</div>
-                    </div>
-                    <div class="card">
-                        <div class="label">CAPITALE TOTALE PnL</div>
-                        <div class="value ${pnl_class}">${b.total_pnl >= 0 ? '+' : ''}${b.total_pnl.toFixed(2)}$</div>
-                        <div class="label">Trade totali: ${b.total_trades}</div>
-                    </div>
-                    <div class="card">
-                        <div class="label">WIN RATE (60min)</div>
-                        <div class="value ${wr_class}">${m.win_rate}%</div>
-                        <div class="label">W:${m.wins} L:${m.losses}</div>
-                    </div>
-                    <div class="card">
-                        <div class="label">PnL MEDIO TRADE</div>
-                        <div class="value ${m.pnl_medio >= 0 ? 'profit' : 'loss'}">${m.pnl_medio >= 0 ? '+' : ''}${m.pnl_medio.toFixed(4)}$</div>
-                        <div class="label">Entries: ${m.entries}</div>
-                    </div>
-                    <div class="card">
-                        <div class="label">BLOCCHI</div>
-                        <div class="value warn">${m.blocks}</div>
-                        <div>${blocks_html}</div>
-                    </div>
-                    <div class="card">
-                        <div class="label">CAPSULE ATTIVE</div>
-                        <div class="value">${d.capsule_attive ? d.capsule_attive.length : 0}</div>
-                        <div class="label">Generate: ${b.capsule_generate || 0}</div>
-                    </div>
-                </div>
+    <div class="section">
+        <h2>💊 CAPSULE ATTIVE <button onclick="forzaAnalisi()">🔬 ANALISI ORA</button></h2>
+        <div id="capsuleList"></div>
+    </div>
 
-                <h2>📡 DATI MERCATO LIVE</h2>
-                <div class="grid">
-                    <div class="card">
-                        <div class="label">FUNDING RATE</div>
-                        <div class="value ${Math.abs(d.mercato?.funding_rate||0) > 0.0003 ? 'warn' : 'profit'}">${((d.mercato?.funding_rate||0)*100).toFixed(4)}%</div>
-                    </div>
-                    <div class="card">
-                        <div class="label">OPEN INTEREST</div>
-                        <div class="value">${((d.mercato?.open_interest||0)/1000).toFixed(1)}K BTC</div>
-                    </div>
-                    <div class="card">
-                        <div class="label">ASK WALL</div>
-                        <div class="value loss">${(d.mercato?.ask_wall||0).toFixed(1)} BTC @ $${(d.mercato?.ask_wall_price||0).toFixed(0)}</div>
-                    </div>
-                    <div class="card">
-                        <div class="label">BID WALL</div>
-                        <div class="value profit">${(d.mercato?.bid_wall||0).toFixed(1)} BTC @ $${(d.mercato?.bid_wall_price||0).toFixed(0)}</div>
-                    </div>
-                </div>
+    <div class="section">
+        <h2>📋 TRADE LIVE</h2>
+        <div class="trade-log" id="tradeLog"></div>
+    </div>
 
-                <h2>💊 CAPSULE ATTIVE</h2>
-                <button onclick="forzaAnalisi()">🔬 FORZA ANALISI ORA</button>
-                ${capsule_html}
+    <div class="section">
+        <h2>📋 LOG ANALISI</h2>
+        <pre id="logAnalisi"></pre>
+    </div>
 
-                <h2>📋 LOG ANALISI</h2>
-                <pre>${log_html || 'Nessuna analisi ancora'}</pre>
+<script>
+// ============================================================
+// GRAFICO CANDELE LIVE
+// ============================================================
+const canvas  = document.getElementById('priceChart');
+const ctx     = canvas.getContext('2d');
+let candele   = [];   // {t, o, h, l, c, v}
+let markers   = [];   // entry/exit dal bot
+let prezzoWS  = 0;
+let candolaCorrente = null;
+const CANDLE_SEC = 60; // candele da 1 minuto
 
-                <h2>📈 GRAFICO EQUITY</h2>
-                <canvas id="equityChart" style="width:100%;height:300px;background:#111;border-radius:6px;"></canvas>
+function resizeCanvas() {
+    canvas.width  = canvas.parentElement.offsetWidth;
+    canvas.height = 400;
+}
+resizeCanvas();
+window.addEventListener('resize', () => { resizeCanvas(); disegna(); });
 
-                <h2>📊 ULTIMI 10 TRADE</h2>
-                <pre>${trades_html}</pre>
+// WebSocket Binance per prezzo live
+const ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdc@aggTrade');
+ws.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    const price  = parseFloat(d.p);
+    const volume = parseFloat(d.q);
+    const ts     = Math.floor(d.T / 1000);
+    const bucket = Math.floor(ts / CANDLE_SEC) * CANDLE_SEC;
 
-                <h2>🕐 AGGIORNATO: ${new Date().toLocaleTimeString()}</h2>
-            `;
-        })
-        .catch(e => {
-            document.getElementById('content').innerHTML = '<div class="loss">Errore connessione: ' + e + '</div>';
-        });
-    }
+    prezzoWS = price;
+    document.getElementById('currentPrice').textContent = '$' + price.toLocaleString('en', {minimumFractionDigits:2, maximumFractionDigits:2});
+    document.getElementById('currentPrice').className = 'profit';
 
-    function disabilita(capsule_id) {
-        if (!confirm('Disabilitare ' + capsule_id + '?')) return;
-        fetch('/trading/capsule/' + capsule_id, {method: 'DELETE'})
-        .then(r => r.json())
-        .then(d => { alert(d.status); aggiorna(); });
-    }
-
-    function forzaAnalisi() {
-        fetch('/trading/analisi_ora', {method: 'POST'})
-        .then(r => r.json())
-        .then(d => { alert(JSON.stringify(d, null, 2)); aggiorna(); });
-    }
-
-    // ============ GRAFICO EQUITY ============
-    let chartCanvas = null;
-    let chartCtx    = null;
-    let equityData  = [];
-
-    function disegnaGrafico(data) {
-        const canvas = document.getElementById('equityChart');
-        if (!canvas) return;
-        canvas.width  = canvas.offsetWidth  || 1200;
-        canvas.height = 300;
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        if (!data || data.length === 0) {
-            ctx.fillStyle = '#333';
-            ctx.font = '14px monospace';
-            ctx.fillText('Nessun trade ancora...', 20, 150);
-            return;
+    if (!candolaCorrente || candolaCorrente.t !== bucket) {
+        if (candolaCorrente) {
+            candele.push({...candolaCorrente});
+            if (candele.length > 120) candele.shift();
         }
+        candolaCorrente = { t: bucket, o: price, h: price, l: price, c: price, v: volume };
+    } else {
+        candolaCorrente.h = Math.max(candolaCorrente.h, price);
+        candolaCorrente.l = Math.min(candolaCorrente.l, price);
+        candolaCorrente.c = price;
+        candolaCorrente.v += volume;
+    }
+    disegna();
+};
 
-        const valori  = data.map(d => d.equity);
-        const minVal  = Math.min(...valori) - 5;
-        const maxVal  = Math.max(...valori) + 5;
-        const range   = maxVal - minVal || 1;
-        const W = canvas.width;
-        const H = canvas.height;
-        const PAD = 50;
+function disegna() {
+    const W = canvas.width, H = canvas.height;
+    const PAD_L = 60, PAD_R = 10, PAD_T = 20, PAD_B = 30;
+    const chartW = W - PAD_L - PAD_R;
+    const chartH = H - PAD_T - PAD_B;
 
-        // Griglia
-        ctx.strokeStyle = '#222';
-        ctx.lineWidth = 1;
-        for (let i = 0; i <= 4; i++) {
-            const y = PAD + (H - PAD*2) * i / 4;
+    ctx.fillStyle = '#0d0d0d';
+    ctx.fillRect(0, 0, W, H);
+
+    // Tutte le candele inclusa quella corrente
+    const allCandles = candolaCorrente ? [...candele, candolaCorrente] : [...candele];
+    if (allCandles.length < 2) return;
+
+    const visibili = allCandles.slice(-80);
+    const prezzi   = visibili.flatMap(c => [c.h, c.l]);
+    let minP = Math.min(...prezzi);
+    let maxP = Math.max(...prezzi);
+    const marg = (maxP - minP) * 0.1 || 10;
+    minP -= marg; maxP += marg;
+    const rangeP = maxP - minP;
+
+    const toX = (i) => PAD_L + (i + 0.5) * chartW / visibili.length;
+    const toY = (p)  => PAD_T + chartH * (1 - (p - minP) / rangeP);
+    const cW  = Math.max(2, chartW / visibili.length * 0.7);
+
+    // Griglia prezzi
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 5; i++) {
+        const p = minP + rangeP * i / 5;
+        const y = toY(p);
+        ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke();
+        ctx.fillStyle = '#444'; ctx.font = '10px monospace';
+        ctx.fillText('$' + Math.round(p).toLocaleString(), 2, y + 4);
+    }
+
+    // Candele
+    visibili.forEach((c, i) => {
+        const x  = toX(i);
+        const yO = toY(c.o), yC = toY(c.c);
+        const yH = toY(c.h), yL = toY(c.l);
+        const bull = c.c >= c.o;
+        const col  = bull ? '#00cc44' : '#ff3333';
+
+        // Stoppino
+        ctx.strokeStyle = col; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x, yH); ctx.lineTo(x, yL); ctx.stroke();
+
+        // Corpo
+        ctx.fillStyle = bull ? '#00cc44' : '#ff3333';
+        const bodyY = Math.min(yO, yC);
+        const bodyH = Math.max(Math.abs(yC - yO), 1);
+        ctx.fillRect(x - cW/2, bodyY, cW, bodyH);
+    });
+
+    // Markers trade (entry/exit)
+    markers.forEach(m => {
+        if (!m.price || m.price === 0) return;
+        // Trova posizione X approssimativa
+        const mTs = Math.floor(m.ts / 1000);
+        const bucket = Math.floor(mTs / CANDLE_SEC) * CANDLE_SEC;
+        const idx = visibili.findIndex(c => c.t === bucket);
+        if (idx < 0) return;
+        const x = toX(idx);
+        const y = toY(m.price);
+
+        if (m.type === 'buy') {
+            // Freccia verde su
+            ctx.fillStyle = '#00ff00';
             ctx.beginPath();
-            ctx.moveTo(PAD, y);
-            ctx.lineTo(W - PAD, y);
-            ctx.stroke();
-            const val = maxVal - range * i / 4;
-            ctx.fillStyle = '#555';
-            ctx.font = '11px monospace';
-            ctx.fillText('$' + val.toFixed(0), 2, y + 4);
+            ctx.moveTo(x, y + 15);
+            ctx.lineTo(x - 8, y + 28);
+            ctx.lineTo(x + 8, y + 28);
+            ctx.closePath(); ctx.fill();
+            ctx.fillStyle = '#00ff00'; ctx.font = 'bold 10px monospace';
+            ctx.fillText('B', x - 4, y + 40);
+        } else if (m.type === 'sell') {
+            // Freccia rossa giù
+            const col = m.win ? '#00ff88' : '#ff4444';
+            ctx.fillStyle = col;
+            ctx.beginPath();
+            ctx.moveTo(x, y - 15);
+            ctx.lineTo(x - 8, y - 28);
+            ctx.lineTo(x + 8, y - 28);
+            ctx.closePath(); ctx.fill();
+            ctx.fillStyle = col; ctx.font = 'bold 10px monospace';
+            ctx.fillText(m.pnl >= 0 ? '+' : '', x - 4, y - 32);
         }
+    });
 
-        // Linea baseline $10000
-        const baseY = PAD + (H - PAD*2) * (maxVal - 10000) / range;
-        ctx.strokeStyle = '#333';
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(PAD, baseY);
-        ctx.lineTo(W - PAD, baseY);
-        ctx.stroke();
+    // Linea prezzo corrente
+    if (prezzoWS > 0) {
+        const y = toY(prezzoWS);
+        ctx.strokeStyle = '#ffff00'; ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = '#555';
-        ctx.fillText('$10000', 2, baseY + 4);
-
-        // Curva equity
-        ctx.beginPath();
-        ctx.lineWidth = 2;
-        data.forEach((d, i) => {
-            const x = PAD + (W - PAD*2) * i / Math.max(data.length - 1, 1);
-            const y = PAD + (H - PAD*2) * (maxVal - d.equity) / range;
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-        });
-        const ultimo = data[data.length-1].equity;
-        ctx.strokeStyle = ultimo >= 10000 ? '#00ff00' : '#ff4444';
-        ctx.stroke();
-
-        // Fill sotto la curva
-        const lastX = PAD + (W - PAD*2);
-        const firstX = PAD;
-        ctx.lineTo(lastX, H - PAD);
-        ctx.lineTo(firstX, H - PAD);
-        ctx.closePath();
-        ctx.fillStyle = ultimo >= 10000 ? 'rgba(0,255,0,0.05)' : 'rgba(255,68,68,0.05)';
-        ctx.fill();
-
-        // Punti WIN/LOSS
-        data.forEach((d, i) => {
-            const x = PAD + (W - PAD*2) * i / Math.max(data.length - 1, 1);
-            const y = PAD + (H - PAD*2) * (maxVal - d.equity) / range;
-            ctx.beginPath();
-            ctx.arc(x, y, 4, 0, Math.PI * 2);
-            ctx.fillStyle = d.win ? '#00ff00' : '#ff4444';
-            ctx.fill();
-        });
-
-        // Label equity attuale
-        ctx.fillStyle = ultimo >= 10000 ? '#00ff00' : '#ff4444';
-        ctx.font = 'bold 14px monospace';
-        ctx.fillText('$' + ultimo.toFixed(2), W - PAD - 80, PAD - 10);
     }
+}
 
-    function aggiornaGrafico() {
-        fetch('/trading/chart_data')
-        .then(r => r.json())
-        .then(d => {
-            equityData = d.equity || [];
-            disegnaGrafico(equityData);
-        })
-        .catch(() => {});
-    }
+// ============================================================
+// DATI DASHBOARD
+// ============================================================
+function aggiorna() {
+    fetch('/trading/status?minutes=60')
+    .then(r => r.json())
+    .then(d => {
+        const m = d.metriche, b = d.bot_status;
+        document.getElementById('dot').style.background = b.is_running ? '#00ff00' : '#ff4444';
+        document.getElementById('lastUpdate').textContent = 'aggiornato: ' + new Date().toLocaleTimeString();
 
-    aggiorna();
-    aggiornaGrafico();
-    setInterval(aggiorna, 10000);
-    setInterval(aggiornaGrafico, 10000);
-    window.addEventListener('resize', () => disegnaGrafico(equityData));
-    </script>
+        const pnl_class = b.total_pnl >= 0 ? 'profit' : 'loss';
+        const wr_class  = m.win_rate >= 50 ? 'profit' : m.win_rate >= 40 ? 'warn' : 'loss';
+
+        document.getElementById('metriche').innerHTML = `
+            <div class="card"><div class="label">PnL TOTALE</div>
+                <div class="value ${pnl_class}">${b.total_pnl >= 0 ? '+' : ''}${b.total_pnl.toFixed(2)}$</div>
+                <div class="label">Trade: ${b.total_trades}</div></div>
+            <div class="card"><div class="label">WIN RATE 60min</div>
+                <div class="value ${wr_class}">${m.win_rate}%</div>
+                <div class="label">W:${m.wins} L:${m.losses}</div></div>
+            <div class="card"><div class="label">PnL MEDIO</div>
+                <div class="value ${m.pnl_medio >= 0 ? 'profit' : 'loss'}">${m.pnl_medio >= 0 ? '+' : ''}${m.pnl_medio.toFixed(3)}$</div></div>
+            <div class="card"><div class="label">BLOCCHI</div>
+                <div class="value warn">${m.blocks}</div>
+                <div class="label">${Object.entries(m.block_types||{}).map(([k,v])=>k.split(':').pop()+':'+v).join(' ')}</div></div>
+            <div class="card"><div class="label">CAPSULE</div>
+                <div class="value">${d.capsule_attive ? d.capsule_attive.length : 0}</div>
+                <div class="label">Generate: ${b.capsule_generate||0}</div></div>
+            <div class="card"><div class="label">ULTIMO PING</div>
+                <div class="value" style="font-size:13px">${b.last_ping ? b.last_ping.substring(11,19) : 'N/A'}</div></div>
+        `;
+
+        // Mercato
+        if (d.mercato) {
+            const fr = d.mercato.funding_rate || 0;
+            const fr_class = Math.abs(fr) > 0.0003 ? 'warn' : 'profit';
+            document.getElementById('mercatoGrid').innerHTML = `
+                <div class="card"><div class="label">FUNDING RATE</div>
+                    <div class="value ${fr_class}">${(fr*100).toFixed(4)}%</div></div>
+                <div class="card"><div class="label">OI</div>
+                    <div class="value">${((d.mercato.open_interest||0)/1000).toFixed(1)}K</div></div>
+                <div class="card"><div class="label">ASK WALL</div>
+                    <div class="value loss">${(d.mercato.ask_wall||0).toFixed(1)} BTC @ $${Math.round(d.mercato.ask_wall_price||0)}</div></div>
+                <div class="card"><div class="label">BID WALL</div>
+                    <div class="value profit">${(d.mercato.bid_wall||0).toFixed(1)} BTC @ $${Math.round(d.mercato.bid_wall_price||0)}</div></div>
+            `;
+        }
+
+        // Capsule
+        let chtml = '';
+        (d.capsule_attive || []).forEach(c => {
+            const tipo = c.azione && c.azione.type === 'blocca_entry' ? 'blocca' : '';
+            const icona = tipo === 'blocca' ? '🔴' : '🟢';
+            chtml += `<div class="capsule ${tipo}">${icona} <b>${c.capsule_id}</b> — ${c.descrizione}
+                <button class="danger" onclick="disabilita('${c.capsule_id}')">✕</button></div>`;
+        });
+        document.getElementById('capsuleList').innerHTML = chtml || '<span style="color:#333">Nessuna capsula attiva</span>';
+
+        // Log analisi
+        document.getElementById('logAnalisi').textContent = (d.ultimi_log_analisi || []).join('\n') || 'Nessuna analisi ancora';
+
+        // Ultimi trade
+        let thtml = '';
+        (d.ultimi_10_trade || []).reverse().forEach(t => {
+            const col = t.win ? '#00ff00' : '#ff4444';
+            thtml += `<div class="trade-entry" style="color:${col}">
+                ${t.win ? '🟢' : '🔴'} ${t.modalita} | ${t.reason} | ${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(3)}$ | ${t.regime} | F:${t.forza}
+            </div>`;
+        });
+        document.getElementById('tradeLog').innerHTML = thtml;
+    });
+
+    // Aggiorna markers trade sul grafico
+    fetch('/trading/candles')
+    .then(r => r.json())
+    .then(d => { markers = d.markers || []; disegna(); });
+}
+
+function disabilita(id) {
+    if (!confirm('Disabilitare ' + id + '?')) return;
+    fetch('/trading/capsule/' + id, {method:'DELETE'}).then(() => aggiorna());
+}
+
+function forzaAnalisi() {
+    fetch('/trading/analisi_ora', {method:'POST'}).then(r => r.json()).then(d => {
+        alert('+' + d.capsule_nuove + ' capsule generate\nWR=' + (d.wr_globale*100).toFixed(1) + '%');
+        aggiorna();
+    });
+}
+
+aggiorna();
+setInterval(aggiorna, 10000);
+</script>
 </body>
 </html>"""
 
