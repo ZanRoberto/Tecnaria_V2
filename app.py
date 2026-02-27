@@ -1,6 +1,6 @@
 """
 MISSION CONTROL — OVERTOP BASSANO
-Server Flask per Render. Versione 2.0 — CERVELLO ATTIVO
+Server Flask per Render. Versione 2.0 — CERVELLO ATTIVO + MERCATO
 
 Funzioni:
   - Riceve log dal bot (ENTRY, EXIT, REPORT, BLOCK)
@@ -27,10 +27,22 @@ app = Flask(__name__)
 # STORAGE IN-MEMORY (Render non ha disco persistente)
 # ============================================================
 
-TRADING_EVENTS = deque(maxlen=5000)   # ultimi 5000 eventi
+TRADING_EVENTS  = deque(maxlen=5000)   # ultimi 5000 eventi
 TRADES_COMPLETI = deque(maxlen=2000)  # trade EXIT arricchiti
 CAPSULE_ATTIVE: List[dict] = []       # capsule generate dall'analisi
-ANALISI_LOG = deque(maxlen=100)       # log delle analisi eseguite
+ANALISI_LOG     = deque(maxlen=100)   # log delle analisi eseguite
+
+# [V3.0] Dati mercato esogeni — correlazione con esiti trade
+MARKET_SNAPSHOTS = deque(maxlen=5000) # snapshot funding/OI/orderbook
+LAST_MARKET = {                        # ultimo snapshot ricevuto
+    "funding_rate":    0.0,
+    "open_interest":   0.0,
+    "bid_wall":        0.0,
+    "bid_wall_price":  0.0,
+    "ask_wall":        0.0,
+    "ask_wall_price":  0.0,
+    "updated_at":      None,
+}
 
 TRADING_CONFIG = {
     "RISK_PER_TRADE":        0.015,
@@ -57,7 +69,7 @@ TRADING_CONFIG = {
     "TAKE_PROFIT_R":         0.65,
     "MIN_HOLD_TIME_SL":      2.0,
     "last_updated":          None,
-    "version":               "2.0-CERVELLO",
+    "version":               "3.0-MERCATO",
     "capsules":              [],       # <-- capsule per il bot
 }
 
@@ -226,6 +238,88 @@ def analizza_e_genera_capsule(trades: list) -> list:
                     "created_at":  time.time(),
                 })
 
+    # --- ANALISI FUNDING RATE ---
+    fasce_funding = {
+        'molto_alto':  lambda f: f > 0.0005,
+        'alto':        lambda f: 0.0002 < f <= 0.0005,
+        'neutro':      lambda f: -0.0002 <= f <= 0.0002,
+        'basso':       lambda f: -0.0005 <= f < -0.0002,
+        'molto_basso': lambda f: f < -0.0005,
+    }
+    trades_con_funding = [t for t in trades if t.get('funding_rate', 0) != 0]
+    if len(trades_con_funding) >= MIN_CAMP:
+        for fname, check in fasce_funding.items():
+            gruppo = [t for t in trades_con_funding if check(t.get('funding_rate', 0))]
+            if len(gruppo) < 15:
+                continue
+            wr, pnl = _wr_pnl(gruppo)
+            cid_b = f"AUTO_BLOCCO_FUNDING_{fname.upper()}_001"
+            cid_boost = f"AUTO_BOOST_FUNDING_{fname.upper()}_001"
+
+            if wr < 0.35 and pnl < -10 and cid_b not in ids_esistenti:
+                # Calcola soglia reale dai dati
+                funding_vals = [t['funding_rate'] for t in gruppo]
+                soglia = sum(funding_vals) / len(funding_vals)
+                op = ">" if soglia > 0 else "<"
+                trigger = [{"param": "funding_rate", "op": op, "value": round(soglia, 6)}]
+                capsule.append({
+                    "capsule_id":  cid_b,
+                    "version":     1,
+                    "descrizione": f"AUTO: funding {fname} WR={wr:.0%} su {len(gruppo)} trade — BLOCCO (soglia={soglia:.4%})",
+                    "trigger":     trigger,
+                    "azione":      {"type": "blocca_entry", "params": {"reason": f"auto_funding_{fname}"}},
+                    "priority":    1, "enabled": True, "lifetime": "permanent",
+                    "source":      "server_analyzer_v3", "hits": 0,
+                    "wins_after":  0, "losses_after": 0,
+                    "created_at":  time.time(),
+                })
+            elif wr > 0.70 and pnl > 10 and cid_boost not in ids_esistenti:
+                funding_vals = [t['funding_rate'] for t in gruppo]
+                soglia = sum(funding_vals) / len(funding_vals)
+                op = "<" if soglia > 0 else ">"
+                trigger = [{"param": "funding_rate", "op": op, "value": round(soglia, 6)}]
+                capsule.append({
+                    "capsule_id":  cid_boost,
+                    "version":     1,
+                    "descrizione": f"AUTO: funding {fname} WR={wr:.0%} su {len(gruppo)} trade — BOOST +20%",
+                    "trigger":     trigger,
+                    "azione":      {"type": "modifica_size", "params": {"mult": 1.20}},
+                    "priority":    3, "enabled": True, "lifetime": "permanent",
+                    "source":      "server_analyzer_v3", "hits": 0,
+                    "wins_after":  0, "losses_after": 0,
+                    "created_at":  time.time(),
+                })
+
+    # --- ANALISI ORDER BOOK (muri di liquidità) ---
+    trades_con_ob = [t for t in trades if t.get('ask_wall', 0) > 0]
+    if len(trades_con_ob) >= MIN_CAMP:
+        # Se c'era un muro ask vicino al prezzo e il trade ha perso
+        loss_con_muro = [t for t in trades_con_ob
+                         if not t.get('win', False) and t.get('ask_wall', 0) > 0]
+        win_senza_muro = [t for t in trades_con_ob
+                          if t.get('win', False) and t.get('ask_wall', 0) > 0]
+
+        if len(loss_con_muro) >= 10:
+            avg_wall_loss = sum(t['ask_wall'] for t in loss_con_muro) / len(loss_con_muro)
+            avg_wall_win  = sum(t['ask_wall'] for t in win_senza_muro) / len(win_senza_muro) if win_senza_muro else 0
+
+            # Se i loss hanno muri molto più grandi dei win → il muro è predittivo
+            if avg_wall_loss > avg_wall_win * 1.5:
+                soglia_muro = avg_wall_loss * 0.8
+                cid_muro = "AUTO_BLOCCO_ASK_WALL_001"
+                if cid_muro not in ids_esistenti:
+                    capsule.append({
+                        "capsule_id":  cid_muro,
+                        "version":     1,
+                        "descrizione": f"AUTO: muro ask > {soglia_muro:.0f} BTC predice loss — BLOCCO",
+                        "trigger":     [{"param": "ask_wall", "op": ">=", "value": round(soglia_muro, 2)}],
+                        "azione":      {"type": "blocca_entry", "params": {"reason": "muro_liquidita_ask"}},
+                        "priority":    1, "enabled": True, "lifetime": "permanent",
+                        "source":      "server_analyzer_v3", "hits": 0,
+                        "wins_after":  0, "losses_after": 0,
+                        "created_at":  time.time(),
+                    })
+
     # --- ANALISI FORZA TOSSICA ---
     fasce_forza = {
         'bassa':      lambda f: f < 0.40,
@@ -314,7 +408,24 @@ def trading_log():
             BOT_STATUS["last_ping"] = datetime.now().isoformat()
             BOT_STATUS["is_running"] = True
 
-            # Accumula trade completi per analisi
+            # [V3.0] Aggiorna snapshot mercato
+            if data.get("event_type") == "MARKET_DATA":
+                with _lock:
+                    LAST_MARKET.update({
+                        "funding_rate":   data.get("funding_rate", 0.0),
+                        "open_interest":  data.get("open_interest", 0.0),
+                        "bid_wall":       data.get("bid_wall", 0.0),
+                        "bid_wall_price": data.get("bid_wall_price", 0.0),
+                        "ask_wall":       data.get("ask_wall", 0.0),
+                        "ask_wall_price": data.get("ask_wall_price", 0.0),
+                        "updated_at":     datetime.now().isoformat(),
+                    })
+                    MARKET_SNAPSHOTS.append({
+                        **LAST_MARKET,
+                        "timestamp": time.time(),
+                    })
+
+        # Accumula trade completi per analisi
             if data.get("event_type") == "EXIT":
                 pnl = data.get("pnl", 0)
                 BOT_STATUS["total_trades"] += 1
@@ -339,6 +450,11 @@ def trading_log():
                     "loss_consecutivi":data.get("loss_consecutivi", 0),
                     "entry_ts":        data.get("entry_ts", time.time()),
                     "timestamp":       time.time(),
+                    # [V3.0] Snapshot mercato al momento del trade
+                    "funding_rate":    LAST_MARKET["funding_rate"],
+                    "open_interest":   LAST_MARKET["open_interest"],
+                    "bid_wall":        LAST_MARKET["bid_wall"],
+                    "ask_wall":        LAST_MARKET["ask_wall"],
                 }
                 TRADES_COMPLETI.append(trade)
 
@@ -477,6 +593,7 @@ def trading_status():
             "ultimi_log_analisi": analisi[-10:],
             "ultimi_10_trade": trades_sample,
             "ultimi_5_eventi": list(TRADING_EVENTS)[-5:],
+            "mercato":         dict(LAST_MARKET),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -620,6 +737,26 @@ def dashboard():
                         <div class="label">CAPSULE ATTIVE</div>
                         <div class="value">${d.capsule_attive ? d.capsule_attive.length : 0}</div>
                         <div class="label">Generate: ${b.capsule_generate || 0}</div>
+                    </div>
+                </div>
+
+                <h2>📡 DATI MERCATO LIVE</h2>
+                <div class="grid">
+                    <div class="card">
+                        <div class="label">FUNDING RATE</div>
+                        <div class="value ${Math.abs(d.mercato?.funding_rate||0) > 0.0003 ? 'warn' : 'profit'}">${((d.mercato?.funding_rate||0)*100).toFixed(4)}%</div>
+                    </div>
+                    <div class="card">
+                        <div class="label">OPEN INTEREST</div>
+                        <div class="value">${((d.mercato?.open_interest||0)/1000).toFixed(1)}K BTC</div>
+                    </div>
+                    <div class="card">
+                        <div class="label">ASK WALL</div>
+                        <div class="value loss">${(d.mercato?.ask_wall||0).toFixed(1)} BTC @ $${(d.mercato?.ask_wall_price||0).toFixed(0)}</div>
+                    </div>
+                    <div class="card">
+                        <div class="label">BID WALL</div>
+                        <div class="value profit">${(d.mercato?.bid_wall||0).toFixed(1)} BTC @ $${(d.mercato?.bid_wall_price||0).toFixed(0)}</div>
                     </div>
                 </div>
 
