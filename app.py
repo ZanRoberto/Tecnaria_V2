@@ -1,14 +1,7 @@
 """
-MISSION CONTROL V4.0 — OVERTOP BASSANO
+MISSION CONTROL V4.1 — OVERTOP BASSANO
 Cervello persistente con Supabase.
-
-Cosa fa questa versione:
-  - Tutti i trade vengono salvati su Supabase (sopravvivono ai restart)
-  - Le capsule generate vengono persistite su Supabase
-  - All'avvio carica tutto da Supabase — parte già intelligente
-  - Analisi estese: regime, ora, sequenze, FORZA, seed, modalita, combinazioni incrociate
-  - Genera capsule calibrate sui dati reali, non su valori fissi
-  - Dashboard aggiornata con metriche per dimensione forza e seed
+[FIX V4.1] Porta 6543 connection pooler Supabase Free
 """
 
 from flask import Flask, request, jsonify
@@ -26,30 +19,34 @@ app = Flask(__name__)
 _lock = threading.Lock()
 
 # ============================================================
-# CONNESSIONE SUPABASE
+# CONNESSIONE SUPABASE — FIX PORTA 6543 (connection pooler)
 # ============================================================
 
-DB_URL = os.environ.get(
+_raw_url = os.environ.get(
     "DATABASE_URL",
     "postgresql://postgres:vivalafiga@db.cqtderlxqiffwjxofvux.supabase.co:5432/postgres?sslmode=require"
 )
+# Supabase Free blocca porta 5432 diretta — usa 6543 (connection pooler)
+DB_URL = _raw_url.replace(":5432/", ":6543/")
+print(f"[DB] URL configurato: {DB_URL[:80]}...")
+
 
 def get_db():
     """Connessione al database con retry automatico."""
     for attempt in range(3):
         try:
-            return psycopg2.connect(DB_URL, connect_timeout=5)
+            return psycopg2.connect(DB_URL, connect_timeout=10)
         except Exception as e:
             if attempt == 2:
                 raise
             time.sleep(1)
+
 
 def init_db():
     """Crea le tabelle se non esistono."""
     conn = get_db()
     cur = conn.cursor()
 
-    # Tabella trade
     cur.execute("""
         CREATE TABLE IF NOT EXISTS trades (
             id          SERIAL PRIMARY KEY,
@@ -73,7 +70,6 @@ def init_db():
         )
     """)
 
-    # Tabella capsule
     cur.execute("""
         CREATE TABLE IF NOT EXISTS capsule (
             capsule_id  TEXT PRIMARY KEY,
@@ -92,7 +88,6 @@ def init_db():
         )
     """)
 
-    # Tabella log analisi
     cur.execute("""
         CREATE TABLE IF NOT EXISTS analisi_log (
             id         SERIAL PRIMARY KEY,
@@ -104,14 +99,15 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
-    print("[DB] Tabelle inizializzate")
+    print("[DB] Tabelle inizializzate OK")
+
 
 # ============================================================
-# STORAGE IN-MEMORY (cache per performance)
+# STORAGE IN-MEMORY
 # ============================================================
 
 TRADING_EVENTS   = deque(maxlen=5000)
-TRADES_COMPLETI  = deque(maxlen=5000)   # cache locale — Supabase è il master
+TRADES_COMPLETI  = deque(maxlen=5000)
 CAPSULE_ATTIVE: List[dict] = []
 ANALISI_LOG      = deque(maxlen=200)
 
@@ -147,7 +143,7 @@ TRADING_CONFIG = {
     "TAKE_PROFIT_R":         0.65,
     "MIN_HOLD_TIME_SL":      2.0,
     "last_updated":          None,
-    "version":               "4.0-BRAIN",
+    "version":               "4.1-BRAIN",
     "capsules":              [],
 }
 
@@ -162,11 +158,10 @@ BOT_STATUS = {
 # DB HELPERS
 # ============================================================
 
-# Queue locale per trade non salvati (retry automatico)
 _pending_trades = deque(maxlen=500)
 
+
 def db_salva_trade(trade: dict):
-    """Salva un trade su Supabase. In caso di errore lo mette in coda."""
     try:
         conn = get_db()
         cur = conn.cursor()
@@ -201,8 +196,8 @@ def db_salva_trade(trade: dict):
         print(f"[DB] Errore salvataggio trade: {e} — messo in coda locale")
         _pending_trades.append(trade)
 
+
 def db_salva_capsula(cap: dict):
-    """Upsert capsula su Supabase."""
     try:
         conn = get_db()
         cur = conn.cursor()
@@ -237,8 +232,8 @@ def db_salva_capsula(cap: dict):
     except Exception as e:
         print(f"[DB] Errore salvataggio capsula: {e}")
 
+
 def db_carica_capsule() -> List[dict]:
-    """Carica tutte le capsule attive da Supabase."""
     try:
         conn = get_db()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -266,16 +261,12 @@ def db_carica_capsule() -> List[dict]:
         print(f"[DB] Errore caricamento capsule: {e}")
         return []
 
+
 def db_carica_trades(limit: int = 5000) -> List[dict]:
-    """Carica gli ultimi N trade da Supabase."""
     try:
         conn = get_db()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute("""
-            SELECT * FROM trades
-            ORDER BY created_at DESC
-            LIMIT %s
-        """, (limit,))
+        cur.execute("SELECT * FROM trades ORDER BY created_at DESC LIMIT %s", (limit,))
         rows = cur.fetchall()
         cur.close()
         conn.close()
@@ -283,6 +274,7 @@ def db_carica_trades(limit: int = 5000) -> List[dict]:
     except Exception as e:
         print(f"[DB] Errore caricamento trades: {e}")
         return []
+
 
 def db_disabilita_capsula(capsule_id: str):
     try:
@@ -295,6 +287,7 @@ def db_disabilita_capsula(capsule_id: str):
     except Exception as e:
         print(f"[DB] Errore disabilita capsula: {e}")
 
+
 def db_conta_trades() -> int:
     try:
         conn = get_db()
@@ -305,7 +298,9 @@ def db_conta_trades() -> int:
         conn.close()
         return n
     except Exception as e:
-        return -1  # -1 = DB non raggiungibile
+        print(f"[DB] Errore conta trades: {e}")
+        return -1
+
 
 # ============================================================
 # ANALISI — IL VERO CERVELLO
@@ -318,12 +313,8 @@ def _wr_pnl(trades):
     pnl  = sum(t.get('pnl', 0) for t in trades)
     return wins / len(trades), pnl
 
+
 def analizza_e_genera_capsule(trades: list) -> list:
-    """
-    Cervello analitico — studia tutti i parametri di ingresso e trova pattern.
-    Analizza: regime, ora, sequenze, FORZA, seed, modalità, combinazioni incrociate.
-    Calibra le soglie sui dati reali invece di usare valori fissi.
-    """
     if len(trades) < 25:
         return []
 
@@ -333,10 +324,6 @@ def analizza_e_genera_capsule(trades: list) -> list:
     MIN_CAMP  = 20
     MIN_DELTA = 0.10
 
-    # -------------------------------------------------------
-    # 1. ANALISI FORZA → ESITO (il bug di stamattina)
-    #    Trova automaticamente la soglia forza ottimale
-    # -------------------------------------------------------
     fasce_forza = [
         ('f_sotto_20',  lambda f: f < 0.20),
         ('f_20_35',     lambda f: 0.20 <= f < 0.35),
@@ -346,7 +333,6 @@ def analizza_e_genera_capsule(trades: list) -> list:
         ('f_sopra_80',  lambda f: f >= 0.80),
     ]
     soglie_forza = [0, 0.20, 0.35, 0.50, 0.65, 0.80, 2.0]
-    nomi_forza   = ['f_sotto_20','f_20_35','f_35_50','f_50_65','f_65_80','f_sopra_80']
 
     forza_report = []
     for i, (fname, check) in enumerate(fasce_forza):
@@ -356,7 +342,7 @@ def analizza_e_genera_capsule(trades: list) -> list:
         wr, pnl = _wr_pnl(gruppo)
         forza_report.append((fname, wr, pnl, len(gruppo), soglie_forza[i], soglie_forza[i+1]))
 
-        cid_b = f"AUTO_BLOCCO_FORZA_{fname.upper()}_001"
+        cid_b    = f"AUTO_BLOCCO_FORZA_{fname.upper()}_001"
         cid_boost = f"AUTO_BOOST_FORZA_{fname.upper()}_001"
 
         if wr < 0.38 and pnl < -10 and cid_b not in ids_esistenti:
@@ -369,11 +355,9 @@ def analizza_e_genera_capsule(trades: list) -> list:
                 "descrizione": f"AUTO-BRAIN: forza {fname} WR={wr:.0%} PnL={pnl:+.2f} su {len(gruppo)} trade — BLOCCO",
                 "trigger":     trigger,
                 "azione":      {"type": "blocca_entry", "params": {"reason": f"auto_forza_{fname}"}},
-                "priority": 2, "enabled": True, "lifetime": "permanent",
-                "source": "brain_v4", "hits": 0, "wins_after": 0, "losses_after": 0,
-                "created_at": time.time(),
+                "priority": 2, "enabled": True, "source": "brain_v4",
+                "hits": 0, "wins_after": 0, "losses_after": 0, "created_at": time.time(),
             })
-
         elif wr > 0.68 and pnl > 10 and cid_boost not in ids_esistenti:
             trigger = [{"param": "forza", "op": ">=", "value": soglie_forza[i]},
                        {"param": "forza", "op": "<",  "value": soglie_forza[i+1]}]
@@ -382,21 +366,16 @@ def analizza_e_genera_capsule(trades: list) -> list:
                 "descrizione": f"AUTO-BRAIN: forza {fname} WR={wr:.0%} PnL={pnl:+.2f} su {len(gruppo)} trade — BOOST +20%",
                 "trigger":     trigger,
                 "azione":      {"type": "modifica_size", "params": {"mult": 1.20}},
-                "priority": 3, "enabled": True, "lifetime": "permanent",
-                "source": "brain_v4", "hits": 0, "wins_after": 0, "losses_after": 0,
-                "created_at": time.time(),
+                "priority": 3, "enabled": True, "source": "brain_v4",
+                "hits": 0, "wins_after": 0, "losses_after": 0, "created_at": time.time(),
             })
 
-    # Log forza report
     if forza_report:
         msg = "[BRAIN] Analisi forza: " + " | ".join(
             f"{f[0]}={f[1]:.0%}({f[2]:+.1f}$)" for f in forza_report
         )
         ANALISI_LOG.append(msg)
 
-    # -------------------------------------------------------
-    # 2. ANALISI SEED → ESITO
-    # -------------------------------------------------------
     fasce_seed = [
         ('seed_basso',   lambda s: s < 0.45),
         ('seed_medio',   lambda s: 0.45 <= s < 0.55),
@@ -421,14 +400,10 @@ def analizza_e_genera_capsule(trades: list) -> list:
                 "descrizione": f"AUTO-BRAIN: seed {sname} WR={wr:.0%} PnL={pnl:+.2f} su {len(gruppo)} trade — BLOCCO",
                 "trigger":     trigger,
                 "azione":      {"type": "blocca_entry", "params": {"reason": f"auto_seed_{sname}"}},
-                "priority": 2, "enabled": True, "lifetime": "permanent",
-                "source": "brain_v4", "hits": 0, "wins_after": 0, "losses_after": 0,
-                "created_at": time.time(),
+                "priority": 2, "enabled": True, "source": "brain_v4",
+                "hits": 0, "wins_after": 0, "losses_after": 0, "created_at": time.time(),
             })
 
-    # -------------------------------------------------------
-    # 3. ANALISI REGIME
-    # -------------------------------------------------------
     regimi = defaultdict(list)
     for t in trades:
         if t.get('regime'):
@@ -447,9 +422,8 @@ def analizza_e_genera_capsule(trades: list) -> list:
                 "descrizione": f"AUTO-BRAIN: regime {regime} WR={wr:.0%} PnL={pnl:+.2f} su {len(gruppo)} trade — BLOCCO",
                 "trigger":    [{"param": "regime", "op": "==", "value": regime}],
                 "azione":     {"type": "blocca_entry", "params": {"reason": f"auto_regime_{regime}"}},
-                "priority": 1, "enabled": True, "lifetime": "permanent",
-                "source": "brain_v4", "hits": 0, "wins_after": 0, "losses_after": 0,
-                "created_at": time.time(),
+                "priority": 1, "enabled": True, "source": "brain_v4",
+                "hits": 0, "wins_after": 0, "losses_after": 0, "created_at": time.time(),
             })
         elif wr > 0.70 and wr > wr_globale + MIN_DELTA and cid_boost not in ids_esistenti:
             capsule.append({
@@ -457,22 +431,14 @@ def analizza_e_genera_capsule(trades: list) -> list:
                 "descrizione": f"AUTO-BRAIN: regime {regime} WR={wr:.0%} su {len(gruppo)} trade — BOOST +25%",
                 "trigger":    [{"param": "regime", "op": "==", "value": regime}],
                 "azione":     {"type": "modifica_size", "params": {"mult": 1.25}},
-                "priority": 3, "enabled": True, "lifetime": "permanent",
-                "source": "brain_v4", "hits": 0, "wins_after": 0, "losses_after": 0,
-                "created_at": time.time(),
+                "priority": 3, "enabled": True, "source": "brain_v4",
+                "hits": 0, "wins_after": 0, "losses_after": 0, "created_at": time.time(),
             })
 
-    # -------------------------------------------------------
-    # 4. ANALISI MODALITÀ (FLAT vs NORMAL separati)
-    # -------------------------------------------------------
     for modalita in ['FLAT', 'NORMAL']:
         gruppo_mod = [t for t in trades if t.get('modalita') == modalita]
         if len(gruppo_mod) < MIN_CAMP:
             continue
-
-        wr_mod, pnl_mod = _wr_pnl(gruppo_mod)
-
-        # Forza ottimale per questa modalità specifica
         for i, (fname, check) in enumerate(fasce_forza):
             gruppo = [t for t in gruppo_mod if check(t.get('forza', 0.5))]
             if len(gruppo) < 15:
@@ -490,14 +456,10 @@ def analizza_e_genera_capsule(trades: list) -> list:
                     "descrizione": f"AUTO-BRAIN: {modalita}+forza {fname} WR={wr:.0%} PnL={pnl:+.2f} — BLOCCO",
                     "trigger":    trigger,
                     "azione":     {"type": "blocca_entry", "params": {"reason": f"auto_{modalita.lower()}_forza_{fname}"}},
-                    "priority": 2, "enabled": True, "lifetime": "permanent",
-                    "source": "brain_v4", "hits": 0, "wins_after": 0, "losses_after": 0,
-                    "created_at": time.time(),
+                    "priority": 2, "enabled": True, "source": "brain_v4",
+                    "hits": 0, "wins_after": 0, "losses_after": 0, "created_at": time.time(),
                 })
 
-    # -------------------------------------------------------
-    # 5. ANALISI FASCIA ORARIA
-    # -------------------------------------------------------
     fasce_ore = {
         'mattina':    (8, 12),
         'pomeriggio': (12, 16),
@@ -507,36 +469,24 @@ def analizza_e_genera_capsule(trades: list) -> list:
         'alba':       (4, 8),
     }
     for fname, (h_start, h_end) in fasce_ore.items():
-        if h_end <= 24:
-            gruppo = [t for t in trades if h_start <= t.get('ora_utc', 0) < h_end]
-        else:
-            gruppo = [t for t in trades if t.get('ora_utc', 0) >= h_start or t.get('ora_utc', 0) < h_end % 24]
-
+        gruppo = [t for t in trades if h_start <= t.get('ora_utc', 0) < h_end]
         if len(gruppo) < MIN_CAMP:
             continue
         wr, pnl = _wr_pnl(gruppo)
         cid = f"AUTO_BLOCCO_ORA_{fname.upper()}_001"
         if wr < 0.35 and pnl < -10 and cid not in ids_esistenti:
-            trigger = [
-                {"param": "ora_utc", "op": ">=", "value": h_start},
-                {"param": "ora_utc", "op": "<",  "value": h_end},
-            ]
             capsule.append({
                 "capsule_id": cid, "version": 1,
                 "descrizione": f"AUTO-BRAIN: fascia {fname} ({h_start}-{h_end}h UTC) WR={wr:.0%} PnL={pnl:+.2f} — BLOCCO",
-                "trigger":    trigger,
+                "trigger":    [{"param": "ora_utc", "op": ">=", "value": h_start},
+                               {"param": "ora_utc", "op": "<",  "value": h_end}],
                 "azione":     {"type": "blocca_entry", "params": {"reason": f"auto_ora_{fname}"}},
-                "priority": 2, "enabled": True, "lifetime": "permanent",
-                "source": "brain_v4", "hits": 0, "wins_after": 0, "losses_after": 0,
-                "created_at": time.time(),
+                "priority": 2, "enabled": True, "source": "brain_v4",
+                "hits": 0, "wins_after": 0, "losses_after": 0, "created_at": time.time(),
             })
 
-    # -------------------------------------------------------
-    # 6. ANALISI SEQUENZE 3 LOSS CONSECUTIVI
-    # -------------------------------------------------------
     per_asset = defaultdict(list)
-    for t in sorted(trades, key=lambda x: x.get('entry_ts', x.get('created_at', time.time())
-                    if not isinstance(x.get('created_at'), datetime) else x['created_at'].timestamp())):
+    for t in sorted(trades, key=lambda x: x.get('entry_ts', time.time())):
         per_asset[t.get('asset', 'ALL')].append(t)
 
     for asset, seq in per_asset.items():
@@ -546,7 +496,6 @@ def analizza_e_genera_capsule(trades: list) -> list:
                 not seq[i-2].get('win', False) and
                 not seq[i-3].get('win', False)):
                 after_3loss.append(seq[i])
-
         if len(after_3loss) >= 8:
             wr, _ = _wr_pnl(after_3loss)
             cid = f"AUTO_BLOCCO_3LOSS_{asset}_001"
@@ -557,47 +506,10 @@ def analizza_e_genera_capsule(trades: list) -> list:
                     "trigger":    [{"param": "loss_consecutivi", "op": ">=", "value": 3},
                                    {"param": "asset", "op": "==", "value": asset}],
                     "azione":     {"type": "blocca_entry", "params": {"reason": "auto_3loss_pausa"}},
-                    "priority": 2, "enabled": True, "lifetime": "permanent",
-                    "source": "brain_v4", "hits": 0, "wins_after": 0, "losses_after": 0,
-                    "created_at": time.time(),
+                    "priority": 2, "enabled": True, "source": "brain_v4",
+                    "hits": 0, "wins_after": 0, "losses_after": 0, "created_at": time.time(),
                 })
 
-    # -------------------------------------------------------
-    # 7. ANALISI FUNDING RATE
-    # -------------------------------------------------------
-    fasce_funding = {
-        'molto_alto':  lambda f: f > 0.0005,
-        'alto':        lambda f: 0.0002 < f <= 0.0005,
-        'neutro':      lambda f: -0.0002 <= f <= 0.0002,
-        'basso':       lambda f: -0.0005 <= f < -0.0002,
-        'molto_basso': lambda f: f < -0.0005,
-    }
-    trades_fr = [t for t in trades if t.get('funding_rate', 0) != 0]
-    if len(trades_fr) >= MIN_CAMP:
-        for fname, check in fasce_funding.items():
-            gruppo = [t for t in trades_fr if check(t.get('funding_rate', 0))]
-            if len(gruppo) < 15:
-                continue
-            wr, pnl = _wr_pnl(gruppo)
-            cid = f"AUTO_BLOCCO_FUNDING_{fname.upper()}_001"
-            if wr < 0.35 and pnl < -10 and cid not in ids_esistenti:
-                fr_vals = [t['funding_rate'] for t in gruppo]
-                soglia = sum(fr_vals) / len(fr_vals)
-                op = ">" if soglia > 0 else "<"
-                capsule.append({
-                    "capsule_id": cid, "version": 1,
-                    "descrizione": f"AUTO-BRAIN: funding {fname} WR={wr:.0%} PnL={pnl:+.2f} (soglia={soglia:.4%}) — BLOCCO",
-                    "trigger":    [{"param": "funding_rate", "op": op, "value": round(soglia, 6)}],
-                    "azione":     {"type": "blocca_entry", "params": {"reason": f"auto_funding_{fname}"}},
-                    "priority": 1, "enabled": True, "lifetime": "permanent",
-                    "source": "brain_v4", "hits": 0, "wins_after": 0, "losses_after": 0,
-                    "created_at": time.time(),
-                })
-
-    # -------------------------------------------------------
-    # 8. ANALISI COMBINATA: REGIME × MODALITÀ × FORZA
-    #    Il pattern più potente — combinazioni specifiche
-    # -------------------------------------------------------
     for regime in ['lateral', 'choppy', 'normal', 'trending']:
         for modalita in ['FLAT', 'NORMAL']:
             gruppo = [t for t in trades
@@ -613,23 +525,9 @@ def analizza_e_genera_capsule(trades: list) -> list:
                     "trigger":    [{"param": "regime",   "op": "==", "value": regime},
                                    {"param": "modalita", "op": "==", "value": modalita}],
                     "azione":     {"type": "blocca_entry", "params": {"reason": f"auto_combo_{regime}_{modalita.lower()}"}},
-                    "priority": 2, "enabled": True, "lifetime": "permanent",
-                    "source": "brain_v4", "hits": 0, "wins_after": 0, "losses_after": 0,
-                    "created_at": time.time(),
+                    "priority": 2, "enabled": True, "source": "brain_v4",
+                    "hits": 0, "wins_after": 0, "losses_after": 0, "created_at": time.time(),
                 })
-            elif wr > 0.72 and pnl > 10 and cid not in ids_esistenti:
-                boost_cid = f"AUTO_BOOST_COMBO_{regime.upper()}_{modalita}_001"
-                if boost_cid not in ids_esistenti:
-                    capsule.append({
-                        "capsule_id": boost_cid, "version": 1,
-                        "descrizione": f"AUTO-BRAIN: combo {regime}+{modalita} WR={wr:.0%} su {len(gruppo)} trade — BOOST +20%",
-                        "trigger":    [{"param": "regime",   "op": "==", "value": regime},
-                                       {"param": "modalita", "op": "==", "value": modalita}],
-                        "azione":     {"type": "modifica_size", "params": {"mult": 1.20}},
-                        "priority": 3, "enabled": True, "lifetime": "permanent",
-                        "source": "brain_v4", "hits": 0, "wins_after": 0, "losses_after": 0,
-                        "created_at": time.time(),
-                    })
 
     return capsule
 
@@ -639,22 +537,17 @@ def analizza_e_genera_capsule(trades: list) -> list:
 # ============================================================
 
 def thread_analisi_periodica():
-    """Analisi ogni 5 minuti — usa tutti i trade salvati su Supabase."""
-    time.sleep(30)  # attende avvio
+    time.sleep(30)
     while True:
-        time.sleep(300)  # 5 minuti
+        time.sleep(300)
         try:
-            # Carica TUTTI i trade storici da Supabase
             tutti_i_trade = db_carica_trades(limit=10000)
             n_totale = db_conta_trades()
-
             if len(tutti_i_trade) < 25:
                 msg = f"[{datetime.now().strftime('%H:%M')}] Analisi saltata — solo {len(tutti_i_trade)} trade in DB"
                 ANALISI_LOG.append(msg)
                 continue
-
             nuove = analizza_e_genera_capsule(tutti_i_trade)
-
             with _lock:
                 aggiunte = 0
                 for cap in nuove:
@@ -662,18 +555,14 @@ def thread_analisi_periodica():
                         CAPSULE_ATTIVE.append(cap)
                         db_salva_capsula(cap)
                         aggiunte += 1
-
                 TRADING_CONFIG['capsules'] = list(CAPSULE_ATTIVE)
                 BOT_STATUS['ultima_analisi'] = datetime.now().isoformat()
                 BOT_STATUS['capsule_generate'] += aggiunte
-
             wr, pnl = _wr_pnl(tutti_i_trade)
             msg = (f"[{datetime.now().strftime('%H:%M')}] 🧠 Analisi su {n_totale} trade totali "
-                   f"(DB) | WR={wr:.0%} PnL={pnl:+.2f} | +{aggiunte} capsule nuove "
-                   f"(tot={len(CAPSULE_ATTIVE)})")
+                   f"| WR={wr:.0%} PnL={pnl:+.2f} | +{aggiunte} capsule nuove (tot={len(CAPSULE_ATTIVE)})")
             ANALISI_LOG.append(msg)
             print(msg)
-
         except Exception as e:
             print(f"[ANALISI] Errore: {e}")
 
@@ -683,22 +572,20 @@ def thread_analisi_periodica():
 # ============================================================
 
 def startup():
-    """All'avvio carica capsule e trade da Supabase."""
     try:
+        print(f"[STARTUP] DB_URL in uso: {DB_URL[:80]}...")
+        print(f"[STARTUP] DATABASE_URL env presente: {'SI' if os.environ.get('DATABASE_URL') else 'NO — uso default hardcoded'}")
         init_db()
 
-        # Carica capsule persistite
         capsule_db = db_carica_capsule()
         with _lock:
             CAPSULE_ATTIVE.extend(capsule_db)
             TRADING_CONFIG['capsules'] = list(CAPSULE_ATTIVE)
 
-        # Carica ultimi trade in cache locale
         trade_db = db_carica_trades(limit=2000)
         with _lock:
             TRADES_COMPLETI.extend(trade_db)
 
-        # Aggiorna stats
         if trade_db:
             with _lock:
                 BOT_STATUS['total_trades'] = db_conta_trades()
@@ -713,10 +600,9 @@ def startup():
 
     except Exception as e:
         print(f"[STARTUP] ⚠️ Supabase non raggiungibile: {e}")
-        print("[STARTUP] Procedo in modalità memoria locale — nessun dato storico caricato")
         ANALISI_LOG.append(f"[STARTUP] ⚠️ DB non raggiungibile — modalità memoria")
 
-# Avvio in thread per non bloccare Flask
+
 threading.Thread(target=startup, daemon=True).start()
 threading.Thread(target=thread_analisi_periodica, daemon=True).start()
 
@@ -777,7 +663,6 @@ def trading_log():
                     "ask_wall":         LAST_MARKET["ask_wall"],
                 }
                 TRADES_COMPLETI.append(trade)
-                # Salva su Supabase in thread separato per non bloccare
                 threading.Thread(target=db_salva_trade, args=(trade,), daemon=True).start()
 
         return jsonify({
@@ -864,21 +749,21 @@ def trading_status():
         with _lock:
             recent = [e for e in TRADING_EVENTS
                       if datetime.fromisoformat(e.get("received_at", "2000-01-01")) > cutoff]
-        exits     = [e for e in recent if e.get("event_type") == "EXIT"]
-        exits_win = [e for e in exits if e.get("pnl", 0) > 0]
-        exits_loss= [e for e in exits if e.get("pnl", 0) <= 0]
-        wr        = len(exits_win) / len(exits) * 100 if exits else 0
-        pnl_medio = sum(e.get("pnl", 0) for e in exits) / len(exits) if exits else 0
-        blocks    = [e for e in recent if e.get("event_type") == "BLOCK"]
+        exits      = [e for e in recent if e.get("event_type") == "EXIT"]
+        exits_win  = [e for e in exits if e.get("pnl", 0) > 0]
+        exits_loss = [e for e in exits if e.get("pnl", 0) <= 0]
+        wr         = len(exits_win) / len(exits) * 100 if exits else 0
+        pnl_medio  = sum(e.get("pnl", 0) for e in exits) / len(exits) if exits else 0
+        blocks     = [e for e in recent if e.get("event_type") == "BLOCK"]
         block_types = defaultdict(int)
         for b in blocks:
             block_types[str(b.get("block_reason", "unknown"))] += 1
 
         with _lock:
-            status  = dict(BOT_STATUS)
+            status        = dict(BOT_STATUS)
             trades_sample = list(TRADES_COMPLETI)[-10:]
-            analisi = list(ANALISI_LOG)
-            capsule = list(CAPSULE_ATTIVE)
+            analisi       = list(ANALISI_LOG)
+            capsule       = list(CAPSULE_ATTIVE)
 
         return jsonify({
             "timestamp":          datetime.now().isoformat(),
@@ -893,7 +778,7 @@ def trading_status():
                 "win_rate":   round(wr, 1),
                 "pnl_medio":  round(pnl_medio, 4),
                 "blocks":     len(blocks),
-                "block_types":dict(block_types),
+                "block_types": dict(block_types),
             },
             "capsule_attive":     capsule,
             "ultimi_log_analisi": analisi[-15:],
@@ -906,11 +791,9 @@ def trading_status():
 
 @app.route("/trading/analisi_ora", methods=["POST"])
 def forza_analisi():
-    """Forza analisi immediata su tutti i trade in DB."""
     tutti = db_carica_trades(limit=10000)
     if len(tutti) < 10:
         return jsonify({"error": f"Solo {len(tutti)} trade — minimo 10"}), 400
-
     nuove = analizza_e_genera_capsule(tutti)
     with _lock:
         aggiunte = 0
@@ -922,28 +805,25 @@ def forza_analisi():
         TRADING_CONFIG['capsules'] = list(CAPSULE_ATTIVE)
         BOT_STATUS['ultima_analisi'] = datetime.now().isoformat()
         BOT_STATUS['capsule_generate'] += aggiunte
-
     wr, pnl = _wr_pnl(tutti)
     msg = (f"[MANUALE {datetime.now().strftime('%H:%M')}] "
            f"{len(tutti)} trade DB | WR={wr:.0%} PnL={pnl:+.2f} | "
            f"+{aggiunte} capsule (tot={len(CAPSULE_ATTIVE)})")
     ANALISI_LOG.append(msg)
-
     return jsonify({
-        "status":           "analisi_completata",
-        "trade_in_db":      len(tutti),
-        "wr_globale":       round(wr, 3),
-        "pnl_globale":      round(pnl, 2),
-        "capsule_nuove":    aggiunte,
-        "capsule_totali":   len(CAPSULE_ATTIVE),
-        "nuove_capsule":    nuove,
-        "log":              msg,
+        "status":         "analisi_completata",
+        "trade_in_db":    len(tutti),
+        "wr_globale":     round(wr, 3),
+        "pnl_globale":    round(pnl, 2),
+        "capsule_nuove":  aggiunte,
+        "capsule_totali": len(CAPSULE_ATTIVE),
+        "nuove_capsule":  nuove,
+        "log":            msg,
     })
 
 
 @app.route("/trading/brain_report", methods=["GET"])
 def brain_report():
-    """Report approfondito per dimensione forza, seed, regime, modalità."""
     try:
         trades = db_carica_trades(limit=10000)
         if not trades:
@@ -959,18 +839,14 @@ def brain_report():
                 out[label] = {"n": len(gruppo), "wr": round(wr, 3), "pnl": round(pnl, 2)}
             return out
 
-        # Forza
         forza_labels = ['<0.20','0.20-0.35','0.35-0.50','0.50-0.65','0.65-0.80','>0.80']
         forza_funcs  = [lambda f: f<0.20, lambda f: 0.20<=f<0.35,
                         lambda f: 0.35<=f<0.50, lambda f: 0.50<=f<0.65,
                         lambda f: 0.65<=f<0.80, lambda f: f>=0.80]
+        seed_labels  = ['<0.45','0.45-0.55','0.55-0.65','>0.65']
+        seed_funcs   = [lambda s: s<0.45, lambda s: 0.45<=s<0.55,
+                        lambda s: 0.55<=s<0.65, lambda s: s>=0.65]
 
-        # Seed
-        seed_labels = ['<0.45','0.45-0.55','0.55-0.65','>0.65']
-        seed_funcs  = [lambda s: s<0.45, lambda s: 0.45<=s<0.55,
-                       lambda s: 0.55<=s<0.65, lambda s: s>=0.65]
-
-        # Regime
         regimi = {}
         for regime in ['lateral','choppy','normal','trending']:
             gruppo = [t for t in trades if t.get('regime') == regime]
@@ -978,7 +854,6 @@ def brain_report():
                 wr, pnl = _wr_pnl(gruppo)
                 regimi[regime] = {"n": len(gruppo), "wr": round(wr,3), "pnl": round(pnl,2)}
 
-        # Modalità
         modalita_report = {}
         for mod in ['FLAT','NORMAL']:
             gruppo = [t for t in trades if t.get('modalita') == mod]
@@ -987,15 +862,14 @@ def brain_report():
                 modalita_report[mod] = {"n": len(gruppo), "wr": round(wr,3), "pnl": round(pnl,2)}
 
         wr_tot, pnl_tot = _wr_pnl(trades)
-
         return jsonify({
-            "totale_trade":  len(trades),
-            "wr_globale":    round(wr_tot, 3),
-            "pnl_globale":   round(pnl_tot, 2),
-            "per_forza":     _analisi_per('forza', forza_labels, forza_funcs),
-            "per_seed":      _analisi_per('seed', seed_labels, seed_funcs),
-            "per_regime":    regimi,
-            "per_modalita":  modalita_report,
+            "totale_trade": len(trades),
+            "wr_globale":   round(wr_tot, 3),
+            "pnl_globale":  round(pnl_tot, 2),
+            "per_forza":    _analisi_per('forza', forza_labels, forza_funcs),
+            "per_seed":     _analisi_per('seed', seed_labels, seed_funcs),
+            "per_regime":   regimi,
+            "per_modalita": modalita_report,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1007,7 +881,7 @@ def candles():
         events = list(TRADING_EVENTS)
     trade_markers = []
     for e in events:
-        et = e.get('event_type')
+        et     = e.get('event_type')
         ts_raw = e.get('timestamp', e.get('received_at', ''))
         try:
             ts = datetime.fromisoformat(ts_raw).timestamp() if isinstance(ts_raw, str) else float(ts_raw)
@@ -1029,7 +903,7 @@ def dashboard():
     return """<!DOCTYPE html>
 <html>
 <head>
-    <title>Mission Control V4.0 — OVERTOP BASSANO</title>
+    <title>Mission Control V4.1 — OVERTOP BASSANO</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: monospace; background: #0a0a0a; color: #00ff00; }
@@ -1059,18 +933,15 @@ def dashboard():
 <body>
     <div class="header">
         <span class="status-dot" id="dot"></span>
-        <h1>🧠 MISSION CONTROL V4.0 — OVERTOP BASSANO</h1>
+        <h1>🧠 MISSION CONTROL V4.1 — OVERTOP BASSANO</h1>
         <span id="dbCount" style="color:#555;font-size:11px;"></span>
         <span id="lastUpdate" style="color:#555;font-size:11px;margin-left:auto"></span>
     </div>
-
     <div class="grid" id="metriche"></div>
-
     <div class="section">
         <h2>📡 MERCATO LIVE</h2>
         <div class="grid" id="mercatoGrid" style="padding:0"></div>
     </div>
-
     <div class="section">
         <h2>💊 CAPSULE ATTIVE
             <button onclick="forzaAnalisi()">🔬 ANALISI ORA</button>
@@ -1078,7 +949,6 @@ def dashboard():
         </h2>
         <div id="capsuleList"></div>
     </div>
-
     <div class="section">
         <h2>📊 BRAIN REPORT — Analisi per parametro</h2>
         <div id="brainDiv" style="display:none">
@@ -1090,17 +960,14 @@ def dashboard():
             </div>
         </div>
     </div>
-
     <div class="section">
         <h2>📋 ULTIMI TRADE</h2>
         <div class="trade-log" id="tradeLog"></div>
     </div>
-
     <div class="section">
         <h2>📋 LOG CERVELLO</h2>
         <pre id="logAnalisi"></pre>
     </div>
-
 <script>
 function aggiorna() {
     fetch('/trading/status?minutes=60')
@@ -1110,10 +977,8 @@ function aggiorna() {
         document.getElementById('dot').style.background = b.is_running ? '#00ff00' : '#ff4444';
         document.getElementById('lastUpdate').textContent = 'aggiornato: ' + new Date().toLocaleTimeString();
         document.getElementById('dbCount').textContent = '🗄️ DB: ' + (d.db_trade_totali || 0) + ' trade totali';
-
         const pnl_class = b.total_pnl >= 0 ? 'profit' : 'loss';
         const wr_class  = m.win_rate >= 50 ? 'profit' : m.win_rate >= 40 ? 'warn' : 'loss';
-
         document.getElementById('metriche').innerHTML = `
             <div class="card"><div class="label">PnL TOTALE</div>
                 <div class="value ${pnl_class}">${b.total_pnl >= 0 ? '+' : ''}${b.total_pnl.toFixed(2)}$</div>
@@ -1131,7 +996,6 @@ function aggiorna() {
             <div class="card"><div class="label">ULTIMO PING</div>
                 <div class="value" style="font-size:13px">${b.last_ping ? b.last_ping.substring(11,19) : 'N/A'}</div></div>
         `;
-
         if (d.mercato) {
             const fr = d.mercato.funding_rate || 0;
             const fr_class = Math.abs(fr) > 0.0003 ? 'warn' : 'profit';
@@ -1146,7 +1010,6 @@ function aggiorna() {
                     <div class="value profit">${(d.mercato.bid_wall||0).toFixed(1)} BTC</div></div>
             `;
         }
-
         let chtml = '';
         (d.capsule_attive || []).forEach(c => {
             const tipo = c.azione && c.azione.type === 'blocca_entry' ? 'blocca' : '';
@@ -1156,9 +1019,7 @@ function aggiorna() {
                 <button class="danger" onclick="disabilita('${c.capsule_id}')">✕</button></div>`;
         });
         document.getElementById('capsuleList').innerHTML = chtml || '<span style="color:#333">Nessuna capsula — accumula trade per prima analisi</span>';
-
         document.getElementById('logAnalisi').textContent = (d.ultimi_log_analisi || []).join('\\n');
-
         let thtml = '';
         (d.ultimi_10_trade || []).slice().reverse().forEach(t => {
             const col = t.win ? '#00ff00' : '#ff4444';
@@ -1169,12 +1030,9 @@ function aggiorna() {
         document.getElementById('tradeLog').innerHTML = thtml;
     });
 }
-
 function brainReport() {
     document.getElementById('brainDiv').style.display = 'block';
-    fetch('/trading/brain_report')
-    .then(r => r.json())
-    .then(d => {
+    fetch('/trading/brain_report').then(r => r.json()).then(d => {
         function buildTable(data, elId) {
             const el = document.getElementById(elId);
             let html = '<tr><th>Range</th><th>N</th><th>WR</th><th>PnL</th></tr>';
@@ -1192,19 +1050,16 @@ function brainReport() {
         buildTable(d.per_modalita, 'tModalita');
     });
 }
-
 function disabilita(id) {
     if (!confirm('Disabilitare ' + id + '?')) return;
     fetch('/trading/capsule/' + id, {method:'DELETE'}).then(() => aggiorna());
 }
-
 function forzaAnalisi() {
     fetch('/trading/analisi_ora', {method:'POST'}).then(r => r.json()).then(d => {
         alert('🧠 Analisi su ' + d.trade_in_db + ' trade in DB\\n+' + d.capsule_nuove + ' capsule nuove\\nWR=' + (d.wr_globale*100).toFixed(1) + '%  PnL=' + d.pnl_globale.toFixed(2) + '$');
         aggiorna();
     });
 }
-
 aggiorna();
 setInterval(aggiorna, 10000);
 </script>
@@ -1219,5 +1074,5 @@ def index():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"[MC] Mission Control V4.0 — CERVELLO SUPABASE — porta {port}")
+    print(f"[MC] Mission Control V4.1 — CERVELLO SUPABASE — porta {port}")
     app.run(host="0.0.0.0", port=port)
