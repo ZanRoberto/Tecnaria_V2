@@ -603,7 +603,10 @@ def startup():
         ANALISI_LOG.append(f"[STARTUP] ⚠️ DB non raggiungibile — modalità memoria")
 
 
-threading.Thread(target=startup, daemon=True).start()
+# Startup SINCRONO — deve completare prima che Flask parta
+print("[MAIN] Avvio startup sincrono DB...")
+startup()
+print("[MAIN] Startup completato — avvio thread analisi...")
 threading.Thread(target=thread_analisi_periodica, daemon=True).start()
 
 
