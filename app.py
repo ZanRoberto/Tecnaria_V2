@@ -1,5 +1,5 @@
 """
-MISSION CONTROL V5.0 — OVERTOP BASSANO
+MISSION CONTROL V5.1 — OVERTOP BASSANO
 PIT STOP BIDIREZIONALE — l'auto non si ferma mai.
 
 [V5.0 NUOVO rispetto a V4.3]
@@ -14,12 +14,46 @@ PIT STOP BIDIREZIONALE — l'auto non si ferma mai.
 """
 
 from flask import Flask, request, jsonify
+import openai
 import os, json, time, uuid, threading, sqlite3
 from datetime import datetime, timedelta
 from collections import deque, defaultdict
 from typing import List, Dict
 
 app   = Flask(__name__)
+# ============================================================
+# [V5.1] AI BRAIN — OpenAI nel loop
+# ============================================================
+
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+AI_MODEL       = "gpt-4o"
+AI_MAX_TOKENS  = 1500
+AI_TRIGGER_N   = 10      # analisi automatica ogni N trade nuovi
+AI_TRIGGER_MIN = 15      # o ogni N minuti
+_ai_ultimo_trigger_trades = 0
+_ai_ultimo_trigger_ts     = 0.0
+AI_LOG = deque(maxlen=100)
+
+SYSTEM_PROMPT = """Sei il cervello AI del sistema di trading OVERTOP BASSANO.
+Ragiona come il miglior trader quantitativo al mondo con expertise su:
+- Trading algoritmico BTC/USDC su Binance spot
+- Analisi di momentum e impulsi di mercato  
+- Gestione del rischio e position sizing dinamico
+- Pattern recognition su timeframe 1-60 secondi
+
+Il bot opera in due modalità:
+- NORMAL: mercato con movimento (range alto)
+- FLAT: mercato laterale (range basso)
+
+Parametri modificabili:
+- FANTASMA_WR: soglia WR minimo per entrare (default 0.40)
+- SEED_THRESH_NORMAL: qualità minima segnale NORMAL (default 0.45)
+- SEED_THRESH_FLAT: qualità minima segnale FLAT (default 0.50)
+
+Comandi disponibili: SET_CONFIG, INJECT_CAPSULE, STOP, RESUME, RESET_LOSSES
+Rispondi SEMPRE e SOLO con JSON valido, zero testo fuori dal JSON."""
+
+
 _lock = threading.Lock()
 
 # ============================================================
@@ -447,6 +481,126 @@ def startup():
     except Exception as e:
         print(f"[STARTUP] ⚠️ {e}")
 
+
+
+# ============================================================
+# [V5.1] FUNZIONI AI
+# ============================================================
+
+def _build_ai_prompt(trades, mercato, capsule, status, hb):
+    ultimi = trades[-30:] if len(trades) >= 30 else trades
+    if ultimi:
+        wins   = sum(1 for t in ultimi if t.get('win'))
+        wr     = wins / len(ultimi) * 100
+        pnl    = sum(t.get('pnl', 0) for t in ultimi)
+        seq    = ' '.join(['✅' if t.get('win') else '❌' for t in ultimi[-5:]])
+        flat_t = [t for t in ultimi if t.get('modalita') == 'FLAT']
+        norm_t = [t for t in ultimi if t.get('modalita') == 'NORMAL']
+        wr_f   = sum(1 for t in flat_t if t.get('win')) / len(flat_t) * 100 if flat_t else 0
+        wr_n   = sum(1 for t in norm_t if t.get('win')) / len(norm_t) * 100 if norm_t else 0
+        reasons = {}
+        for t in ultimi[-10:]:
+            r = t.get('reason','?')
+            reasons[r] = reasons.get(r, 0) + 1
+    else:
+        wins = wr = pnl = wr_f = wr_n = 0
+        seq = 'N/A'; reasons = {}
+
+    cap_str = chr(10).join([f"- {c['capsule_id']}: {c.get('descrizione','')[:50]}" for c in capsule[:6]])
+    trade_str = chr(10).join([
+        f"{'✅' if t.get('win') else '❌'} {t.get('modalita','?')} F:{t.get('forza',0):.2f} S:{t.get('seed',0):.2f} {t.get('reason','?')} {t.get('pnl',0):+.3f}$"
+        for t in ultimi[-5:]
+    ])
+
+    return f"""Analizza la situazione attuale del bot OVERTOP BASSANO e decidi se intervenire.
+
+STATO BOT: {hb.get('status','?')} | Capitale: ${hb.get('capital',0):.2f} | Modalità: {hb.get('modalita','?')} | Posizione: {'APERTA' if hb.get('posizione_aperta') else 'CHIUSA'}
+
+PERFORMANCE ULTIMI {len(ultimi)} TRADE:
+WR={wr:.1f}% W:{wins} L:{len(ultimi)-wins} | PnL={pnl:+.2f}$ | Sequenza: {seq}
+WR FLAT={wr_f:.1f}% ({len(flat_t)} trade) | WR NORMAL={wr_n:.1f}% ({len(norm_t)} trade)
+Exit reasons: {reasons}
+
+MERCATO: FR={mercato.get('funding_rate',0):.4%} OI={mercato.get('open_interest',0)/1000:.1f}K
+AskWall={mercato.get('ask_wall',0):.1f}BTC@${mercato.get('ask_wall_price',0):.0f}
+BidWall={mercato.get('bid_wall',0):.1f}BTC@${mercato.get('bid_wall_price',0):.0f}
+
+CAPSULE ATTIVE ({len(capsule)}):
+{cap_str}
+
+ULTIMI 5 TRADE:
+{trade_str}
+
+Rispondi con questo JSON esatto:
+{{
+  "valutazione": "OTTIMO|BUONO|ATTENZIONE|CRITICO",
+  "ragionamento": "cosa vedi in 2-3 frasi",
+  "intervieni": true/false,
+  "comandi": [],
+  "messaggio_operatore": "messaggio per Roberto in italiano"
+}}
+Se intervieni, popola comandi con SET_CONFIG o INJECT_CAPSULE.
+Se non intervieni, comandi = []."""
+
+
+def chiedi_ai(motivo: str = "automatico") -> dict:
+    global _ai_ultimo_trigger_ts, _ai_ultimo_trigger_trades
+    try:
+        with _lock:
+            trades  = list(TRADES_COMPLETI)
+            mercato = dict(LAST_MARKET)
+            capsule = list(CAPSULE_ATTIVE)
+            status  = dict(BOT_STATUS)
+            hb      = dict(BOT_HEARTBEAT)
+        if len(trades) < 5:
+            return {"error": "Troppo pochi trade", "n_trade": len(trades)}
+        prompt   = _build_ai_prompt(trades, mercato, capsule, status, hb)
+        client   = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        response = client.chat.completions.create(
+            model=AI_MODEL, max_tokens=AI_MAX_TOKENS, temperature=0.3,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user",   "content": prompt},
+            ]
+        )
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+        risultato = json.loads(raw.strip())
+        msg = (f"[AI {datetime.now().strftime('%H:%M')} | {motivo}] "
+               f"{risultato.get('valutazione','?')} — "
+               f"{risultato.get('ragionamento','')[:120]}")
+        AI_LOG.append(msg); ANALISI_LOG.append(msg); print(msg)
+        cmds = []
+        if risultato.get("intervieni") and risultato.get("comandi"):
+            for cmd in risultato["comandi"]:
+                c = _crea_comando(cmd["type"], cmd.get("params", {}))
+                cmds.append(c["id"])
+                print(f"[AI] 📡 Comando: {cmd['type']}")
+        _ai_ultimo_trigger_ts     = time.time()
+        _ai_ultimo_trigger_trades = len(trades)
+        return {
+            "ok": True, "motivo": motivo,
+            "valutazione":  risultato.get("valutazione"),
+            "ragionamento": risultato.get("ragionamento"),
+            "intervieni":   risultato.get("intervieni", False),
+            "comandi_creati": cmds,
+            "messaggio":    risultato.get("messaggio_operatore", ""),
+            "n_trade":      len(trades),
+            "timestamp":    datetime.now().isoformat(),
+        }
+    except Exception as e:
+        err = f"[AI] Errore: {e}"; AI_LOG.append(err); print(err)
+        return {"error": str(e)}
+
+
+def _check_ai_trigger(n_trades_ora: int):
+    global _ai_ultimo_trigger_trades, _ai_ultimo_trigger_ts
+    nuovi  = n_trades_ora - _ai_ultimo_trigger_trades
+    minuti = (time.time() - _ai_ultimo_trigger_ts) / 60 if _ai_ultimo_trigger_ts > 0 else 999
+    if nuovi >= AI_TRIGGER_N or minuti >= AI_TRIGGER_MIN:
+        threading.Thread(target=chiedi_ai, args=("automatico",), daemon=True).start()
+
 startup()
 threading.Thread(target=thread_analisi_periodica, daemon=True).start()
 
@@ -489,6 +643,8 @@ def trading_log():
                 if len(TRADES_COMPLETI) >= 10:
                     snap = list(TRADES_COMPLETI)
                     threading.Thread(target=trigger_analisi_se_pronto, args=(snap,), daemon=True).start()
+                    # [V5.1] Check trigger AI automatico
+                    _check_ai_trigger(len(TRADES_COMPLETI))
         return jsonify({"status": "logged", "total_events": len(TRADING_EVENTS), "capsule_attive": len(CAPSULE_ATTIVE)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -750,7 +906,7 @@ def dashboard():
     return r"""<!DOCTYPE html>
 <html>
 <head>
-<title>Mission Control V5.0 — PIT STOP</title>
+<title>Mission Control V5.1 — PIT STOP</title>
 <meta charset="utf-8">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -798,7 +954,7 @@ td{padding:2px 6px;border-bottom:1px solid #111}
 <body>
 <div class="hdr">
   <span class="dot" id="dot"></span>
-  <h1>🏎️ MISSION CONTROL V5.0 — PIT STOP LIVE</h1>
+  <h1>🏎️ MISSION CONTROL V5.1 — PIT STOP LIVE</h1>
   <span id="hbInfo" style="font-size:10px;color:#555"></span>
   <span id="upd" style="font-size:10px;color:#222;margin-left:auto"></span>
 </div>
@@ -910,6 +1066,24 @@ function disabilita(id){
   if(!confirm('Disabilitare '+id+'?')) return;
   fetch('/trading/capsule/'+id,{method:'DELETE'}).then(()=>tick());
 }
+
+function chiediAI() {
+  const btn = event.target;
+  btn.textContent = '⏳ AI sta analizzando...';
+  btn.disabled = true;
+  fetch('/trading/ai_analysis', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})
+  .then(r=>r.json()).then(d=>{
+    btn.textContent = "🤖 CHIEDI ALL'AI";
+    btn.disabled = false;
+    if(d.error){ toast('❌ '+d.error,'#f44'); return; }
+    const col = d.valutazione==='OTTIMO'?'#0f0':d.valutazione==='BUONO'?'#48f':d.valutazione==='ATTENZIONE'?'#fa0':'#f44';
+    toast('🤖 ' + d.valutazione + ' — ' + (d.messaggio||d.ragionamento||''), col);
+    if(d.comandi_creati && d.comandi_creati.length > 0){
+      toast('📡 ' + d.comandi_creati.length + ' comandi inviati al bot!', '#fa0');
+    }
+    tick();
+  }).catch(e=>{ btn.textContent="🤖 CHIEDI ALL'AI"; btn.disabled=false; toast('❌ '+e,'#f44'); });
+}
 function showBrain(){
   const s=document.getElementById('brainSec');
   s.style.display=s.style.display==='none'?'block':'none';
@@ -1016,5 +1190,5 @@ setInterval(tick,8000);
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"[MC] Mission Control V5.0 — PIT STOP BIDIREZIONALE — porta {port}")
+    print(f"[MC] Mission Control V5.1 — PIT STOP BIDIREZIONALE — porta {port}")
     app.run(host="0.0.0.0", port=port)
