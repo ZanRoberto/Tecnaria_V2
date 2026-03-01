@@ -1,6 +1,5 @@
-Flask
+flask
 openai
-beautifulsoup4
 requests
 langdetect
 psycopg2-binary
