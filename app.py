@@ -26,9 +26,17 @@ _raw_url = os.environ.get(
     "DATABASE_URL",
     "postgresql://postgres:vivalafiga@db.cqtderlxqiffwjxofvux.supabase.co:5432/postgres?sslmode=require"
 )
-# Supabase Free blocca porta 5432 diretta — usa 6543 (connection pooler)
-DB_URL = _raw_url.replace(":5432/", ":6543/")
-print(f"[DB] URL configurato: {DB_URL[:80]}...")
+# Supabase connection pooler IPv4 (Render Free non supporta IPv6):
+# - hostname: aws-0-eu-central-1.pooler.supabase.com  
+# - porta: 6543
+# - username: postgres.PROJECT_ID (obbligatorio per il pooler)
+DB_URL = (
+    _raw_url
+    .replace(":5432/", ":6543/")
+    .replace("db.cqtderlxqiffwjxofvux.supabase.co", "aws-0-eu-central-1.pooler.supabase.com")
+    .replace("postgresql://postgres:", "postgresql://postgres.cqtderlxqiffwjxofvux:")
+)
+print(f"[DB] URL pooler IPv4: {DB_URL[:100]}...")
 
 
 def get_db():
