@@ -66,6 +66,7 @@ _lock = threading.Lock()
 # ============================================================
 
 DB_PATH = os.environ.get("DB_PATH", "/tmp/overtop_mission.db")
+print(f"[STARTUP] DB_PATH={DB_PATH} | Writable={os.access(os.path.dirname(DB_PATH) or '.', os.W_OK)}")
 
 def get_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -151,6 +152,7 @@ BOT_HEARTBEAT = {
 
 def db_salva_trade(t):
     try:
+        print(f"[DB_SAVE] 💾 Inizio salvataggio trade: pnl={t.get('pnl')}, asset={t.get('asset')}")
         conn = get_db()
         conn.execute("""INSERT INTO trades
             (asset,pnl,win,regime,ora_utc,forza,seed,modalita,duration,reason,
@@ -164,8 +166,9 @@ def db_salva_trade(t):
              t.get("bid_wall",0), t.get("ask_wall",0)))
         conn.commit()
         conn.close()
+        print(f"[DB_SAVE] ✅ Trade salvato: pnl={t.get('pnl')}")
     except Exception as e:
-        print(f"[DB] trade: {e}")
+        print(f"[DB_SAVE] ❌ ERRORE salvataggio: {e} | trade={t}")
 
 def db_salva_capsula(cap):
     try:
@@ -383,7 +386,9 @@ def thread_analisi_periodica():
         time.sleep(300)
         try:
             source = _fonte_migliore()
+            print(f"[BRAIN_THREAD] 🧠 Analisi periodica: {len(source)} trade in memoria/DB")
             if len(source) < 10:
+                print(f"[BRAIN_THREAD] ⏭️  Skip: meno di 10 trade ({len(source)})")
                 continue
             nuove = analizza_e_genera_capsule(source)
             n = _applica_capsule_nuove(nuove)
@@ -392,7 +397,7 @@ def thread_analisi_periodica():
             ANALISI_LOG.append(msg)
             print(msg)
         except Exception as e:
-            print(f"[ANALISI] {e}")
+            print(f"[BRAIN_THREAD] ❌ ERRORE: {e}")
 
 # ============================================================
 # STARTUP
@@ -433,6 +438,7 @@ def trading_log():
         if not data:
             return jsonify({"error": "No JSON"}), 400
         
+        print(f"[TRADING_LOG] 📥 Ricevuto evento: type={data.get('event_type')} | asset={data.get('asset')} | pnl={data.get('pnl')}")
         event = {**data, "received_at": datetime.now().isoformat()}
         with _lock:
             TRADING_EVENTS.append(event)
@@ -464,15 +470,19 @@ def trading_log():
                     "bid_wall": LAST_MARKET["bid_wall"], "ask_wall": LAST_MARKET["ask_wall"],
                 }
                 
+                print(f"[TRADING_LOG] 🧮 EXIT event processato: {trade}")
                 TRADES_COMPLETI.append(trade)
+                print(f"[TRADING_LOG] 💾 Avvio thread salvataggio DB...")
                 threading.Thread(target=db_salva_trade, args=(trade,), daemon=True).start()
                 
                 if len(TRADES_COMPLETI) >= 20:
                     snap = list(TRADES_COMPLETI)
+                    print(f"[TRADING_LOG] 🧠 Raggiunto threshold 20 trade: avvio analisi brain")
                     threading.Thread(target=trigger_analisi_se_pronto, args=(snap,), daemon=True).start()
         
         return jsonify({"status": "logged", "total_events": len(TRADING_EVENTS), "capsule_attive": len(CAPSULE_ATTIVE)})
     except Exception as e:
+        print(f"[TRADING_LOG] ❌ ERRORE: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/trading/config", methods=["GET"])
