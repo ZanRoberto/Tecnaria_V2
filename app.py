@@ -1,7 +1,8 @@
 """
-MISSION CONTROL V5.4 — DB FIX
-================================
+MISSION CONTROL V5.4 — DB FIX + LOGGING DIRECT
+================================================
 Fix critico: Salva ENTRY e EXIT nel DB (non scarta)
+Logging diretto stdout (unbuffered)
 Render deployment ready
 """
 
@@ -10,9 +11,14 @@ import sqlite3
 import json
 import threading
 import time
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 import os
+
+# Force unbuffered output
+sys.stdout.flush()
+sys.stderr.flush()
 
 app = Flask(__name__)
 
@@ -20,17 +26,19 @@ app = Flask(__name__)
 # CONFIG
 # ============================================================
 
-DB_PATH = "/tmp/trading_data.db"  # Render: /tmp è writable
+DB_PATH = "/tmp/trading_data.db"
 LOG_FILE = "/tmp/trading.log"
 
 def log(msg):
-    """Log a stdout e file"""
+    """Log direct to stdout (unbuffered for Render)"""
     timestamp = datetime.utcnow().isoformat()
     line = f"{timestamp}Z {msg}"
-    print(line)
+    print(line, flush=True)  # Force flush
+    sys.stdout.flush()
     try:
         with open(LOG_FILE, "a") as f:
             f.write(line + "\n")
+            f.flush()
     except:
         pass
 
@@ -85,7 +93,7 @@ init_db()
 # GLOBAL STATE
 # ============================================================
 
-trades_memory = []  # Buffer in-memory (ultimi 100 trade)
+trades_memory = []
 heartbeat_data = {"status": "UNKNOWN", "capital": 0, "trades": 0, "last_seen": None}
 
 # ============================================================
@@ -94,23 +102,14 @@ heartbeat_data = {"status": "UNKNOWN", "capital": 0, "trades": 0, "last_seen": N
 
 @app.route('/trading/log', methods=['POST'])
 def trading_log():
-    """
-    Bot manda: {
-        "type": "ENTRY|EXIT|BLOCK",
-        "asset": "BTCUSDC",
-        "price": 68000,
-        "size": 0.15,
-        "pnl": 1.23,
-        "direction": "LONG",
-        "reason": "momentum_decay",
-        "extra": {...}
-    }
-    """
+    """Bot manda: {type, asset, price, size, pnl, direction, reason, ...}"""
     try:
         data = request.get_json()
         event_type = data.get("type", "UNKNOWN")
+        asset = data.get("asset", "UNKNOWN")
+        pnl = data.get("pnl", 0)
         
-        log(f"[TRADING_LOG] 📥 Ricevuto evento: type={event_type} | asset={data.get('asset')} | pnl={data.get('pnl')}")
+        log(f"[TRADING_LOG] 📥 Ricevuto evento: type={event_type} | asset={asset} | pnl={pnl}")
         
         # ✅ CRITICAL FIX: Salva ENTRY, EXIT (scarta BLOCK per ora)
         if event_type in ["ENTRY", "EXIT"]:
@@ -122,26 +121,26 @@ def trading_log():
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     event_type,
-                    data.get("asset"),
+                    asset,
                     data.get("price", 0),
                     data.get("size", 0),
-                    data.get("pnl", 0),
+                    pnl,
                     data.get("direction", "LONG"),
                     data.get("reason", ""),
                     json.dumps(data)
                 ))
                 conn.commit()
                 conn.close()
-                log(f"[DB_SAVE] ✅ SALVATO: {event_type} {data.get('asset')} PnL={data.get('pnl')}")
+                log(f"[DB_SAVE] ✅ SALVATO: {event_type} {asset} PnL={pnl}")
             except Exception as e:
                 log(f"[DB_SAVE] ❌ ERRORE: {e}")
         
-        # Aggiungi a buffer memoria
+        # Buffer memoria
         trades_memory.append({
             'timestamp': datetime.utcnow().isoformat(),
             'type': event_type,
-            'asset': data.get('asset'),
-            'pnl': data.get('pnl', 0)
+            'asset': asset,
+            'pnl': pnl
         })
         if len(trades_memory) > 100:
             trades_memory.pop(0)
@@ -226,7 +225,7 @@ def brain_analysis_thread():
     """Analizza trade ogni minuto"""
     while True:
         try:
-            time.sleep(60)  # Ogni minuto
+            time.sleep(60)
             
             conn = sqlite3.connect(DB_PATH, check_same_thread=False)
             rows = conn.execute("""
@@ -251,7 +250,7 @@ def brain_analysis_thread():
 threading.Thread(target=brain_analysis_thread, daemon=True, name='brain_analysis').start()
 
 # ============================================================
-# ROUTE: GET /trading/commands — Leggi comandi (placeholder)
+# ROUTES: Comandi, config
 # ============================================================
 
 @app.route('/trading/commands', methods=['GET'])
@@ -261,10 +260,6 @@ def get_commands():
 @app.route('/trading/commands/history', methods=['GET'])
 def get_commands_history():
     return jsonify({"history": []}), 200
-
-# ============================================================
-# ROUTE: GET /trading/config — Config attuale
-# ============================================================
 
 @app.route('/trading/config', methods=['GET'])
 def get_config():
@@ -364,4 +359,3 @@ def dashboard():
 if __name__ == '__main__':
     log("[MAIN] 🚀 Mission Control V5.4 starting...")
     app.run(host='0.0.0.0', port=5000, debug=False)
-
