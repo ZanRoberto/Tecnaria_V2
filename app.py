@@ -1,12 +1,10 @@
 """
-MISSION CONTROL V5.6 — ULTIMATE REPAIR
-========================================
-✅ Connessione DB GARANTITA (debug built-in)
-✅ Legge VERAMENTE i trade dal DB
-✅ Mostra metriche REALI
-✅ Dashboard V5.5 completa
-✅ Logging stderr + stdout
-✅ Error handling robusto
+MISSION CONTROL V5.7 — DEBUG CRITICAL
+======================================
+✅ Logging DEBUG completo — mostra JSON ricevuto
+✅ Identifica esattamente cosa il bot manda
+✅ Connessione DB garantita
+✅ Dashboard V5.5 integrata
 """
 
 from flask import Flask, request, jsonify, render_template_string
@@ -92,12 +90,19 @@ heartbeat_data = {"status": "UNKNOWN", "capital": 0, "trades": 0, "last_seen": N
 def trading_log():
     """Ricevi trade events dal bot"""
     try:
+        # Leggi il raw request body
+        raw_data = request.get_data(as_text=True)
+        log(f"[TRADING_LOG] 🔍 RAW BODY: {raw_data}")
+        
+        # Parse JSON
         data = request.get_json()
+        log(f"[TRADING_LOG] 📥 JSON COMPLETO RICEVUTO: {json.dumps(data)}")
+        
         event_type = data.get("type", "UNKNOWN")
         asset = data.get("asset", "UNKNOWN")
         pnl = data.get("pnl", 0)
         
-        log(f"[TRADING_LOG] 📥 RICEVUTO: type={event_type} asset={asset} pnl={pnl}")
+        log(f"[TRADING_LOG] 📥 PARSED: type={event_type} | asset={asset} | pnl={pnl}")
         
         if event_type in ["ENTRY", "EXIT"]:
             try:
@@ -121,6 +126,8 @@ def trading_log():
                 log(f"[DB_SAVE] ✅ SALVATO nel DB: {event_type} {asset} PnL={pnl}$")
             except Exception as e:
                 log(f"[DB_SAVE] ❌ ERRORE SALVATAGGIO: {e}")
+        else:
+            log(f"[TRADING_LOG] ⚠️ SCARTATO: type={event_type} (non è ENTRY/EXIT)")
         
         trades_memory.append({
             'timestamp': datetime.utcnow().isoformat(),
@@ -133,7 +140,7 @@ def trading_log():
         
         return jsonify({"status": "ok"}), 200
     except Exception as e:
-        log(f"[TRADING_LOG] ❌ ERRORE: {e}")
+        log(f"[TRADING_LOG] ❌ ERRORE CRITICO: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/trading/heartbeat', methods=['POST'])
@@ -150,7 +157,7 @@ def trading_heartbeat():
         heartbeat_data["trades"] = trades
         heartbeat_data["last_seen"] = datetime.utcnow().isoformat()
         
-        log(f"[HEARTBEAT] 💓 RicEVUTO: status={status} capital=${capital} trades={trades}")
+        log(f"[HEARTBEAT] 💓 RICEVUTO: status={status} capital=${capital} trades={trades}")
         
         return jsonify({"status": "ok"}), 200
     except Exception as e:
@@ -279,7 +286,7 @@ threading.Thread(target=brain_analysis_thread, daemon=True, name='brain').start(
 
 @app.route('/trading/config', methods=['GET'])
 def get_config():
-    return jsonify({"version": "V5.6 ULTIMATE", "mode": "LIVE"}), 200
+    return jsonify({"version": "V5.7 DEBUG", "mode": "LIVE"}), 200
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -287,7 +294,7 @@ DASHBOARD_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MISSION CONTROL V5.6</title>
+    <title>MISSION CONTROL V5.7</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
@@ -370,15 +377,11 @@ DASHBOARD_HTML = """
         }
         .win { color: #00ff00; }
         .loss { color: #ff0000; }
-        @media (max-width: 768px) {
-            .metrics-grid { grid-template-columns: repeat(2, 1fr); }
-            .trade-row { grid-template-columns: 1fr; }
-        }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">🔴 MISSION CONTROL V5.6 — LIVE BRAIN 🔴</div>
+        <div class="header">🔴 MISSION CONTROL V5.7 — DEBUG MODE 🔴</div>
         
         <div class="metrics-grid">
             <div class="metric-card">
@@ -500,5 +503,5 @@ def dashboard():
     return render_template_string(DASHBOARD_HTML)
 
 if __name__ == '__main__':
-    log("[MAIN] 🚀 MISSION CONTROL V5.6 ULTIMATE STARTING...")
+    log("[MAIN] 🚀 MISSION CONTROL V5.7 DEBUG STARTING...")
     app.run(host='0.0.0.0', port=5000, debug=False)
