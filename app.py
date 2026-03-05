@@ -98,11 +98,12 @@ def trading_log():
         data = request.get_json()
         log(f"[TRADING_LOG] 📥 JSON COMPLETO RICEVUTO: {json.dumps(data)}")
         
-        event_type = data.get("type", "UNKNOWN")
+        # Supporta ENTRAMBI i formati: "type" e "event_type"
+        event_type = data.get("type") or data.get("event_type", "UNKNOWN")
         asset = data.get("asset", "UNKNOWN")
         pnl = data.get("pnl", 0)
         
-        log(f"[TRADING_LOG] 📥 PARSED: type={event_type} | asset={asset} | pnl={pnl}")
+        log(f"[TRADING_LOG] 📥 PARSED: event_type={event_type} | asset={asset} | pnl={pnl}")
         
         if event_type in ["ENTRY", "EXIT"]:
             try:
