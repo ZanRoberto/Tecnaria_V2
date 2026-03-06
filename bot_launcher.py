@@ -25,7 +25,7 @@ print("[LAUNCHER] 📦 Python path:", sys.path[:3])
 
 try:
     # Importa il bot con MEMORIA
-    from OVERTOP_BASSANO_V14_1_ import OvertopBassanoV14Memoria
+    from OVERTOP_BASSANO_V14 import OvertopBassanoV14Memoria
     print("[LAUNCHER] ✅ Imported OvertopBassanoV14Memoria")
     
     # Crea istanza
@@ -50,3 +50,4 @@ except Exception as e:
     import traceback
     traceback.print_exc()
     sys.exit(1)
+
