@@ -1,10 +1,10 @@
 """
-MISSION CONTROL V5.9 — PERSISTENT DATABASE
-============================================
+MISSION CONTROL V5.9 — PERSISTENT DATABASE + BOT LAUNCHER
+===========================================================
 ✅ Database PERSISTENTE in /home/app/data/
 ✅ Sopravvive ai riavvii Render
 ✅ Retry logic per salvataggi
-✅ Verifica connessione DB ogni operazione
+✅ Bot V14 lanciato in thread daemon
 """
 
 from flask import Flask, request, jsonify, render_template_string
@@ -291,9 +291,73 @@ def brain_analysis_thread():
 
 threading.Thread(target=brain_analysis_thread, daemon=True, name='brain').start()
 
+def bot_launcher_thread():
+    """Lancia il bot V14 in thread separato"""
+    try:
+        log("[LAUNCHER] 🚀 OVERTOP BASSANO V14 LAUNCHER STARTING...")
+        log(f"[LAUNCHER] 📁 Working directory: {os.getcwd()}")
+        log(f"[LAUNCHER] 📦 Python path: {sys.path[:3]}")
+        
+        # Import bot
+        try:
+            from OVERTOP_BASSANO_V14 import OvertopBassanoV14Memoria
+            log("[LAUNCHER] ✅ Imported OvertopBassanoV14Memoria")
+        except ImportError as ie:
+            log(f"[LAUNCHER] ❌ IMPORT ERROR: {ie}")
+            log(f"[LAUNCHER] ⚠️ Files in directory: {os.listdir('.')}")
+            return
+        except Exception as e:
+            log(f"[LAUNCHER] ❌ UNEXPECTED ERROR during import: {e}")
+            import traceback
+            log(traceback.format_exc())
+            return
+        
+        # Create instance
+        try:
+            log("[LAUNCHER] 🔧 Creating bot instance...")
+            bot = OvertopBassanoV14Memoria()
+            log("[LAUNCHER] ✅ Bot instance created successfully")
+        except Exception as e:
+            log(f"[LAUNCHER] ❌ ERROR creating bot instance: {e}")
+            import traceback
+            log(traceback.format_exc())
+            return
+        
+        # Check bot has run() method
+        if not hasattr(bot, 'run'):
+            log("[LAUNCHER] ❌ Bot does not have a 'run()' method!")
+            log(f"[LAUNCHER] ⚠️ Bot methods: {dir(bot)}")
+            return
+        
+        log("[LAUNCHER] ✅ Bot has run() method")
+        
+        # Start bot
+        log("[LAUNCHER] ▶️ Starting bot.run()...")
+        log("[LAUNCHER] 🟢 Bot is now LIVE")
+        log("[LAUNCHER] 💓 Sending heartbeat to Mission Control every 30s")
+        log("[LAUNCHER] 📊 WR should rise towards 71%+")
+        log("[LAUNCHER] 🧠 Memory system active: matrimoni/separazioni/divorzi")
+        
+        try:
+            bot.run()
+        except KeyboardInterrupt:
+            log("[LAUNCHER] ⚠️ Bot interrupted")
+        except Exception as e:
+            log(f"[LAUNCHER] ❌ ERROR during bot.run(): {e}")
+            import traceback
+            log(traceback.format_exc())
+    except Exception as e:
+        log(f"[LAUNCHER] ❌ CRITICAL ERROR: {e}")
+        import traceback
+        log(traceback.format_exc())
+
+# Lancia bot in thread daemon (non blocca app.py)
+threading.Thread(target=bot_launcher_thread, daemon=True, name='bot_launcher').start()
+log("[MAIN] ✅ Bot launcher thread started")
+
 @app.route('/trading/config', methods=['GET'])
 def get_config():
-    return jsonify({"version": "V5.9 PERSISTENT", "db": DB_PATH}), 200
+    return jsonify({"version": "V5.9 PERSISTENT + BOT", "db": DB_PATH}), 200
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
@@ -397,5 +461,5 @@ def dashboard():
     return render_template_string(DASHBOARD_HTML)
 
 if __name__ == '__main__':
-    log("[MAIN] 🚀 MISSION CONTROL V5.9 PERSISTENT STARTING...")
+    log("[MAIN] 🚀 MISSION CONTROL V5.9 + BOT LAUNCHER STARTING...")
     app.run(host='0.0.0.0', port=5000, debug=False)
