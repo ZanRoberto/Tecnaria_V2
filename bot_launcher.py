@@ -25,7 +25,7 @@ print("[LAUNCHER] 📦 Python path:", sys.path[:3])
 
 try:
     # Importa il bot con MEMORIA
-    from OVERTOP_BASSANO_V14 import OvertopBassanoV14Memoria
+    from OVERTOP_BASSANO_V14.py import OvertopBassanoV14Memoria
     print("[LAUNCHER] ✅ Imported OvertopBassanoV14Memoria")
     
     # Crea istanza
@@ -43,11 +43,12 @@ try:
     
 except ImportError as e:
     print(f"[LAUNCHER] ❌ IMPORT ERROR: {e}")
-    print("[LAUNCHER] ⚠️ Make sure OVERTOP_BASSANO_V14_1_.py exists in same directory")
+    print("[LAUNCHER] ⚠️ Make sure OVERTOP_BASSANO_V14.py exists in same directory")
     sys.exit(1)
 except Exception as e:
     print(f"[LAUNCHER] ❌ CRITICAL ERROR: {e}")
     import traceback
     traceback.print_exc()
     sys.exit(1)
+
 
