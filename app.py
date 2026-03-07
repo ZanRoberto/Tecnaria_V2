@@ -93,7 +93,8 @@ def init_db():
 
 init_db()
 
-# ✅ HEARTBEAT_DATA CONDIVISO tra app.py e bot
+# ✅ HEARTBEAT_DATA CONDIVISO tra app.py e bot (THREAD-SAFE)
+heartbeat_lock = threading.Lock()
 heartbeat_data = {"status": "UNKNOWN", "capital": 0, "trades": 0, "wr": 0, "wins": 0, "last_seen": None}
 
 def db_execute(query, params=None, fetch=False):
@@ -208,8 +209,13 @@ def trading_status():
         
         wr = (n_wins / n_trades * 100) if n_trades > 0 else 0
         
-        # USA heartbeat_data dalla memoria condivisa con bot
-        capital = heartbeat_data.get("capital", 0)
+        # LEGGI heartbeat_data CON LOCK (THREAD-SAFE)
+        with heartbeat_lock:
+            capital = heartbeat_data.get("capital", 0)
+            status = heartbeat_data.get("status", "UNKNOWN")
+            hb_trades = heartbeat_data.get("trades", 0)
+            hb_wr = heartbeat_data.get("wr", 0)
+        
         roi = (total_pnl / capital * 100) if capital > 0 else 0
         
         trades = []
@@ -235,10 +241,10 @@ def trading_status():
         if n_trades == 0:
             suggestions.append("🟡 Nessun trade — warmup")
         
-        log(f"[STATUS] 📊 Ritorno: {n_trades} trade | WR={wr:.1f}% | PnL={total_pnl:.2f}$")
+        log(f"[STATUS] 📊 Ritorno: {n_trades} trade | WR={wr:.1f}% | PnL={total_pnl:.2f}$ | Status={status}")
         
         return jsonify({
-            "heartbeat": heartbeat_data,
+            "heartbeat": {"status": status, "capital": capital, "trades": hb_trades, "wr": hb_wr},
             "metrics": {
                 "n_trades": n_trades,
                 "n_wins": n_wins,
@@ -299,6 +305,7 @@ def bot_thread_launcher():
             
             # CREA istanza bot e PASSA heartbeat_data condiviso
             bot = OvertopBassanoV14Memoria(
+                heartbeat_lock=heartbeat_lock,
                 heartbeat_data=heartbeat_data,
                 db_execute=db_execute
             )
