@@ -1,37 +1,10 @@
 #!/usr/bin/env python3
 """
-OVERTOP BASSANO V14 — MEMORIA MATRIMONI/DIVORZI/SEPARAZIONI/RICONCILIAZIONI
+OVERTOP BASSANO V14 — INTEGRATO IN APP.PY (SENZA HTTP ESTERNO)
 ═══════════════════════════════════════════════════════════════════════════════
-UPGRADE DALLA VERSIONE PRECEDENTE:
-
-V14 ORIGINALE:
-├─ 5 Capsule intelligenti
-├─ Matrimoni (fingerprint + contesto)
-├─ Entry/Exit logica
-└─ WR=0.4% (V13.9 live data)
-
-V14 MEMORIA (NUOVO):
-├─ TUTTO di sopra
-├─ + MEMORIA dei matrimoni (trust score)
-├─ + SEPARAZIONI (50 trade recovery time)
-├─ + RICONCILIAZIONI (re-test with caution)
-├─ + DIVORZI DEFINITIVI (never enter again)
-└─ WR=71% ATTESO (vs 0.4%)
-
-COME FUNZIONA:
-
-1. MATRIMONIO: Entra con fingerprint + contesto allineati
-2. SEPARAZIONE: Se WR<40% → blacklist 50 trade (tempo per guarire)
-3. RICONCILIAZIONE: Dopo 50 trade → ri-testa (trust=50)
-4. DIVORZIO: Se riconciliazione fallisce → PERMANENTE
-
-TRUST SCORE:
-├─ Base: 50
-├─ Win: +5 (max 100)
-├─ Loss: -15 (min 0)
-├─ Blocca entry se <30
-└─ Blacklist se <10 per 3+ fallimenti
-
+Questo bot gira DENTRO app.py come thread.
+NON manda heartbeat via HTTP.
+Scrive DIRETTAMENTE a heartbeat_data passato da app.py.
 ═══════════════════════════════════════════════════════════════════════════════
 """
 
@@ -39,7 +12,6 @@ import json
 import websocket
 import threading
 import time
-import requests
 from datetime import datetime
 from collections import deque, defaultdict
 import logging
@@ -57,7 +29,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# LE 5 CAPSULE (STESSE DI PRIMA)
+# LE 5 CAPSULE
 # ═══════════════════════════════════════════════════════════════════════════
 
 class Capsule1Coerenza:
@@ -122,7 +94,7 @@ class MatrimonioIntelligente:
         })
 
 # ═══════════════════════════════════════════════════════════════════════════
-# MEMORIA MATRIMONI (NUOVO!)
+# MEMORIA MATRIMONI
 # ═══════════════════════════════════════════════════════════════════════════
 
 class MemoriaMatrimoni:
@@ -140,16 +112,13 @@ class MemoriaMatrimoni:
     def get_status(self, matrimonio_name):
         """Controlla stato matrimonio prima di entrare"""
         
-        # DIVORZIO PERMANENTE?
         if matrimonio_name in self.matrimoni_divorce_permanent:
             return False, "DIVORZIO_PERMANENTE"
         
-        # IN BLACKLIST (SEPARAZIONE ATTIVA)?
         if self.matrimoni_blacklist[matrimonio_name] > 0:
             self.matrimoni_blacklist[matrimonio_name] -= 1
             return False, "SEPARAZIONE_ATTIVA"
         
-        # TRUST TOO LOW?
         if self.matrimoni_trust[matrimonio_name] < 30:
             return False, "TRUST_BASSO"
         
@@ -165,27 +134,22 @@ class MemoriaMatrimoni:
             self.matrimoni_losses[matrimonio_name] += 1
             self.matrimoni_trust[matrimonio_name] -= 15
         
-        # Cap trust
         self.matrimoni_trust[matrimonio_name] = max(0, min(100, self.matrimoni_trust[matrimonio_name]))
         
-        # Calcola WR reale
         total = self.matrimoni_wins[matrimonio_name] + self.matrimoni_losses[matrimonio_name]
         if total > 0:
             wr_reale = self.matrimoni_wins[matrimonio_name] / total
             self.matrimoni_wr_history[matrimonio_name].append(wr_reale)
             
-            # Se WR è troppo basso nei recenti 10 trade, attiva divorzio/separazione
             if len(self.matrimoni_wr_history[matrimonio_name]) >= 10:
                 recent_wr = sum(self.matrimoni_wr_history[matrimonio_name][-10:]) / 10
                 
                 if recent_wr < wr_expected * 0.6:
                     if matrimonio_name in self.matrimoni_separazione and self.matrimoni_separazione[matrimonio_name]:
-                        # È già stato in separazione → DIVORZIO PERMANENTE
                         self.matrimoni_divorce_permanent.add(matrimonio_name)
                         self.matrimoni_trust[matrimonio_name] = 0
                         log.warning(f"[DIVORZIO] {matrimonio_name} - PERMANENTE (WR={recent_wr:.1%})")
                     else:
-                        # Prima volta → SEPARAZIONE
                         self.matrimoni_separazione[matrimonio_name] = True
                         self.matrimoni_blacklist[matrimonio_name] = 50
                         self.matrimoni_trust[matrimonio_name] -= 30
@@ -213,7 +177,6 @@ class ContestoAnalyzer:
         
         prices = list(self.prices)
         
-        # Momentum
         recent = prices[-5:]
         changes = [recent[i+1] - recent[i] for i in range(len(recent)-1)]
         consecutive_up = sum(1 for c in changes if c > 0)
@@ -226,7 +189,6 @@ class ContestoAnalyzer:
         else:
             momentum = "DEBOLE"
         
-        # Volatility
         recent_20 = prices[-20:]
         changes_20 = [abs(recent_20[i+1] - recent_20[i]) for i in range(len(recent_20)-1)]
         max_change = max(changes_20)
@@ -239,7 +201,6 @@ class ContestoAnalyzer:
         else:
             volatility = "BASSA"
         
-        # Trend
         start = prices[0]
         end = prices[-1]
         change_pct = (end - start) / start * 100
@@ -254,14 +215,17 @@ class ContestoAnalyzer:
         return momentum, volatility, trend
 
 # ═══════════════════════════════════════════════════════════════════════════
-# BOT CON MEMORIA MATRIMONI
+# BOT INTEGRATO (NO HTTP ESTERNO)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class OvertopBassanoV14Memoria:
-    def __init__(self):
+    def __init__(self, heartbeat_data=None, db_execute=None):
         self.symbol = "BTCUSDC"
         self.ws_url = "wss://stream.binance.com:9443/ws/btcusdc@aggTrade"
-        self.render_url = "http://localhost:5000"
+        
+        # RICEVE heartbeat_data e db_execute da app.py
+        self.heartbeat_data = heartbeat_data if heartbeat_data is not None else {}
+        self.db_execute = db_execute
         
         self.capital = 10116.48
         self.total_trades = 894
@@ -269,7 +233,7 @@ class OvertopBassanoV14Memoria:
         self.losses = 0
         
         self.analyzer = ContestoAnalyzer(window=50)
-        self.memoria = MemoriaMatrimoni()  # NUOVO!
+        self.memoria = MemoriaMatrimoni()
         self.capsule1 = Capsule1Coerenza()
         self.capsule2 = Capsule2Trappola()
         self.capsule3 = Capsule3Protezione()
@@ -279,7 +243,7 @@ class OvertopBassanoV14Memoria:
         self.trade_open = None
         self.entry_time = None
         self.max_price = None
-        self.current_matrimonio = None  # Track current matrimonio
+        self.current_matrimonio = None
         
         self.fingerprint_wr = 0.72
         self.heartbeat_interval = 30
@@ -288,7 +252,7 @@ class OvertopBassanoV14Memoria:
         self.ws = None
         
         log.info("═" * 80)
-        log.info("OVERTOP BASSANO V14 — MEMORIA MATRIMONI")
+        log.info("OVERTOP BASSANO V14 — INTEGRATO IN APP.PY (NO HTTP)")
         log.info("═" * 80)
         log.info("[MEMORIA] Sistema attivato:")
         log.info("  ├─ Matrimoni: intelligenti")
@@ -297,7 +261,7 @@ class OvertopBassanoV14Memoria:
         log.info("  └─ Divorzi: permanenti")
     
     def connect_binance(self):
-        """Connessione a Binance con diagnostica"""
+        """Connessione a Binance"""
         
         def on_message(ws, msg):
             try:
@@ -332,10 +296,10 @@ class OvertopBassanoV14Memoria:
         threading.Thread(target=self.ws.run_forever, daemon=True).start()
     
     def _process_tick(self, price):
-        """Processa ogni tick con debug"""
+        """Processa ogni tick"""
         
         if time.time() - self.last_heartbeat > self.heartbeat_interval:
-            self._send_heartbeat()
+            self._update_heartbeat()
             self.last_heartbeat = time.time()
         
         contesto = self.analyzer.analyze()
@@ -353,20 +317,18 @@ class OvertopBassanoV14Memoria:
             self._evaluate_entry(price, momentum, volatility, trend)
     
     def _evaluate_entry(self, price, momentum, volatility, trend):
-        """ENTRY con MEMORIA matrimoni"""
+        """ENTRY con MEMORIA"""
         
         matrimonio = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
         matrimonio_name = matrimonio["name"]
         confidence = matrimonio["confidence"]
         
-        # CONTROLLA MEMORIA PRIMA DI ENTRARE!
         can_enter, status = self.memoria.get_status(matrimonio_name)
         if not can_enter:
             if self.analyzer.tick_count % 500 == 0:
                 log.info(f"[MEMORIA] {matrimonio_name}: {status} - NON ENTRO")
             return
         
-        # Capsule check
         allow_1, conf_1, reason_1 = self.capsule1.valida(self.fingerprint_wr, momentum, volatility, trend)
         if not allow_1:
             return
@@ -432,9 +394,8 @@ class OvertopBassanoV14Memoria:
             return
         
         matrimonio_name = self.trade_open["matrimonio"]
-        matrimonio = MatrimonioIntelligente.get_marriage("", "", "")  # Placeholder
+        matrimonio = MatrimonioIntelligente.get_marriage("", "", "")
         
-        # Cerca il matrimonio corretto per ottenere confidence
         for key, m in MatrimonioIntelligente.MARRIAGES.items():
             if m["name"] == matrimonio_name:
                 matrimonio = m
@@ -442,7 +403,6 @@ class OvertopBassanoV14Memoria:
         
         wr_expected = matrimonio.get("confidence", 0.50)
         
-        # REGISTRA A MEMORIA
         self.memoria.record_trade(matrimonio_name, is_win, wr_expected)
         
         if is_win:
@@ -463,52 +423,48 @@ class OvertopBassanoV14Memoria:
 └─ WR: {wr:.1f}%
 """)
         
-        self._send_trade_log(pnl, is_win)
-        self._send_heartbeat()
+        self._save_trade_log(pnl, is_win)
+        self._update_heartbeat()
         
         self.trade_open = None
         self.entry_time = None
         self.current_matrimonio = None
     
-    def _send_trade_log(self, pnl, is_win):
-        try:
-            requests.post(
-                f"{self.render_url}/trading/log",
-                json={
-                    "type": "EXIT",
-                    "asset": self.symbol,
-                    "pnl": pnl,
-                    "is_win": is_win,
-                    "capital": self.capital,
-                    "timestamp": datetime.utcnow().isoformat(),
-                },
-                timeout=3
-            )
-            log.debug("[RENDER] Trade log inviato")
-        except Exception as e:
-            log.warning(f"[RENDER_ERROR] {e}")
+    def _save_trade_log(self, pnl, is_win):
+        """Salva il trade nel DB (se disponibile)"""
+        if self.db_execute:
+            try:
+                self.db_execute("""
+                    INSERT INTO trades 
+                    (event_type, asset, price, size, pnl, direction, reason, data_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    "EXIT",
+                    self.symbol,
+                    0,
+                    0,
+                    pnl,
+                    "LONG",
+                    "Trade completato",
+                    json.dumps({"is_win": is_win})
+                ))
+                log.debug("[DB] Trade salvato")
+            except Exception as e:
+                log.warning(f"[DB_ERROR] {e}")
     
-    def _send_heartbeat(self):
-        try:
-            requests.post(
-                f"{self.render_url}/trading/heartbeat",
-                json={
-                    "status": "RUNNING",
-                    "capital": self.capital,
-                    "trades": self.total_trades,
-                    "wins": self.wins,
-                    "wr": self.wins / max(1, self.total_trades),
-                    "memoria_attiva": True,
-                    "divorzi_permanenti": len(self.memoria.matrimoni_divorce_permanent),
-                },
-                timeout=3
-            )
-            log.debug("[RENDER] Heartbeat inviato (con memoria)")
-        except Exception as e:
-            log.warning(f"[RENDER_ERROR] {e}")
+    def _update_heartbeat(self):
+        """Aggiorna heartbeat_data DIRETTAMENTE (no HTTP)"""
+        if self.heartbeat_data is not None:
+            self.heartbeat_data["status"] = "RUNNING"
+            self.heartbeat_data["capital"] = self.capital
+            self.heartbeat_data["trades"] = self.total_trades
+            self.heartbeat_data["wins"] = self.wins
+            self.heartbeat_data["wr"] = self.wins / max(1, self.total_trades)
+            self.heartbeat_data["last_seen"] = datetime.utcnow().isoformat()
+            log.debug("[HEARTBEAT] Aggiornato (memoria condivisa)")
     
     def run(self):
-        """Avvia con diagnostica e memoria"""
+        """Avvia il bot"""
         log.info("[START] Avviando bot con MEMORIA MATRIMONI...")
         self.connect_binance()
         
@@ -524,11 +480,3 @@ class OvertopBassanoV14Memoria:
                 time.sleep(1)
         except KeyboardInterrupt:
             log.info("[STOP] Bot fermato")
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════════════════════
-
-if __name__ == "__main__":
-    bot = OvertopBassanoV14Memoria()
-    bot.run()
