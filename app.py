@@ -9,7 +9,7 @@ MISSION CONTROL V5.9 — BOT V14 INTEGRATO
 """
 
 from flask import Flask, request, jsonify, render_template_string
-from OVERTOP_BASSANO_V14_INTEGRATO import OvertopBassanoV14Memoria
+from OVERTOP_BASSANO_V14 import OvertopBassanoV14Memoria
 import sqlite3
 import json
 import threading
