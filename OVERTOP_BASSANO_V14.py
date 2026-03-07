@@ -219,12 +219,13 @@ class ContestoAnalyzer:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class OvertopBassanoV14Memoria:
-    def __init__(self, heartbeat_data=None, db_execute=None):
+    def __init__(self, heartbeat_data=None, db_execute=None, heartbeat_lock=None):
         self.symbol = "BTCUSDC"
         self.ws_url = "wss://stream.binance.com:9443/ws/btcusdc@aggTrade"
         
         # RICEVE heartbeat_data e db_execute da app.py
         self.heartbeat_data = heartbeat_data if heartbeat_data is not None else {}
+        self.heartbeat_lock = heartbeat_lock
         self.db_execute = db_execute
         
         self.capital = 10116.48
@@ -454,14 +455,25 @@ class OvertopBassanoV14Memoria:
     
     def _update_heartbeat(self):
         """Aggiorna heartbeat_data DIRETTAMENTE (no HTTP)"""
-        if self.heartbeat_data is not None:
-            self.heartbeat_data["status"] = "RUNNING"
-            self.heartbeat_data["capital"] = self.capital
-            self.heartbeat_data["trades"] = self.total_trades
-            self.heartbeat_data["wins"] = self.wins
-            self.heartbeat_data["wr"] = self.wins / max(1, self.total_trades)
-            self.heartbeat_data["last_seen"] = datetime.utcnow().isoformat()
-            log.debug("[HEARTBEAT] Aggiornato (memoria condivisa)")
+        if self.heartbeat_lock:
+            self.heartbeat_lock.acquire()
+        try:
+            if self.heartbeat_data is not None:
+                self.heartbeat_data["status"] = "RUNNING"
+                self.heartbeat_data["capital"] = self.capital
+                self.heartbeat_data["trades"] = self.total_trades
+                self.heartbeat_data["wins"] = self.wins
+                self.heartbeat_data["wr"] = self.wins / max(1, self.total_trades)
+                self.heartbeat_data["last_seen"] = datetime.utcnow().isoformat()
+                log.info("[HEARTBEAT] ✅ Aggiornato | Status=RUNNING | Capital=${:.2f} | Trades={}".format(
+                    self.capital, self.total_trades))
+            else:
+                log.error("[HEARTBEAT] ❌ ERRORE CRITICO: heartbeat_data is None!")
+        except Exception as e:
+            log.error("[HEARTBEAT] ❌ ERRORE durante aggiornamento: {}".format(e))
+        finally:
+            if self.heartbeat_lock:
+                self.heartbeat_lock.release()
     
     def run(self):
         """Avvia il bot"""
@@ -480,4 +492,3 @@ class OvertopBassanoV14Memoria:
                 time.sleep(1)
         except KeyboardInterrupt:
             log.info("[STOP] Bot fermato")
-
