@@ -219,12 +219,13 @@ class ContestoAnalyzer:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class OvertopBassanoV14Memoria:
-    def __init__(self, heartbeat_data=None, db_execute=None):
+    def __init__(self, heartbeat_data=None, db_execute=None, heartbeat_lock=None):
         self.symbol = "BTCUSDC"
         self.ws_url = "wss://stream.binance.com:9443/ws/btcusdc@aggTrade"
         
         # RICEVE heartbeat_data e db_execute da app.py
         self.heartbeat_data = heartbeat_data if heartbeat_data is not None else {}
+        self.heartbeat_lock = heartbeat_lock
         self.db_execute = db_execute
         
         self.capital = 10116.48
@@ -453,6 +454,9 @@ class OvertopBassanoV14Memoria:
                 log.warning(f"[DB_ERROR] {e}")
     
     def _update_heartbeat(self):
+        if self.heartbeat_lock:
+            self.heartbeat_lock.acquire()
+        try:
         """Aggiorna heartbeat_data DIRETTAMENTE (no HTTP)"""
         if self.heartbeat_data is not None:
             self.heartbeat_data["status"] = "RUNNING"
@@ -462,6 +466,9 @@ class OvertopBassanoV14Memoria:
             self.heartbeat_data["wr"] = self.wins / max(1, self.total_trades)
             self.heartbeat_data["last_seen"] = datetime.utcnow().isoformat()
             log.debug("[HEARTBEAT] Aggiornato (memoria condivisa)")
+        finally:
+            if self.heartbeat_lock:
+                self.heartbeat_lock.release()
     
     def run(self):
         """Avvia il bot"""
