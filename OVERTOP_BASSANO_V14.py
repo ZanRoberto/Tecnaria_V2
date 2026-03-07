@@ -261,7 +261,7 @@ class OvertopBassanoV14Memoria:
     def __init__(self):
         self.symbol = "BTCUSDC"
         self.ws_url = "wss://stream.binance.com:9443/ws/btcusdc@aggTrade"
-        self.render_url = "https://teknaria-v2.onrender.com:5000"
+        self.render_url = "http://localhost:5000"
         
         self.capital = 10116.48
         self.total_trades = 894
