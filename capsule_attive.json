@@ -1,1 +1,338 @@
-
+[
+  {
+    "capsule_id": "BLOCCO_REGIME_LATERAL_001",
+    "version": 1,
+    "descrizione": "Regime lateral \u2014 WR=17% su 2820 trade storici. SEMPRE tossico.",
+    "trigger": [
+      {
+        "param": "regime",
+        "op": "==",
+        "value": "lateral"
+      }
+    ],
+    "azione": {
+      "type": "blocca_entry",
+      "params": {
+        "reason": "regime_lateral_tossico"
+      }
+    },
+    "priority": 1,
+    "enabled": true,
+    "lifetime": "permanent",
+    "source": "analyzer",
+    "created_at": 1772186930.1312296,
+    "hits": 0,
+    "wins_after": 0,
+    "losses_after": 0
+  },
+  {
+    "capsule_id": "BLOCCO_REGIME_CHOPPY_001",
+    "version": 1,
+    "descrizione": "Regime choppy \u2014 WR=19% su 1353 trade storici. SEMPRE tossico.",
+    "trigger": [
+      {
+        "param": "regime",
+        "op": "==",
+        "value": "choppy"
+      }
+    ],
+    "azione": {
+      "type": "blocca_entry",
+      "params": {
+        "reason": "regime_choppy_tossico"
+      }
+    },
+    "priority": 1,
+    "enabled": true,
+    "lifetime": "permanent",
+    "source": "analyzer",
+    "created_at": 1772186930.1312296,
+    "hits": 0,
+    "wins_after": 0,
+    "losses_after": 0
+  },
+  {
+    "capsule_id": "BOOST_REGIME_TRENDING_001",
+    "version": 1,
+    "descrizione": "Regime trending \u2014 WR=80% su 843 trade. Aumenta size +30%.",
+    "trigger": [
+      {
+        "param": "regime",
+        "op": "==",
+        "value": "trending"
+      }
+    ],
+    "azione": {
+      "type": "modifica_size",
+      "params": {
+        "mult": 1.3
+      }
+    },
+    "priority": 3,
+    "enabled": true,
+    "lifetime": "permanent",
+    "source": "analyzer",
+    "created_at": 1772186930.1312296,
+    "hits": 51,
+    "wins_after": 1,
+    "losses_after": 0
+  },
+  {
+    "capsule_id": "BLOCCO_DOPO3LOSS_001",
+    "version": 1,
+    "descrizione": "Dopo 3 loss consecutivi WR crolla a 13-20%. Pausa obbligatoria.",
+    "trigger": [
+      {
+        "param": "loss_consecutivi",
+        "op": ">=",
+        "value": 3
+      }
+    ],
+    "azione": {
+      "type": "blocca_entry",
+      "params": {
+        "reason": "drawdown_sequenziale_3loss"
+      }
+    },
+    "priority": 2,
+    "enabled": true,
+    "lifetime": "permanent",
+    "source": "analyzer",
+    "created_at": 1772186930.1312296,
+    "hits": 1,
+    "wins_after": 0,
+    "losses_after": 0
+  },
+  {
+    "capsule_id": "VETO_IGNOTO_NORMAL_001",
+    "version": 2,
+    "descrizione": "[V13.9] IGNOTO in NORMAL con sample size < 20 \u2014 rilassato. WR 14% su n sconosciuto, potrebbe essere falso positivo.",
+    "trigger": [
+      {
+        "param": "seed_tipo",
+        "op": "==",
+        "value": "IGNOTO"
+      },
+      {
+        "param": "mode",
+        "op": "==",
+        "value": "NORMAL"
+      },
+      {
+        "param": "sample_size",
+        "op": "<",
+        "value": 20
+      }
+    ],
+    "azione": {
+      "type": "blocca_entry",
+      "params": {
+        "reason": "ignoto_normal_tossico_assoluto"
+      }
+    },
+    "priority": 1,
+    "enabled": true,
+    "lifetime": "permanent",
+    "source": "log_live_reale",
+    "created_at": 1772227200.0,
+    "hits": 234,
+    "wins_after": 0,
+    "losses_after": 0
+  },
+  {
+    "capsule_id": "VETO_IGNOTO_FORCE_BASSA_001",
+    "version": 2,
+    "descrizione": "[V13.9] IGNOTO con Force < 0.3 (da 0.4) \u2014 rilassato. V13.8 aveva 429 blocchi.",
+    "trigger": [
+      {
+        "param": "seed_tipo",
+        "op": "==",
+        "value": "IGNOTO"
+      },
+      {
+        "param": "force",
+        "op": "<",
+        "value": 0.3
+      }
+    ],
+    "azione": {
+      "type": "blocca_entry",
+      "params": {
+        "reason": "ignoto_force_bassa_tossico"
+      }
+    },
+    "priority": 1,
+    "enabled": true,
+    "lifetime": "permanent",
+    "source": "log_live_reale",
+    "created_at": 1772227200.0,
+    "hits": 429,
+    "wins_after": 0,
+    "losses_after": 0
+  },
+  {
+    "capsule_id": "BOOST_GOLD_TRAILING_001",
+    "version": 1,
+    "descrizione": "NORMAL + CONFERMATO + Force < 0.35 = TRAILING_STOP quasi garantito. LOG REALE: WR 100%, R medio +1.22, PnL +$20.72 su 7 trade. ORO PURO.",
+    "trigger": [
+      {
+        "param": "mode",
+        "op": "==",
+        "value": "NORMAL"
+      },
+      {
+        "param": "seed_tipo",
+        "op": "==",
+        "value": "CONFERMATO"
+      },
+      {
+        "param": "force",
+        "op": "<",
+        "value": 0.35
+      }
+    ],
+    "azione": {
+      "type": "modifica_size",
+      "params": {
+        "mult": 1.5,
+        "trailing_aggressivo": true,
+        "note": "Condizioni gold: massimizza il trade"
+      }
+    },
+    "priority": 3,
+    "enabled": true,
+    "lifetime": "permanent",
+    "source": "log_live_reale",
+    "created_at": 1772227200.0,
+    "hits": 0,
+    "wins_after": 0,
+    "losses_after": 0
+  },
+  {
+    "capsule_id": "RIDUZIONE_CONF_FORCE_ALTA_001",
+    "version": 1,
+    "descrizione": "CONFERMATO + Force > 0.6 = trappola controintuitiva. LOG REALE: multipli trade finiscono in ZONA_MORTA nonostante CONFERMATO. Ridurre size.",
+    "trigger": [
+      {
+        "param": "seed_tipo",
+        "op": "==",
+        "value": "CONFERMATO"
+      },
+      {
+        "param": "force",
+        "op": ">",
+        "value": 0.6
+      }
+    ],
+    "azione": {
+      "type": "modifica_size",
+      "params": {
+        "mult": 0.8,
+        "note": "Quando tutto sembra perfetto il mercato spesso delude"
+      }
+    },
+    "priority": 3,
+    "enabled": true,
+    "lifetime": "permanent",
+    "source": "log_live_reale",
+    "created_at": 1772227200.0,
+    "hits": 0,
+    "wins_after": 0,
+    "losses_after": 0
+  },
+  {
+    "capsule_id": "BOOST_WR_ORACOLO_GOLD_001",
+    "version": 1,
+    "descrizione": "WR oracolo 65-74% = zona magica. LOG REALE: WR reale 66.7%, PnL +$18.43, AvgR +0.304. Meglio di WR>=75%. Boost size.",
+    "trigger": [
+      {
+        "param": "wr_oracolo",
+        "op": ">=",
+        "value": 65
+      },
+      {
+        "param": "wr_oracolo",
+        "op": "<",
+        "value": 75
+      }
+    ],
+    "azione": {
+      "type": "modifica_size",
+      "params": {
+        "mult": 1.2,
+        "note": "Zona magica 65-74%: stabile e profittevole"
+      }
+    },
+    "priority": 3,
+    "enabled": true,
+    "lifetime": "permanent",
+    "source": "log_live_reale",
+    "created_at": 1772227200.0,
+    "hits": 0,
+    "wins_after": 0,
+    "losses_after": 0
+  },
+  {
+    "capsule_id": "PAUSA_DOPO_ZONA_MORTA_1S_001",
+    "version": 1,
+    "descrizione": "Dopo ZONA_MORTA in 1 secondo: il mercato non ha momentum. LOG REALE: 21 trade 1s, WR 19%, -$18.15. Aspetta 10s prima di rientrare.",
+    "trigger": [
+      {
+        "param": "ultimo_exit_type",
+        "op": "==",
+        "value": "ZONA_MORTA"
+      },
+      {
+        "param": "ultima_durata",
+        "op": "<=",
+        "value": 1.0
+      }
+    ],
+    "azione": {
+      "type": "pausa_entry",
+      "params": {
+        "secondi": 10,
+        "reason": "zona_morta_1s_no_momentum"
+      }
+    },
+    "priority": 2,
+    "enabled": false,
+    "lifetime": "permanent",
+    "source": "log_live_reale",
+    "created_at": 1772227200.0,
+    "hits": 62,
+    "wins_after": 0,
+    "losses_after": 1
+  },
+  {
+    "capsule_id": "FANTASMA_WR_MINIMO_001",
+    "version": 1,
+    "descrizione": "[V13.9] FANTASMA con WR < 30% ma n >= 100 \u2014 rilassato. V13.8 bloccava con n=3 (falso positivo).",
+    "trigger": [
+      {
+        "param": "fingerprint_wr",
+        "op": "<",
+        "value": 0.3
+      },
+      {
+        "param": "fingerprint_n",
+        "op": ">=",
+        "value": 100
+      }
+    ],
+    "azione": {
+      "type": "blocca_entry",
+      "params": {
+        "reason": "fantasma_basso_wr_validated"
+      }
+    },
+    "priority": 1,
+    "enabled": true,
+    "lifetime": "permanent",
+    "source": "log_live_reale",
+    "created_at": 1772227200.0,
+    "hits": 0,
+    "wins_after": 0,
+    "losses_after": 0
+  }
+]
