@@ -1,53 +1,44 @@
 #!/usr/bin/env python3
 """
-BOT LAUNCHER - OVERTOP BASSANO V14 CON MEMORIA
+BOT LAUNCHER — OVERTOP BASSANO V14 PRODUCTION
 ═══════════════════════════════════════════════════════════════════════════════
-Questo file avvia il bot V14 con memoria matrimoni/divorzi/separazioni.
+Avvia il bot come processo worker su Render.
 
-Usa questo file come processo worker su Render (insieme a app.py).
+PROCFILE su Render:
+  web:    python app.py
+  worker: python bot_launcher.py
 
-PROCFILE su Render deve essere:
-web: python app.py
-worker: python bot_launcher.py
-
+NOTA: PAPER_TRADE = True nel file production → nessun ordine reale.
+Imposta PAPER_TRADE = False solo dopo paper test soddisfacente.
 ═══════════════════════════════════════════════════════════════════════════════
 """
 
 import sys
 import os
 
-# Assicura che i path siano corretti
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 print("[LAUNCHER] 🚀 OVERTOP BASSANO V14 LAUNCHER STARTING...")
 print("[LAUNCHER] 📁 Working directory:", os.getcwd())
-print("[LAUNCHER] 📦 Python path:", sys.path[:3])
+print("[LAUNCHER] 📦 Python:", sys.version.split()[0])
 
 try:
-    # Importa il bot con MEMORIA
-    from OVERTOP_BASSANO_V14 import OvertopBassanoV14Memoria
-    print("[LAUNCHER] ✅ Imported OvertopBassanoV14Memoria")
-    
-    # Crea istanza
-    print("[LAUNCHER] 🔧 Creating bot instance...")
-    bot = OvertopBassanoV14Memoria()
-    
-    # Avvia il bot
-    print("[LAUNCHER] ▶️ Starting bot.run()...")
-    print("[LAUNCHER] 🟢 Bot is now LIVE")
-    print("[LAUNCHER] 💓 Sending heartbeat to Mission Control every 30s")
-    print("[LAUNCHER] 📊 WR should rise from 0.4% towards 50%+")
-    print("[LAUNCHER] 🧠 Memory system active: matrimoni/separazioni/divorzi")
-    
+    from OVERTOP_BASSANO_V14_PRODUCTION import OvertopBassanoV14Production
+
+    print("[LAUNCHER] ✅ Import OK: OvertopBassanoV14Production")
+    print("[LAUNCHER] 🔧 Creazione istanza bot...")
+
+    bot = OvertopBassanoV14Production()
+
+    print("[LAUNCHER] ▶️  bot.run() — bot LIVE")
     bot.run()
-    
+
 except ImportError as e:
     print(f"[LAUNCHER] ❌ IMPORT ERROR: {e}")
-    print("[LAUNCHER] ⚠️ Make sure OVERTOP_BASSANO_V14.py exists in same directory")
+    print("[LAUNCHER] ⚠️  Verifica che OVERTOP_BASSANO_V14_PRODUCTION.py sia nella stessa directory")
     sys.exit(1)
 except Exception as e:
-    print(f"[LAUNCHER] ❌ CRITICAL ERROR: {e}")
+    print(f"[LAUNCHER] ❌ ERRORE CRITICO: {e}")
     import traceback
     traceback.print_exc()
     sys.exit(1)
-
