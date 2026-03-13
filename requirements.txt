@@ -1,7 +1,5 @@
 flask
-openai
-requests
-langdetect
-psycopg2-binary
-websocket-client
 gunicorn
+websocket-client
+requests
+
