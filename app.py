@@ -264,7 +264,14 @@ def bot_thread_launcher():
                 heartbeat_lock=heartbeat_lock,
                 db_execute=db_execute,
             )
-            log("[BOT_LAUNCHER] ✅ Bot istanziato — bot.run() in partenza")
+            # ── Heartbeat IMMEDIATO — non aspettare 30s ──────────────────
+            with heartbeat_lock:
+                heartbeat_data["status"]  = "RUNNING"
+                heartbeat_data["mode"]    = "PAPER" if bot.paper_trade else "LIVE"
+                heartbeat_data["capital"] = round(bot.capital, 2)
+                heartbeat_data["trades"]  = bot.total_trades
+                heartbeat_data["last_seen"] = datetime.utcnow().isoformat()
+            log(f"[BOT_LAUNCHER] ✅ Bot istanziato — capital=${bot.capital:.2f} — bot.run() in partenza")
             bot.run()
         except Exception as e:
             retry_count += 1
