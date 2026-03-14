@@ -692,7 +692,99 @@ class PersistenzaStato:
             log.error(f"[PERSIST] Load: {e} — uso defaults")
             return self.DEFAULT_CAPITAL, self.DEFAULT_TRADES
 
-    def save(self, capital: float, total_trades: int):
+    def save_brain(self, oracolo, memoria, calibratore):
+        """
+        Serializza l'intelligenza accumulata su SQLite.
+        OracoloDinamico + MemoriaMatrimoni + AutoCalibratore params.
+        Chiamato ad ogni trade chiuso e ogni 5 minuti.
+        """
+        try:
+            import json
+            conn = sqlite3.connect(self.db_path)
+
+            # ── OracoloDinamico ─────────────────────────────────────────
+            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('oracolo', ?)",
+                        (json.dumps(oracolo._memory),))
+
+            # ── MemoriaMatrimoni ────────────────────────────────────────
+            memoria_data = {
+                'trust':      dict(memoria.trust),
+                'separazione':dict(memoria.separazione),
+                'blacklist':  dict(memoria.blacklist),
+                'divorzio':   list(memoria.divorzio),
+                'wins':       dict(memoria.wins),
+                'losses':     dict(memoria.losses),
+                'wr_history': {k: list(v) for k, v in memoria.wr_history.items()},
+            }
+            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('memoria', ?)",
+                        (json.dumps(memoria_data),))
+
+            # ── AutoCalibratore params ───────────────────────────────────
+            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('calibra_params', ?)",
+                        (json.dumps(calibratore.params),))
+
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            log.error(f"[BRAIN_SAVE] {e}")
+
+    def load_brain(self, oracolo, memoria, calibratore):
+        """
+        Ripristina l'intelligenza accumulata da SQLite dopo un restart.
+        Il bot riprende esattamente da dove aveva lasciato.
+        """
+        try:
+            import json
+            conn  = sqlite3.connect(self.db_path)
+            rows  = dict(conn.execute("SELECT key, value FROM bot_state").fetchall())
+            conn.close()
+
+            restored = []
+
+            # ── OracoloDinamico ─────────────────────────────────────────
+            if 'oracolo' in rows:
+                raw = json.loads(rows['oracolo'])
+                # Ricostruisce la struttura interna
+                for fp, data in raw.items():
+                    oracolo._memory[fp] = {
+                        'wins':    float(data.get('wins', 0)),
+                        'samples': float(data.get('samples', 0)),
+                    }
+                restored.append(f"Oracolo: {len(oracolo._memory)} fingerprint")
+
+            # ── MemoriaMatrimoni ────────────────────────────────────────
+            if 'memoria' in rows:
+                md = json.loads(rows['memoria'])
+                for k, v in md.get('trust', {}).items():
+                    memoria.trust[k] = v
+                for k, v in md.get('separazione', {}).items():
+                    memoria.separazione[k] = v
+                for k, v in md.get('blacklist', {}).items():
+                    memoria.blacklist[k] = v
+                for mat in md.get('divorzio', []):
+                    memoria.divorzio.add(mat)
+                for k, v in md.get('wins', {}).items():
+                    memoria.wins[k] = v
+                for k, v in md.get('losses', {}).items():
+                    memoria.losses[k] = v
+                for k, v in md.get('wr_history', {}).items():
+                    memoria.wr_history[k] = list(v)
+                restored.append(f"Memoria: {len(memoria.divorzio)} divorzi, "
+                               f"{sum(1 for v in memoria.blacklist.values() if v > 0)} separazioni")
+
+            # ── AutoCalibratore params ───────────────────────────────────
+            if 'calibra_params' in rows:
+                saved = json.loads(rows['calibra_params'])
+                calibratore.params.update(saved)
+                restored.append(f"Calibra: seed={saved.get('seed_threshold', '?')}")
+
+            if restored:
+                log.info(f"[BRAIN_LOAD] 🧠 Intelligenza ripristinata → {' | '.join(restored)}")
+            else:
+                log.info("[BRAIN_LOAD] Primo avvio — nessuna memoria precedente")
+
+        except Exception as e:
+            log.error(f"[BRAIN_LOAD] {e} — parto da zero")
         try:
             conn = sqlite3.connect(self.db_path)
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('capital', ?)",      (str(capital),))
@@ -1192,6 +1284,9 @@ class OvertopBassanoV14Production:
         self.regime_detector = RegimeDetector()
         self.decelero        = MomentumDecelerometer()
         self.position_sizer  = PositionSizer()
+
+        # ── Ripristina intelligenza accumulata ────────────────────────────
+        self._persist.load_brain(self.oracolo, self.memoria, self.calibratore)
         self._regime_current = 'RANGING'
         self._regime_conf    = 0.0
         self._last_regime_check = time.time()
@@ -1328,6 +1423,7 @@ class OvertopBassanoV14Production:
         # Persistenza ogni 5 minuti
         if now - self.last_persist > 300:
             self._persist.save(self.capital, self.total_trades)
+            self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
             self.last_persist = now
 
         contesto = self.analyzer.analyze()
@@ -1625,6 +1721,7 @@ class OvertopBassanoV14Production:
 
         # Persiste immediatamente dopo ogni trade
         self._persist.save(self.capital, self.total_trades)
+        self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
         self._update_heartbeat()
 
         # Salva info exit per capsule reattive
