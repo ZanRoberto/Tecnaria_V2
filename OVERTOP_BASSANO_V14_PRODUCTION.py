@@ -1067,6 +1067,7 @@ class OvertopBassanoV14Production:
             self.losses += 1
         self.capital += pnl
 
+        wr_live = (self.wins / (self.wins + self.losses) * 100) if (self.wins + self.losses) > 0 else 0
         self._log(
             "🟢" if is_win else "🔴",
             f"EXIT {matrimonio_name} {'WIN' if is_win else 'LOSS'} PnL=${pnl:+.4f} WR={wr_live:.0f}% [{reason}]"
