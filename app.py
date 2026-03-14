@@ -343,6 +343,13 @@ DASHBOARD_HTML = """
         <div class="metric-card"><div class="metric-label">STATUS</div><div class="metric-value" id="status">OFFLINE</div></div>
         <div class="metric-card"><div class="metric-label">Divorzi</div><div class="metric-value" id="divorzi" style="font-size:13px">--</div></div>
     </div>
+    <!-- LIVE TICKER -->
+    <div style="background:#0f1420; border:1px solid #00ff00; padding:10px; margin-bottom:15px; border-radius:3px; font-size:13px; display:flex; gap:30px; align-items:center;">
+        <span>💹 BTC/USDC: <span id="live-price" style="color:#00ffff; font-size:18px; font-weight:bold">--</span></span>
+        <span>⚡ Tick: <span id="tick-count" style="color:#ffff00">#0</span></span>
+        <span>🕐 Ultimo: <span id="last-tick" style="color:#888">--</span></span>
+        <span id="trade-status" style="color:#aaa">🔍 Analizzando mercato...</span>
+    </div>
     <div class="controls">
         <button onclick="sendCommand('STOP')">⏹️ STOP</button>
         <button onclick="sendCommand('RESUME')">▶️ RESUME</button>
@@ -376,7 +383,28 @@ function updateDashboard() {
         document.getElementById('status').className = 'metric-value ' +
             (hb.status === 'RUNNING' ? 'status-running' : 'status-offline');
 
-        // Modalità PAPER / LIVE
+        // Live ticker
+        const lp = hb.last_price;
+        if (lp) {
+            document.getElementById('live-price').textContent = '$' + lp.toLocaleString('en-US', {minimumFractionDigits:2});
+        }
+        const tc = hb.tick_count || 0;
+        document.getElementById('tick-count').textContent = '#' + tc.toLocaleString();
+        const lt = hb.last_tick ? new Date(hb.last_tick).toLocaleTimeString() : '--';
+        document.getElementById('last-tick').textContent = lt;
+
+        // Trade status
+        const ts = document.getElementById('trade-status');
+        if (hb.posizione_aperta) {
+            ts.textContent = '🟢 TRADE APERTO';
+            ts.style.color = '#00ff00';
+        } else if (tc < 20) {
+            ts.textContent = '⏳ Warmup (' + tc + '/20 tick)';
+            ts.style.color = '#ffff00';
+        } else {
+            ts.textContent = '🔍 Analizzando — in attesa setup';
+            ts.style.color = '#aaa';
+        }
         const mode  = hb.mode || 'PAPER';
         const badge = document.getElementById('mode-badge');
         badge.textContent = mode === 'LIVE' ? '🔴 LIVE' : '📄 PAPER';
