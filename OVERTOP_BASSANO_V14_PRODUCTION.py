@@ -879,11 +879,22 @@ class OvertopBassanoV14Production:
     # ════════════════════════════════════════════════════════════════════════
 
     def _log(self, emoji: str, msg: str):
-        """Aggiunge una riga al log live visibile sulla dashboard."""
+        """Aggiunge una riga al log live e la spinge subito a heartbeat_data."""
         ts = datetime.utcnow().strftime('%H:%M:%S')
         entry = f"{ts} {emoji} {msg}"
         self._live_log.append(entry)
         log.info(entry)
+        # Push immediato alla dashboard — non aspetta il ciclo heartbeat da 30s
+        if self.heartbeat_lock:
+            self.heartbeat_lock.acquire()
+        try:
+            if self.heartbeat_data is not None:
+                self.heartbeat_data["live_log"] = list(self._live_log)
+        except Exception:
+            pass
+        finally:
+            if self.heartbeat_lock:
+                self.heartbeat_lock.release()
 
     def _evaluate_entry(self, price, momentum, volatility, trend):
 
