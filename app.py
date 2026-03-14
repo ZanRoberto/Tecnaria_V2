@@ -360,6 +360,25 @@ DASHBOARD_HTML = """
         <div style="font-weight:bold; margin-bottom:6px;">🔮 ORACOLO DINAMICO — Fingerprint WR</div>
         <div id="oracolo-data" style="color:#aaa;">Nessun dato ancora</div>
     </div>
+    <!-- LIVE LOG DECISIONI -->
+    <div style="background:#0a0e1a; border:2px solid #333; padding:12px; margin-bottom:20px; border-radius:3px;">
+        <div style="font-weight:bold; margin-bottom:8px; color:#00ff00;">📋 LOG LIVE DECISIONI BOT (ultimi 20)</div>
+        <!-- LEGENDA -->
+        <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:10px; font-size:11px; border-bottom:1px solid #222; padding-bottom:8px;">
+            <span style="color:#00ff00">🚀 ENTRY aperta</span>
+            <span style="color:#00ff00">🟢 EXIT WIN</span>
+            <span style="color:#ff4444">🔴 EXIT LOSS o blocco Capsule</span>
+            <span style="color:#666">⚡ SEED basso — impulso debole</span>
+            <span style="color:#aa44ff">👻 FANTASMA — pattern perdente</span>
+            <span style="color:#ff6600">🚫 MEMORIA blocca matrimonio</span>
+            <span style="color:#ffaa00">💊 CAPSULE JSON blocca</span>
+            <span style="color:#ff0000">💔 DIVORZIO IMMEDIATO</span>
+            <span style="color:#aaaaff">🌙 SMORZ — impulso finito</span>
+        </div>
+        <div id="live-log" style="font-size:11px; font-family:monospace; line-height:1.8; color:#ccc; max-height:320px; overflow-y:auto;">
+            In attesa dati...
+        </div>
+    </div>
     <div class="trades-section">
         <div style="margin-bottom:10px; font-weight:bold;">📊 ULTIMI 20 TRADE</div>
         <div class="trade-row header">
@@ -382,6 +401,24 @@ function updateDashboard() {
         document.getElementById('status').textContent   = hb.status || 'OFFLINE';
         document.getElementById('status').className = 'metric-value ' +
             (hb.status === 'RUNNING' ? 'status-running' : 'status-offline');
+
+        // Live log decisioni
+        const ll = hb.live_log || [];
+        if (ll.length > 0) {
+            document.getElementById('live-log').innerHTML = [...ll].reverse().map(line => {
+                let col = '#ccc';
+                if (line.includes('🚀')) col = '#00ff00';
+                else if (line.includes('🟢')) col = '#00ff00';
+                else if (line.includes('🔴')) col = '#ff4444';
+                else if (line.includes('💔')) col = '#ff0000';
+                else if (line.includes('⚡')) col = '#666';
+                else if (line.includes('👻')) col = '#aa44ff';
+                else if (line.includes('🚫')) col = '#ff6600';
+                else if (line.includes('💊')) col = '#ffaa00';
+                else if (line.includes('🌙')) col = '#aaaaff';
+                return `<div style="color:${col}; border-bottom:1px solid #111; padding:2px 0">${line}</div>`;
+            }).join('');
+        }
 
         // Live ticker
         const lp = hb.last_price;
