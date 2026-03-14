@@ -772,8 +772,11 @@ class OvertopBassanoV14Production:
         self.ws                = None
 
         # ── Stato exit (per capsule reattive) ─────────────────────────────
-        self._last_exit_type     = None   # es. "DIVORZIO_IMMEDIATO", "SMORZ"
-        self._last_exit_duration = 0.0    # durata in secondi dell'ultimo trade
+        self._last_exit_type     = None
+        self._last_exit_duration = 0.0
+
+        # ── Log live decisioni (ultimi 20 eventi) ─────────────────────────
+        self._live_log = deque(maxlen=20)
 
         # ── Banner ────────────────────────────────────────────────────────
         mode_label = "📄 PAPER TRADE" if self.paper_trade else "🔴 LIVE TRADING"
@@ -875,17 +878,25 @@ class OvertopBassanoV14Production:
     # ENTRY — catena decisionale completa
     # ════════════════════════════════════════════════════════════════════════
 
+    def _log(self, emoji: str, msg: str):
+        """Aggiunge una riga al log live visibile sulla dashboard."""
+        ts = datetime.utcnow().strftime('%H:%M:%S')
+        entry = f"{ts} {emoji} {msg}"
+        self._live_log.append(entry)
+        log.info(entry)
+
     def _evaluate_entry(self, price, momentum, volatility, trend):
 
         # ── 1. SEED SCORER ────────────────────────────────────────────────
         seed = self.seed_scorer.score()
         if not seed['pass']:
-            return   # impulso insufficiente
+            self._log("⚡", f"SEED FAIL score={seed['score']:.3f} | {momentum}/{volatility}/{trend} @ ${price:.1f}")
+            return
 
         # ── 2. ORACOLO DINAMICO ───────────────────────────────────────────
         is_fantasma, fantasma_reason = self.oracolo.is_fantasma(momentum, volatility, trend)
         if is_fantasma:
-            log.debug(f"[ORACOLO] 👻 FANTASMA bloccato: {fantasma_reason}")
+            self._log("👻", f"FANTASMA bloccato: {fantasma_reason}")
             return
         fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend)
 
@@ -897,56 +908,52 @@ class OvertopBassanoV14Production:
         # ── 4. MEMORIA MATRIMONI ──────────────────────────────────────────
         can_enter, mem_status = self.memoria.get_status(matrimonio_name)
         if not can_enter:
-            log.debug(f"[MEMORIA] ❌ {matrimonio_name}: {mem_status}")
+            self._log("🚫", f"MEMORIA blocca {matrimonio_name}: {mem_status}")
             return
 
         # ── 5. CATENA 5 CAPSULE ────────────────────────────────────────────
         allow_1, conf_1, reason_1 = self.capsule1.valida(fingerprint_wr, momentum, volatility, trend)
         if not allow_1:
+            self._log("🔴", f"CAP1 COERENZA blocca | fp_wr={fingerprint_wr:.2f} {momentum}/{volatility}/{trend}")
             return
 
         allow_2, reason_2 = self.capsule2.riconosci(confidence)
         if not allow_2:
+            self._log("🔴", f"CAP2 TRAPPOLA blocca | conf={confidence:.2f} {matrimonio_name}")
             return
 
         allow_3, reason_3 = self.capsule3.proteggi(momentum, volatility, fingerprint_wr)
         if not allow_3:
+            self._log("🔴", f"CAP3 PROTEZIONE blocca | {momentum}/{volatility} fp={fingerprint_wr:.2f}")
             return
 
         allow_4, _, reason_4 = self.capsule4.riconosci(fingerprint_wr, momentum, volatility)
-        # capsule4 è informativa, non bloccante — entra anche senza "oro"
 
         allow_5, duration_min, reason_5 = self.capsule5.timing(True, allow_1, conf_1)
         if not allow_5:
+            self._log("🔴", f"CAP5 TIMING blocca | conf_1={conf_1:.2f}")
             return
 
         # ── 6. CAPSULE RUNTIME (JSON dinamico) ───────────────────────────
         ctx_caps = {
-            # Core contesto
             'matrimonio':       matrimonio_name,
             'momentum':         momentum,
             'volatility':       volatility,
             'trend':            trend,
-            # SeedScorer
             'seed_score':       seed['score'],
             'seed_tipo':        'CONFERMATO' if seed['score'] >= 0.65 else
                                 ('PROBABILE'  if seed['score'] >= SEED_ENTRY_THRESHOLD else 'IGNOTO'),
-            'force':            seed['score'],          # alias usato dalle capsule storiche
-            # OracoloDinamico
+            'force':            seed['score'],
             'fingerprint_wr':   fingerprint_wr,
             'wr_oracolo':       round(fingerprint_wr * 100, 1),
             'fingerprint_n':    self.oracolo._memory.get(
                                     self.oracolo._fp(momentum, volatility, trend),
                                     {}).get('samples', 0),
-            # Regime (mapping da momentum+volatility)
             'regime':           'trending' if momentum == 'FORTE' and volatility == 'BASSA'
                                 else ('choppy'  if volatility == 'ALTA'
                                 else ('lateral' if momentum == 'DEBOLE' else 'normal')),
-            # Modalità paper/live
             'mode':             'PAPER' if self.paper_trade else 'LIVE',
-            # Loss consecutivi (dal log_analyzer)
             'loss_consecutivi': self._loss_consecutivi(),
-            # Ultimo exit (per capsule reattive)
             'ultimo_exit_type': self._last_exit_type,
             'ultima_durata':    self._last_exit_duration,
             'sample_size':      int(self.oracolo._memory.get(
@@ -955,13 +962,13 @@ class OvertopBassanoV14Production:
         }
         caps_check = self.capsule_runtime.valuta(ctx_caps)
         if caps_check.get('blocca'):
-            log.debug(f"[CAPSULE_RT] 🚫 Blocco: {caps_check['reason']}")
+            self._log("💊", f"CAPSULE_RT blocca: {caps_check['reason']} | {matrimonio_name}")
             return
 
         # ── ENTRY CONFERMATA ──────────────────────────────────────────────
         size_mult = caps_check.get('size_mult', 1.0)
 
-        log.info(f"[ENTRY] 🚀 {matrimonio_name} | seed={seed['score']:.3f} | fp_wr={fingerprint_wr:.2f} | size_x{size_mult:.1f}")
+        self._log("🚀", f"ENTRY {matrimonio_name} | seed={seed['score']:.3f} fp_wr={fingerprint_wr:.2f} size_x{size_mult:.1f} @ ${price:.1f}")
         self.ai_explainer.log_decision("ENTRY",
             f"Entrato in {matrimonio_name} | seed={seed['score']:.3f} fp_wr={fingerprint_wr:.2f} conf={confidence:.2f}",
             {'momentum': momentum, 'volatility': volatility, 'trend': trend,
@@ -1016,20 +1023,19 @@ class OvertopBassanoV14Production:
             triggers_attivi.append(f"T4_FP_DIVERGE_{fp_diverge:.0%}")
 
         if len(triggers_attivi) >= DIVORCE_MIN_TRIGGERS:
-            log.warning(f"[DIVORZIO IMMEDIATO] 💔 {self.current_matrimonio} | {' + '.join(triggers_attivi)}")
+            self._log("💔", f"DIVORZIO IMMEDIATO {self.current_matrimonio} | {' + '.join(triggers_attivi)}")
             self._close_trade(price, momentum, volatility, trend, reason="DIVORZIO_IMMEDIATO")
             return
 
-        # ── SMORZ — impulso finito (momentum debole dopo entrata forte) ──
+        # ── SMORZ — impulso finito ────────────────────────────────────────
         duration     = time.time() - self.entry_time
         duration_avg = self.trade_open["duration_avg"]
         if duration > duration_avg * 0.5 and momentum == "DEBOLE":
-            log.info(f"[SMORZ] 🌙 Impulso finito — {self.current_matrimonio}")
+            self._log("🌙", f"SMORZ impulso finito — {self.current_matrimonio} dopo {duration:.0f}s")
             self._close_trade(price, momentum, volatility, trend, reason="SMORZ")
             return
 
         # ── TIMEOUT adattivo ──────────────────────────────────────────────
-        # Esce dopo duration_avg × 3, oppure se drawdown > 1% dopo duration_avg
         if duration > duration_avg * 3:
             self._close_trade(price, momentum, volatility, trend, reason="TIMEOUT_3X")
             return
@@ -1061,13 +1067,9 @@ class OvertopBassanoV14Production:
             self.losses += 1
         self.capital += pnl
 
-        wr_live = (self.wins / (self.wins + self.losses) * 100) if (self.wins + self.losses) > 0 else 0
-        paper_label = "[PAPER] " if self.paper_trade else ""
-        log.info(
-            f"{paper_label}[EXIT] 🏁 {matrimonio_name} | "
-            f"{'🟢 WIN' if is_win else '🔴 LOSS'} | "
-            f"PnL=${pnl:+.4f} | WR={wr_live:.1f}% | "
-            f"Capital=${self.capital:,.2f} | motivo={reason}"
+        self._log(
+            "🟢" if is_win else "🔴",
+            f"EXIT {matrimonio_name} {'WIN' if is_win else 'LOSS'} PnL=${pnl:+.4f} WR={wr_live:.0f}% [{reason}]"
         )
         self.ai_explainer.log_decision("EXIT",
             f"Uscito da {matrimonio_name} | PnL=${pnl:+.4f} | motivo={reason}",
@@ -1132,6 +1134,7 @@ class OvertopBassanoV14Production:
                     "matrimoni_divorzio": list(self.memoria.divorzio),
                     "oracolo_snapshot":   self.oracolo.dump(),
                     "posizione_aperta":   self.trade_open is not None,
+                    "live_log":           list(self._live_log),
                 })
         except Exception as e:
             log.error(f"[HEARTBEAT_ERROR] {e}")
