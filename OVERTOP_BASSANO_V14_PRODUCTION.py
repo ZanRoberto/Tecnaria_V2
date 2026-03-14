@@ -480,10 +480,11 @@ class OracoloDinamico:
 
 class Capsule1Coerenza:
     """Valida coerenza tra fingerprint_wr e contesto attuale."""
-    def valida(self, fingerprint_wr, momentum, volatility, trend):
-        if fingerprint_wr > 0.75 and momentum == "FORTE" and volatility == "BASSA" and trend == "UP":
+    def valida(self, fingerprint_wr, momentum, volatility, trend,
+               soglia_buona=0.60, soglia_perfetta=0.75):
+        if fingerprint_wr > soglia_perfetta and momentum == "FORTE" and volatility == "BASSA" and trend == "UP":
             return True, 0.95, "COERENZA PERFETTA"
-        if fingerprint_wr > 0.60 and momentum in ("FORTE", "MEDIO") and trend == "UP":
+        if fingerprint_wr > soglia_buona and momentum in ("FORTE", "MEDIO") and trend == "UP":
             return True, fingerprint_wr, "COERENZA BUONA"
         return False, 0.10, "BLOCCO_COERENZA"
 
@@ -496,28 +497,28 @@ class Capsule2Trappola:
 
 class Capsule3Protezione:
     """Blocca in condizioni di alta volatilità con impulso debole."""
-    def proteggi(self, momentum, volatility, fingerprint_wr):
+    def proteggi(self, momentum, volatility, fingerprint_wr, fp_minimo=0.55):
         if momentum == "DEBOLE" and volatility == "ALTA" and fingerprint_wr <= 0.70:
             return False, "PROTETTO_VOLATILITÀ"
-        if volatility == "ALTA" and fingerprint_wr < 0.55:
+        if volatility == "ALTA" and fingerprint_wr < fp_minimo:
             return False, "PROTETTO_FP_BASSO"
         return True, "OK"
 
 class Capsule4Opportunita:
     """Riconosce finestre di opportunità premium."""
-    def riconosci(self, fingerprint_wr, momentum, volatility):
+    def riconosci(self, fingerprint_wr, momentum, volatility, soglia_buona=0.65):
         if fingerprint_wr > 0.75 and momentum == "FORTE" and volatility == "BASSA":
             return True, 0.95, "OPPORTUNITÀ_ORO"
-        if fingerprint_wr > 0.65 and momentum == "FORTE":
+        if fingerprint_wr > soglia_buona and momentum == "FORTE":
             return True, fingerprint_wr, "OPPORTUNITÀ_BUONA"
         return False, 0.40, "NO_OPPORTUNITÀ"
 
 class Capsule5Tattica:
     """Timing tattico: entry solo se coerenza e confidence alte."""
-    def timing(self, entry_trigger, coerenza, confidence):
+    def timing(self, entry_trigger, coerenza, confidence, conf_ok=0.65):
         if entry_trigger and coerenza and confidence > 0.80:
             return True, 45, "TIMING_PERFETTO"
-        if entry_trigger and confidence > 0.65:
+        if entry_trigger and confidence > conf_ok:
             return True, 25, "TIMING_OK"
         return False, 0, "TIMING_NO"
 
@@ -702,6 +703,185 @@ class PersistenzaStato:
             log.error(f"[PERSIST] Save: {e}")
 
 # ═══════════════════════════════════════════════════════════════════════════
+# ★ AUTO CALIBRATORE — TUA INVENZIONE
+#   Osserva i risultati reali e aggiusta i parametri statici.
+#   Stessa pazienza e cautela del DNA del sistema:
+#   - Minimo 30 trade prima di toccare qualsiasi soglia
+#   - Step massimo ±0.02 per aggiustamento
+#   - Invertibile se la modifica peggiora i risultati
+#   - Log narrativo di ogni modifica
+# ═══════════════════════════════════════════════════════════════════════════
+
+class AutoCalibratore:
+    """
+    Calibra automaticamente i parametri statici basandosi sui risultati reali.
+    Non è ubriaco: aspetta evidenza solida, cambia in piccoli passi,
+    ricorda ogni modifica e può tornare indietro.
+    """
+
+    # ── Limiti di sicurezza — non si esce mai da questi range ─────────────
+    LIMITS = {
+        'seed_threshold':      (0.25, 0.70),   # mai troppo permissivo né troppo restrittivo
+        'cap1_soglia_buona':   (0.45, 0.80),   # Capsule1 soglia "coerenza buona"
+        'cap1_soglia_perfetta':(0.60, 0.90),   # Capsule1 soglia "coerenza perfetta"
+        'cap3_fp_minimo':      (0.35, 0.65),   # Capsule3 protezione fp minimo
+        'cap4_soglia_buona':   (0.50, 0.80),   # Capsule4 opportunità buona
+        'cap5_conf_ok':        (0.50, 0.80),   # Capsule5 timing OK
+        'divorce_drawdown':    (1.5,  5.0),    # drawdown trigger
+    }
+
+    STEP          = 0.02    # step massimo per ogni aggiustamento
+    MIN_TRADES    = 30      # campioni minimi prima di calibrare
+    MIN_DELTA_WR  = 0.05    # differenza minima WR reale vs atteso per intervenire
+    HISTORY_SIZE  = 5       # quante calibrazioni ricordare per inversione
+
+    def __init__(self):
+        # Parametri correnti — inizializzati ai valori di default
+        self.params = {
+            'seed_threshold':       SEED_ENTRY_THRESHOLD,
+            'cap1_soglia_buona':    0.60,
+            'cap1_soglia_perfetta': 0.75,
+            'cap3_fp_minimo':       0.55,
+            'cap4_soglia_buona':    0.65,
+            'cap5_conf_ok':         0.65,
+            'divorce_drawdown':     DIVORCE_DRAWDOWN_PCT,
+        }
+        # Storico per inversione: {param: [(valore_prima, valore_dopo, wr_al_momento)]}
+        self._history: dict = {k: [] for k in self.params}
+        # Osservazioni per calibrazione: lista di (seed_score, wr_contesto, is_win)
+        self._obs: list = []
+        self._calibrazioni_log: list = []   # log narrativo
+
+    def registra_osservazione(self, seed_score: float, fingerprint_wr: float,
+                               is_win: bool, divorce_drawdown_usato: float):
+        """Chiamato dopo ogni trade chiuso."""
+        self._obs.append({
+            'seed_score':     seed_score,
+            'fingerprint_wr': fingerprint_wr,
+            'is_win':         is_win,
+            'drawdown':       divorce_drawdown_usato,
+        })
+
+    def calibra(self) -> dict:
+        """
+        Analizza le osservazioni accumulate.
+        Se ci sono evidenze solide (≥ MIN_TRADES) aggiusta i parametri.
+        Ritorna dict con parametri aggiornati e log delle modifiche.
+        """
+        if len(self._obs) < self.MIN_TRADES:
+            return {}   # troppo poco per giudicare
+
+        modifiche = {}
+        n = len(self._obs)
+        wins = sum(1 for o in self._obs if o['is_win'])
+        wr_reale = wins / n
+
+        # ── 1. SEED THRESHOLD ─────────────────────────────────────────────
+        # Se la maggior parte dei trade ha seed_score vicino alla soglia attuale
+        # e WR è basso → alza la soglia (sii più selettivo)
+        # Se WR è alto ma entri raramente → abbassa leggermente
+        seed_scores = [o['seed_score'] for o in self._obs]
+        avg_seed = sum(seed_scores) / len(seed_scores)
+        current_seed = self.params['seed_threshold']
+
+        if wr_reale < 0.45 and avg_seed < current_seed + 0.10:
+            # WR basso e i trade hanno seed basso → soglia troppo permissiva
+            new_val = min(current_seed + self.STEP,
+                         self.LIMITS['seed_threshold'][1])
+            if new_val != current_seed:
+                self._aggiusta('seed_threshold', new_val, wr_reale,
+                    f"WR={wr_reale:.0%} basso su {n} trade, avg_seed={avg_seed:.3f} → alzo soglia")
+                modifiche['seed_threshold'] = new_val
+
+        elif wr_reale > 0.70 and n > self.MIN_TRADES * 2:
+            # WR molto alto → possiamo essere leggermente meno restrittivi
+            new_val = max(current_seed - self.STEP,
+                         self.LIMITS['seed_threshold'][0])
+            if new_val != current_seed:
+                self._aggiusta('seed_threshold', new_val, wr_reale,
+                    f"WR={wr_reale:.0%} eccellente su {n} trade → abbasso soglia leggermente")
+                modifiche['seed_threshold'] = new_val
+
+        # ── 2. DIVORCE DRAWDOWN ───────────────────────────────────────────
+        # Se molti trade escono per TIMEOUT (non per divorce) con drawdown alto
+        # → il drawdown trigger è troppo permissivo, abbassalo
+        drawdowns = [o['drawdown'] for o in self._obs if o['drawdown'] > 0]
+        if drawdowns:
+            avg_dd = sum(drawdowns) / len(drawdowns)
+            current_dd = self.params['divorce_drawdown']
+            if avg_dd > current_dd * 0.8 and wr_reale < 0.50:
+                new_val = max(current_dd - self.STEP * 5,
+                             self.LIMITS['divorce_drawdown'][0])
+                if new_val != current_dd:
+                    self._aggiusta('divorce_drawdown', new_val, wr_reale,
+                        f"avg_drawdown={avg_dd:.1f}% vicino alla soglia, WR basso → stringo drawdown")
+                    modifiche['divorce_drawdown'] = new_val
+
+        # ── 3. CAP1 SOGLIA COERENZA ───────────────────────────────────────
+        # Osserva quanti trade hanno fingerprint_wr nel range "buono" (0.60-0.75)
+        # Se quelli perdono → alza la soglia di ingresso coerenza
+        fp_buono = [o for o in self._obs
+                    if 0.60 <= o['fingerprint_wr'] < 0.75]
+        if len(fp_buono) >= 10:
+            wr_fp_buono = sum(1 for o in fp_buono if o['is_win']) / len(fp_buono)
+            current_c1 = self.params['cap1_soglia_buona']
+            if wr_fp_buono < 0.45:
+                new_val = min(current_c1 + self.STEP,
+                             self.LIMITS['cap1_soglia_buona'][1])
+                if new_val != current_c1:
+                    self._aggiusta('cap1_soglia_buona', new_val, wr_fp_buono,
+                        f"Trade fp_wr 0.60-0.75 hanno WR={wr_fp_buono:.0%} → alzo soglia coerenza")
+                    modifiche['cap1_soglia_buona'] = new_val
+
+        # Reset osservazioni dopo calibrazione (mantieni le ultime MIN_TRADES/2)
+        self._obs = self._obs[-(self.MIN_TRADES // 2):]
+
+        return modifiche
+
+    def _aggiusta(self, param: str, new_val: float, wr_al_momento: float, motivo: str):
+        """Applica il cambio, lo registra per eventuale inversione."""
+        old_val = self.params[param]
+        self.params[param] = new_val
+
+        # Storico per inversione
+        self._history[param].append((old_val, new_val, wr_al_momento))
+        if len(self._history[param]) > self.HISTORY_SIZE:
+            self._history[param].pop(0)
+
+        msg = f"[CALIBRA] 🎯 {param}: {old_val:.3f} → {new_val:.3f} | {motivo}"
+        self._calibrazioni_log.append({
+            'ts':    datetime.utcnow().isoformat(),
+            'param': param,
+            'from':  old_val,
+            'to':    new_val,
+            'why':   motivo,
+        })
+        log.info(msg)
+
+    def inverti_se_peggiorato(self, wr_attuale: float):
+        """
+        Se dopo una calibrazione il WR è peggiorato, torna al valore precedente.
+        Chiamato ogni 20 trade dopo una modifica.
+        """
+        for param, history in self._history.items():
+            if not history:
+                continue
+            old_val, new_val, wr_prima = history[-1]
+            if wr_attuale < wr_prima - self.MIN_DELTA_WR:
+                # La modifica ha peggiorato le cose → torna indietro
+                self.params[param] = old_val
+                history.pop()
+                log.warning(f"[CALIBRA] ↩️  INVERSIONE {param}: {new_val:.3f} → {old_val:.3f} "
+                           f"(WR prima={wr_prima:.0%} ora={wr_attuale:.0%})")
+
+    def get_params(self) -> dict:
+        return dict(self.params)
+
+    def get_log(self) -> list:
+        return list(self._calibrazioni_log[-10:])   # ultimi 10 eventi
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # ★★★ BOT PRINCIPALE — OVERTOP BASSANO V14 PRODUCTION ★★★
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -747,6 +927,7 @@ class OvertopBassanoV14Production:
         self.realtime_engine = RealtimeLearningEngine(max_trades=10, capsule_file="capsule_attive.json")
         self.log_analyzer    = LogAnalyzer()
         self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
+        self.calibratore     = AutoCalibratore()
 
         # ── 5 Capsule ─────────────────────────────────────────────────────
         self.capsule1 = Capsule1Coerenza()
@@ -774,6 +955,9 @@ class OvertopBassanoV14Production:
         # ── Stato exit (per capsule reattive) ─────────────────────────────
         self._last_exit_type     = None
         self._last_exit_duration = 0.0
+        self._last_entry_seed    = 0.0   # per AutoCalibratore
+        self._last_entry_fp_wr   = 0.72  # per AutoCalibratore
+        self._trades_since_calib = 0     # contatore per calibrazione
 
         # ── Log live decisioni (ultimi 20 eventi) ─────────────────────────
         self._live_log = deque(maxlen=20)
@@ -900,7 +1084,8 @@ class OvertopBassanoV14Production:
 
         # ── 1. SEED SCORER ────────────────────────────────────────────────
         seed = self.seed_scorer.score()
-        if not seed['pass']:
+        dynamic_seed_thresh = self.calibratore.get_params()['seed_threshold']
+        if not seed['pass'] or seed['score'] < dynamic_seed_thresh:
             self._log("⚡", f"SEED FAIL score={seed['score']:.3f} | {momentum}/{volatility}/{trend} @ ${price:.1f}")
             return
 
@@ -922,8 +1107,13 @@ class OvertopBassanoV14Production:
             self._log("🚫", f"MEMORIA blocca {matrimonio_name}: {mem_status}")
             return
 
-        # ── 5. CATENA 5 CAPSULE ────────────────────────────────────────────
-        allow_1, conf_1, reason_1 = self.capsule1.valida(fingerprint_wr, momentum, volatility, trend)
+        # ── 5. CATENA 5 CAPSULE — soglie dinamiche dal calibratore ──────────
+        p = self.calibratore.get_params()
+
+        allow_1, conf_1, reason_1 = self.capsule1.valida(
+            fingerprint_wr, momentum, volatility, trend,
+            soglia_buona=p['cap1_soglia_buona'],
+            soglia_perfetta=p['cap1_soglia_perfetta'])
         if not allow_1:
             self._log("🔴", f"CAP1 COERENZA blocca | fp_wr={fingerprint_wr:.2f} {momentum}/{volatility}/{trend}")
             return
@@ -933,14 +1123,20 @@ class OvertopBassanoV14Production:
             self._log("🔴", f"CAP2 TRAPPOLA blocca | conf={confidence:.2f} {matrimonio_name}")
             return
 
-        allow_3, reason_3 = self.capsule3.proteggi(momentum, volatility, fingerprint_wr)
+        allow_3, reason_3 = self.capsule3.proteggi(
+            momentum, volatility, fingerprint_wr,
+            fp_minimo=p['cap3_fp_minimo'])
         if not allow_3:
             self._log("🔴", f"CAP3 PROTEZIONE blocca | {momentum}/{volatility} fp={fingerprint_wr:.2f}")
             return
 
-        allow_4, _, reason_4 = self.capsule4.riconosci(fingerprint_wr, momentum, volatility)
+        allow_4, _, reason_4 = self.capsule4.riconosci(
+            fingerprint_wr, momentum, volatility,
+            soglia_buona=p['cap4_soglia_buona'])
 
-        allow_5, duration_min, reason_5 = self.capsule5.timing(True, allow_1, conf_1)
+        allow_5, duration_min, reason_5 = self.capsule5.timing(
+            True, allow_1, conf_1,
+            conf_ok=p['cap5_conf_ok'])
         if not allow_5:
             self._log("🔴", f"CAP5 TIMING blocca | conf_1={conf_1:.2f}")
             return
@@ -1002,6 +1198,8 @@ class OvertopBassanoV14Production:
         self.current_matrimonio= matrimonio_name
         self.max_price         = price
         self.total_trades     += 1
+        self._last_entry_seed  = seed['score']    # per AutoCalibratore
+        self._last_entry_fp_wr = fingerprint_wr   # per AutoCalibratore
 
     # ════════════════════════════════════════════════════════════════════════
     # EXIT — 4 DIVORCE TRIGGERS + SMORZ + TIMEOUT
@@ -1070,7 +1268,28 @@ class OvertopBassanoV14Production:
         self.memoria.record_trade(matrimonio_name, is_win, wr_expected)
         self.realtime_engine.registra_trade({'matrimonio': matrimonio_name, 'pnl': pnl, 'is_win': is_win})
         self.log_analyzer.registra({'matrimonio': matrimonio_name, 'pnl': pnl, 'is_win': is_win})
-        self.realtime_engine.analizza_e_genera()   # genera capsule auto se necessario
+        self.realtime_engine.analizza_e_genera()
+
+        # ── AutoCalibratore: registra osservazione ────────────────────────
+        self.calibratore.registra_osservazione(
+            seed_score=self._last_entry_seed,
+            fingerprint_wr=self._last_entry_fp_wr,
+            is_win=is_win,
+            divorce_drawdown_usato=drawdown_pct if 'drawdown_pct' in dir() else 0.0
+        )
+        self._trades_since_calib += 1
+
+        # Calibra ogni 30 trade
+        if self._trades_since_calib >= 30:
+            tot_now = self.wins + self.losses + (1 if is_win else 0)
+            wr_now  = (self.wins + (1 if is_win else 0)) / max(1, tot_now)
+            # Prima verifica se calibrazioni precedenti hanno peggiorato
+            self.calibratore.inverti_se_peggiorato(wr_now)
+            # Poi calibra
+            modifiche = self.calibratore.calibra()
+            if modifiche:
+                self._log("🎯", f"AutoCalibra: {modifiche}")
+            self._trades_since_calib = 0
 
         if is_win:
             self.wins   += 1
@@ -1147,6 +1366,8 @@ class OvertopBassanoV14Production:
                     "oracolo_snapshot":   self.oracolo.dump(),
                     "posizione_aperta":   self.trade_open is not None,
                     "live_log":           list(self._live_log),
+                    "calibra_params":     self.calibratore.get_params(),
+                    "calibra_log":        self.calibratore.get_log(),
                 })
         except Exception as e:
             log.error(f"[HEARTBEAT_ERROR] {e}")
