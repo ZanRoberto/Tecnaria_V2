@@ -842,6 +842,20 @@ class OvertopBassanoV14Production:
             self._update_heartbeat()
             self.last_heartbeat = now
 
+        # Aggiorna prezzo live ad ogni tick (per dashboard)
+        if self.heartbeat_lock:
+            self.heartbeat_lock.acquire()
+        try:
+            if self.heartbeat_data is not None:
+                self.heartbeat_data["last_price"] = round(price, 2)
+                self.heartbeat_data["last_tick"]  = datetime.utcnow().isoformat()
+                self.heartbeat_data["tick_count"] = self.heartbeat_data.get("tick_count", 0) + 1
+        except Exception:
+            pass
+        finally:
+            if self.heartbeat_lock:
+                self.heartbeat_lock.release()
+
         # Persistenza ogni 5 minuti
         if now - self.last_persist > 300:
             self._persist.save(self.capital, self.total_trades)
@@ -1117,6 +1131,7 @@ class OvertopBassanoV14Production:
                     "last_seen":       datetime.utcnow().isoformat(),
                     "matrimoni_divorzio": list(self.memoria.divorzio),
                     "oracolo_snapshot":   self.oracolo.dump(),
+                    "posizione_aperta":   self.trade_open is not None,
                 })
         except Exception as e:
             log.error(f"[HEARTBEAT_ERROR] {e}")
