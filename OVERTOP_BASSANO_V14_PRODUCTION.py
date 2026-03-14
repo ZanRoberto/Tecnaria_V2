@@ -703,6 +703,267 @@ class PersistenzaStato:
             log.error(f"[PERSIST] Save: {e}")
 
 # ═══════════════════════════════════════════════════════════════════════════
+# ★ REGIME DETECTOR — contesto macro sopra tutto
+#   Classifica il regime strutturale del mercato su finestra larga.
+#   TRENDING_BULL / TRENDING_BEAR / RANGING / EXPLOSIVE
+#   Il regime cambia i parametri di tutto il sistema sottostante.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class RegimeDetector:
+    """
+    Osserva 500 tick e classifica il regime macro.
+    Non si confonde con i tick singoli — lavora sulla struttura.
+
+    Regimi:
+      TRENDING_BULL  — trend rialzista strutturale, alta directional consistency
+      TRENDING_BEAR  — trend ribassista strutturale
+      RANGING        — mercato laterale, alta volatilità relativa, bassa direzione
+      EXPLOSIVE      — breakout improvviso, volume spike + range expansion
+    """
+
+    WINDOW = 500   # tick per valutare il regime
+
+    # Moltiplicatori per ogni regime — applicati ai parametri del calibratore
+    REGIME_PARAMS = {
+        'TRENDING_BULL': {
+            'seed_mult':      0.90,   # leggermente più permissivo
+            'fp_wr_mult':     0.95,   # accetta contesti leggermente meno perfetti
+            'size_mult':      1.25,   # size più grande in trend
+            'drawdown_mult':  1.20,   # tollera più drawdown in trend
+        },
+        'TRENDING_BEAR': {
+            'seed_mult':      1.20,   # più selettivo
+            'fp_wr_mult':     1.10,
+            'size_mult':      0.70,   # size ridotta
+            'drawdown_mult':  0.80,   # meno tolleranza
+        },
+        'RANGING': {
+            'seed_mult':      1.30,   # molto selettivo — il ranging è il nemico
+            'fp_wr_mult':     1.15,
+            'size_mult':      0.60,
+            'drawdown_mult':  0.70,
+        },
+        'EXPLOSIVE': {
+            'seed_mult':      0.85,   # velocità conta — entra prima
+            'fp_wr_mult':     0.90,
+            'size_mult':      1.50,   # massima size in breakout
+            'drawdown_mult':  1.50,   # lascia correre
+        },
+    }
+
+    def __init__(self):
+        self.prices    = deque(maxlen=self.WINDOW)
+        self.volumes   = deque(maxlen=self.WINDOW)
+        self._regime   = 'RANGING'   # default conservativo
+        self._confidence = 0.0
+
+    def add_tick(self, price: float, volume: float = 1.0):
+        self.prices.append(price)
+        self.volumes.append(volume)
+
+    def detect(self) -> tuple:
+        """
+        Ritorna (regime: str, confidence: float, dettaglio: dict)
+        """
+        if len(self.prices) < 100:
+            return 'RANGING', 0.0, {}
+
+        prices  = list(self.prices)
+        volumes = list(self.volumes)
+        n       = len(prices)
+
+        # ── Trend strutturale ─────────────────────────────────────────────
+        # Regressione lineare semplificata: confronta metà iniziale vs finale
+        mid        = n // 2
+        avg_first  = sum(prices[:mid]) / mid
+        avg_second = sum(prices[mid:]) / (n - mid)
+        trend_pct  = (avg_second - avg_first) / avg_first * 100
+
+        # ── Directional Consistency su finestra larga ─────────────────────
+        changes    = [prices[i+1] - prices[i] for i in range(n-1)]
+        up_count   = sum(1 for c in changes if c > 0)
+        dir_ratio  = up_count / len(changes)   # 0=tutto giù, 1=tutto su
+
+        # ── Volatilità strutturale ─────────────────────────────────────────
+        abs_changes = [abs(c) for c in changes]
+        avg_change  = sum(abs_changes) / len(abs_changes)
+        # Confronta volatilità prima vs seconda metà
+        vol_first   = sum(abs_changes[:mid]) / mid
+        vol_second  = sum(abs_changes[mid:]) / (n - mid)
+        vol_ratio   = vol_second / max(vol_first, 0.001)
+
+        # ── Volume acceleration ────────────────────────────────────────────
+        vol_recent  = sum(volumes[-50:]) / 50
+        vol_base    = sum(volumes[:50])  / 50
+        vol_accel   = vol_recent / max(vol_base, 0.001)
+
+        # ── Classificazione ───────────────────────────────────────────────
+        regime     = 'RANGING'
+        confidence = 0.5
+
+        if vol_accel > 2.0 and vol_ratio > 1.5:
+            # Volume esploso + volatilità in aumento → EXPLOSIVE
+            regime     = 'EXPLOSIVE'
+            confidence = min(1.0, vol_accel / 3.0)
+
+        elif trend_pct > 0.5 and dir_ratio > 0.55:
+            # Trend rialzista strutturale
+            regime     = 'TRENDING_BULL'
+            confidence = min(1.0, (dir_ratio - 0.5) * 4)
+
+        elif trend_pct < -0.5 and dir_ratio < 0.45:
+            # Trend ribassista strutturale
+            regime     = 'TRENDING_BEAR'
+            confidence = min(1.0, (0.5 - dir_ratio) * 4)
+
+        else:
+            # Laterale
+            regime     = 'RANGING'
+            confidence = min(1.0, 1.0 - abs(dir_ratio - 0.5) * 4)
+
+        self._regime     = regime
+        self._confidence = confidence
+
+        return regime, confidence, {
+            'trend_pct':  round(trend_pct, 3),
+            'dir_ratio':  round(dir_ratio, 3),
+            'vol_accel':  round(vol_accel, 3),
+            'vol_ratio':  round(vol_ratio, 3),
+        }
+
+    @property
+    def regime(self) -> str:
+        return self._regime
+
+    def get_multipliers(self) -> dict:
+        return self.REGIME_PARAMS.get(self._regime, self.REGIME_PARAMS['RANGING'])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ★ MOMENTUM DECELEROMETER — exit intelligente
+#   Non misura il momentum — misura quanto velocemente sta decelerando.
+#   Uscire quando decelera forte, non quando è già morto.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class MomentumDecelerometer:
+    """
+    Calcola la derivata seconda del momentum.
+    Se il momentum stava salendo e ora sta scendendo velocemente
+    → segnale di uscita anticipata prima che il prezzo inverta.
+
+    Restituisce:
+      decel_score [0-1] — 0=momentum stabile, 1=decelera forte
+      should_exit bool  — True se la decelerazione supera la soglia
+    """
+
+    WINDOW_FAST = 5    # tick per momentum veloce
+    WINDOW_SLOW = 15   # tick per momentum lento
+    DECEL_THRESHOLD = 0.65   # oltre questa soglia → esci
+
+    def __init__(self):
+        self.prices = deque(maxlen=50)
+
+    def add_price(self, price: float):
+        self.prices.append(price)
+
+    def analyze(self) -> dict:
+        if len(self.prices) < self.WINDOW_SLOW + 5:
+            return {'decel_score': 0.0, 'should_exit': False}
+
+        prices = list(self.prices)
+
+        # Momentum veloce: variazione media negli ultimi WINDOW_FAST tick
+        fast_changes = [prices[i+1] - prices[i]
+                        for i in range(len(prices)-self.WINDOW_FAST, len(prices)-1)]
+        mom_fast = sum(fast_changes) / len(fast_changes) if fast_changes else 0
+
+        # Momentum lento: variazione media negli ultimi WINDOW_SLOW tick
+        slow_start = len(prices) - self.WINDOW_SLOW
+        slow_changes = [prices[i+1] - prices[i]
+                        for i in range(slow_start, len(prices)-1)]
+        mom_slow = sum(slow_changes) / len(slow_changes) if slow_changes else 0
+
+        # Decelerazione: il momentum veloce è molto più basso di quello lento
+        # (il trend sta perdendo forza)
+        if abs(mom_slow) < 0.001:
+            decel_score = 0.0
+        else:
+            # Se mom_fast < mom_slow → decelera (in trade long)
+            decel = (mom_slow - mom_fast) / abs(mom_slow)
+            decel_score = max(0.0, min(1.0, decel))
+
+        return {
+            'decel_score': round(decel_score, 4),
+            'mom_fast':    round(mom_fast, 4),
+            'mom_slow':    round(mom_slow, 4),
+            'should_exit': decel_score > self.DECEL_THRESHOLD,
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ★ POSITION SIZER — la tua fisica applicata
+#   Size come funzione CONTINUA dell'intensità dell'impulso.
+#   Non più 1.0 / 1.3 / 1.5 discreti — una curva che riflette
+#   esattamente quanto il mercato ti sta dando.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class PositionSizer:
+    """
+    Calcola la size ottimale come funzione continua di 3 segnali:
+      1. seed_score      — forza dell'impulso (peso 40%)
+      2. fingerprint_wr  — affidabilità storica del contesto (peso 35%)
+      3. confidence      — certezza del matrimonio (peso 25%)
+
+    Poi applica il moltiplicatore di regime.
+
+    Output: size_factor [0.5 – 2.0]
+    Dove 1.0 = size base, 2.0 = massimo, 0.5 = minimo di sicurezza
+    """
+
+    W_SEED   = 0.40
+    W_FP_WR  = 0.35
+    W_CONF   = 0.25
+
+    SIZE_MIN = 0.5
+    SIZE_MAX = 2.0
+
+    def calculate(self, seed_score: float, fingerprint_wr: float,
+                  confidence: float, regime_mult: float = 1.0) -> dict:
+        """
+        Ritorna {'size_factor': float, 'breakdown': dict}
+        """
+        # Normalizza ogni componente in [0, 1]
+        # seed_score è già [0, 1]
+        seed_norm = min(1.0, max(0.0, seed_score))
+
+        # fingerprint_wr [0.45, 0.95] → [0, 1]
+        fp_norm = min(1.0, max(0.0, (fingerprint_wr - 0.45) / 0.50))
+
+        # confidence [0.05, 0.95] → [0, 1]
+        conf_norm = min(1.0, max(0.0, (confidence - 0.05) / 0.90))
+
+        # Score composito
+        score = (seed_norm   * self.W_SEED  +
+                 fp_norm     * self.W_FP_WR +
+                 conf_norm   * self.W_CONF)
+
+        # Mappa da [0,1] a [SIZE_MIN, SIZE_MAX] con curva non lineare
+        # Le posizioni forti crescono più che proporzionalmente
+        size_raw = self.SIZE_MIN + (self.SIZE_MAX - self.SIZE_MIN) * (score ** 1.5)
+
+        # Applica moltiplicatore regime
+        size_final = min(self.SIZE_MAX, max(self.SIZE_MIN, size_raw * regime_mult))
+
+        return {
+            'size_factor': round(size_final, 3),
+            'score':       round(score, 3),
+            'seed_norm':   round(seed_norm, 3),
+            'fp_norm':     round(fp_norm, 3),
+            'conf_norm':   round(conf_norm, 3),
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # ★ AUTO CALIBRATORE — TUA INVENZIONE
 #   Osserva i risultati reali e aggiusta i parametri statici.
 #   Stessa pazienza e cautela del DNA del sistema:
@@ -928,6 +1189,12 @@ class OvertopBassanoV14Production:
         self.log_analyzer    = LogAnalyzer()
         self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
         self.calibratore     = AutoCalibratore()
+        self.regime_detector = RegimeDetector()
+        self.decelero        = MomentumDecelerometer()
+        self.position_sizer  = PositionSizer()
+        self._regime_current = 'RANGING'
+        self._regime_conf    = 0.0
+        self._last_regime_check = time.time()
 
         # ── 5 Capsule ─────────────────────────────────────────────────────
         self.capsule1 = Capsule1Coerenza()
@@ -1042,6 +1309,21 @@ class OvertopBassanoV14Production:
         finally:
             if self.heartbeat_lock:
                 self.heartbeat_lock.release()
+
+        # Feed RegimeDetector e Decelerometer
+        self.regime_detector.add_tick(price)
+        self.decelero.add_price(price)
+
+        # Aggiorna regime ogni 60s
+        if now - self._last_regime_check > 60:
+            regime, conf, detail = self.regime_detector.detect()
+            if regime != self._regime_current:
+                self._log("🌍", f"REGIME → {regime} (conf={conf:.0%}) | "
+                         f"trend={detail.get('trend_pct',0):+.2f}% "
+                         f"dir={detail.get('dir_ratio',0):.2f}")
+            self._regime_current    = regime
+            self._regime_conf       = conf
+            self._last_regime_check = now
 
         # Persistenza ogni 5 minuti
         if now - self.last_persist > 300:
@@ -1173,22 +1455,37 @@ class OvertopBassanoV14Production:
             return
 
         # ── ENTRY CONFERMATA ──────────────────────────────────────────────
-        size_mult = caps_check.get('size_mult', 1.0)
+        # Position sizing continuo — funzione dell'impulso × regime
+        regime_mults = self.regime_detector.get_multipliers()
+        sizing = self.position_sizer.calculate(
+            seed_score=seed['score'],
+            fingerprint_wr=fingerprint_wr,
+            confidence=confidence,
+            regime_mult=regime_mults['size_mult']
+        )
+        # Le capsule JSON possono ancora modificare ulteriormente
+        caps_size_mult = caps_check.get('size_mult', 1.0)
+        size_factor = min(PositionSizer.SIZE_MAX,
+                         sizing['size_factor'] * caps_size_mult)
 
-        self._log("🚀", f"ENTRY {matrimonio_name} | seed={seed['score']:.3f} fp_wr={fingerprint_wr:.2f} size_x{size_mult:.1f} @ ${price:.1f}")
+        self._log("🚀", f"ENTRY {matrimonio_name} | seed={seed['score']:.3f} "
+                       f"fp_wr={fingerprint_wr:.2f} size={size_factor:.2f}x "
+                       f"regime={self._regime_current} @ ${price:.1f}")
         self.ai_explainer.log_decision("ENTRY",
-            f"Entrato in {matrimonio_name} | seed={seed['score']:.3f} fp_wr={fingerprint_wr:.2f} conf={confidence:.2f}",
+            f"Entrato in {matrimonio_name} | seed={seed['score']:.3f} "
+            f"fp_wr={fingerprint_wr:.2f} size={size_factor:.2f}x regime={self._regime_current}",
             {'momentum': momentum, 'volatility': volatility, 'trend': trend,
-             'seed': seed, 'fingerprint_wr': fingerprint_wr})
+             'seed': seed, 'fingerprint_wr': fingerprint_wr,
+             'sizing': sizing, 'regime': self._regime_current})
 
         if not self.paper_trade:
-            self._place_order("BUY", price, size_mult)
+            self._place_order("BUY", price, size_factor)
 
         self.trade_open = {
             "price_entry":    price,
             "matrimonio":     matrimonio_name,
             "duration_avg":   matrimonio["duration_avg"],
-            "size_mult":      size_mult,
+            "size_mult":      size_factor,
         }
         self.entry_time        = time.time()
         self.entry_momentum    = momentum
@@ -1208,6 +1505,23 @@ class OvertopBassanoV14Production:
     def _evaluate_exit(self, price, momentum, volatility, trend):
         if price > self.max_price:
             self.max_price = price
+
+        # ── MOMENTUM DECELEROMETER — exit anticipata ──────────────────────
+        # Controlla prima dei divorce triggers: se il momentum sta decelerando
+        # fortemente usciamo prima che il prezzo inverta completamente
+        duration = time.time() - self.entry_time
+        duration_avg = self.trade_open["duration_avg"]
+
+        if duration > duration_avg * 0.3:   # solo dopo il 30% della durata attesa
+            decel = self.decelero.analyze()
+            if decel['should_exit']:
+                self._log("📉", f"DECEL EXIT {self.current_matrimonio} | "
+                         f"decel={decel['decel_score']:.2f} "
+                         f"mom_fast={decel['mom_fast']:+.4f} "
+                         f"mom_slow={decel['mom_slow']:+.4f}")
+                self._close_trade(price, momentum, volatility, trend,
+                                  reason="DECEL_MOMENTUM")
+                return
 
         # ── 4 DIVORCE TRIGGERS — monitorati ogni tick ─────────────────────
         triggers_attivi = []
@@ -1368,6 +1682,8 @@ class OvertopBassanoV14Production:
                     "live_log":           list(self._live_log),
                     "calibra_params":     self.calibratore.get_params(),
                     "calibra_log":        self.calibratore.get_log(),
+                    "regime":             self._regime_current,
+                    "regime_conf":        round(self._regime_conf, 3),
                 })
         except Exception as e:
             log.error(f"[HEARTBEAT_ERROR] {e}")
