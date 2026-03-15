@@ -785,6 +785,9 @@ class PersistenzaStato:
 
         except Exception as e:
             log.error(f"[BRAIN_LOAD] {e} — parto da zero")
+
+    def save(self, capital: float, total_trades: int):
+        """Persiste capital e total_trades su SQLite."""
         try:
             conn = sqlite3.connect(self.db_path)
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('capital', ?)",      (str(capital),))
@@ -1235,6 +1238,177 @@ class AutoCalibratore:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# ★ CAMPO GRAVITAZIONALE — MOTORE 2 (CARTESIANO)
+#   Nessun filtro binario tranne i veti assoluti.
+#   Ogni condizione accumula punti. La soglia si muove con il contesto.
+#   La size è funzione continua della distanza punteggio-soglia.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class CampoGravitazionale:
+    """
+    Entry engine cartesiano: ogni dimensione contribuisce punti,
+    la soglia è dinamica, la size è continua.
+
+    Veti assoluti (non negoziabili):
+      - TRAP / PANIC (combinazioni tossiche provate)
+      - DIVORZIO PERMANENTE
+      - FANTASMA con evidenza forte (samples>20, WR<30%)
+      - 3+ loss consecutivi
+
+    Tutto il resto → punteggio 0-100 vs soglia dinamica 35-90.
+    """
+
+    # ── VETI ASSOLUTI ─────────────────────────────────────────────────────
+    VETI_COMBINAZIONI = {
+        ("DEBOLE", "ALTA", "DOWN"),    # TRAP — WR 5%
+        ("FORTE",  "ALTA", "DOWN"),    # PANIC — WR 15%
+    }
+    FANTASMA_VETO_MIN_SAMPLES = 20
+    FANTASMA_VETO_MAX_WR      = 0.30
+    MAX_LOSS_CONSECUTIVI      = 3
+
+    # ── PESI DEL CAMPO (totale = 100) ─────────────────────────────────────
+    W_SEED        = 30
+    W_FINGERPRINT = 25
+    W_MOMENTUM    = 15
+    W_TREND       = 15
+    W_VOLATILITY  = 10
+    W_REGIME      = 5
+
+    # ── SCORING PER DIMENSIONE ────────────────────────────────────────────
+    MOMENTUM_SCORE  = {"FORTE": 1.0,  "MEDIO": 0.67, "DEBOLE": 0.20}
+    TREND_SCORE     = {"UP": 1.0,     "SIDEWAYS": 0.47, "DOWN": 0.0}
+    VOL_SCORE       = {"BASSA": 1.0,  "MEDIA": 0.60, "ALTA": 0.20}
+    REGIME_SCORE    = {"TRENDING_BULL": 1.0, "EXPLOSIVE": 0.80,
+                       "RANGING": 0.20, "TRENDING_BEAR": 0.0}
+
+    # ── SOGLIA DINAMICA ───────────────────────────────────────────────────
+    SOGLIA_BASE = 60
+    REGIME_FACTOR = {"TRENDING_BULL": 0.80, "EXPLOSIVE": 0.85,
+                     "RANGING": 1.30, "TRENDING_BEAR": 1.20}
+    VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.15}
+    SOGLIA_MIN    = 35
+    SOGLIA_MAX    = 90
+
+    # ── SIZE CONTINUA ─────────────────────────────────────────────────────
+    SIZE_MIN = 0.5
+    SIZE_MAX = 2.0
+
+    def __init__(self):
+        self._recent_results = deque(maxlen=20)
+
+    def evaluate(self, seed_score, fingerprint_wr, momentum, volatility,
+                 trend, regime, matrimonio_name, divorzio_set,
+                 fantasma_info, loss_consecutivi) -> dict:
+        """
+        Ritorna:
+          enter:     bool
+          score:     float (0-100)
+          soglia:    float (35-90, dinamica)
+          size:      float (0.5-2.0 se enter, 0.0 se no)
+          veto:      str o None
+          breakdown: dict dettaglio per log
+        """
+        # ── VETI ASSOLUTI ─────────────────────────────────────────────────
+        combo = (momentum, volatility, trend)
+        if combo in self.VETI_COMBINAZIONI:
+            return self._veto(f"TOSSICO_{momentum}_{volatility}_{trend}")
+
+        if matrimonio_name in divorzio_set:
+            return self._veto("DIVORZIO_PERMANENTE")
+
+        is_fantasma, fantasma_reason = fantasma_info
+        if is_fantasma:
+            # Solo se evidenza forte — non blocchiamo su 5 campioni
+            # Il campo già penalizza fingerprint_wr basso nel punteggio
+            fp_samples = fantasma_reason  # passato come samples count
+            if isinstance(fp_samples, str):
+                # fantasma_info ritorna (bool, str_reason) — usiamo l'info dell'oracolo
+                pass  # non è un veto forte, il punteggio basso basta
+
+        if loss_consecutivi >= self.MAX_LOSS_CONSECUTIVI:
+            return self._veto(f"LOSS_CONSECUTIVI_{loss_consecutivi}")
+
+        # ── CALCOLO PUNTEGGIO CAMPO ───────────────────────────────────────
+        # Seed: normalizza [0.3, 1.0] → [0, 1]
+        s_seed = min(1.0, max(0.0, (seed_score - 0.30) / 0.70)) * self.W_SEED
+
+        # Fingerprint WR: normalizza [0.30, 1.0] → [0, 1]
+        s_fp = min(1.0, max(0.0, (fingerprint_wr - 0.30) / 0.70)) * self.W_FINGERPRINT
+
+        # Dimensioni categoriche
+        s_mom   = self.MOMENTUM_SCORE.get(momentum, 0.5)   * self.W_MOMENTUM
+        s_trend = self.TREND_SCORE.get(trend, 0.5)          * self.W_TREND
+        s_vol   = self.VOL_SCORE.get(volatility, 0.5)       * self.W_VOLATILITY
+        s_reg   = self.REGIME_SCORE.get(regime, 0.2)         * self.W_REGIME
+
+        score = s_seed + s_fp + s_mom + s_trend + s_vol + s_reg
+
+        # ── SOGLIA DINAMICA ───────────────────────────────────────────────
+        regime_f  = self.REGIME_FACTOR.get(regime, 1.0)
+        vol_f     = self.VOL_FACTOR.get(volatility, 1.0)
+        history_f = self._history_factor()
+
+        soglia = self.SOGLIA_BASE * regime_f * vol_f * history_f
+        soglia = max(self.SOGLIA_MIN, min(self.SOGLIA_MAX, soglia))
+
+        # ── DECISIONE ─────────────────────────────────────────────────────
+        enter = score >= soglia
+
+        # ── SIZE CONTINUA ─────────────────────────────────────────────────
+        if enter:
+            eccedenza = (score - soglia) / max(1.0, 100.0 - soglia)
+            size = self.SIZE_MIN + (self.SIZE_MAX - self.SIZE_MIN) * (eccedenza ** 1.5)
+            size = min(self.SIZE_MAX, max(self.SIZE_MIN, size))
+        else:
+            size = 0.0
+
+        return {
+            'enter':     enter,
+            'score':     round(score, 2),
+            'soglia':    round(soglia, 2),
+            'size':      round(size, 3),
+            'veto':      None,
+            'breakdown': {
+                'seed':    round(s_seed, 2),
+                'fp':      round(s_fp, 2),
+                'mom':     round(s_mom, 2),
+                'trend':   round(s_trend, 2),
+                'vol':     round(s_vol, 2),
+                'regime':  round(s_reg, 2),
+                'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f}",
+            }
+        }
+
+    def record_result(self, is_win: bool):
+        """Chiamato alla chiusura di ogni shadow trade."""
+        self._recent_results.append(is_win)
+
+    def _history_factor(self) -> float:
+        """Soglia si muove con la storia recente."""
+        if len(self._recent_results) < 5:
+            return 1.0
+        recent_wr = sum(1 for r in self._recent_results if r) / len(self._recent_results)
+        if recent_wr > 0.70:
+            return 0.90    # va bene, soglia più bassa
+        elif recent_wr < 0.40:
+            return 1.20    # sta andando male, soglia più alta
+        return 1.0
+
+    def _veto(self, reason: str) -> dict:
+        return {'enter': False, 'score': 0.0, 'soglia': 0.0,
+                'size': 0.0, 'veto': reason, 'breakdown': {}}
+
+    def get_stats(self) -> dict:
+        total = len(self._recent_results)
+        if total == 0:
+            return {'trades': 0, 'wr': 0.0}
+        wins = sum(1 for r in self._recent_results if r)
+        return {'trades': total, 'wr': round(wins / total, 3),
+                'wins': wins, 'losses': total - wins}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # ★★★ BOT PRINCIPALE — OVERTOP BASSANO V14 PRODUCTION ★★★
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1324,6 +1498,23 @@ class OvertopBassanoV14Production:
         # ── Log live decisioni (ultimi 20 eventi) ─────────────────────────
         self._live_log = deque(maxlen=20)
 
+        # ── MOTORE 2: CAMPO GRAVITAZIONALE (shadow trading) ──────────────
+        self.campo = CampoGravitazionale()
+        self._shadow = None          # shadow trade aperto (dict o None)
+        self._shadow_entry_time = None
+        self._shadow_entry_momentum = None
+        self._shadow_entry_volatility = None
+        self._shadow_entry_trend = None
+        self._shadow_entry_fingerprint = None
+        self._shadow_max_price = None
+        self._shadow_matrimonio = None
+        # Stats separate per Motore 2
+        self._m2_wins    = 0
+        self._m2_losses  = 0
+        self._m2_pnl     = 0.0
+        self._m2_trades  = 0
+        self._m2_log     = deque(maxlen=20)   # log dedicato M2
+
         # ── Banner ────────────────────────────────────────────────────────
         mode_label = "📄 PAPER TRADE" if self.paper_trade else "🔴 LIVE TRADING"
         log.info("=" * 80)
@@ -1331,6 +1522,7 @@ class OvertopBassanoV14Production:
         log.info(f"   Capital: ${self.capital:,.2f}  |  Trades totali: {self.total_trades}")
         log.info(f"   SeedScorer threshold: {SEED_ENTRY_THRESHOLD}")
         log.info(f"   Divorce triggers minimi: {DIVORCE_MIN_TRIGGERS}/4")
+        log.info(f"   🎯 MOTORE 2 (Campo Gravitazionale): SHADOW ATTIVO — confronto parallelo")
         log.info("=" * 80)
         if self.paper_trade:
             log.info("⚠️  PAPER TRADE ATTIVO — nessun ordine reale verrà eseguito")
@@ -1435,6 +1627,12 @@ class OvertopBassanoV14Production:
             self._evaluate_exit(price, momentum, volatility, trend)
         else:
             self._evaluate_entry(price, momentum, volatility, trend)
+
+        # ── MOTORE 2: Shadow trade evaluation (parallelo) ─────────────────
+        if self._shadow:
+            self._evaluate_shadow_exit(price, momentum, volatility, trend)
+        else:
+            self._evaluate_shadow_entry(price, momentum, volatility, trend)
 
     # ════════════════════════════════════════════════════════════════════════
     # ENTRY — catena decisionale completa
@@ -1673,6 +1871,12 @@ class OvertopBassanoV14Production:
         matrimonio      = MatrimonioIntelligente.get_by_name(matrimonio_name)
         wr_expected     = matrimonio.get("wr", 0.50)
 
+        # ── Calcola drawdown reale (per AutoCalibratore) ──────────────────
+        if self.max_price and self.trade_open:
+            drawdown_pct = ((self.max_price - price) / self.trade_open["price_entry"]) * 100
+        else:
+            drawdown_pct = 0.0
+
         # ── Aggiorna tutti i sistemi di apprendimento ─────────────────────
         self.oracolo.record(self.entry_momentum, self.entry_volatility, self.entry_trend, is_win)
         self.memoria.record_trade(matrimonio_name, is_win, wr_expected)
@@ -1685,7 +1889,7 @@ class OvertopBassanoV14Production:
             seed_score=self._last_entry_seed,
             fingerprint_wr=self._last_entry_fp_wr,
             is_win=is_win,
-            divorce_drawdown_usato=drawdown_pct if 'drawdown_pct' in dir() else 0.0
+            divorce_drawdown_usato=drawdown_pct
         )
         self._trades_since_calib += 1
 
@@ -1739,6 +1943,159 @@ class OvertopBassanoV14Production:
         self.max_price          = None
 
     # ════════════════════════════════════════════════════════════════════════
+    # MOTORE 2: CAMPO GRAVITAZIONALE — Shadow Entry/Exit/Close
+    # ════════════════════════════════════════════════════════════════════════
+
+    def _log_m2(self, emoji: str, msg: str):
+        """Log dedicato Motore 2 — separato dal Motore 1."""
+        ts = datetime.utcnow().strftime('%H:%M:%S')
+        entry = f"{ts} {emoji} [M2] {msg}"
+        self._m2_log.append(entry)
+        log.info(entry)
+        log.info(entry)
+
+    def _evaluate_shadow_entry(self, price, momentum, volatility, trend):
+        """Motore 2 valuta entry con il Campo Gravitazionale."""
+        seed = self.seed_scorer.score()
+        if seed.get('reason') == 'insufficient_data':
+            return
+
+        fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend)
+        matrimonio     = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
+        matrimonio_name = matrimonio["name"]
+        fantasma_info  = self.oracolo.is_fantasma(momentum, volatility, trend)
+
+        result = self.campo.evaluate(
+            seed_score=seed['score'],
+            fingerprint_wr=fingerprint_wr,
+            momentum=momentum,
+            volatility=volatility,
+            trend=trend,
+            regime=self._regime_current,
+            matrimonio_name=matrimonio_name,
+            divorzio_set=self.memoria.divorzio,
+            fantasma_info=fantasma_info,
+            loss_consecutivi=self._m2_loss_consecutivi(),
+        )
+
+        if result['veto']:
+            return   # veto silenzioso — non intasare i log
+
+        if result['enter']:
+            self._log_m2("🎯", f"ENTRY {matrimonio_name} | score={result['score']:.1f} "
+                              f"soglia={result['soglia']:.1f} size={result['size']:.2f}x "
+                              f"| {result['breakdown']} @ ${price:.1f}")
+
+            self._shadow = {
+                "price_entry":   price,
+                "matrimonio":    matrimonio_name,
+                "duration_avg":  matrimonio["duration_avg"],
+                "size":          result['size'],
+                "score":         result['score'],
+                "soglia":        result['soglia'],
+            }
+            self._shadow_entry_time        = time.time()
+            self._shadow_entry_momentum    = momentum
+            self._shadow_entry_volatility  = volatility
+            self._shadow_entry_trend       = trend
+            self._shadow_entry_fingerprint = fingerprint_wr
+            self._shadow_max_price         = price
+            self._shadow_matrimonio        = matrimonio_name
+            self._m2_trades += 1
+
+    def _evaluate_shadow_exit(self, price, momentum, volatility, trend):
+        """Stessa logica di uscita del Motore 1 applicata al shadow trade."""
+        if not self._shadow:
+            return
+        if price > self._shadow_max_price:
+            self._shadow_max_price = price
+
+        duration     = time.time() - self._shadow_entry_time
+        duration_avg = self._shadow["duration_avg"]
+
+        # ── DECEL ─────────────────────────────────────────────────────────
+        if duration > duration_avg * 0.3:
+            decel = self.decelero.analyze()
+            if decel['should_exit']:
+                self._close_shadow_trade(price, "DECEL_MOMENTUM")
+                return
+
+        # ── 4 DIVORCE TRIGGERS ────────────────────────────────────────────
+        triggers = []
+        if self._shadow_entry_volatility == "BASSA" and volatility == "ALTA":
+            triggers.append("T1_VOL")
+        if self._shadow_entry_trend == "UP" and trend == "DOWN":
+            triggers.append("T2_TREND")
+        drawdown_pct = ((self._shadow_max_price - price) / self._shadow["price_entry"]) * 100
+        if drawdown_pct > DIVORCE_DRAWDOWN_PCT:
+            triggers.append("T3_DD")
+        current_fp = self.oracolo.get_wr(momentum, volatility, trend)
+        fp_div = abs(current_fp - self._shadow_entry_fingerprint) / max(self._shadow_entry_fingerprint, 0.001)
+        if fp_div > DIVORCE_FP_DIVERGE_PCT:
+            triggers.append("T4_FP")
+        if len(triggers) >= DIVORCE_MIN_TRIGGERS:
+            self._close_shadow_trade(price, f"DIVORZIO|{'|'.join(triggers)}")
+            return
+
+        # ── SMORZ ─────────────────────────────────────────────────────────
+        if duration > duration_avg * 0.5 and momentum == "DEBOLE":
+            self._close_shadow_trade(price, "SMORZ")
+            return
+
+        # ── TIMEOUT ───────────────────────────────────────────────────────
+        if duration > duration_avg * 3:
+            self._close_shadow_trade(price, "TIMEOUT_3X")
+            return
+        if duration > duration_avg and drawdown_pct > 1.0:
+            self._close_shadow_trade(price, "TIMEOUT_DD")
+            return
+
+    def _close_shadow_trade(self, price, reason):
+        """Chiude il shadow trade e registra stats M2."""
+        if not self._shadow:
+            return
+        pnl    = price - self._shadow["price_entry"]
+        is_win = pnl > 0
+
+        self.campo.record_result(is_win)
+
+        if is_win:
+            self._m2_wins  += 1
+        else:
+            self._m2_losses += 1
+        self._m2_pnl += pnl
+
+        m2_tot = self._m2_wins + self._m2_losses
+        m2_wr  = (self._m2_wins / m2_tot * 100) if m2_tot > 0 else 0
+
+        self._log_m2(
+            "🟢" if is_win else "🔴",
+            f"EXIT {self._shadow_matrimonio} {'WIN' if is_win else 'LOSS'} "
+            f"PnL=${pnl:+.4f} WR={m2_wr:.0f}% score={self._shadow['score']:.1f} "
+            f"soglia={self._shadow['soglia']:.1f} [{reason}]"
+        )
+
+        # Reset shadow
+        self._shadow                   = None
+        self._shadow_entry_time        = None
+        self._shadow_entry_momentum    = None
+        self._shadow_entry_volatility  = None
+        self._shadow_entry_trend       = None
+        self._shadow_entry_fingerprint = None
+        self._shadow_max_price         = None
+        self._shadow_matrimonio        = None
+
+    def _m2_loss_consecutivi(self) -> int:
+        """Loss consecutivi del Motore 2."""
+        count = 0
+        for r in reversed(list(self.campo._recent_results)):
+            if not r:
+                count += 1
+            else:
+                break
+        return count
+
+    # ════════════════════════════════════════════════════════════════════════
     # ORDINI BINANCE (solo LIVE)
     # ════════════════════════════════════════════════════════════════════════
 
@@ -1781,6 +2138,15 @@ class OvertopBassanoV14Production:
                     "calibra_log":        self.calibratore.get_log(),
                     "regime":             self._regime_current,
                     "regime_conf":        round(self._regime_conf, 3),
+                    # ── MOTORE 2: CAMPO GRAVITAZIONALE stats ──────────
+                    "m2_trades":          self._m2_trades,
+                    "m2_wins":            self._m2_wins,
+                    "m2_losses":          self._m2_losses,
+                    "m2_wr":              round(self._m2_wins / max(1, self._m2_wins + self._m2_losses), 4),
+                    "m2_pnl":             round(self._m2_pnl, 4),
+                    "m2_shadow_open":     self._shadow is not None,
+                    "m2_log":             list(self._m2_log),
+                    "m2_campo_stats":     self.campo.get_stats(),
                 })
         except Exception as e:
             log.error(f"[HEARTBEAT_ERROR] {e}")
