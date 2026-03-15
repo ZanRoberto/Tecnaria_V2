@@ -1952,7 +1952,6 @@ class OvertopBassanoV14Production:
         entry = f"{ts} {emoji} [M2] {msg}"
         self._m2_log.append(entry)
         log.info(entry)
-        log.info(entry)
 
     def _evaluate_shadow_entry(self, price, momentum, volatility, trend):
         """Motore 2 valuta entry con il Campo Gravitazionale."""
