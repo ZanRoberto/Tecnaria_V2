@@ -1296,6 +1296,16 @@ class CampoGravitazionale:
 
     def __init__(self):
         self._recent_results = deque(maxlen=20)
+        # ── PRE-BREAKOUT DETECTOR ─────────────────────────────────────────
+        self._prices_short = deque(maxlen=50)     # ultimi 50 prezzi per compressione
+        self._seed_history = deque(maxlen=10)     # ultimi 10 seed per derivata
+        self._volumes_short = deque(maxlen=50)    # ultimi 50 volumi per accelerazione
+
+    def feed_tick(self, price: float, volume: float, seed_score: float):
+        """Alimenta il detector pre-breakout con dati tick-by-tick."""
+        self._prices_short.append(price)
+        self._volumes_short.append(volume)
+        self._seed_history.append(seed_score)
 
     def evaluate(self, seed_score, fingerprint_wr, momentum, volatility,
                  trend, regime, matrimonio_name, divorzio_set,
@@ -1348,8 +1358,9 @@ class CampoGravitazionale:
         regime_f  = self.REGIME_FACTOR.get(regime, 1.0)
         vol_f     = self.VOL_FACTOR.get(volatility, 1.0)
         history_f = self._history_factor()
+        prebreak_f, prebreak_detail = self._pre_breakout_factor()
 
-        soglia = self.SOGLIA_BASE * regime_f * vol_f * history_f
+        soglia = self.SOGLIA_BASE * regime_f * vol_f * history_f * prebreak_f
         soglia = max(self.SOGLIA_MIN, min(self.SOGLIA_MAX, soglia))
 
         # ── DECISIONE ─────────────────────────────────────────────────────
@@ -1376,7 +1387,7 @@ class CampoGravitazionale:
                 'trend':   round(s_trend, 2),
                 'vol':     round(s_vol, 2),
                 'regime':  round(s_reg, 2),
-                'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f}",
+                'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f} {prebreak_detail}",
             }
         }
 
@@ -1394,6 +1405,83 @@ class CampoGravitazionale:
         elif recent_wr < 0.40:
             return 1.20    # sta andando male, soglia più alta
         return 1.0
+
+    def _pre_breakout_factor(self) -> tuple:
+        """
+        ★ PRE-BREAKOUT DETECTOR — il cecchino sente i passi.
+
+        Tre segnali indipendenti:
+          1. COMPRESSIONE: range stretto (< 0.02%) con volatilità storica alta
+          2. VOLUME CRESCENTE: vol_accel > 1.3 a prezzo fermo
+          3. SEED CRESCENTI: derivata positiva per 5+ tick consecutivi
+
+        Ogni segnale vale 0.0-1.0. Il fattore finale è:
+          3 segnali attivi → 0.70 (soglia scende del 30%)
+          2 segnali attivi → 0.80 (soglia scende del 20%)
+          1 segnale attivo → 0.92 (soglia scende dell'8%)
+          0 segnali        → 1.00 (nessun effetto)
+
+        Ritorna (factor: float, dettaglio: str)
+        """
+        if len(self._prices_short) < 30 or len(self._seed_history) < 5:
+            return 1.0, ""
+
+        signals = 0
+        details = []
+
+        # ── 1. COMPRESSIONE ───────────────────────────────────────────────
+        prices = list(self._prices_short)
+        recent_50 = prices[-50:] if len(prices) >= 50 else prices
+        p_max = max(recent_50)
+        p_min = min(recent_50)
+        p_mid = (p_max + p_min) / 2
+        compression = (p_max - p_min) / p_mid if p_mid > 0 else 1.0
+
+        if compression < 0.0003:   # range < 0.03% — molla molto carica
+            signals += 1
+            details.append(f"COMPRESS={compression:.5f}")
+
+        # ── 2. VOLUME CRESCENTE (a prezzo fermo) ─────────────────────────
+        if len(self._volumes_short) >= 20:
+            vols = list(self._volumes_short)
+            vol_recent = sum(vols[-10:]) / 10
+            vol_prev   = sum(vols[-20:-10]) / 10
+            if vol_prev > 0:
+                vol_ratio = vol_recent / vol_prev
+                if vol_ratio > 1.3 and compression < 0.001:
+                    # Volume sale MA prezzo fermo → accumulazione
+                    signals += 1
+                    details.append(f"VOL_ACC={vol_ratio:.2f}")
+
+        # ── 3. SEED CRESCENTI (derivata positiva) ────────────────────────
+        seeds = list(self._seed_history)
+        if len(seeds) >= 5:
+            last_5 = seeds[-5:]
+            # Tutti crescenti: ogni seed > precedente
+            all_rising = all(last_5[i] > last_5[i-1] for i in range(1, len(last_5)))
+            # O almeno 4 su 5 crescenti con derivata media positiva
+            rising_count = sum(1 for i in range(1, len(last_5)) if last_5[i] > last_5[i-1])
+            avg_deriv = (last_5[-1] - last_5[0]) / 4  # derivata media
+
+            if all_rising and avg_deriv > 0.02:
+                signals += 1
+                details.append(f"SEED_RISE={avg_deriv:+.3f}")
+            elif rising_count >= 4 and avg_deriv > 0.05:
+                signals += 1
+                details.append(f"SEED_RISE4={avg_deriv:+.3f}")
+
+        # ── CALCOLA FATTORE ───────────────────────────────────────────────
+        if signals >= 3:
+            factor = 0.70    # molla carica — 3 conferme — soglia -30%
+        elif signals >= 2:
+            factor = 0.80    # probabile breakout — soglia -20%
+        elif signals >= 1:
+            factor = 0.92    # un segnale — leggero vantaggio
+        else:
+            factor = 1.00    # niente — soglia invariata
+
+        detail_str = f"pb={factor:.2f}({signals}/3 {'+'.join(details)})" if signals > 0 else ""
+        return factor, detail_str
 
     def _veto(self, reason: str) -> dict:
         return {'enter': False, 'score': 0.0, 'soglia': 0.0,
@@ -1514,6 +1602,7 @@ class OvertopBassanoV14Production:
         self._m2_pnl     = 0.0
         self._m2_trades  = 0
         self._m2_log     = deque(maxlen=20)   # log dedicato M2
+        self._last_volume = 1.0               # ultimo volume dal WebSocket
 
         # ── BRIDGE COMMANDS READER ───────────────────────────────────────
         self._bridge_cmd_file = "bridge_commands.json"
@@ -1544,6 +1633,7 @@ class OvertopBassanoV14Production:
                 if price > 0:
                     self.analyzer.add_price(price)
                     self.seed_scorer.add_tick(price, volume)
+                    self._last_volume = volume
                     self._process_tick(price)
             except Exception as e:
                 log.error(f"[WS_MSG] {e}")
@@ -1636,6 +1726,11 @@ class OvertopBassanoV14Production:
             self._evaluate_exit(price, momentum, volatility, trend)
         else:
             self._evaluate_entry(price, momentum, volatility, trend)
+
+        # ── MOTORE 2: Feed pre-breakout detector (OGNI tick) ─────────────
+        _seed_quick = self.seed_scorer.score()
+        _seed_val = _seed_quick.get('score', 0.0) if _seed_quick.get('reason') != 'insufficient_data' else 0.0
+        self.campo.feed_tick(price, self._last_volume, _seed_val)
 
         # ── MOTORE 2: Shadow trade evaluation (parallelo) ─────────────────
         if self._shadow:
