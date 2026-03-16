@@ -13,7 +13,7 @@ COSA FA:
   6. Zero restart, zero interruzione
 
 SETUP:
-  - Env var: ANTHROPIC_API_KEY (obbligatoria)
+  - Env var: DEEPSEEK_API_KEY (obbligatoria)
   - Env var: AI_BRIDGE_INTERVAL (opzionale, default 300 = 5 minuti)
   - Env var: AI_BRIDGE_ENABLED (opzionale, default "true")
 
@@ -108,10 +108,10 @@ class AIBridge:
         self.capsule_file   = capsule_file
 
         # Config da env vars
-        self.api_key    = os.environ.get("ANTHROPIC_API_KEY", "")
+        self.api_key    = os.environ.get("DEEPSEEK_API_KEY", "")
         self.interval   = int(os.environ.get("AI_BRIDGE_INTERVAL", "300"))  # 5 min default
         self.enabled    = os.environ.get("AI_BRIDGE_ENABLED", "true").lower() == "true"
-        self.model      = os.environ.get("AI_BRIDGE_MODEL", "claude-sonnet-4-20250514")
+        self.model      = os.environ.get("AI_BRIDGE_MODEL", "deepseek-chat")
 
         # Stato interno
         self._thread         = None
@@ -133,7 +133,7 @@ class AIBridge:
             return
 
         if not self.api_key:
-            log.warning("[AI_BRIDGE] ❌ ANTHROPIC_API_KEY non impostata — bridge inattivo")
+            log.warning("[AI_BRIDGE] ❌ DEEPSEEK_API_KEY non impostata — bridge inattivo")
             return
 
         self._running = True
@@ -234,7 +234,7 @@ class AIBridge:
         return True
 
     def _call_claude(self, snapshot: dict) -> dict:
-        """Chiama Claude API con lo snapshot e ritorna la risposta parsed."""
+        """Chiama DeepSeek API con lo snapshot e ritorna la risposta parsed."""
         import urllib.request
         import urllib.error
 
@@ -244,21 +244,21 @@ class AIBridge:
         payload = json.dumps({
             "model": self.model,
             "max_tokens": 1000,
-            "system": SYSTEM_PROMPT,
             "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_msg}
-            ]
+            ],
+            "temperature": 0.3,
         }).encode('utf-8')
 
         headers = {
             "Content-Type": "application/json",
-            "x-api-key": self.api_key,
-            "anthropic-version": "2023-06-01",
+            "Authorization": f"Bearer {self.api_key}",
         }
 
         try:
             req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages",
+                "https://api.deepseek.com/chat/completions",
                 data=payload,
                 headers=headers,
                 method="POST"
@@ -266,14 +266,10 @@ class AIBridge:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
 
-            # Estrai il testo dalla risposta
-            text = ""
-            for block in data.get("content", []):
-                if block.get("type") == "text":
-                    text += block.get("text", "")
+            # Estrai il testo dalla risposta DeepSeek
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
             # Parse JSON dalla risposta
-            # Rimuovi eventuali backtick markdown
             text = text.strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -282,7 +278,7 @@ class AIBridge:
             text = text.strip()
 
             response = json.loads(text)
-            self._log("📡", f"Claude risponde: {response.get('analisi', '?')[:80]} "
+            self._log("📡", f"AI risponde: {response.get('analisi', '?')[:80]} "
                            f"[{response.get('alert_level', '?')}] "
                            f"comandi={len(response.get('comandi', []))}")
             return response
