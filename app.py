@@ -1,5 +1,5 @@
 """
-MISSION CONTROL V5.9 — BOT V14 PRODUCTION INTEGRATO
+MISSION CONTROL V5.9 — BOT V14 PRODUCTION + AI BRIDGE
 =====================================================
 ✅ Bot gira DENTRO app.py come thread daemon
 ✅ Memoria condivisa thread-safe (heartbeat_data + Lock)
@@ -7,10 +7,12 @@ MISSION CONTROL V5.9 — BOT V14 PRODUCTION INTEGRATO
 ✅ ZERO comunicazione HTTP esterna tra bot e app
 ✅ Dashboard PAPER/LIVE indicator
 ✅ Nomi classe/file allineati a OVERTOP_BASSANO_V14_PRODUCTION
+✅ AI BRIDGE: Claude analizza e comanda in tempo reale
 """
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template_string, request, send_file, abort
 from OVERTOP_BASSANO_V14_PRODUCTION import OvertopBassanoV14Production
+from ai_bridge import AIBridge
 import sqlite3
 import json
 import threading
@@ -31,6 +33,7 @@ app = Flask(__name__)
 
 DB_DIR  = os.environ.get("DB_DIR",  "/home/app/data")
 DB_PATH = os.environ.get("DB_PATH", os.path.join(DB_DIR, "trading_data.db"))
+NARRATIVES_DB = os.environ.get("NARRATIVES_DB", os.path.join(DB_DIR, "narratives.db"))
 LOG_FILE= os.path.join(DB_DIR, "trading.log")
 
 Path(DB_DIR).mkdir(parents=True, exist_ok=True)
@@ -121,6 +124,16 @@ def db_execute(query, params=None, fetch=False):
             if attempt == 2:
                 return None
             time.sleep(0.5)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DOWNLOAD SECRET per endpoint protetti
+# ═══════════════════════════════════════════════════════════════════════════
+
+DOWNLOAD_SECRET = os.environ.get("DOWNLOAD_SECRET", "overtop2024")
+
+def _check_key():
+    if request.args.get('key') != DOWNLOAD_SECRET:
+        abort(403, "Chiave non valida")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ROUTES
@@ -226,7 +239,65 @@ def send_command():
 
 @app.route('/trading/config', methods=['GET'])
 def get_config():
-    return jsonify({"version": "V5.9+V14_PRODUCTION", "db": DB_PATH}), 200
+    return jsonify({"version": "V5.9+V14_PRODUCTION+AI_BRIDGE", "db": DB_PATH}), 200
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DOWNLOAD ENDPOINTS — scarica DB, narratives, capsule
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route('/download/db')
+def download_db():
+    _check_key()
+    if not os.path.exists(DB_PATH):
+        abort(404, "trading_data.db non trovato")
+    return send_file(DB_PATH, as_attachment=True, download_name="trading_data.db")
+
+@app.route('/download/narratives')
+def download_narratives():
+    _check_key()
+    if not os.path.exists(NARRATIVES_DB):
+        abort(404, "narratives.db non trovato")
+    return send_file(NARRATIVES_DB, as_attachment=True, download_name="narratives.db")
+
+@app.route('/download/capsule')
+def download_capsule():
+    _check_key()
+    capsule_file = "capsule_attive.json"
+    if not os.path.exists(capsule_file):
+        abort(404, "capsule_attive.json non trovato")
+    return send_file(capsule_file, as_attachment=True, download_name="capsule_attive.json")
+
+@app.route('/debug/db')
+def debug_db():
+    _check_key()
+    if not os.path.exists(DB_PATH):
+        return json.dumps({"error": "DB non trovato"}), 404
+    conn = sqlite3.connect(DB_PATH)
+    rows = dict(conn.execute("SELECT key, value FROM bot_state").fetchall())
+    conn.close()
+    result = {}
+    for k, v in rows.items():
+        try:
+            parsed = json.loads(v)
+            if isinstance(parsed, dict) and len(str(parsed)) > 2000:
+                result[k] = f"[{len(parsed)} entries]"
+            else:
+                result[k] = parsed
+        except (json.JSONDecodeError, TypeError):
+            result[k] = v
+    return json.dumps(result, indent=2), 200, {'Content-Type': 'application/json'}
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AI BRIDGE STATUS ENDPOINT
+# ═══════════════════════════════════════════════════════════════════════════
+
+bridge = None  # inizializzato dopo il bot
+
+@app.route('/bridge/status')
+def bridge_status():
+    if bridge:
+        return json.dumps(bridge.get_status(), indent=2), 200, {'Content-Type': 'application/json'}
+    return json.dumps({"active": False, "reason": "bridge not initialized"}), 200, {'Content-Type': 'application/json'}
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BRAIN THREAD — analisi periodica ogni 60s
@@ -250,10 +321,11 @@ def brain_analysis_thread():
 threading.Thread(target=brain_analysis_thread, daemon=True, name='brain').start()
 
 # ═══════════════════════════════════════════════════════════════════════════
-# BOT LAUNCHER THREAD — avvia OvertopBassanoV14Production come daemon
+# BOT LAUNCHER THREAD + AI BRIDGE
 # ═══════════════════════════════════════════════════════════════════════════
 
 def bot_thread_launcher():
+    global bridge
     retry_count = 0
     max_retries = 5
     while retry_count < max_retries:
@@ -271,6 +343,11 @@ def bot_thread_launcher():
                 heartbeat_data["capital"] = round(bot.capital, 2)
                 heartbeat_data["trades"]  = bot.total_trades
                 heartbeat_data["last_seen"] = datetime.utcnow().isoformat()
+
+            # ── AI BRIDGE — connette il bot a Claude API ─────────────────
+            bridge = AIBridge(heartbeat_data, heartbeat_lock)
+            bridge.start()
+
             log(f"[BOT_LAUNCHER] ✅ Bot istanziato — capital=${bot.capital:.2f} — bot.run() in partenza")
             bot.run()
         except Exception as e:
@@ -282,7 +359,7 @@ def bot_thread_launcher():
     log(f"[BOT_LAUNCHER] ❌ Bot non avviabile dopo {max_retries} tentativi")
 
 threading.Thread(target=bot_thread_launcher, daemon=True, name='bot_v14').start()
-log("[MAIN] ✅ Bot thread avviato")
+log("[MAIN] ✅ Bot thread + AI Bridge avviati")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # DASHBOARD HTML
@@ -326,12 +403,16 @@ DASHBOARD_HTML = """
                      gap: 8px; padding: 7px; border-bottom: 1px solid #333; font-size: 11px; }
         .trade-row.header { font-weight: bold; border-bottom: 2px solid #00ff00; background: #0f1420; }
         .win { color: #00ff00; } .loss { color: #ff0000; }
+        .bridge-section { background: #1a1020; border: 2px solid #a855f7; padding: 12px;
+                          margin-bottom: 20px; border-radius: 3px; }
+        .m2-section { background: #0f1a2a; border: 2px solid #3b82f6; padding: 12px;
+                      margin-bottom: 20px; border-radius: 3px; }
     </style>
 </head>
 <body>
 <div class="container">
     <div class="header">
-        🔴 MISSION CONTROL V5.9
+        🔴 MISSION CONTROL V5.9 + AI BRIDGE
         <span class="mode-badge" id="mode-badge">--</span>
     </div>
     <div class="metrics-grid">
@@ -341,14 +422,43 @@ DASHBOARD_HTML = """
         <div class="metric-card"><div class="metric-label">ROI %</div><div class="metric-value" id="roi">--</div></div>
         <div class="metric-card"><div class="metric-label">Trade #</div><div class="metric-value" id="n_trades">--</div></div>
         <div class="metric-card"><div class="metric-label">STATUS</div><div class="metric-value" id="status">OFFLINE</div></div>
+        <div class="metric-card"><div class="metric-label">Regime</div><div class="metric-value" id="regime" style="font-size:13px">--</div></div>
         <div class="metric-card"><div class="metric-label">Divorzi</div><div class="metric-value" id="divorzi" style="font-size:13px">--</div></div>
     </div>
     <!-- LIVE TICKER -->
-    <div style="background:#0f1420; border:1px solid #00ff00; padding:10px; margin-bottom:15px; border-radius:3px; font-size:13px; display:flex; gap:30px; align-items:center;">
+    <div style="background:#0f1420; border:1px solid #00ff00; padding:10px; margin-bottom:15px; border-radius:3px; font-size:13px; display:flex; gap:30px; align-items:center; flex-wrap:wrap;">
         <span>💹 BTC/USDC: <span id="live-price" style="color:#00ffff; font-size:18px; font-weight:bold">--</span></span>
         <span>⚡ Tick: <span id="tick-count" style="color:#ffff00">#0</span></span>
         <span>🕐 Ultimo: <span id="last-tick" style="color:#888">--</span></span>
         <span id="trade-status" style="color:#aaa">🔍 Analizzando mercato...</span>
+    </div>
+    <!-- M2 CAMPO GRAVITAZIONALE -->
+    <div class="m2-section">
+        <div style="font-weight:bold; margin-bottom:8px; color:#3b82f6;">🎯 MOTORE 2 — CAMPO GRAVITAZIONALE (shadow)</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(100px,1fr)); gap:8px; font-size:12px;" id="m2-stats">
+            <span>Trade: <b id="m2-trades">0</b></span>
+            <span>Win: <b id="m2-wins" style="color:#00ff00">0</b></span>
+            <span>Loss: <b id="m2-losses" style="color:#ff4444">0</b></span>
+            <span>WR: <b id="m2-wr">0%</b></span>
+            <span>PnL: <b id="m2-pnl">$0</b></span>
+            <span>Shadow: <b id="m2-shadow">-</b></span>
+        </div>
+        <div id="m2-log" style="font-size:11px; font-family:monospace; margin-top:8px; max-height:150px; overflow-y:auto; color:#8888cc;">
+            In attesa dati M2...
+        </div>
+    </div>
+    <!-- AI BRIDGE -->
+    <div class="bridge-section">
+        <div style="font-weight:bold; margin-bottom:8px; color:#a855f7;">🌉 AI BRIDGE — Claude Analista</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px,1fr)); gap:8px; font-size:12px;">
+            <span>Attivo: <b id="bridge-active" style="color:#a855f7">-</b></span>
+            <span>Ultima call: <b id="bridge-last">-</b></span>
+            <span>Errori: <b id="bridge-errors">0</b></span>
+            <span>Comandi: <b id="bridge-cmds">0</b></span>
+        </div>
+        <div id="bridge-log" style="font-size:11px; font-family:monospace; margin-top:8px; max-height:120px; overflow-y:auto; color:#aa88dd;">
+            Bridge non ancora attivo...
+        </div>
     </div>
     <div class="controls">
         <button onclick="sendCommand('STOP')">⏹️ STOP</button>
@@ -363,17 +473,17 @@ DASHBOARD_HTML = """
     <!-- LIVE LOG DECISIONI -->
     <div style="background:#0a0e1a; border:2px solid #333; padding:12px; margin-bottom:20px; border-radius:3px;">
         <div style="font-weight:bold; margin-bottom:8px; color:#00ff00;">📋 LOG LIVE DECISIONI BOT (ultimi 20)</div>
-        <!-- LEGENDA -->
         <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:10px; font-size:11px; border-bottom:1px solid #222; padding-bottom:8px;">
-            <span style="color:#00ff00">🚀 ENTRY aperta</span>
-            <span style="color:#00ff00">🟢 EXIT WIN</span>
-            <span style="color:#ff4444">🔴 EXIT LOSS o blocco Capsule</span>
-            <span style="color:#666">⚡ SEED basso — impulso debole</span>
-            <span style="color:#aa44ff">👻 FANTASMA — pattern perdente</span>
-            <span style="color:#ff6600">🚫 MEMORIA blocca matrimonio</span>
-            <span style="color:#ffaa00">💊 CAPSULE JSON blocca</span>
-            <span style="color:#ff0000">💔 DIVORZIO IMMEDIATO</span>
-            <span style="color:#aaaaff">🌙 SMORZ — impulso finito</span>
+            <span style="color:#00ff00">🚀 ENTRY</span>
+            <span style="color:#00ff00">🟢 WIN</span>
+            <span style="color:#ff4444">🔴 LOSS/blocco</span>
+            <span style="color:#666">⚡ SEED basso</span>
+            <span style="color:#aa44ff">👻 FANTASMA</span>
+            <span style="color:#ff6600">🚫 MEMORIA</span>
+            <span style="color:#ffaa00">💊 CAPSULE</span>
+            <span style="color:#ff0000">💔 DIVORZIO</span>
+            <span style="color:#aaaaff">🌙 SMORZ</span>
+            <span style="color:#00aaff">🌉 BRIDGE</span>
         </div>
         <div id="live-log" style="font-size:11px; font-family:monospace; line-height:1.8; color:#ccc; max-height:320px; overflow-y:auto;">
             In attesa dati...
@@ -401,6 +511,40 @@ function updateDashboard() {
         document.getElementById('status').textContent   = hb.status || 'OFFLINE';
         document.getElementById('status').className = 'metric-value ' +
             (hb.status === 'RUNNING' ? 'status-running' : 'status-offline');
+        document.getElementById('regime').textContent = (hb.regime || '?') + ' (' + ((hb.regime_conf||0)*100).toFixed(0) + '%)';
+
+        // M2 stats
+        document.getElementById('m2-trades').textContent = hb.m2_trades || 0;
+        document.getElementById('m2-wins').textContent = hb.m2_wins || 0;
+        document.getElementById('m2-losses').textContent = hb.m2_losses || 0;
+        document.getElementById('m2-wr').textContent = ((hb.m2_wr||0)*100).toFixed(1) + '%';
+        document.getElementById('m2-pnl').textContent = '$' + (hb.m2_pnl||0).toFixed(4);
+        document.getElementById('m2-shadow').textContent = hb.m2_shadow_open ? '🟢 APERTO' : '⚪ chiuso';
+
+        // M2 log
+        const m2l = hb.m2_log || [];
+        if (m2l.length > 0) {
+            document.getElementById('m2-log').innerHTML = [...m2l].reverse().map(line => {
+                let col = line.includes('🟢') ? '#00ff00' : line.includes('🔴') ? '#ff4444' : '#8888cc';
+                return '<div style="color:'+col+';border-bottom:1px solid #111;padding:1px 0">'+line+'</div>';
+            }).join('');
+        }
+
+        // Bridge stats
+        document.getElementById('bridge-active').textContent = hb.bridge_active ? '✅ SÌ' : '❌ NO';
+        document.getElementById('bridge-last').textContent = hb.bridge_last_call ? new Date(hb.bridge_last_call).toLocaleTimeString() : '-';
+        document.getElementById('bridge-errors').textContent = hb.bridge_errors || 0;
+        const bcmds = hb.bridge_commands || [];
+        document.getElementById('bridge-cmds').textContent = bcmds.length;
+
+        // Bridge log
+        const bl = hb.bridge_log || [];
+        if (bl.length > 0) {
+            document.getElementById('bridge-log').innerHTML = [...bl].reverse().map(line => {
+                let col = line.includes('❌') ? '#ff4444' : line.includes('📡') ? '#a855f7' : '#aa88dd';
+                return '<div style="color:'+col+';padding:1px 0">'+line+'</div>';
+            }).join('');
+        }
 
         // Live log decisioni
         const ll = hb.live_log || [];
@@ -416,32 +560,23 @@ function updateDashboard() {
                 else if (line.includes('🚫')) col = '#ff6600';
                 else if (line.includes('💊')) col = '#ffaa00';
                 else if (line.includes('🌙')) col = '#aaaaff';
-                return `<div style="color:${col}; border-bottom:1px solid #111; padding:2px 0">${line}</div>`;
+                else if (line.includes('🌉')) col = '#00aaff';
+                return '<div style="color:'+col+';border-bottom:1px solid #111;padding:2px 0">'+line+'</div>';
             }).join('');
         }
 
         // Live ticker
-        const lp = hb.last_price;
-        if (lp) {
-            document.getElementById('live-price').textContent = '$' + lp.toLocaleString('en-US', {minimumFractionDigits:2});
-        }
-        const tc = hb.tick_count || 0;
-        document.getElementById('tick-count').textContent = '#' + tc.toLocaleString();
-        const lt = hb.last_tick ? new Date(hb.last_tick).toLocaleTimeString() : '--';
-        document.getElementById('last-tick').textContent = lt;
+        if (hb.last_price) document.getElementById('live-price').textContent = '$' + hb.last_price.toLocaleString('en-US', {minimumFractionDigits:2});
+        document.getElementById('tick-count').textContent = '#' + (hb.tick_count||0).toLocaleString();
+        document.getElementById('last-tick').textContent = hb.last_tick ? new Date(hb.last_tick).toLocaleTimeString() : '--';
 
         // Trade status
         const ts = document.getElementById('trade-status');
-        if (hb.posizione_aperta) {
-            ts.textContent = '🟢 TRADE APERTO';
-            ts.style.color = '#00ff00';
-        } else if (tc < 20) {
-            ts.textContent = '⏳ Warmup (' + tc + '/20 tick)';
-            ts.style.color = '#ffff00';
-        } else {
-            ts.textContent = '🔍 Analizzando — in attesa setup';
-            ts.style.color = '#aaa';
-        }
+        if (hb.posizione_aperta) { ts.textContent = '🟢 M1 TRADE APERTO'; ts.style.color = '#00ff00'; }
+        else if (hb.m2_shadow_open) { ts.textContent = '🎯 M2 SHADOW APERTO'; ts.style.color = '#3b82f6'; }
+        else if ((hb.tick_count||0) < 20) { ts.textContent = '⏳ Warmup'; ts.style.color = '#ffff00'; }
+        else { ts.textContent = '🔍 In attesa setup'; ts.style.color = '#aaa'; }
+
         const mode  = hb.mode || 'PAPER';
         const badge = document.getElementById('mode-badge');
         badge.textContent = mode === 'LIVE' ? '🔴 LIVE' : '📄 PAPER';
@@ -449,8 +584,7 @@ function updateDashboard() {
 
         // Divorzi
         const divorzi = hb.matrimoni_divorzio || [];
-        document.getElementById('divorzi').textContent =
-            divorzi.length > 0 ? divorzi.join(', ') : '✅ nessuno';
+        document.getElementById('divorzi').textContent = divorzi.length > 0 ? divorzi.join(', ') : '✅ nessuno';
 
         // Oracolo snapshot
         const oracolo = hb.oracolo_snapshot || {};
@@ -460,14 +594,14 @@ function updateDashboard() {
                 const d2 = oracolo[fp];
                 const wr = (d2.wr * 100).toFixed(0);
                 const col = d2.wr >= 0.60 ? '#00ff00' : (d2.wr >= 0.45 ? '#ffff00' : '#ff4444');
-                return `<span style="margin-right:14px; color:${col}">${fp}: WR=${wr}% (${d2.samples})</span>`;
+                return '<span style="margin-right:14px;color:'+col+'">'+fp+': WR='+wr+'% ('+d2.samples+')</span>';
             }).join('');
         }
 
         // Suggerimenti
-        let sh = '<div style="font-weight:bold; margin-bottom:5px;">💡 ALERT:</div>';
-        (d.suggestions || []).forEach(s => { sh += '<div style="margin:4px 0">' + s + '</div>'; });
-        if (!d.suggestions || d.suggestions.length === 0) sh += '<div>✅ Sistema OK</div>';
+        let sh = '<div style="font-weight:bold;margin-bottom:5px;">💡 ALERT:</div>';
+        (d.suggestions||[]).forEach(s => { sh += '<div style="margin:4px 0">'+s+'</div>'; });
+        if (!d.suggestions||d.suggestions.length===0) sh += '<div>✅ Sistema OK</div>';
         document.getElementById('suggestions').innerHTML = sh;
 
         // Trade list
@@ -475,29 +609,18 @@ function updateDashboard() {
         if (d.trades && d.trades.length > 0) {
             d.trades.forEach(t => {
                 const cls = t.pnl > 0 ? 'win' : 'loss';
-                const ts  = new Date(t.timestamp).toLocaleTimeString();
-                th += `<div class="trade-row ${cls}">
-                    <div>${ts}</div><div>${t.type}</div><div>${t.asset}</div>
-                    <div>${t.price.toFixed(1)}</div>
-                    <div>${t.pnl >= 0 ? '+' : ''}${t.pnl.toFixed(2)}$</div>
-                    <div></div>
-                    <div>${(t.reason || 'N/A').substring(0, 18)}</div>
-                </div>`;
+                const tts = new Date(t.timestamp).toLocaleTimeString();
+                th += '<div class="trade-row '+cls+'"><div>'+tts+'</div><div>'+t.type+'</div><div>'+t.asset+'</div><div>'+t.price.toFixed(1)+'</div><div>'+(t.pnl>=0?'+':'')+t.pnl.toFixed(2)+'$</div><div></div><div>'+(t.reason||'N/A').substring(0,18)+'</div></div>';
             });
         } else {
             th = '<div class="trade-row" style="color:#555">Nessun trade ancora</div>';
         }
         document.getElementById('trades-list').innerHTML = th;
-    }).catch(() => {
-        document.getElementById('status').textContent = 'OFFLINE';
-    });
+    }).catch(() => { document.getElementById('status').textContent = 'OFFLINE'; });
 }
 function sendCommand(cmd) {
-    fetch('/trading/command', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({command: cmd})
-    }).then(r => r.json()).then(() => alert('✅ Comando inviato: ' + cmd));
+    fetch('/trading/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command:cmd})})
+    .then(r => r.json()).then(() => alert('✅ Comando: '+cmd));
 }
 updateDashboard();
 setInterval(updateDashboard, 2000);
@@ -516,5 +639,5 @@ def dashboard():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    log(f"[MAIN] 🚀 MISSION CONTROL V5.9 — porta {port}")
+    log(f"[MAIN] 🚀 MISSION CONTROL V5.9 + AI BRIDGE — porta {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
