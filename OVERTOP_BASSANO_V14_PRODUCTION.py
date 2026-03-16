@@ -1515,6 +1515,10 @@ class OvertopBassanoV14Production:
         self._m2_trades  = 0
         self._m2_log     = deque(maxlen=20)   # log dedicato M2
 
+        # ── BRIDGE COMMANDS READER ───────────────────────────────────────
+        self._bridge_cmd_file = "bridge_commands.json"
+        self._last_bridge_check = time.time()
+
         # ── Banner ────────────────────────────────────────────────────────
         mode_label = "📄 PAPER TRADE" if self.paper_trade else "🔴 LIVE TRADING"
         log.info("=" * 80)
@@ -1577,6 +1581,11 @@ class OvertopBassanoV14Production:
                 if self.capsule_runtime.reload():
                     log.info("[CONFIG] 🔄 Capsule ricaricate a caldo")
             self.last_config_check = now
+
+        # Bridge commands check ogni 30s
+        if now - self._last_bridge_check > 30:
+            self._read_bridge_commands()
+            self._last_bridge_check = now
 
         # Heartbeat ogni 30s
         if now - self.last_heartbeat > 30:
@@ -2093,6 +2102,53 @@ class OvertopBassanoV14Production:
             else:
                 break
         return count
+
+    def _read_bridge_commands(self):
+        """
+        Legge bridge_commands.json e applica comandi al CampoGravitazionale.
+        Il bridge AI scrive qui, il bot esegue qui. Zero restart.
+        """
+        try:
+            if not os.path.exists(self._bridge_cmd_file):
+                return
+
+            with open(self._bridge_cmd_file) as f:
+                commands = json.load(f)
+
+            modified = False
+            for cmd in commands:
+                if cmd.get("executed"):
+                    continue
+
+                cmd_type = cmd.get("type", "")
+                data     = cmd.get("data", {})
+
+                if cmd_type == "modify_weight":
+                    param = data.get("param", "")
+                    value = data.get("value")
+                    if hasattr(self.campo, param) and value is not None:
+                        old = getattr(self.campo, param)
+                        setattr(self.campo, param, value)
+                        self._log("🌉", f"BRIDGE: {param} {old} → {value}")
+                        cmd["executed"] = True
+                        modified = True
+
+                elif cmd_type == "adjust_soglia":
+                    param = data.get("param", "")
+                    value = data.get("value")
+                    if hasattr(self.campo, param) and value is not None:
+                        old = getattr(self.campo, param)
+                        setattr(self.campo, param, value)
+                        self._log("🌉", f"BRIDGE: {param} {old} → {value}")
+                        cmd["executed"] = True
+                        modified = True
+
+            if modified:
+                with open(self._bridge_cmd_file, 'w') as f:
+                    json.dump(commands, f, indent=2)
+
+        except Exception as e:
+            log.error(f"[BRIDGE_READ] {e}")
 
     # ════════════════════════════════════════════════════════════════════════
     # ORDINI BINANCE (solo LIVE)
