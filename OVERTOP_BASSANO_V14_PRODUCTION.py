@@ -1,2242 +1,594 @@
 #!/usr/bin/env python3
 """
-OVERTOP BASSANO V14 PRODUCTION — FULL BUILD
+AI BRIDGE — OVERTOP BASSANO
 ═══════════════════════════════════════════════════════════════════════════════
-BOT TRADING COMPLETO INTEGRATO - PRODUCTION READY
+Ponte tra il bot e Claude API.
 
-INTEGRATO DENTRO (UN FILE, ZERO DIPENDENZE ESTERNE):
-  ✅ CapsuleRuntime        — capsule da JSON, hot-reload senza restart
-  ✅ ConfigHotReloader     — ricarica config ogni 30s
-  ✅ RealtimeLearningEngine— genera capsule auto da trade recenti
-  ✅ LogAnalyzer           — statistiche pattern per matrimonio
-  ✅ AIExplainer           — narrative log SQLite ogni decisione
-  ✅ SeedScorer            — scoring impulso a 4 componenti (TUA INVENZIONE)
-  ✅ OracoloDinamico       — fingerprint WR memory con decay (TUA INVENZIONE)
-  ✅ MemoriaMatrimoni      — 7 tipi, trust, separazione, divorzio permanente
-  ✅ 5 Capsule intelligenti— Coerenza/Trappola/Protezione/Opportunità/Tattica
-  ✅ 4 Divorce Triggers    — monitorati ogni tick, 2+ = DIVORZIO IMMEDIATO
-  ✅ PAPER TRADE mode      — flag sicurezza prima del live
-  ✅ Persistenza SQLite    — capital/trades sopravvivono al restart
+COSA FA:
+  1. Legge lo stato del bot ogni N secondi (heartbeat_data)
+  2. Rileva eventi significativi (trade chiuso, regime cambiato, anomalia)
+  3. Manda lo snapshot a Claude API con prompt strutturato
+  4. Riceve comandi: nuove capsule, modifiche pesi, alert
+  5. Scrive in capsule_attive.json → il bot le raccoglie al prossimo hot-reload
+  6. Zero restart, zero interruzione
 
-PAPER TRADE:  imposta PAPER_TRADE = True per test sicuro
-LIVE TRADING: imposta PAPER_TRADE = False (solo dopo paper test OK)
+SETUP:
+  - Env var: DEEPSEEK_API_KEY (obbligatoria)
+  - Env var: AI_BRIDGE_INTERVAL (opzionale, default 300 = 5 minuti)
+  - Env var: AI_BRIDGE_ENABLED (opzionale, default "true")
+
+INTEGRAZIONE in app.py:
+  from ai_bridge import AIBridge
+  bridge = AIBridge(heartbeat_data, heartbeat_lock)
+  bridge.start()
 ═══════════════════════════════════════════════════════════════════════════════
 """
 
-import json
-import websocket
-import threading
-import time
-import hashlib
-import operator
-import sqlite3
 import os
-from datetime import datetime
-from collections import deque, defaultdict
+import json
+import time
+import threading
 import logging
-import sys
+import hashlib
+from datetime import datetime
 
-# ═══════════════════════════════════════════════════════════════════════════
-# ⚙️  CONFIGURAZIONE GLOBALE
-# ═══════════════════════════════════════════════════════════════════════════
-
-# ─── PAPER TRADE FLAG ───────────────────────────────────────────────────────
-# True  = simula tutto, zero ordini reali su Binance → usa per testare
-# False = ordini reali → SOLO dopo paper test soddisfacente
-PAPER_TRADE = True
-
-# ─── SEED SCORER ────────────────────────────────────────────────────────────
-SEED_ENTRY_THRESHOLD = 0.45   # soglia minima per entrare
-
-# ─── DIVORCE TRIGGERS ───────────────────────────────────────────────────────
-DIVORCE_DRAWDOWN_PCT   = 3.0  # % drawdown dal massimo → trigger 3
-DIVORCE_FP_DIVERGE_PCT = 0.50 # divergenza fingerprint > 50% → trigger 4
-DIVORCE_MIN_TRIGGERS   = 2    # quanti trigger devono scattare per uscita immediata
-
-# ─── DATABASE ────────────────────────────────────────────────────────────────
-DB_PATH        = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
-NARRATIVES_DB  = os.environ.get("NARRATIVES_DB", "/home/app/data/narratives.db")
-
-# ─── BINANCE ─────────────────────────────────────────────────────────────────
-BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/btcusdc@aggTrade"
-SYMBOL         = "BTCUSDC"
-
-# ═══════════════════════════════════════════════════════════════════════════
-# LOGGING
-# ═══════════════════════════════════════════════════════════════════════════
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(message)s',
-    datefmt='%H:%M:%S'
-)
 log = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════
-# OPERATORS FOR CAPSULE RUNTIME
+# SYSTEM PROMPT — L'ANALISTA AI
 # ═══════════════════════════════════════════════════════════════════════════
 
-OPS = {
-    '>':      operator.gt,
-    '>=':     operator.ge,
-    '<':      operator.lt,
-    '<=':     operator.le,
-    '==':     operator.eq,
-    '!=':     operator.ne,
-    'in':     lambda a, b: a in b,
-    'not_in': lambda a, b: a not in b,
+SYSTEM_PROMPT = """Sei l'analista AI del trading bot OVERTOP BASSANO. Ricevi snapshot periodici dello stato del bot e rispondi SOLO con comandi JSON strutturati.
+
+Il bot ha DUE motori:
+- M1 (Catena Filtri): 10 filtri binari in serie. Ultra-selettivo, spesso fa zero trade.
+- M2 (Campo Gravitazionale): punteggio cartesiano 0-100 vs soglia dinamica 35-90. Shadow trading.
+
+ANALIZZA:
+1. Performance M1 vs M2 (trade, WR, PnL)
+2. Regime attuale e se le soglie sono appropriate
+3. Pattern nei trade recenti (tutti win? tutti loss? un matrimonio domina?)
+4. Anomalie (bot fermo, WR in crollo, regime bloccato su RANGING)
+
+RISPONDI SEMPRE con questo formato JSON esatto (niente altro, niente markdown):
+{
+  "analisi": "breve analisi testuale max 200 caratteri",
+  "alert_level": "green|yellow|red",
+  "comandi": [
+    {
+      "tipo": "add_capsule|disable_capsule|modify_weight|adjust_soglia|noop",
+      "payload": {}
+    }
+  ],
+  "note_per_roberto": "eventuale messaggio per il proprietario"
 }
 
+TIPI DI COMANDI:
+
+add_capsule: aggiunge una nuova capsula a capsule_attive.json
+  payload: {"capsule_id":"...", "descrizione":"...", "trigger":[...], "azione":{...}, "priority":N, "enabled":true}
+
+disable_capsule: disabilita una capsula esistente
+  payload: {"capsule_id":"ID_DA_DISABILITARE"}
+
+modify_weight: modifica un peso del CampoGravitazionale (solo M2)
+  payload: {"param":"W_SEED|W_FINGERPRINT|W_MOMENTUM|W_TREND|W_VOLATILITY|W_REGIME", "new_value":N}
+
+adjust_soglia: modifica la soglia base del Campo
+  payload: {"param":"SOGLIA_BASE|SOGLIA_MIN|SOGLIA_MAX", "new_value":N}
+
+noop: nessuna azione necessaria
+  payload: {"reason":"motivo per cui non serve intervenire"}
+
+REGOLE:
+- Se non hai abbastanza dati (< 10 trade M2), rispondi con noop
+- Non fare più di 2 comandi per ciclo — cambiamenti piccoli e misurabili
+- Se M2 sta funzionando bene (WR > 60%, PnL positivo), non toccare niente
+- Se M2 ha WR < 40% su 20+ trade, suggerisci aggiustamenti ai pesi
+- Se il regime è RANGING da troppo tempo e M2 non fa trade, abbassa SOGLIA_BASE di 2-3 punti
+- Mai portare SOGLIA_BASE sotto 45 o sopra 75
+- Mai portare un peso sotto 5 o sopra 40
+- alert_level: green = tutto ok, yellow = attenzione, red = problema serio
+"""
+
 # ═══════════════════════════════════════════════════════════════════════════
-# CAPSULE RUNTIME
+# AI BRIDGE
 # ═══════════════════════════════════════════════════════════════════════════
 
-class CapsuleRuntime:
-    """Valuta e applica capsule da capsule_attive.json — hot reload senza restart."""
+class AIBridge:
+    """
+    Thread background che connette il bot a Claude API.
+    Legge, analizza, comanda — senza fermare niente.
+    """
 
-    def __init__(self, capsule_file: str = "capsule_attive.json"):
-        self.capsule_file = capsule_file
-        self.capsules = []
-        self.hash = ""
-        self._load()
+    def __init__(self, heartbeat_data, heartbeat_lock,
+                 capsule_file="capsule_attive.json"):
+        self.heartbeat_data = heartbeat_data
+        self.heartbeat_lock = heartbeat_lock
+        self.capsule_file   = capsule_file
 
-    def _load(self):
+        # Config da env vars
+        self.api_key    = os.environ.get("DEEPSEEK_API_KEY", "")
+        self.interval   = int(os.environ.get("AI_BRIDGE_INTERVAL", "300"))  # 5 min default
+        self.enabled    = os.environ.get("AI_BRIDGE_ENABLED", "true").lower() == "true"
+        self.model      = os.environ.get("AI_BRIDGE_MODEL", "deepseek-chat")
+
+        # Stato interno
+        self._thread         = None
+        self._running        = False
+        self._last_snapshot  = {}
+        self._last_m2_trades = 0
+        self._last_regime    = ""
+        self._history        = []     # ultimi 10 scambi con Claude
+        self._commands_log   = []     # ultimi 20 comandi eseguiti
+        self._consecutive_errors = 0
+
+        # Log bridge dedicato
+        self._bridge_log = []
+
+    def start(self):
+        """Avvia il bridge come daemon thread."""
+        if not self.enabled:
+            log.info("[AI_BRIDGE] ⚠️ Disabilitato (AI_BRIDGE_ENABLED=false)")
+            return
+
+        if not self.api_key:
+            log.warning("[AI_BRIDGE] ❌ DEEPSEEK_API_KEY non impostata — bridge inattivo")
+            return
+
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._loop,
+            daemon=True,
+            name="ai_bridge_thread"
+        )
+        self._thread.start()
+        log.info(f"[AI_BRIDGE] 🌉 Avviato — intervallo {self.interval}s, modello {self.model}")
+
+    def stop(self):
+        """Ferma il bridge."""
+        self._running = False
+        log.info("[AI_BRIDGE] 🛑 Fermato")
+
+    def _loop(self):
+        """Loop principale del bridge."""
+        # Aspetta 60s all'avvio per dare tempo al bot di scaldare i dati
+        time.sleep(60)
+        self._log("🌉", "Bridge attivo — primo ciclo in corso")
+
+        while self._running:
+            try:
+                snapshot = self._read_snapshot()
+
+                if self._should_call(snapshot):
+                    response = self._call_claude(snapshot)
+
+                    if response:
+                        self._execute_commands(response)
+                        self._history.append({
+                            "ts": datetime.utcnow().isoformat(),
+                            "snapshot_summary": self._summarize(snapshot),
+                            "response": response,
+                        })
+                        if len(self._history) > 10:
+                            self._history.pop(0)
+                        self._consecutive_errors = 0
+                    else:
+                        self._consecutive_errors += 1
+
+                # Esponi stato bridge nel heartbeat
+                self._update_heartbeat_bridge()
+
+            except Exception as e:
+                log.error(f"[AI_BRIDGE] Errore nel loop: {e}")
+                self._consecutive_errors += 1
+
+            # Backoff se troppi errori consecutivi
+            wait = self.interval
+            if self._consecutive_errors > 3:
+                wait = min(self.interval * 4, 1800)  # max 30 min
+                self._log("⚠️", f"Backoff: {self._consecutive_errors} errori, aspetto {wait}s")
+
+            time.sleep(wait)
+
+    def _read_snapshot(self) -> dict:
+        """Legge lo stato corrente dal heartbeat_data."""
+        if self.heartbeat_lock:
+            self.heartbeat_lock.acquire()
         try:
-            with open(self.capsule_file) as f:
-                self.capsules = json.load(f)
-                self.hash = hashlib.md5(open(self.capsule_file, 'rb').read()).hexdigest()
-            log.info(f"[CAPSULE] ✅ Caricate {len(self.capsules)} regole da {self.capsule_file}")
-        except FileNotFoundError:
-            self.capsules = []
-            log.warning("[CAPSULE] ⚠️ capsule_attive.json non trovato — opero a vuoto")
+            snapshot = dict(self.heartbeat_data) if self.heartbeat_data else {}
+        finally:
+            if self.heartbeat_lock:
+                self.heartbeat_lock.release()
+        return snapshot
+
+    def _should_call(self, snapshot: dict) -> bool:
+        """
+        Decide se vale la pena chiamare Claude.
+        Non sprecare API calls se non è cambiato niente di significativo.
+        """
+        if not snapshot:
+            return False
+
+        # Sempre chiama se è la prima volta
+        if not self._last_snapshot:
+            self._last_snapshot = snapshot
+            return True
+
+        # Chiama se M2 ha fatto nuovi trade
+        m2_trades = snapshot.get("m2_trades", 0)
+        if m2_trades > self._last_m2_trades:
+            self._last_m2_trades = m2_trades
+            self._last_snapshot = snapshot
+            return True
+
+        # Chiama se il regime è cambiato
+        regime = snapshot.get("regime", "")
+        if regime != self._last_regime and regime:
+            self._last_regime = regime
+            self._last_snapshot = snapshot
+            return True
+
+        # Chiama comunque ogni intervallo (per check routine)
+        self._last_snapshot = snapshot
+        return True
+
+    def _call_claude(self, snapshot: dict) -> dict:
+        """Chiama DeepSeek API con lo snapshot e ritorna la risposta parsed."""
+        import urllib.request
+        import urllib.error
+
+        # Costruisci il messaggio user
+        user_msg = self._build_user_message(snapshot)
+
+        payload = json.dumps({
+            "model": self.model,
+            "max_tokens": 1000,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_msg}
+            ],
+            "temperature": 0.3,
+        }).encode('utf-8')
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+
+        try:
+            req = urllib.request.Request(
+                "https://api.deepseek.com/chat/completions",
+                data=payload,
+                headers=headers,
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+
+            # Estrai il testo dalla risposta DeepSeek
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+            # Parse JSON dalla risposta
+            text = text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+
+            response = json.loads(text)
+            self._log("📡", f"AI risponde: {response.get('analisi', '?')[:80]} "
+                           f"[{response.get('alert_level', '?')}] "
+                           f"comandi={len(response.get('comandi', []))}")
+            return response
+
+        except urllib.error.HTTPError as e:
+            body = e.read().decode('utf-8') if e.fp else ""
+            log.error(f"[AI_BRIDGE] API HTTP {e.code}: {body[:200]}")
+            self._log("❌", f"API errore HTTP {e.code}")
+            return None
+        except json.JSONDecodeError as e:
+            log.error(f"[AI_BRIDGE] JSON parse error: {e} | raw: {text[:200]}")
+            self._log("❌", f"Risposta non parsabile")
+            return None
         except Exception as e:
-            self.capsules = []
-            log.error(f"[CAPSULE] Errore caricamento: {e}")
+            log.error(f"[AI_BRIDGE] Call error: {e}")
+            self._log("❌", f"Errore chiamata: {str(e)[:60]}")
+            return None
 
-    def reload(self) -> bool:
-        try:
-            new_hash = hashlib.md5(open(self.capsule_file, 'rb').read()).hexdigest()
-            if new_hash != self.hash:
-                self._load()
-                return True
-        except Exception:
-            pass
-        return False
+    def _build_user_message(self, snapshot: dict) -> str:
+        """Costruisce il messaggio per Claude con tutti i dati rilevanti."""
+        # M1 stats
+        m1_trades = snapshot.get("trades", 0)
+        m1_wins   = snapshot.get("wins", 0)
+        m1_losses = snapshot.get("losses", 0)
+        m1_wr     = snapshot.get("wr", 0)
+        capital   = snapshot.get("capital", 10000)
 
-    def valuta(self, contesto: dict) -> dict:
-        """Valuta tutte le capsule attive. Ritorna: {blocca, size_mult, reason}"""
-        risultato = {'blocca': False, 'size_mult': 1.0, 'reason': ''}
-        for capsule in sorted(self.capsules, key=lambda c: c.get('priority', 5)):
-            if not capsule.get('enabled', True):
-                continue
-            triggers = capsule.get('trigger', [])
-            if not all(self._check_trigger(t, contesto) for t in triggers):
-                continue
-            azione = capsule.get('azione', {})
-            if azione.get('type') == 'blocca_entry':
-                risultato['blocca'] = True
-                risultato['reason'] = azione.get('params', {}).get('reason', 'capsule_block')
-                break
-            elif azione.get('type') == 'modifica_size':
-                risultato['size_mult'] *= azione.get('params', {}).get('mult', 1.0)
-        return risultato
+        # M2 stats
+        m2_trades = snapshot.get("m2_trades", 0)
+        m2_wins   = snapshot.get("m2_wins", 0)
+        m2_losses = snapshot.get("m2_losses", 0)
+        m2_wr     = snapshot.get("m2_wr", 0)
+        m2_pnl    = snapshot.get("m2_pnl", 0)
 
-    def _check_trigger(self, trigger: dict, contesto: dict) -> bool:
-        param = trigger.get('param')
-        op    = trigger.get('op')
-        value = trigger.get('value')
-        if param not in contesto or op not in OPS:
-            return False
-        try:
-            return OPS[op](contesto[param], value)
-        except Exception:
-            return False
+        # Regime
+        regime      = snapshot.get("regime", "UNKNOWN")
+        regime_conf = snapshot.get("regime_conf", 0)
 
-# ═══════════════════════════════════════════════════════════════════════════
-# CONFIG HOT RELOADER
-# ═══════════════════════════════════════════════════════════════════════════
+        # Log recenti
+        live_log = snapshot.get("live_log", [])[-10:]
+        m2_log   = snapshot.get("m2_log", [])[-10:]
 
-class ConfigHotReloader:
-    """Controlla hash del file capsule ogni 30s. Zero restart."""
+        # Calibratore
+        calibra = snapshot.get("calibra_params", {})
 
-    def __init__(self, capsule_path: str = "capsule_attive.json"):
-        self.capsule_path = capsule_path
-        self.hash = ""
+        # Oracolo (top 5 fingerprint)
+        oracolo = snapshot.get("oracolo_snapshot", {})
+        top_fp  = sorted(oracolo.items(), key=lambda x: x[1].get("samples", 0), reverse=True)[:5]
 
-    def check_reload(self) -> bool:
-        try:
-            new_hash = hashlib.md5(open(self.capsule_path, 'rb').read()).hexdigest()
-            if new_hash != self.hash:
-                self.hash = new_hash
-                return True
-        except Exception:
-            pass
-        return False
+        # Campo stats
+        campo = snapshot.get("m2_campo_stats", {})
 
-# ═══════════════════════════════════════════════════════════════════════════
-# REAL-TIME LEARNING ENGINE
-# ═══════════════════════════════════════════════════════════════════════════
+        msg = f"""SNAPSHOT BOT — {datetime.utcnow().isoformat()}
 
-class RealtimeLearningEngine:
-    """
-    Osserva gli ultimi N trade. Se un matrimonio scende sotto WR 40%
-    su almeno 3 campioni, genera automaticamente una capsula di blocco
-    e la scrive in capsule_attive.json.
-    """
+═══ STATO GENERALE ═══
+Capitale: ${capital:.2f}
+Regime: {regime} (conf={regime_conf:.0%})
+Posizione M1 aperta: {snapshot.get('posizione_aperta', False)}
+Shadow M2 aperta: {snapshot.get('m2_shadow_open', False)}
 
-    def __init__(self, max_trades: int = 10, capsule_file: str = "capsule_attive.json"):
-        self.recent_trades = deque(maxlen=max_trades)
-        self.capsule_file  = capsule_file
+═══ MOTORE 1 (Catena Filtri) ═══
+Trade: {m1_trades} | Win: {m1_wins} | Loss: {m1_losses} | WR: {m1_wr:.1%}
 
-    def registra_trade(self, trade: dict):
-        self.recent_trades.append(trade)
+═══ MOTORE 2 (Campo Gravitazionale) ═══
+Trade: {m2_trades} | Win: {m2_wins} | Loss: {m2_losses} | WR: {m2_wr:.1%}
+PnL shadow: ${m2_pnl:.4f}
+Campo stats: {json.dumps(campo)}
 
-    def analizza_e_genera(self) -> list:
-        if len(self.recent_trades) < 3:
-            return []
-        stats = defaultdict(lambda: {'wins': 0, 'total': 0})
-        for t in self.recent_trades:
-            m = t.get('matrimonio', 'unknown')
-            stats[m]['total'] += 1
-            if t.get('pnl', 0) > 0:
-                stats[m]['wins'] += 1
-        nuove = []
-        for matrimonio, s in stats.items():
-            if s['total'] >= 3:
-                wr = s['wins'] / s['total'] * 100
-                if wr < 40:
-                    cap = {
-                        'capsule_id':  f"RT_BLOCCO_{matrimonio}_{int(time.time())}",
-                        'version':     1,
-                        'descrizione': f"Auto-RT: {matrimonio} WR {wr:.0f}% sotto soglia",
-                        'trigger':     [{'param': 'matrimonio', 'op': '==', 'value': matrimonio}],
-                        'azione':      {'type': 'blocca_entry', 'params': {'reason': 'matrimonio_wr_basso'}},
-                        'priority':    1,
-                        'enabled':     True,
-                    }
-                    nuove.append(cap)
-                    log.info(f"[REALTIME] 🧠 Capsula auto generata: BLOCCO {matrimonio} (WR={wr:.0f}%)")
-        # Persiste le nuove capsule nel file
-        if nuove:
-            self._persist(nuove)
-        return nuove
+═══ CALIBRATORE ATTUALE ═══
+{json.dumps(calibra, indent=2)}
 
-    def _persist(self, nuove: list):
+═══ TOP FINGERPRINT ORACOLO ═══
+{chr(10).join(f"  {fp}: WR={d.get('wr',0):.2f} samples={d.get('samples',0):.0f}" for fp, d in top_fp)}
+
+═══ LOG M1 RECENTI ═══
+{chr(10).join(live_log[-5:]) if live_log else "(vuoto)"}
+
+═══ LOG M2 RECENTI ═══
+{chr(10).join(m2_log[-5:]) if m2_log else "(vuoto)"}
+
+═══ DIVORZI ATTIVI ═══
+{json.dumps(snapshot.get('matrimoni_divorzio', []))}
+
+Analizza e rispondi con comandi JSON."""
+
+        return msg
+
+    def _execute_commands(self, response: dict):
+        """Esegue i comandi ricevuti da Claude."""
+        comandi = response.get("comandi", [])
+        alert   = response.get("alert_level", "green")
+        analisi = response.get("analisi", "")
+        note    = response.get("note_per_roberto", "")
+
+        if alert == "red":
+            self._log("🔴", f"ALERT RED: {analisi}")
+        elif alert == "yellow":
+            self._log("🟡", f"ALERT: {analisi}")
+
+        if note:
+            self._log("📝", f"Per Roberto: {note[:100]}")
+
+        for cmd in comandi:
+            tipo    = cmd.get("tipo", "noop")
+            payload = cmd.get("payload", {})
+
+            try:
+                if tipo == "add_capsule":
+                    self._cmd_add_capsule(payload)
+                elif tipo == "disable_capsule":
+                    self._cmd_disable_capsule(payload)
+                elif tipo == "modify_weight":
+                    self._cmd_modify_weight(payload)
+                elif tipo == "adjust_soglia":
+                    self._cmd_adjust_soglia(payload)
+                elif tipo == "noop":
+                    reason = payload.get("reason", "nessun motivo")
+                    self._log("💤", f"Noop: {reason[:60]}")
+                else:
+                    self._log("❓", f"Comando sconosciuto: {tipo}")
+
+                self._commands_log.append({
+                    "ts": datetime.utcnow().isoformat(),
+                    "tipo": tipo,
+                    "payload": payload,
+                    "alert": alert,
+                })
+                if len(self._commands_log) > 20:
+                    self._commands_log.pop(0)
+
+            except Exception as e:
+                log.error(f"[AI_BRIDGE] Errore esecuzione {tipo}: {e}")
+                self._log("❌", f"Errore cmd {tipo}: {str(e)[:50]}")
+
+    # ── COMANDI ───────────────────────────────────────────────────────────
+
+    def _cmd_add_capsule(self, payload: dict):
+        """Aggiunge una capsula a capsule_attive.json."""
+        capsule_id = payload.get("capsule_id", f"AI_BRIDGE_{int(time.time())}")
+        payload["capsule_id"] = capsule_id
+        payload.setdefault("enabled", True)
+        payload.setdefault("priority", 3)
+        payload.setdefault("source", "ai_bridge")
+        payload.setdefault("created_at", time.time())
+
         try:
             existing = []
             if os.path.exists(self.capsule_file):
                 with open(self.capsule_file) as f:
                     existing = json.load(f)
-            # Evita duplicati per stesso matrimonio
-            existing_ids = {c.get('capsule_id') for c in existing}
-            da_aggiungere = [c for c in nuove if c['capsule_id'] not in existing_ids]
-            existing.extend(da_aggiungere)
+
+            # Evita duplicati
+            existing_ids = {c.get("capsule_id") for c in existing}
+            if capsule_id in existing_ids:
+                self._log("⚠️", f"Capsula {capsule_id} già esiste — skip")
+                return
+
+            existing.append(payload)
             with open(self.capsule_file, 'w') as f:
                 json.dump(existing, f, indent=2)
-        except Exception as e:
-            log.error(f"[REALTIME] Errore persistenza capsule: {e}")
 
-# ═══════════════════════════════════════════════════════════════════════════
-# LOG ANALYZER
-# ═══════════════════════════════════════════════════════════════════════════
-
-class LogAnalyzer:
-    """Analizza gli ultimi 100 trade, espone statistiche per matrimonio."""
-
-    def __init__(self):
-        self.trades = deque(maxlen=100)
-
-    def registra(self, trade: dict):
-        self.trades.append(trade)
-
-    def get_stats(self) -> dict:
-        if not self.trades:
-            return {}
-        stats = defaultdict(lambda: {'wins': 0, 'total': 0})
-        for t in self.trades:
-            m = t.get('matrimonio')
-            stats[m]['total'] += 1
-            if t.get('pnl', 0) > 0:
-                stats[m]['wins'] += 1
-        return {
-            'total_trades':  len(self.trades),
-            'matrimonio_wr': {m: (s['wins'] / s['total'] * 100 if s['total'] > 0 else 0)
-                              for m, s in stats.items()},
-        }
-
-# ═══════════════════════════════════════════════════════════════════════════
-# AI EXPLAINER
-# ═══════════════════════════════════════════════════════════════════════════
-
-class AIExplainer:
-    """Log narrativo di ogni decisione del bot — scritto su SQLite."""
-
-    def __init__(self, db_path: str = "narratives.db"):
-        self.db_path = db_path
-        self._ensure_dir()
-        self._init_db()
-
-    def _ensure_dir(self):
-        d = os.path.dirname(self.db_path)
-        if d and not os.path.exists(d):
-            os.makedirs(d, exist_ok=True)
-
-    def _init_db(self):
-        try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS narrative_log (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp  TEXT,
-                    event_type TEXT,
-                    narrative  TEXT,
-                    trade_data TEXT
-                )
-            """)
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            log.error(f"[AIExplainer] DB init: {e}")
-
-    def log_decision(self, event_type: str, narrative: str, trade_data: dict = None):
-        try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
-                INSERT INTO narrative_log (timestamp, event_type, narrative, trade_data)
-                VALUES (?, ?, ?, ?)
-            """, (datetime.utcnow().isoformat(), event_type, narrative,
-                  json.dumps(trade_data) if trade_data else None))
-            conn.commit()
-            conn.close()
-        except Exception:
-            pass
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ★ SEED SCORER — TUA INVENZIONE
-#   Valuta la forza dell'impulso prima di ogni entry.
-#   4 componenti con pesi specifici → score 0.0–1.0
-#   Soglia: SEED_ENTRY_THRESHOLD (default 0.45)
-# ═══════════════════════════════════════════════════════════════════════════
-
-class SeedScorer:
-    """
-    Scoring dell'impulso a 4 componenti:
-      1. Range Position      40% — dove si trova il prezzo nel range recente
-      2. Volume Acceleration 25% — accelerazione del volume sugli ultimi tick
-      3. Directional Consist 20% — coerenza direzionale delle ultime variazioni
-      4. Breakout Score      15% — rottura del range precedente
-    Ritorna score [0.0 – 1.0] e dettaglio di ogni componente.
-    """
-
-    W_RANGE_POS   = 0.40
-    W_VOL_ACCEL   = 0.25
-    W_DIR_CONSIST = 0.20
-    W_BREAKOUT    = 0.15
-
-    def __init__(self, window: int = 50):
-        self.prices  = deque(maxlen=window)
-        self.volumes = deque(maxlen=window)   # aggTrade include qty
-
-    def add_tick(self, price: float, volume: float = 1.0):
-        self.prices.append(price)
-        self.volumes.append(volume)
-
-    def score(self) -> dict:
-        """
-        Ritorna {'score': float, 'range_pos': float, 'vol_accel': float,
-                 'dir_consist': float, 'breakout': float, 'pass': bool}
-        """
-        if len(self.prices) < 20:
-            return {'score': 0.0, 'pass': False, 'reason': 'insufficient_data'}
-
-        prices  = list(self.prices)
-        volumes = list(self.volumes)
-
-        # — 1. Range Position (40%) ────────────────────────────────────────
-        # Quanto è in alto il prezzo attuale rispetto al range degli ultimi 20 tick
-        window_20 = prices[-20:]
-        low20  = min(window_20)
-        high20 = max(window_20)
-        if high20 == low20:
-            range_pos = 0.5
-        else:
-            range_pos = (prices[-1] - low20) / (high20 - low20)  # 0=basso, 1=alto
-
-        # — 2. Volume Acceleration (25%) ───────────────────────────────────
-        # Volume medio ultimi 5 tick vs volume medio tick 6-10
-        vol_recent = sum(volumes[-5:])  / 5
-        vol_prev   = sum(volumes[-10:-5]) / 5 if len(volumes) >= 10 else vol_recent
-        if vol_prev == 0:
-            vol_accel = 0.5
-        else:
-            ratio     = vol_recent / vol_prev
-            vol_accel = min(1.0, ratio / 2.0)   # normalizza: ratio=2 → score=1.0
-
-        # — 3. Directional Consistency (20%) ──────────────────────────────
-        # % di variazioni positive negli ultimi 10 tick
-        changes = [prices[i+1] - prices[i] for i in range(len(prices)-10, len(prices)-1)]
-        if not changes:
-            dir_consist = 0.5
-        else:
-            positive = sum(1 for c in changes if c > 0)
-            dir_consist = positive / len(changes)   # 0=tutto giù, 1=tutto su
-
-        # — 4. Breakout Score (15%) ────────────────────────────────────────
-        # Prezzo attuale vs massimo dei tick 10-30 (rottura di resistenza recente)
-        if len(prices) >= 30:
-            resistance = max(prices[-30:-10])
-            current    = prices[-1]
-            if current > resistance:
-                breakout = min(1.0, (current - resistance) / resistance * 100)
-            else:
-                breakout = 0.0
-        else:
-            breakout = 0.5   # non abbastanza dati, neutro
-
-        # — Score totale ───────────────────────────────────────────────────
-        total = (range_pos   * self.W_RANGE_POS   +
-                 vol_accel   * self.W_VOL_ACCEL   +
-                 dir_consist * self.W_DIR_CONSIST  +
-                 breakout    * self.W_BREAKOUT)
-
-        return {
-            'score':       round(total, 4),
-            'range_pos':   round(range_pos, 4),
-            'vol_accel':   round(vol_accel, 4),
-            'dir_consist': round(dir_consist, 4),
-            'breakout':    round(breakout, 4),
-            'pass':        total >= SEED_ENTRY_THRESHOLD,
-        }
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ★ ORACOLO DINAMICO — TUA INVENZIONE
-#   Fingerprint-based win-rate memory con decay.
-#   Blocca pattern FANTASMA (contesti che storicamente perdono).
-# ═══════════════════════════════════════════════════════════════════════════
-
-class OracoloDinamico:
-    """
-    Memorizza il WR per ogni fingerprint (combinazione momentum+volatility+trend).
-    Applica decay temporale: i ricordi vecchi pesano meno di quelli recenti.
-    Blocca entry se il fingerprint ha un WR storico < soglia.
-    Restituisce anche il fingerprint_wr corrente usato dalle 5 Capsule.
-    """
-
-    FANTASMA_WR_THRESHOLD = 0.45   # sotto questa soglia il pattern è FANTASMA
-    DECAY_FACTOR          = 0.95   # ogni trade, il peso storico si riduce del 5%
-    MIN_SAMPLES           = 5      # campioni minimi prima di giudicare
-
-    def __init__(self):
-        # {fingerprint: {'wr_decay': float, 'samples': int, 'wins': float}}
-        self._memory: dict = {}
-
-    def _fp(self, momentum: str, volatility: str, trend: str) -> str:
-        return f"{momentum}|{volatility}|{trend}"
-
-    def get_wr(self, momentum: str, volatility: str, trend: str) -> float:
-        """Ritorna il WR stimato per questo contesto (0.0–1.0). Default 0.72 se ignoto."""
-        fp = self._fp(momentum, volatility, trend)
-        if fp not in self._memory or self._memory[fp]['samples'] < self.MIN_SAMPLES:
-            return 0.72   # neutro — abbastanza positivo da non bloccare
-        m = self._memory[fp]
-        return m['wins'] / m['samples'] if m['samples'] > 0 else 0.72
-
-    def is_fantasma(self, momentum: str, volatility: str, trend: str) -> tuple:
-        """
-        Ritorna (True, motivo) se il pattern è FANTASMA, (False, '') altrimenti.
-        """
-        fp  = self._fp(momentum, volatility, trend)
-        wr  = self.get_wr(momentum, volatility, trend)
-        mem = self._memory.get(fp, {})
-        if mem.get('samples', 0) < self.MIN_SAMPLES:
-            return False, ''   # troppo pochi dati → non bloccare
-        if wr < self.FANTASMA_WR_THRESHOLD:
-            return True, f"FANTASMA fp={fp} wr={wr:.2f}"
-        return False, ''
-
-    def record(self, momentum: str, volatility: str, trend: str, is_win: bool):
-        """Aggiorna la memoria con decay. Chiamato ad ogni chiusura trade."""
-        fp = self._fp(momentum, volatility, trend)
-        if fp not in self._memory:
-            self._memory[fp] = {'wins': 0.0, 'samples': 0}
-        m = self._memory[fp]
-        # Applica decay ai valori esistenti
-        m['wins']    *= self.DECAY_FACTOR
-        m['samples'] *= self.DECAY_FACTOR
-        # Aggiungi nuovo dato (peso pieno = 1)
-        m['wins']    += 1.0 if is_win else 0.0
-        m['samples'] += 1.0
-        log.debug(f"[ORACOLO] {fp} → WR={m['wins']/m['samples']:.2f} samples={m['samples']:.1f}")
-
-    def dump(self) -> dict:
-        """Snapshot completo della memoria — per heartbeat/debug."""
-        return {fp: {'wr': round(m['wins']/m['samples'], 3) if m['samples'] > 0 else 0,
-                     'samples': round(m['samples'], 1)}
-                for fp, m in self._memory.items()}
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 5 CAPSULE INTELLIGENTI
-# ═══════════════════════════════════════════════════════════════════════════
-
-class Capsule1Coerenza:
-    """Valida coerenza tra fingerprint_wr e contesto attuale."""
-    def valida(self, fingerprint_wr, momentum, volatility, trend,
-               soglia_buona=0.60, soglia_perfetta=0.75):
-        if fingerprint_wr > soglia_perfetta and momentum == "FORTE" and volatility == "BASSA" and trend == "UP":
-            return True, 0.95, "COERENZA PERFETTA"
-        if fingerprint_wr > soglia_buona and momentum in ("FORTE", "MEDIO") and trend == "UP":
-            return True, fingerprint_wr, "COERENZA BUONA"
-        return False, 0.10, "BLOCCO_COERENZA"
-
-class Capsule2Trappola:
-    """Riconosce setup trappola da confidence bassa."""
-    def riconosci(self, confidence):
-        if confidence < 0.50:
-            return False, "TRAPPOLA_CONFIDENCE"
-        return True, "OK"
-
-class Capsule3Protezione:
-    """Blocca in condizioni di alta volatilità con impulso debole."""
-    def proteggi(self, momentum, volatility, fingerprint_wr, fp_minimo=0.55):
-        if momentum == "DEBOLE" and volatility == "ALTA" and fingerprint_wr <= 0.70:
-            return False, "PROTETTO_VOLATILITÀ"
-        if volatility == "ALTA" and fingerprint_wr < fp_minimo:
-            return False, "PROTETTO_FP_BASSO"
-        return True, "OK"
-
-class Capsule4Opportunita:
-    """Riconosce finestre di opportunità premium."""
-    def riconosci(self, fingerprint_wr, momentum, volatility, soglia_buona=0.65):
-        if fingerprint_wr > 0.75 and momentum == "FORTE" and volatility == "BASSA":
-            return True, 0.95, "OPPORTUNITÀ_ORO"
-        if fingerprint_wr > soglia_buona and momentum == "FORTE":
-            return True, fingerprint_wr, "OPPORTUNITÀ_BUONA"
-        return False, 0.40, "NO_OPPORTUNITÀ"
-
-class Capsule5Tattica:
-    """Timing tattico: entry solo se coerenza e confidence alte."""
-    def timing(self, entry_trigger, coerenza, confidence, conf_ok=0.65):
-        if entry_trigger and coerenza and confidence > 0.80:
-            return True, 45, "TIMING_PERFETTO"
-        if entry_trigger and confidence > conf_ok:
-            return True, 25, "TIMING_OK"
-        return False, 0, "TIMING_NO"
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MATRIMONI INTELLIGENTI — 7 TIPI
-# ═══════════════════════════════════════════════════════════════════════════
-
-class MatrimonioIntelligente:
-    """
-    7 matrimoni con WR atteso e duration media.
-    La chiave è (momentum, volatility, trend).
-    """
-    MARRIAGES = {
-        ("FORTE", "BASSA",  "UP"):      {"name": "STRONG_BULL",  "wr": 0.85, "duration_avg": 45, "confidence": 0.95},
-        ("FORTE", "MEDIA",  "UP"):      {"name": "STRONG_MED",   "wr": 0.75, "duration_avg": 30, "confidence": 0.85},
-        ("MEDIO", "BASSA",  "UP"):      {"name": "MEDIUM_BULL",  "wr": 0.70, "duration_avg": 25, "confidence": 0.80},
-        ("MEDIO", "MEDIA",  "UP"):      {"name": "CAUTIOUS",     "wr": 0.60, "duration_avg": 15, "confidence": 0.65},
-        ("DEBOLE","MEDIA",  "SIDEWAYS"):{"name": "WEAK_NEUTRAL", "wr": 0.45, "duration_avg": 8,  "confidence": 0.40},
-        ("DEBOLE","ALTA",   "DOWN"):    {"name": "TRAP",         "wr": 0.05, "duration_avg": 2,  "confidence": 0.05},
-        ("FORTE", "ALTA",   "DOWN"):    {"name": "PANIC",        "wr": 0.15, "duration_avg": 3,  "confidence": 0.15},
-    }
-
-    @staticmethod
-    def get_marriage(momentum, volatility, trend):
-        key = (momentum, volatility, trend)
-        return MatrimonioIntelligente.MARRIAGES.get(key, {
-            "name": "UNKNOWN", "wr": 0.50, "duration_avg": 12, "confidence": 0.50
-        })
-
-    @staticmethod
-    def get_by_name(name: str) -> dict:
-        for m in MatrimonioIntelligente.MARRIAGES.values():
-            if m["name"] == name:
-                return m
-        return {"name": name, "wr": 0.50, "duration_avg": 12, "confidence": 0.50}
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MEMORIA MATRIMONI — trust, separazione, divorzio
-# ═══════════════════════════════════════════════════════════════════════════
-
-class MemoriaMatrimoni:
-    """
-    Tiene traccia delle performance per ogni matrimonio.
-    - trust [0–100]: sale con win (+5), scende con loss (-15)
-    - SEPARAZIONE: WR reale < 60% dell'atteso dopo 10 trade → blacklist 50 trade
-    - DIVORZIO PERMANENTE: seconda SEPARAZIONE → fuori per sempre
-    """
-
-    def __init__(self):
-        self.trust      = defaultdict(lambda: 50)
-        self.separazione= defaultdict(bool)
-        self.blacklist  = defaultdict(int)
-        self.divorzio   = set()
-        self.wr_history = defaultdict(list)
-        self.wins       = defaultdict(int)
-        self.losses     = defaultdict(int)
-
-    def get_status(self, name: str) -> tuple:
-        if name in self.divorzio:
-            return False, "DIVORZIO_PERMANENTE"
-        if self.blacklist[name] > 0:
-            self.blacklist[name] -= 1
-            return False, f"SEPARAZIONE_ATTIVA ({self.blacklist[name]} rimasti)"
-        if self.trust[name] < 30:
-            return False, f"TRUST_BASSO ({self.trust[name]})"
-        return True, "OK"
-
-    def record_trade(self, name: str, is_win: bool, wr_expected: float):
-        if is_win:
-            self.wins[name]  += 1
-            self.trust[name] = min(100, self.trust[name] + 5)
-        else:
-            self.losses[name]  += 1
-            self.trust[name]   = max(0, self.trust[name] - 15)
-
-        total = self.wins[name] + self.losses[name]
-        if total > 0:
-            wr_reale = self.wins[name] / total
-            self.wr_history[name].append(wr_reale)
-            if len(self.wr_history[name]) >= 10:
-                recent_wr = sum(self.wr_history[name][-10:]) / 10
-                if recent_wr < wr_expected * 0.6:
-                    if self.separazione[name]:
-                        self.divorzio.add(name)
-                        self.trust[name] = 0
-                        log.warning(f"[DIVORZIO PERMANENTE] 💔 {name} eliminato")
-                    else:
-                        self.separazione[name] = True
-                        self.blacklist[name]   = 50
-                        log.warning(f"[SEPARAZIONE] ⚠️  {name} blacklist 50 trade")
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ANALIZZATORE CONTESTO
-# ═══════════════════════════════════════════════════════════════════════════
-
-class ContestoAnalyzer:
-    """Momentum, volatility, trend dai prezzi recenti."""
-
-    def __init__(self, window: int = 50):
-        self.prices    = deque(maxlen=window)
-        self.tick_count= 0
-
-    def add_price(self, price: float):
-        self.prices.append(price)
-        self.tick_count += 1
-
-    def analyze(self):
-        if len(self.prices) < 10:
-            return None, None, None
-        prices    = list(self.prices)
-        recent    = prices[-5:]
-        changes   = [recent[i+1] - recent[i] for i in range(len(recent)-1)]
-        up_count  = sum(1 for c in changes if c > 0)
-        momentum  = "FORTE" if up_count >= 4 else ("MEDIO" if up_count >= 2 else "DEBOLE")
-
-        r20        = prices[-20:]
-        changes20  = [abs(r20[i+1] - r20[i]) for i in range(len(r20)-1)]
-        avg_ch20   = sum(changes20) / len(changes20) if changes20 else 0
-        volatility = "ALTA" if avg_ch20 > 0.005 else ("MEDIA" if avg_ch20 > 0.002 else "BASSA")
-
-        chg_pct = (prices[-1] - prices[0]) / prices[0] * 100
-        trend   = "UP" if chg_pct > 0.3 else ("DOWN" if chg_pct < -0.3 else "SIDEWAYS")
-
-        return momentum, volatility, trend
-
-# ═══════════════════════════════════════════════════════════════════════════
-# PERSISTENZA SQLite — capital e trades sopravvivono al restart
-# ═══════════════════════════════════════════════════════════════════════════
-
-class PersistenzaStato:
-    """Legge/scrive capital e total_trades su SQLite."""
-
-    DEFAULT_CAPITAL = 10000.0
-    DEFAULT_TRADES  = 0
-
-    def __init__(self, db_path: str = DB_PATH):
-        self.db_path = db_path
-        self._ensure_dir()
-        self._init_db()
-
-    def _ensure_dir(self):
-        d = os.path.dirname(self.db_path)
-        if d and not os.path.exists(d):
-            os.makedirs(d, exist_ok=True)
-
-    def _init_db(self):
-        try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS bot_state (
-                    key   TEXT PRIMARY KEY,
-                    value TEXT
-                )
-            """)
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            log.error(f"[PERSIST] Init DB: {e}")
-
-    def load(self) -> tuple:
-        """Ritorna (capital, total_trades)."""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            rows = dict(conn.execute("SELECT key, value FROM bot_state").fetchall())
-            conn.close()
-            capital      = float(rows.get('capital',      self.DEFAULT_CAPITAL))
-            total_trades = int(rows.get('total_trades',   self.DEFAULT_TRADES))
-            log.info(f"[PERSIST] Stato caricato: capital={capital:.2f} trades={total_trades}")
-            return capital, total_trades
-        except Exception as e:
-            log.error(f"[PERSIST] Load: {e} — uso defaults")
-            return self.DEFAULT_CAPITAL, self.DEFAULT_TRADES
-
-    def save_brain(self, oracolo, memoria, calibratore):
-        """
-        Serializza l'intelligenza accumulata su SQLite.
-        OracoloDinamico + MemoriaMatrimoni + AutoCalibratore params.
-        Chiamato ad ogni trade chiuso e ogni 5 minuti.
-        """
-        try:
-            import json
-            conn = sqlite3.connect(self.db_path)
-
-            # ── OracoloDinamico ─────────────────────────────────────────
-            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('oracolo', ?)",
-                        (json.dumps(oracolo._memory),))
-
-            # ── MemoriaMatrimoni ────────────────────────────────────────
-            memoria_data = {
-                'trust':      dict(memoria.trust),
-                'separazione':dict(memoria.separazione),
-                'blacklist':  dict(memoria.blacklist),
-                'divorzio':   list(memoria.divorzio),
-                'wins':       dict(memoria.wins),
-                'losses':     dict(memoria.losses),
-                'wr_history': {k: list(v) for k, v in memoria.wr_history.items()},
-            }
-            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('memoria', ?)",
-                        (json.dumps(memoria_data),))
-
-            # ── AutoCalibratore params ───────────────────────────────────
-            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('calibra_params', ?)",
-                        (json.dumps(calibratore.params),))
-
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            log.error(f"[BRAIN_SAVE] {e}")
-
-    def load_brain(self, oracolo, memoria, calibratore):
-        """
-        Ripristina l'intelligenza accumulata da SQLite dopo un restart.
-        Il bot riprende esattamente da dove aveva lasciato.
-        """
-        try:
-            import json
-            conn  = sqlite3.connect(self.db_path)
-            rows  = dict(conn.execute("SELECT key, value FROM bot_state").fetchall())
-            conn.close()
-
-            restored = []
-
-            # ── OracoloDinamico ─────────────────────────────────────────
-            if 'oracolo' in rows:
-                raw = json.loads(rows['oracolo'])
-                # Ricostruisce la struttura interna
-                for fp, data in raw.items():
-                    oracolo._memory[fp] = {
-                        'wins':    float(data.get('wins', 0)),
-                        'samples': float(data.get('samples', 0)),
-                    }
-                restored.append(f"Oracolo: {len(oracolo._memory)} fingerprint")
-
-            # ── MemoriaMatrimoni ────────────────────────────────────────
-            if 'memoria' in rows:
-                md = json.loads(rows['memoria'])
-                for k, v in md.get('trust', {}).items():
-                    memoria.trust[k] = v
-                for k, v in md.get('separazione', {}).items():
-                    memoria.separazione[k] = v
-                for k, v in md.get('blacklist', {}).items():
-                    memoria.blacklist[k] = v
-                for mat in md.get('divorzio', []):
-                    memoria.divorzio.add(mat)
-                for k, v in md.get('wins', {}).items():
-                    memoria.wins[k] = v
-                for k, v in md.get('losses', {}).items():
-                    memoria.losses[k] = v
-                for k, v in md.get('wr_history', {}).items():
-                    memoria.wr_history[k] = list(v)
-                restored.append(f"Memoria: {len(memoria.divorzio)} divorzi, "
-                               f"{sum(1 for v in memoria.blacklist.values() if v > 0)} separazioni")
-
-            # ── AutoCalibratore params ───────────────────────────────────
-            if 'calibra_params' in rows:
-                saved = json.loads(rows['calibra_params'])
-                calibratore.params.update(saved)
-                restored.append(f"Calibra: seed={saved.get('seed_threshold', '?')}")
-
-            if restored:
-                log.info(f"[BRAIN_LOAD] 🧠 Intelligenza ripristinata → {' | '.join(restored)}")
-            else:
-                log.info("[BRAIN_LOAD] Primo avvio — nessuna memoria precedente")
+            self._log("💊", f"Capsula aggiunta: {capsule_id} — {payload.get('descrizione','')[:50]}")
 
         except Exception as e:
-            log.error(f"[BRAIN_LOAD] {e} — parto da zero")
-
-    def save(self, capital: float, total_trades: int):
-        """Persiste capital e total_trades su SQLite."""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('capital', ?)",      (str(capital),))
-            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('total_trades', ?)", (str(total_trades),))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            log.error(f"[PERSIST] Save: {e}")
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ★ REGIME DETECTOR — contesto macro sopra tutto
-#   Classifica il regime strutturale del mercato su finestra larga.
-#   TRENDING_BULL / TRENDING_BEAR / RANGING / EXPLOSIVE
-#   Il regime cambia i parametri di tutto il sistema sottostante.
-# ═══════════════════════════════════════════════════════════════════════════
-
-class RegimeDetector:
-    """
-    Osserva 500 tick e classifica il regime macro.
-    Non si confonde con i tick singoli — lavora sulla struttura.
-
-    Regimi:
-      TRENDING_BULL  — trend rialzista strutturale, alta directional consistency
-      TRENDING_BEAR  — trend ribassista strutturale
-      RANGING        — mercato laterale, alta volatilità relativa, bassa direzione
-      EXPLOSIVE      — breakout improvviso, volume spike + range expansion
-    """
-
-    WINDOW = 500   # tick per valutare il regime
-
-    # Moltiplicatori per ogni regime — applicati ai parametri del calibratore
-    REGIME_PARAMS = {
-        'TRENDING_BULL': {
-            'seed_mult':      0.90,   # leggermente più permissivo
-            'fp_wr_mult':     0.95,   # accetta contesti leggermente meno perfetti
-            'size_mult':      1.25,   # size più grande in trend
-            'drawdown_mult':  1.20,   # tollera più drawdown in trend
-        },
-        'TRENDING_BEAR': {
-            'seed_mult':      1.20,   # più selettivo
-            'fp_wr_mult':     1.10,
-            'size_mult':      0.70,   # size ridotta
-            'drawdown_mult':  0.80,   # meno tolleranza
-        },
-        'RANGING': {
-            'seed_mult':      1.30,   # molto selettivo — il ranging è il nemico
-            'fp_wr_mult':     1.15,
-            'size_mult':      0.60,
-            'drawdown_mult':  0.70,
-        },
-        'EXPLOSIVE': {
-            'seed_mult':      0.85,   # velocità conta — entra prima
-            'fp_wr_mult':     0.90,
-            'size_mult':      1.50,   # massima size in breakout
-            'drawdown_mult':  1.50,   # lascia correre
-        },
-    }
-
-    def __init__(self):
-        self.prices    = deque(maxlen=self.WINDOW)
-        self.volumes   = deque(maxlen=self.WINDOW)
-        self._regime   = 'RANGING'   # default conservativo
-        self._confidence = 0.0
-
-    def add_tick(self, price: float, volume: float = 1.0):
-        self.prices.append(price)
-        self.volumes.append(volume)
-
-    def detect(self) -> tuple:
-        """
-        Ritorna (regime: str, confidence: float, dettaglio: dict)
-        """
-        if len(self.prices) < 100:
-            return 'RANGING', 0.0, {}
-
-        prices  = list(self.prices)
-        volumes = list(self.volumes)
-        n       = len(prices)
-
-        # ── Trend strutturale ─────────────────────────────────────────────
-        # Regressione lineare semplificata: confronta metà iniziale vs finale
-        mid        = n // 2
-        avg_first  = sum(prices[:mid]) / mid
-        avg_second = sum(prices[mid:]) / (n - mid)
-        trend_pct  = (avg_second - avg_first) / avg_first * 100
-
-        # ── Directional Consistency su finestra larga ─────────────────────
-        changes    = [prices[i+1] - prices[i] for i in range(n-1)]
-        up_count   = sum(1 for c in changes if c > 0)
-        dir_ratio  = up_count / len(changes)   # 0=tutto giù, 1=tutto su
-
-        # ── Volatilità strutturale ─────────────────────────────────────────
-        abs_changes = [abs(c) for c in changes]
-        avg_change  = sum(abs_changes) / len(abs_changes)
-        # Confronta volatilità prima vs seconda metà
-        vol_first   = sum(abs_changes[:mid]) / mid
-        vol_second  = sum(abs_changes[mid:]) / (n - mid)
-        vol_ratio   = vol_second / max(vol_first, 0.001)
-
-        # ── Volume acceleration ────────────────────────────────────────────
-        vol_recent  = sum(volumes[-50:]) / 50
-        vol_base    = sum(volumes[:50])  / 50
-        vol_accel   = vol_recent / max(vol_base, 0.001)
-
-        # ── Classificazione ───────────────────────────────────────────────
-        regime     = 'RANGING'
-        confidence = 0.5
-
-        if vol_accel > 2.0 and vol_ratio > 1.5:
-            # Volume esploso + volatilità in aumento → EXPLOSIVE
-            regime     = 'EXPLOSIVE'
-            confidence = min(1.0, vol_accel / 3.0)
-
-        elif trend_pct > 0.5 and dir_ratio > 0.55:
-            # Trend rialzista strutturale
-            regime     = 'TRENDING_BULL'
-            confidence = min(1.0, (dir_ratio - 0.5) * 4)
-
-        elif trend_pct < -0.5 and dir_ratio < 0.45:
-            # Trend ribassista strutturale
-            regime     = 'TRENDING_BEAR'
-            confidence = min(1.0, (0.5 - dir_ratio) * 4)
-
-        else:
-            # Laterale
-            regime     = 'RANGING'
-            confidence = min(1.0, 1.0 - abs(dir_ratio - 0.5) * 4)
-
-        self._regime     = regime
-        self._confidence = confidence
-
-        return regime, confidence, {
-            'trend_pct':  round(trend_pct, 3),
-            'dir_ratio':  round(dir_ratio, 3),
-            'vol_accel':  round(vol_accel, 3),
-            'vol_ratio':  round(vol_ratio, 3),
-        }
-
-    @property
-    def regime(self) -> str:
-        return self._regime
-
-    def get_multipliers(self) -> dict:
-        return self.REGIME_PARAMS.get(self._regime, self.REGIME_PARAMS['RANGING'])
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ★ MOMENTUM DECELEROMETER — exit intelligente
-#   Non misura il momentum — misura quanto velocemente sta decelerando.
-#   Uscire quando decelera forte, non quando è già morto.
-# ═══════════════════════════════════════════════════════════════════════════
-
-class MomentumDecelerometer:
-    """
-    Calcola la derivata seconda del momentum.
-    Se il momentum stava salendo e ora sta scendendo velocemente
-    → segnale di uscita anticipata prima che il prezzo inverta.
-
-    Restituisce:
-      decel_score [0-1] — 0=momentum stabile, 1=decelera forte
-      should_exit bool  — True se la decelerazione supera la soglia
-    """
-
-    WINDOW_FAST = 5    # tick per momentum veloce
-    WINDOW_SLOW = 15   # tick per momentum lento
-    DECEL_THRESHOLD = 0.65   # oltre questa soglia → esci
-
-    def __init__(self):
-        self.prices = deque(maxlen=50)
-
-    def add_price(self, price: float):
-        self.prices.append(price)
-
-    def analyze(self) -> dict:
-        if len(self.prices) < self.WINDOW_SLOW + 5:
-            return {'decel_score': 0.0, 'should_exit': False}
-
-        prices = list(self.prices)
-
-        # Momentum veloce: variazione media negli ultimi WINDOW_FAST tick
-        fast_changes = [prices[i+1] - prices[i]
-                        for i in range(len(prices)-self.WINDOW_FAST, len(prices)-1)]
-        mom_fast = sum(fast_changes) / len(fast_changes) if fast_changes else 0
-
-        # Momentum lento: variazione media negli ultimi WINDOW_SLOW tick
-        slow_start = len(prices) - self.WINDOW_SLOW
-        slow_changes = [prices[i+1] - prices[i]
-                        for i in range(slow_start, len(prices)-1)]
-        mom_slow = sum(slow_changes) / len(slow_changes) if slow_changes else 0
-
-        # Decelerazione: il momentum veloce è molto più basso di quello lento
-        # (il trend sta perdendo forza)
-        if abs(mom_slow) < 0.001:
-            decel_score = 0.0
-        else:
-            # Se mom_fast < mom_slow → decelera (in trade long)
-            decel = (mom_slow - mom_fast) / abs(mom_slow)
-            decel_score = max(0.0, min(1.0, decel))
-
-        return {
-            'decel_score': round(decel_score, 4),
-            'mom_fast':    round(mom_fast, 4),
-            'mom_slow':    round(mom_slow, 4),
-            'should_exit': decel_score > self.DECEL_THRESHOLD,
-        }
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ★ POSITION SIZER — la tua fisica applicata
-#   Size come funzione CONTINUA dell'intensità dell'impulso.
-#   Non più 1.0 / 1.3 / 1.5 discreti — una curva che riflette
-#   esattamente quanto il mercato ti sta dando.
-# ═══════════════════════════════════════════════════════════════════════════
-
-class PositionSizer:
-    """
-    Calcola la size ottimale come funzione continua di 3 segnali:
-      1. seed_score      — forza dell'impulso (peso 40%)
-      2. fingerprint_wr  — affidabilità storica del contesto (peso 35%)
-      3. confidence      — certezza del matrimonio (peso 25%)
-
-    Poi applica il moltiplicatore di regime.
-
-    Output: size_factor [0.5 – 2.0]
-    Dove 1.0 = size base, 2.0 = massimo, 0.5 = minimo di sicurezza
-    """
-
-    W_SEED   = 0.40
-    W_FP_WR  = 0.35
-    W_CONF   = 0.25
-
-    SIZE_MIN = 0.5
-    SIZE_MAX = 2.0
-
-    def calculate(self, seed_score: float, fingerprint_wr: float,
-                  confidence: float, regime_mult: float = 1.0) -> dict:
-        """
-        Ritorna {'size_factor': float, 'breakdown': dict}
-        """
-        # Normalizza ogni componente in [0, 1]
-        # seed_score è già [0, 1]
-        seed_norm = min(1.0, max(0.0, seed_score))
-
-        # fingerprint_wr [0.45, 0.95] → [0, 1]
-        fp_norm = min(1.0, max(0.0, (fingerprint_wr - 0.45) / 0.50))
-
-        # confidence [0.05, 0.95] → [0, 1]
-        conf_norm = min(1.0, max(0.0, (confidence - 0.05) / 0.90))
-
-        # Score composito
-        score = (seed_norm   * self.W_SEED  +
-                 fp_norm     * self.W_FP_WR +
-                 conf_norm   * self.W_CONF)
-
-        # Mappa da [0,1] a [SIZE_MIN, SIZE_MAX] con curva non lineare
-        # Le posizioni forti crescono più che proporzionalmente
-        size_raw = self.SIZE_MIN + (self.SIZE_MAX - self.SIZE_MIN) * (score ** 1.5)
-
-        # Applica moltiplicatore regime
-        size_final = min(self.SIZE_MAX, max(self.SIZE_MIN, size_raw * regime_mult))
-
-        return {
-            'size_factor': round(size_final, 3),
-            'score':       round(score, 3),
-            'seed_norm':   round(seed_norm, 3),
-            'fp_norm':     round(fp_norm, 3),
-            'conf_norm':   round(conf_norm, 3),
-        }
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ★ AUTO CALIBRATORE — TUA INVENZIONE
-#   Osserva i risultati reali e aggiusta i parametri statici.
-#   Stessa pazienza e cautela del DNA del sistema:
-#   - Minimo 30 trade prima di toccare qualsiasi soglia
-#   - Step massimo ±0.02 per aggiustamento
-#   - Invertibile se la modifica peggiora i risultati
-#   - Log narrativo di ogni modifica
-# ═══════════════════════════════════════════════════════════════════════════
-
-class AutoCalibratore:
-    """
-    Calibra automaticamente i parametri statici basandosi sui risultati reali.
-    Non è ubriaco: aspetta evidenza solida, cambia in piccoli passi,
-    ricorda ogni modifica e può tornare indietro.
-    """
-
-    # ── Limiti di sicurezza — non si esce mai da questi range ─────────────
-    LIMITS = {
-        'seed_threshold':      (0.25, 0.70),   # mai troppo permissivo né troppo restrittivo
-        'cap1_soglia_buona':   (0.45, 0.80),   # Capsule1 soglia "coerenza buona"
-        'cap1_soglia_perfetta':(0.60, 0.90),   # Capsule1 soglia "coerenza perfetta"
-        'cap3_fp_minimo':      (0.35, 0.65),   # Capsule3 protezione fp minimo
-        'cap4_soglia_buona':   (0.50, 0.80),   # Capsule4 opportunità buona
-        'cap5_conf_ok':        (0.50, 0.80),   # Capsule5 timing OK
-        'divorce_drawdown':    (1.5,  5.0),    # drawdown trigger
-    }
-
-    STEP          = 0.02    # step massimo per ogni aggiustamento
-    MIN_TRADES    = 30      # campioni minimi prima di calibrare
-    MIN_DELTA_WR  = 0.05    # differenza minima WR reale vs atteso per intervenire
-    HISTORY_SIZE  = 5       # quante calibrazioni ricordare per inversione
-
-    def __init__(self):
-        # Parametri correnti — inizializzati ai valori di default
-        self.params = {
-            'seed_threshold':       SEED_ENTRY_THRESHOLD,
-            'cap1_soglia_buona':    0.60,
-            'cap1_soglia_perfetta': 0.75,
-            'cap3_fp_minimo':       0.55,
-            'cap4_soglia_buona':    0.65,
-            'cap5_conf_ok':         0.65,
-            'divorce_drawdown':     DIVORCE_DRAWDOWN_PCT,
-        }
-        # Storico per inversione: {param: [(valore_prima, valore_dopo, wr_al_momento)]}
-        self._history: dict = {k: [] for k in self.params}
-        # Osservazioni per calibrazione: lista di (seed_score, wr_contesto, is_win)
-        self._obs: list = []
-        self._calibrazioni_log: list = []   # log narrativo
-
-    def registra_osservazione(self, seed_score: float, fingerprint_wr: float,
-                               is_win: bool, divorce_drawdown_usato: float):
-        """Chiamato dopo ogni trade chiuso."""
-        self._obs.append({
-            'seed_score':     seed_score,
-            'fingerprint_wr': fingerprint_wr,
-            'is_win':         is_win,
-            'drawdown':       divorce_drawdown_usato,
-        })
-
-    def calibra(self) -> dict:
-        """
-        Analizza le osservazioni accumulate.
-        Se ci sono evidenze solide (≥ MIN_TRADES) aggiusta i parametri.
-        Ritorna dict con parametri aggiornati e log delle modifiche.
-        """
-        if len(self._obs) < self.MIN_TRADES:
-            return {}   # troppo poco per giudicare
-
-        modifiche = {}
-        n = len(self._obs)
-        wins = sum(1 for o in self._obs if o['is_win'])
-        wr_reale = wins / n
-
-        # ── 1. SEED THRESHOLD ─────────────────────────────────────────────
-        # Se la maggior parte dei trade ha seed_score vicino alla soglia attuale
-        # e WR è basso → alza la soglia (sii più selettivo)
-        # Se WR è alto ma entri raramente → abbassa leggermente
-        seed_scores = [o['seed_score'] for o in self._obs]
-        avg_seed = sum(seed_scores) / len(seed_scores)
-        current_seed = self.params['seed_threshold']
-
-        if wr_reale < 0.45 and avg_seed < current_seed + 0.10:
-            # WR basso e i trade hanno seed basso → soglia troppo permissiva
-            new_val = min(current_seed + self.STEP,
-                         self.LIMITS['seed_threshold'][1])
-            if new_val != current_seed:
-                self._aggiusta('seed_threshold', new_val, wr_reale,
-                    f"WR={wr_reale:.0%} basso su {n} trade, avg_seed={avg_seed:.3f} → alzo soglia")
-                modifiche['seed_threshold'] = new_val
-
-        elif wr_reale > 0.70 and n > self.MIN_TRADES * 2:
-            # WR molto alto → possiamo essere leggermente meno restrittivi
-            new_val = max(current_seed - self.STEP,
-                         self.LIMITS['seed_threshold'][0])
-            if new_val != current_seed:
-                self._aggiusta('seed_threshold', new_val, wr_reale,
-                    f"WR={wr_reale:.0%} eccellente su {n} trade → abbasso soglia leggermente")
-                modifiche['seed_threshold'] = new_val
-
-        # ── 2. DIVORCE DRAWDOWN ───────────────────────────────────────────
-        # Se molti trade escono per TIMEOUT (non per divorce) con drawdown alto
-        # → il drawdown trigger è troppo permissivo, abbassalo
-        drawdowns = [o['drawdown'] for o in self._obs if o['drawdown'] > 0]
-        if drawdowns:
-            avg_dd = sum(drawdowns) / len(drawdowns)
-            current_dd = self.params['divorce_drawdown']
-            if avg_dd > current_dd * 0.8 and wr_reale < 0.50:
-                new_val = max(current_dd - self.STEP * 5,
-                             self.LIMITS['divorce_drawdown'][0])
-                if new_val != current_dd:
-                    self._aggiusta('divorce_drawdown', new_val, wr_reale,
-                        f"avg_drawdown={avg_dd:.1f}% vicino alla soglia, WR basso → stringo drawdown")
-                    modifiche['divorce_drawdown'] = new_val
-
-        # ── 3. CAP1 SOGLIA COERENZA ───────────────────────────────────────
-        # Osserva quanti trade hanno fingerprint_wr nel range "buono" (0.60-0.75)
-        # Se quelli perdono → alza la soglia di ingresso coerenza
-        fp_buono = [o for o in self._obs
-                    if 0.60 <= o['fingerprint_wr'] < 0.75]
-        if len(fp_buono) >= 10:
-            wr_fp_buono = sum(1 for o in fp_buono if o['is_win']) / len(fp_buono)
-            current_c1 = self.params['cap1_soglia_buona']
-            if wr_fp_buono < 0.45:
-                new_val = min(current_c1 + self.STEP,
-                             self.LIMITS['cap1_soglia_buona'][1])
-                if new_val != current_c1:
-                    self._aggiusta('cap1_soglia_buona', new_val, wr_fp_buono,
-                        f"Trade fp_wr 0.60-0.75 hanno WR={wr_fp_buono:.0%} → alzo soglia coerenza")
-                    modifiche['cap1_soglia_buona'] = new_val
-
-        # Reset osservazioni dopo calibrazione (mantieni le ultime MIN_TRADES/2)
-        self._obs = self._obs[-(self.MIN_TRADES // 2):]
-
-        return modifiche
-
-    def _aggiusta(self, param: str, new_val: float, wr_al_momento: float, motivo: str):
-        """Applica il cambio, lo registra per eventuale inversione."""
-        old_val = self.params[param]
-        self.params[param] = new_val
-
-        # Storico per inversione
-        self._history[param].append((old_val, new_val, wr_al_momento))
-        if len(self._history[param]) > self.HISTORY_SIZE:
-            self._history[param].pop(0)
-
-        msg = f"[CALIBRA] 🎯 {param}: {old_val:.3f} → {new_val:.3f} | {motivo}"
-        self._calibrazioni_log.append({
-            'ts':    datetime.utcnow().isoformat(),
-            'param': param,
-            'from':  old_val,
-            'to':    new_val,
-            'why':   motivo,
-        })
-        log.info(msg)
-
-    def inverti_se_peggiorato(self, wr_attuale: float):
-        """
-        Se dopo una calibrazione il WR è peggiorato, torna al valore precedente.
-        Chiamato ogni 20 trade dopo una modifica.
-        """
-        for param, history in self._history.items():
-            if not history:
-                continue
-            old_val, new_val, wr_prima = history[-1]
-            if wr_attuale < wr_prima - self.MIN_DELTA_WR:
-                # La modifica ha peggiorato le cose → torna indietro
-                self.params[param] = old_val
-                history.pop()
-                log.warning(f"[CALIBRA] ↩️  INVERSIONE {param}: {new_val:.3f} → {old_val:.3f} "
-                           f"(WR prima={wr_prima:.0%} ora={wr_attuale:.0%})")
-
-    def get_params(self) -> dict:
-        return dict(self.params)
-
-    def get_log(self) -> list:
-        return list(self._calibrazioni_log[-10:])   # ultimi 10 eventi
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ★ CAMPO GRAVITAZIONALE — MOTORE 2 (CARTESIANO)
-#   Nessun filtro binario tranne i veti assoluti.
-#   Ogni condizione accumula punti. La soglia si muove con il contesto.
-#   La size è funzione continua della distanza punteggio-soglia.
-# ═══════════════════════════════════════════════════════════════════════════
-
-class CampoGravitazionale:
-    """
-    Entry engine cartesiano: ogni dimensione contribuisce punti,
-    la soglia è dinamica, la size è continua.
-
-    Veti assoluti (non negoziabili):
-      - TRAP / PANIC (combinazioni tossiche provate)
-      - DIVORZIO PERMANENTE
-      - FANTASMA con evidenza forte (samples>20, WR<30%)
-      - 3+ loss consecutivi
-
-    Tutto il resto → punteggio 0-100 vs soglia dinamica 35-90.
-    """
-
-    # ── VETI ASSOLUTI ─────────────────────────────────────────────────────
-    VETI_COMBINAZIONI = {
-        ("DEBOLE", "ALTA", "DOWN"),    # TRAP — WR 5%
-        ("FORTE",  "ALTA", "DOWN"),    # PANIC — WR 15%
-    }
-    FANTASMA_VETO_MIN_SAMPLES = 20
-    FANTASMA_VETO_MAX_WR      = 0.30
-    MAX_LOSS_CONSECUTIVI      = 3
-
-    # ── PESI DEL CAMPO (totale = 100) ─────────────────────────────────────
-    W_SEED        = 30
-    W_FINGERPRINT = 25
-    W_MOMENTUM    = 15
-    W_TREND       = 15
-    W_VOLATILITY  = 10
-    W_REGIME      = 5
-
-    # ── SCORING PER DIMENSIONE ────────────────────────────────────────────
-    MOMENTUM_SCORE  = {"FORTE": 1.0,  "MEDIO": 0.67, "DEBOLE": 0.20}
-    TREND_SCORE     = {"UP": 1.0,     "SIDEWAYS": 0.47, "DOWN": 0.0}
-    VOL_SCORE       = {"BASSA": 1.0,  "MEDIA": 0.60, "ALTA": 0.20}
-    REGIME_SCORE    = {"TRENDING_BULL": 1.0, "EXPLOSIVE": 0.80,
-                       "RANGING": 0.20, "TRENDING_BEAR": 0.0}
-
-    # ── SOGLIA DINAMICA ───────────────────────────────────────────────────
-    SOGLIA_BASE = 60
-    REGIME_FACTOR = {"TRENDING_BULL": 0.80, "EXPLOSIVE": 0.85,
-                     "RANGING": 1.30, "TRENDING_BEAR": 1.20}
-    VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.15}
-    SOGLIA_MIN    = 35
-    SOGLIA_MAX    = 90
-
-    # ── SIZE CONTINUA ─────────────────────────────────────────────────────
-    SIZE_MIN = 0.5
-    SIZE_MAX = 2.0
-
-    def __init__(self):
-        self._recent_results = deque(maxlen=20)
-
-    def evaluate(self, seed_score, fingerprint_wr, momentum, volatility,
-                 trend, regime, matrimonio_name, divorzio_set,
-                 fantasma_info, loss_consecutivi) -> dict:
-        """
-        Ritorna:
-          enter:     bool
-          score:     float (0-100)
-          soglia:    float (35-90, dinamica)
-          size:      float (0.5-2.0 se enter, 0.0 se no)
-          veto:      str o None
-          breakdown: dict dettaglio per log
-        """
-        # ── VETI ASSOLUTI ─────────────────────────────────────────────────
-        combo = (momentum, volatility, trend)
-        if combo in self.VETI_COMBINAZIONI:
-            return self._veto(f"TOSSICO_{momentum}_{volatility}_{trend}")
-
-        if matrimonio_name in divorzio_set:
-            return self._veto("DIVORZIO_PERMANENTE")
-
-        is_fantasma, fantasma_reason = fantasma_info
-        if is_fantasma:
-            # Solo se evidenza forte — non blocchiamo su 5 campioni
-            # Il campo già penalizza fingerprint_wr basso nel punteggio
-            fp_samples = fantasma_reason  # passato come samples count
-            if isinstance(fp_samples, str):
-                # fantasma_info ritorna (bool, str_reason) — usiamo l'info dell'oracolo
-                pass  # non è un veto forte, il punteggio basso basta
-
-        if loss_consecutivi >= self.MAX_LOSS_CONSECUTIVI:
-            return self._veto(f"LOSS_CONSECUTIVI_{loss_consecutivi}")
-
-        # ── CALCOLO PUNTEGGIO CAMPO ───────────────────────────────────────
-        # Seed: normalizza [0.3, 1.0] → [0, 1]
-        s_seed = min(1.0, max(0.0, (seed_score - 0.30) / 0.70)) * self.W_SEED
-
-        # Fingerprint WR: normalizza [0.30, 1.0] → [0, 1]
-        s_fp = min(1.0, max(0.0, (fingerprint_wr - 0.30) / 0.70)) * self.W_FINGERPRINT
-
-        # Dimensioni categoriche
-        s_mom   = self.MOMENTUM_SCORE.get(momentum, 0.5)   * self.W_MOMENTUM
-        s_trend = self.TREND_SCORE.get(trend, 0.5)          * self.W_TREND
-        s_vol   = self.VOL_SCORE.get(volatility, 0.5)       * self.W_VOLATILITY
-        s_reg   = self.REGIME_SCORE.get(regime, 0.2)         * self.W_REGIME
-
-        score = s_seed + s_fp + s_mom + s_trend + s_vol + s_reg
-
-        # ── SOGLIA DINAMICA ───────────────────────────────────────────────
-        regime_f  = self.REGIME_FACTOR.get(regime, 1.0)
-        vol_f     = self.VOL_FACTOR.get(volatility, 1.0)
-        history_f = self._history_factor()
-
-        soglia = self.SOGLIA_BASE * regime_f * vol_f * history_f
-        soglia = max(self.SOGLIA_MIN, min(self.SOGLIA_MAX, soglia))
-
-        # ── DECISIONE ─────────────────────────────────────────────────────
-        enter = score >= soglia
-
-        # ── SIZE CONTINUA ─────────────────────────────────────────────────
-        if enter:
-            eccedenza = (score - soglia) / max(1.0, 100.0 - soglia)
-            size = self.SIZE_MIN + (self.SIZE_MAX - self.SIZE_MIN) * (eccedenza ** 1.5)
-            size = min(self.SIZE_MAX, max(self.SIZE_MIN, size))
-        else:
-            size = 0.0
-
-        return {
-            'enter':     enter,
-            'score':     round(score, 2),
-            'soglia':    round(soglia, 2),
-            'size':      round(size, 3),
-            'veto':      None,
-            'breakdown': {
-                'seed':    round(s_seed, 2),
-                'fp':      round(s_fp, 2),
-                'mom':     round(s_mom, 2),
-                'trend':   round(s_trend, 2),
-                'vol':     round(s_vol, 2),
-                'regime':  round(s_reg, 2),
-                'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f}",
-            }
-        }
-
-    def record_result(self, is_win: bool):
-        """Chiamato alla chiusura di ogni shadow trade."""
-        self._recent_results.append(is_win)
-
-    def _history_factor(self) -> float:
-        """Soglia si muove con la storia recente."""
-        if len(self._recent_results) < 5:
-            return 1.0
-        recent_wr = sum(1 for r in self._recent_results if r) / len(self._recent_results)
-        if recent_wr > 0.70:
-            return 0.90    # va bene, soglia più bassa
-        elif recent_wr < 0.40:
-            return 1.20    # sta andando male, soglia più alta
-        return 1.0
-
-    def _veto(self, reason: str) -> dict:
-        return {'enter': False, 'score': 0.0, 'soglia': 0.0,
-                'size': 0.0, 'veto': reason, 'breakdown': {}}
-
-    def get_stats(self) -> dict:
-        total = len(self._recent_results)
-        if total == 0:
-            return {'trades': 0, 'wr': 0.0}
-        wins = sum(1 for r in self._recent_results if r)
-        return {'trades': total, 'wr': round(wins / total, 3),
-                'wins': wins, 'losses': total - wins}
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# ★★★ BOT PRINCIPALE — OVERTOP BASSANO V14 PRODUCTION ★★★
-# ═══════════════════════════════════════════════════════════════════════════
-
-class OvertopBassanoV14Production:
-    """
-    Bot BTC/USDC su Binance WebSocket.
-    Modalità: PAPER_TRADE (simula) o LIVE (ordini reali).
-
-    Architettura decisionale entry:
-      SeedScorer → OracoloDinamico → MemoriaMatrimoni → 5 Capsule → CapsuleRuntime
-
-    Architettura exit:
-      4 Divorce Triggers (ogni tick) → SMORZ (impulso finito) → Timeout adattivo
-
-    Auto-apprendimento:
-      OracoloDinamico aggiorna WR fingerprint ad ogni trade chiuso.
-      RealtimeLearningEngine genera capsule di blocco se WR < 40% su 3+ campioni.
-      MemoriaMatrimoni scala trust e irroga SEPARAZIONE/DIVORZIO.
-    """
-
-    def __init__(self, heartbeat_data=None, db_execute=None, heartbeat_lock=None):
-        self.symbol         = SYMBOL
-        self.ws_url         = BINANCE_WS_URL
-        self.paper_trade    = PAPER_TRADE
-
-        self.heartbeat_data = heartbeat_data if heartbeat_data is not None else {}
-        self.heartbeat_lock = heartbeat_lock
-        self.db_execute     = db_execute
-
-        # ── Persistenza ──────────────────────────────────────────────────
-        self._persist        = PersistenzaStato(db_path=DB_PATH)
-        self.capital, self.total_trades = self._persist.load()
-        self.wins    = 0
-        self.losses  = 0
-
-        # ── Componenti core ──────────────────────────────────────────────
-        self.analyzer        = ContestoAnalyzer(window=50)
-        self.seed_scorer     = SeedScorer(window=50)
-        self.oracolo         = OracoloDinamico()
-        self.memoria         = MemoriaMatrimoni()
-        self.capsule_runtime = CapsuleRuntime(capsule_file="capsule_attive.json")
-        self.config_reloader = ConfigHotReloader(capsule_path="capsule_attive.json")
-        self.realtime_engine = RealtimeLearningEngine(max_trades=10, capsule_file="capsule_attive.json")
-        self.log_analyzer    = LogAnalyzer()
-        self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
-        self.calibratore     = AutoCalibratore()
-        self.regime_detector = RegimeDetector()
-        self.decelero        = MomentumDecelerometer()
-        self.position_sizer  = PositionSizer()
-
-        # ── Ripristina intelligenza accumulata ────────────────────────────
-        self._persist.load_brain(self.oracolo, self.memoria, self.calibratore)
-        self._regime_current = 'RANGING'
-        self._regime_conf    = 0.0
-        self._last_regime_check = time.time()
-
-        # ── 5 Capsule ─────────────────────────────────────────────────────
-        self.capsule1 = Capsule1Coerenza()
-        self.capsule2 = Capsule2Trappola()
-        self.capsule3 = Capsule3Protezione()
-        self.capsule4 = Capsule4Opportunita()
-        self.capsule5 = Capsule5Tattica()
-
-        # ── Stato trade ───────────────────────────────────────────────────
-        self.trade_open         = None   # None = nessun trade aperto
-        self.entry_time         = None
-        self.entry_momentum     = None   # per divorce trigger 2
-        self.entry_volatility   = None   # per divorce trigger 1
-        self.entry_fingerprint  = None   # per divorce trigger 4
-        self.entry_trend        = None
-        self.max_price          = None
-        self.current_matrimonio = None
-
-        # ── Timing ────────────────────────────────────────────────────────
-        self.last_heartbeat    = time.time()
-        self.last_config_check = time.time()
-        self.last_persist      = time.time()
-        self.ws                = None
-
-        # ── Stato exit (per capsule reattive) ─────────────────────────────
-        self._last_exit_type     = None
-        self._last_exit_duration = 0.0
-        self._last_entry_seed    = 0.0   # per AutoCalibratore
-        self._last_entry_fp_wr   = 0.72  # per AutoCalibratore
-        self._trades_since_calib = 0     # contatore per calibrazione
-
-        # ── Log live decisioni (ultimi 20 eventi) ─────────────────────────
-        self._live_log = deque(maxlen=20)
-
-        # ── MOTORE 2: CAMPO GRAVITAZIONALE (shadow trading) ──────────────
-        self.campo = CampoGravitazionale()
-        self._shadow = None          # shadow trade aperto (dict o None)
-        self._shadow_entry_time = None
-        self._shadow_entry_momentum = None
-        self._shadow_entry_volatility = None
-        self._shadow_entry_trend = None
-        self._shadow_entry_fingerprint = None
-        self._shadow_max_price = None
-        self._shadow_matrimonio = None
-        # Stats separate per Motore 2
-        self._m2_wins    = 0
-        self._m2_losses  = 0
-        self._m2_pnl     = 0.0
-        self._m2_trades  = 0
-        self._m2_log     = deque(maxlen=20)   # log dedicato M2
-
-        # ── BRIDGE COMMANDS READER ───────────────────────────────────────
-        self._bridge_cmd_file = "bridge_commands.json"
-        self._last_bridge_check = time.time()
-
-        # ── Banner ────────────────────────────────────────────────────────
-        mode_label = "📄 PAPER TRADE" if self.paper_trade else "🔴 LIVE TRADING"
-        log.info("=" * 80)
-        log.info(f"🚀 OVERTOP BASSANO V14 PRODUCTION — {mode_label}")
-        log.info(f"   Capital: ${self.capital:,.2f}  |  Trades totali: {self.total_trades}")
-        log.info(f"   SeedScorer threshold: {SEED_ENTRY_THRESHOLD}")
-        log.info(f"   Divorce triggers minimi: {DIVORCE_MIN_TRIGGERS}/4")
-        log.info(f"   🎯 MOTORE 2 (Campo Gravitazionale): SHADOW ATTIVO — confronto parallelo")
-        log.info("=" * 80)
-        if self.paper_trade:
-            log.info("⚠️  PAPER TRADE ATTIVO — nessun ordine reale verrà eseguito")
-
-    # ════════════════════════════════════════════════════════════════════════
-    # CONNESSIONE BINANCE WEBSOCKET
-    # ════════════════════════════════════════════════════════════════════════
-
-    def connect_binance(self):
-        def on_message(ws, msg):
-            try:
-                data   = json.loads(msg)
-                price  = float(data.get('p', 0))
-                volume = float(data.get('q', 1.0))
-                if price > 0:
-                    self.analyzer.add_price(price)
-                    self.seed_scorer.add_tick(price, volume)
-                    self._process_tick(price)
-            except Exception as e:
-                log.error(f"[WS_MSG] {e}")
-
-        def on_error(ws, error):
-            log.error(f"[WS_ERROR] {error}")
-
-        def on_close(ws, code, msg):
-            log.warning(f"[WS_CLOSE] codice={code} — riconnessione in 5s...")
-            time.sleep(5)
-            self.connect_binance()
-
-        def on_open(ws):
-            log.info("[WS] ✅ Connesso a Binance aggTrade BTCUSDC")
-
-        self.ws = websocket.WebSocketApp(
-            self.ws_url,
-            on_message=on_message,
-            on_error=on_error,
-            on_close=on_close,
-            on_open=on_open,
-        )
-        threading.Thread(target=self.ws.run_forever, daemon=True, name="ws_thread").start()
-
-    # ════════════════════════════════════════════════════════════════════════
-    # PROCESS TICK — orchestratore principale
-    # ════════════════════════════════════════════════════════════════════════
-
-    def _process_tick(self, price: float):
-        now = time.time()
-
-        # Config hot-reload ogni 30s
-        if now - self.last_config_check > 30:
-            if self.config_reloader.check_reload():
-                if self.capsule_runtime.reload():
-                    log.info("[CONFIG] 🔄 Capsule ricaricate a caldo")
-            self.last_config_check = now
-
-        # Bridge commands check ogni 30s
-        if now - self._last_bridge_check > 30:
-            self._read_bridge_commands()
-            self._last_bridge_check = now
-
-        # Heartbeat ogni 30s
-        if now - self.last_heartbeat > 30:
-            self._update_heartbeat()
-            self.last_heartbeat = now
-
-        # Aggiorna prezzo live ad ogni tick (per dashboard)
-        if self.heartbeat_lock:
-            self.heartbeat_lock.acquire()
-        try:
-            if self.heartbeat_data is not None:
-                self.heartbeat_data["last_price"] = round(price, 2)
-                self.heartbeat_data["last_tick"]  = datetime.utcnow().isoformat()
-                self.heartbeat_data["tick_count"] = self.heartbeat_data.get("tick_count", 0) + 1
-        except Exception:
-            pass
-        finally:
-            if self.heartbeat_lock:
-                self.heartbeat_lock.release()
-
-        # Feed RegimeDetector e Decelerometer
-        self.regime_detector.add_tick(price)
-        self.decelero.add_price(price)
-
-        # Aggiorna regime ogni 60s
-        if now - self._last_regime_check > 60:
-            regime, conf, detail = self.regime_detector.detect()
-            if regime != self._regime_current:
-                self._log("🌍", f"REGIME → {regime} (conf={conf:.0%}) | "
-                         f"trend={detail.get('trend_pct',0):+.2f}% "
-                         f"dir={detail.get('dir_ratio',0):.2f}")
-            self._regime_current    = regime
-            self._regime_conf       = conf
-            self._last_regime_check = now
-
-        # Persistenza ogni 5 minuti
-        if now - self.last_persist > 300:
-            self._persist.save(self.capital, self.total_trades)
-            self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
-            self.last_persist = now
-
-        contesto = self.analyzer.analyze()
-        if not contesto[0]:
+            log.error(f"[AI_BRIDGE] Add capsule error: {e}")
+
+    def _cmd_disable_capsule(self, payload: dict):
+        """Disabilita una capsula esistente."""
+        target_id = payload.get("capsule_id", "")
+        if not target_id:
             return
-        momentum, volatility, trend = contesto
 
-        if self.trade_open:
-            self._evaluate_exit(price, momentum, volatility, trend)
-        else:
-            self._evaluate_entry(price, momentum, volatility, trend)
+        try:
+            if not os.path.exists(self.capsule_file):
+                return
+            with open(self.capsule_file) as f:
+                capsules = json.load(f)
 
-        # ── MOTORE 2: Shadow trade evaluation (parallelo) ─────────────────
-        if self._shadow:
-            self._evaluate_shadow_exit(price, momentum, volatility, trend)
-        else:
-            self._evaluate_shadow_entry(price, momentum, volatility, trend)
+            found = False
+            for cap in capsules:
+                if cap.get("capsule_id") == target_id:
+                    cap["enabled"] = False
+                    found = True
+                    break
 
-    # ════════════════════════════════════════════════════════════════════════
-    # ENTRY — catena decisionale completa
-    # ════════════════════════════════════════════════════════════════════════
+            if found:
+                with open(self.capsule_file, 'w') as f:
+                    json.dump(capsules, f, indent=2)
+                self._log("🔕", f"Capsula disabilitata: {target_id}")
+            else:
+                self._log("❓", f"Capsula {target_id} non trovata")
+
+        except Exception as e:
+            log.error(f"[AI_BRIDGE] Disable capsule error: {e}")
+
+    def _cmd_modify_weight(self, payload: dict):
+        """
+        Modifica un peso del CampoGravitazionale.
+        Scrive in un file bridge_commands.json che il bot legge.
+        """
+        param     = payload.get("param", "")
+        new_value = payload.get("new_value", None)
+
+        valid_params = {"W_SEED", "W_FINGERPRINT", "W_MOMENTUM",
+                        "W_TREND", "W_VOLATILITY", "W_REGIME"}
+
+        if param not in valid_params:
+            self._log("❌", f"Parametro peso non valido: {param}")
+            return
+
+        if new_value is None or not (5 <= new_value <= 40):
+            self._log("❌", f"Valore peso fuori range: {new_value} (deve essere 5-40)")
+            return
+
+        self._write_bridge_command("modify_weight", {"param": param, "value": new_value})
+        self._log("⚖️", f"Peso M2 {param} → {new_value}")
+
+    def _cmd_adjust_soglia(self, payload: dict):
+        """Modifica la soglia del CampoGravitazionale."""
+        param     = payload.get("param", "")
+        new_value = payload.get("new_value", None)
+
+        valid_params = {"SOGLIA_BASE": (45, 75), "SOGLIA_MIN": (25, 50), "SOGLIA_MAX": (70, 95)}
+
+        if param not in valid_params:
+            self._log("❌", f"Parametro soglia non valido: {param}")
+            return
+
+        lo, hi = valid_params[param]
+        if new_value is None or not (lo <= new_value <= hi):
+            self._log("❌", f"Valore soglia fuori range: {new_value} (deve essere {lo}-{hi})")
+            return
+
+        self._write_bridge_command("adjust_soglia", {"param": param, "value": new_value})
+        self._log("📐", f"Soglia M2 {param} → {new_value}")
+
+    def _write_bridge_command(self, cmd_type: str, data: dict):
+        """
+        Scrive comandi in bridge_commands.json.
+        Il bot li legge nel prossimo ciclo di hot-reload.
+        """
+        cmd_file = "bridge_commands.json"
+        try:
+            existing = []
+            if os.path.exists(cmd_file):
+                with open(cmd_file) as f:
+                    existing = json.load(f)
+
+            existing.append({
+                "type":      cmd_type,
+                "data":      data,
+                "timestamp": time.time(),
+                "executed":  False,
+            })
+
+            with open(cmd_file, 'w') as f:
+                json.dump(existing, f, indent=2)
+
+        except Exception as e:
+            log.error(f"[AI_BRIDGE] Write command error: {e}")
+
+    # ── UTILITIES ─────────────────────────────────────────────────────────
 
     def _log(self, emoji: str, msg: str):
-        """Aggiunge una riga al log live e la spinge subito a heartbeat_data."""
+        """Log del bridge."""
         ts = datetime.utcnow().strftime('%H:%M:%S')
-        entry = f"{ts} {emoji} {msg}"
-        self._live_log.append(entry)
+        entry = f"{ts} {emoji} [BRIDGE] {msg}"
+        self._bridge_log.append(entry)
+        if len(self._bridge_log) > 30:
+            self._bridge_log.pop(0)
         log.info(entry)
-        # Push immediato alla dashboard — non aspetta il ciclo heartbeat da 30s
+
+    def _summarize(self, snapshot: dict) -> str:
+        """Riassunto snapshot per history."""
+        return (f"M1:{snapshot.get('trades',0)}t M2:{snapshot.get('m2_trades',0)}t "
+                f"regime={snapshot.get('regime','?')} cap=${snapshot.get('capital',0):.0f}")
+
+    def _update_heartbeat_bridge(self):
+        """Esponi stato bridge nel heartbeat per la dashboard."""
         if self.heartbeat_lock:
             self.heartbeat_lock.acquire()
         try:
             if self.heartbeat_data is not None:
-                self.heartbeat_data["live_log"] = list(self._live_log)
+                self.heartbeat_data["bridge_active"]  = self._running
+                self.heartbeat_data["bridge_errors"]   = self._consecutive_errors
+                self.heartbeat_data["bridge_log"]      = list(self._bridge_log[-10:])
+                self.heartbeat_data["bridge_commands"]  = list(self._commands_log[-5:])
+                self.heartbeat_data["bridge_history"]   = len(self._history)
+                self.heartbeat_data["bridge_last_call"] = (
+                    self._history[-1]["ts"] if self._history else None
+                )
         except Exception:
             pass
         finally:
             if self.heartbeat_lock:
                 self.heartbeat_lock.release()
 
-    def _evaluate_entry(self, price, momentum, volatility, trend):
-
-        # ── 1. SEED SCORER ────────────────────────────────────────────────
-        seed = self.seed_scorer.score()
-        dynamic_seed_thresh = self.calibratore.get_params()['seed_threshold']
-        if not seed['pass'] or seed['score'] < dynamic_seed_thresh:
-            self._log("⚡", f"SEED FAIL score={seed['score']:.3f} | {momentum}/{volatility}/{trend} @ ${price:.1f}")
-            return
-
-        # ── 2. ORACOLO DINAMICO ───────────────────────────────────────────
-        is_fantasma, fantasma_reason = self.oracolo.is_fantasma(momentum, volatility, trend)
-        if is_fantasma:
-            self._log("👻", f"FANTASMA bloccato: {fantasma_reason}")
-            return
-        fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend)
-
-        # ── 3. MATRIMONIO ─────────────────────────────────────────────────
-        matrimonio      = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
-        matrimonio_name = matrimonio["name"]
-        confidence      = matrimonio["confidence"]
-
-        # ── 4. MEMORIA MATRIMONI ──────────────────────────────────────────
-        can_enter, mem_status = self.memoria.get_status(matrimonio_name)
-        if not can_enter:
-            self._log("🚫", f"MEMORIA blocca {matrimonio_name}: {mem_status}")
-            return
-
-        # ── 5. CATENA 5 CAPSULE — soglie dinamiche dal calibratore ──────────
-        p = self.calibratore.get_params()
-
-        allow_1, conf_1, reason_1 = self.capsule1.valida(
-            fingerprint_wr, momentum, volatility, trend,
-            soglia_buona=p['cap1_soglia_buona'],
-            soglia_perfetta=p['cap1_soglia_perfetta'])
-        if not allow_1:
-            self._log("🔴", f"CAP1 COERENZA blocca | fp_wr={fingerprint_wr:.2f} {momentum}/{volatility}/{trend}")
-            return
-
-        allow_2, reason_2 = self.capsule2.riconosci(confidence)
-        if not allow_2:
-            self._log("🔴", f"CAP2 TRAPPOLA blocca | conf={confidence:.2f} {matrimonio_name}")
-            return
-
-        allow_3, reason_3 = self.capsule3.proteggi(
-            momentum, volatility, fingerprint_wr,
-            fp_minimo=p['cap3_fp_minimo'])
-        if not allow_3:
-            self._log("🔴", f"CAP3 PROTEZIONE blocca | {momentum}/{volatility} fp={fingerprint_wr:.2f}")
-            return
-
-        allow_4, _, reason_4 = self.capsule4.riconosci(
-            fingerprint_wr, momentum, volatility,
-            soglia_buona=p['cap4_soglia_buona'])
-
-        allow_5, duration_min, reason_5 = self.capsule5.timing(
-            True, allow_1, conf_1,
-            conf_ok=p['cap5_conf_ok'])
-        if not allow_5:
-            self._log("🔴", f"CAP5 TIMING blocca | conf_1={conf_1:.2f}")
-            return
-
-        # ── 6. CAPSULE RUNTIME (JSON dinamico) ───────────────────────────
-        ctx_caps = {
-            'matrimonio':       matrimonio_name,
-            'momentum':         momentum,
-            'volatility':       volatility,
-            'trend':            trend,
-            'seed_score':       seed['score'],
-            'seed_tipo':        'CONFERMATO' if seed['score'] >= 0.65 else
-                                ('PROBABILE'  if seed['score'] >= SEED_ENTRY_THRESHOLD else 'IGNOTO'),
-            'force':            seed['score'],
-            'fingerprint_wr':   fingerprint_wr,
-            'wr_oracolo':       round(fingerprint_wr * 100, 1),
-            'fingerprint_n':    self.oracolo._memory.get(
-                                    self.oracolo._fp(momentum, volatility, trend),
-                                    {}).get('samples', 0),
-            'regime':           'trending' if momentum == 'FORTE' and volatility == 'BASSA'
-                                else ('choppy'  if volatility == 'ALTA'
-                                else ('lateral' if momentum == 'DEBOLE' else 'normal')),
-            'mode':             'PAPER' if self.paper_trade else 'LIVE',
-            'loss_consecutivi': self._loss_consecutivi(),
-            'ultimo_exit_type': self._last_exit_type,
-            'ultima_durata':    self._last_exit_duration,
-            'sample_size':      int(self.oracolo._memory.get(
-                                    self.oracolo._fp(momentum, volatility, trend),
-                                    {}).get('samples', 0)),
+    def get_status(self) -> dict:
+        """Stato del bridge per endpoint dedicato."""
+        return {
+            "active":            self._running,
+            "enabled":           self.enabled,
+            "has_api_key":       bool(self.api_key),
+            "interval":          self.interval,
+            "model":             self.model,
+            "consecutive_errors":self._consecutive_errors,
+            "total_calls":       len(self._history),
+            "total_commands":    len(self._commands_log),
+            "last_call":         self._history[-1]["ts"] if self._history else None,
+            "last_response":     self._history[-1]["response"] if self._history else None,
+            "log":               list(self._bridge_log[-15:]),
+            "recent_commands":   list(self._commands_log[-10:]),
         }
-        caps_check = self.capsule_runtime.valuta(ctx_caps)
-        if caps_check.get('blocca'):
-            self._log("💊", f"CAPSULE_RT blocca: {caps_check['reason']} | {matrimonio_name}")
-            return
-
-        # ── ENTRY CONFERMATA ──────────────────────────────────────────────
-        # Position sizing continuo — funzione dell'impulso × regime
-        regime_mults = self.regime_detector.get_multipliers()
-        sizing = self.position_sizer.calculate(
-            seed_score=seed['score'],
-            fingerprint_wr=fingerprint_wr,
-            confidence=confidence,
-            regime_mult=regime_mults['size_mult']
-        )
-        # Le capsule JSON possono ancora modificare ulteriormente
-        caps_size_mult = caps_check.get('size_mult', 1.0)
-        size_factor = min(PositionSizer.SIZE_MAX,
-                         sizing['size_factor'] * caps_size_mult)
-
-        self._log("🚀", f"ENTRY {matrimonio_name} | seed={seed['score']:.3f} "
-                       f"fp_wr={fingerprint_wr:.2f} size={size_factor:.2f}x "
-                       f"regime={self._regime_current} @ ${price:.1f}")
-        self.ai_explainer.log_decision("ENTRY",
-            f"Entrato in {matrimonio_name} | seed={seed['score']:.3f} "
-            f"fp_wr={fingerprint_wr:.2f} size={size_factor:.2f}x regime={self._regime_current}",
-            {'momentum': momentum, 'volatility': volatility, 'trend': trend,
-             'seed': seed, 'fingerprint_wr': fingerprint_wr,
-             'sizing': sizing, 'regime': self._regime_current})
-
-        if not self.paper_trade:
-            self._place_order("BUY", price, size_factor)
-
-        self.trade_open = {
-            "price_entry":    price,
-            "matrimonio":     matrimonio_name,
-            "duration_avg":   matrimonio["duration_avg"],
-            "size_mult":      size_factor,
-        }
-        self.entry_time        = time.time()
-        self.entry_momentum    = momentum
-        self.entry_volatility  = volatility
-        self.entry_trend       = trend
-        self.entry_fingerprint = fingerprint_wr
-        self.current_matrimonio= matrimonio_name
-        self.max_price         = price
-        self.total_trades     += 1
-        self._last_entry_seed  = seed['score']    # per AutoCalibratore
-        self._last_entry_fp_wr = fingerprint_wr   # per AutoCalibratore
-
-    # ════════════════════════════════════════════════════════════════════════
-    # EXIT — 4 DIVORCE TRIGGERS + SMORZ + TIMEOUT
-    # ════════════════════════════════════════════════════════════════════════
-
-    def _evaluate_exit(self, price, momentum, volatility, trend):
-        if price > self.max_price:
-            self.max_price = price
-
-        # ── MOMENTUM DECELEROMETER — exit anticipata ──────────────────────
-        # Controlla prima dei divorce triggers: se il momentum sta decelerando
-        # fortemente usciamo prima che il prezzo inverta completamente
-        duration = time.time() - self.entry_time
-        duration_avg = self.trade_open["duration_avg"]
-
-        if duration > duration_avg * 0.3:   # solo dopo il 30% della durata attesa
-            decel = self.decelero.analyze()
-            if decel['should_exit']:
-                self._log("📉", f"DECEL EXIT {self.current_matrimonio} | "
-                         f"decel={decel['decel_score']:.2f} "
-                         f"mom_fast={decel['mom_fast']:+.4f} "
-                         f"mom_slow={decel['mom_slow']:+.4f}")
-                self._close_trade(price, momentum, volatility, trend,
-                                  reason="DECEL_MOMENTUM")
-                return
-
-        # ── 4 DIVORCE TRIGGERS — monitorati ogni tick ─────────────────────
-        triggers_attivi = []
-
-        # Trigger 1: volatilità esplode (entry BASSA → ora ALTA)
-        if self.entry_volatility == "BASSA" and volatility == "ALTA":
-            triggers_attivi.append("T1_VOLATILITÀ_ESPLOSA")
-
-        # Trigger 2: trend si inverte (entry UP → ora DOWN)
-        if self.entry_trend == "UP" and trend == "DOWN":
-            triggers_attivi.append("T2_TREND_INVERTITO")
-
-        # Trigger 3: drawdown > 3% dal massimo
-        drawdown_pct = ((self.max_price - price) / self.trade_open["price_entry"]) * 100
-        if drawdown_pct > DIVORCE_DRAWDOWN_PCT:
-            triggers_attivi.append(f"T3_DRAWDOWN_{drawdown_pct:.1f}%")
-
-        # Trigger 4: fingerprint diverge > 50% dal valore di entry
-        current_fp = self.oracolo.get_wr(momentum, volatility, trend)
-        fp_diverge = abs(current_fp - self.entry_fingerprint) / max(self.entry_fingerprint, 0.001)
-        if fp_diverge > DIVORCE_FP_DIVERGE_PCT:
-            triggers_attivi.append(f"T4_FP_DIVERGE_{fp_diverge:.0%}")
-
-        if len(triggers_attivi) >= DIVORCE_MIN_TRIGGERS:
-            self._log("💔", f"DIVORZIO IMMEDIATO {self.current_matrimonio} | {' + '.join(triggers_attivi)}")
-            self._close_trade(price, momentum, volatility, trend, reason="DIVORZIO_IMMEDIATO")
-            return
-
-        # ── SMORZ — impulso finito ────────────────────────────────────────
-        duration     = time.time() - self.entry_time
-        duration_avg = self.trade_open["duration_avg"]
-        if duration > duration_avg * 0.5 and momentum == "DEBOLE":
-            self._log("🌙", f"SMORZ impulso finito — {self.current_matrimonio} dopo {duration:.0f}s")
-            self._close_trade(price, momentum, volatility, trend, reason="SMORZ")
-            return
-
-        # ── TIMEOUT adattivo ──────────────────────────────────────────────
-        if duration > duration_avg * 3:
-            self._close_trade(price, momentum, volatility, trend, reason="TIMEOUT_3X")
-            return
-        if duration > duration_avg and drawdown_pct > 1.0:
-            self._close_trade(price, momentum, volatility, trend, reason="TIMEOUT_DD_1%")
-            return
-
-    # ════════════════════════════════════════════════════════════════════════
-    # CLOSE TRADE — registra, impara, aggiorna
-    # ════════════════════════════════════════════════════════════════════════
-
-    def _close_trade(self, price, momentum, volatility, trend, reason: str):
-        pnl    = price - self.trade_open["price_entry"]
-        is_win = pnl > 0
-        matrimonio_name = self.current_matrimonio
-        matrimonio      = MatrimonioIntelligente.get_by_name(matrimonio_name)
-        wr_expected     = matrimonio.get("wr", 0.50)
-
-        # ── Calcola drawdown reale (per AutoCalibratore) ──────────────────
-        if self.max_price and self.trade_open:
-            drawdown_pct = ((self.max_price - price) / self.trade_open["price_entry"]) * 100
-        else:
-            drawdown_pct = 0.0
-
-        # ── Aggiorna tutti i sistemi di apprendimento ─────────────────────
-        self.oracolo.record(self.entry_momentum, self.entry_volatility, self.entry_trend, is_win)
-        self.memoria.record_trade(matrimonio_name, is_win, wr_expected)
-        self.realtime_engine.registra_trade({'matrimonio': matrimonio_name, 'pnl': pnl, 'is_win': is_win})
-        self.log_analyzer.registra({'matrimonio': matrimonio_name, 'pnl': pnl, 'is_win': is_win})
-        self.realtime_engine.analizza_e_genera()
-
-        # ── AutoCalibratore: registra osservazione ────────────────────────
-        self.calibratore.registra_osservazione(
-            seed_score=self._last_entry_seed,
-            fingerprint_wr=self._last_entry_fp_wr,
-            is_win=is_win,
-            divorce_drawdown_usato=drawdown_pct
-        )
-        self._trades_since_calib += 1
-
-        # Calibra ogni 30 trade
-        if self._trades_since_calib >= 30:
-            tot_now = self.wins + self.losses + (1 if is_win else 0)
-            wr_now  = (self.wins + (1 if is_win else 0)) / max(1, tot_now)
-            # Prima verifica se calibrazioni precedenti hanno peggiorato
-            self.calibratore.inverti_se_peggiorato(wr_now)
-            # Poi calibra
-            modifiche = self.calibratore.calibra()
-            if modifiche:
-                self._log("🎯", f"AutoCalibra: {modifiche}")
-            self._trades_since_calib = 0
-
-        if is_win:
-            self.wins   += 1
-        else:
-            self.losses += 1
-        self.capital += pnl
-
-        wr_live = (self.wins / (self.wins + self.losses) * 100) if (self.wins + self.losses) > 0 else 0
-        self._log(
-            "🟢" if is_win else "🔴",
-            f"EXIT {matrimonio_name} {'WIN' if is_win else 'LOSS'} PnL=${pnl:+.4f} WR={wr_live:.0f}% [{reason}]"
-        )
-        self.ai_explainer.log_decision("EXIT",
-            f"Uscito da {matrimonio_name} | PnL=${pnl:+.4f} | motivo={reason}",
-            {'pnl': pnl, 'is_win': is_win, 'reason': reason})
-
-        if not self.paper_trade:
-            self._place_order("SELL", price, self.trade_open.get("size_mult", 1.0))
-
-        # Persiste immediatamente dopo ogni trade
-        self._persist.save(self.capital, self.total_trades)
-        self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
-        self._update_heartbeat()
-
-        # Salva info exit per capsule reattive
-        self._last_exit_type     = reason
-        self._last_exit_duration = time.time() - self.entry_time if self.entry_time else 0.0
-
-        # Reset stato trade
-        self.trade_open         = None
-        self.entry_time         = None
-        self.entry_momentum     = None
-        self.entry_volatility   = None
-        self.entry_trend        = None
-        self.entry_fingerprint  = None
-        self.current_matrimonio = None
-        self.max_price          = None
-
-    # ════════════════════════════════════════════════════════════════════════
-    # MOTORE 2: CAMPO GRAVITAZIONALE — Shadow Entry/Exit/Close
-    # ════════════════════════════════════════════════════════════════════════
-
-    def _log_m2(self, emoji: str, msg: str):
-        """Log dedicato Motore 2 — separato dal Motore 1."""
-        ts = datetime.utcnow().strftime('%H:%M:%S')
-        entry = f"{ts} {emoji} [M2] {msg}"
-        self._m2_log.append(entry)
-        log.info(entry)
-
-    def _evaluate_shadow_entry(self, price, momentum, volatility, trend):
-        """Motore 2 valuta entry con il Campo Gravitazionale."""
-        seed = self.seed_scorer.score()
-        if seed.get('reason') == 'insufficient_data':
-            return
-
-        fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend)
-        matrimonio     = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
-        matrimonio_name = matrimonio["name"]
-        fantasma_info  = self.oracolo.is_fantasma(momentum, volatility, trend)
-
-        result = self.campo.evaluate(
-            seed_score=seed['score'],
-            fingerprint_wr=fingerprint_wr,
-            momentum=momentum,
-            volatility=volatility,
-            trend=trend,
-            regime=self._regime_current,
-            matrimonio_name=matrimonio_name,
-            divorzio_set=self.memoria.divorzio,
-            fantasma_info=fantasma_info,
-            loss_consecutivi=self._m2_loss_consecutivi(),
-        )
-
-        if result['veto']:
-            return   # veto silenzioso — non intasare i log
-
-        if result['enter']:
-            self._log_m2("🎯", f"ENTRY {matrimonio_name} | score={result['score']:.1f} "
-                              f"soglia={result['soglia']:.1f} size={result['size']:.2f}x "
-                              f"| {result['breakdown']} @ ${price:.1f}")
-
-            self._shadow = {
-                "price_entry":   price,
-                "matrimonio":    matrimonio_name,
-                "duration_avg":  matrimonio["duration_avg"],
-                "size":          result['size'],
-                "score":         result['score'],
-                "soglia":        result['soglia'],
-            }
-            self._shadow_entry_time        = time.time()
-            self._shadow_entry_momentum    = momentum
-            self._shadow_entry_volatility  = volatility
-            self._shadow_entry_trend       = trend
-            self._shadow_entry_fingerprint = fingerprint_wr
-            self._shadow_max_price         = price
-            self._shadow_matrimonio        = matrimonio_name
-            self._m2_trades += 1
-
-    def _evaluate_shadow_exit(self, price, momentum, volatility, trend):
-        """Stessa logica di uscita del Motore 1 applicata al shadow trade."""
-        if not self._shadow:
-            return
-        if price > self._shadow_max_price:
-            self._shadow_max_price = price
-
-        duration     = time.time() - self._shadow_entry_time
-        duration_avg = self._shadow["duration_avg"]
-
-        # ── DECEL ─────────────────────────────────────────────────────────
-        if duration > duration_avg * 0.3:
-            decel = self.decelero.analyze()
-            if decel['should_exit']:
-                self._close_shadow_trade(price, "DECEL_MOMENTUM")
-                return
-
-        # ── 4 DIVORCE TRIGGERS ────────────────────────────────────────────
-        triggers = []
-        if self._shadow_entry_volatility == "BASSA" and volatility == "ALTA":
-            triggers.append("T1_VOL")
-        if self._shadow_entry_trend == "UP" and trend == "DOWN":
-            triggers.append("T2_TREND")
-        drawdown_pct = ((self._shadow_max_price - price) / self._shadow["price_entry"]) * 100
-        if drawdown_pct > DIVORCE_DRAWDOWN_PCT:
-            triggers.append("T3_DD")
-        current_fp = self.oracolo.get_wr(momentum, volatility, trend)
-        fp_div = abs(current_fp - self._shadow_entry_fingerprint) / max(self._shadow_entry_fingerprint, 0.001)
-        if fp_div > DIVORCE_FP_DIVERGE_PCT:
-            triggers.append("T4_FP")
-        if len(triggers) >= DIVORCE_MIN_TRIGGERS:
-            self._close_shadow_trade(price, f"DIVORZIO|{'|'.join(triggers)}")
-            return
-
-        # ── SMORZ ─────────────────────────────────────────────────────────
-        if duration > duration_avg * 0.5 and momentum == "DEBOLE":
-            self._close_shadow_trade(price, "SMORZ")
-            return
-
-        # ── TIMEOUT ───────────────────────────────────────────────────────
-        if duration > duration_avg * 3:
-            self._close_shadow_trade(price, "TIMEOUT_3X")
-            return
-        if duration > duration_avg and drawdown_pct > 1.0:
-            self._close_shadow_trade(price, "TIMEOUT_DD")
-            return
-
-    def _close_shadow_trade(self, price, reason):
-        """Chiude il shadow trade e registra stats M2."""
-        if not self._shadow:
-            return
-        pnl    = price - self._shadow["price_entry"]
-        is_win = pnl > 0
-
-        self.campo.record_result(is_win)
-
-        if is_win:
-            self._m2_wins  += 1
-        else:
-            self._m2_losses += 1
-        self._m2_pnl += pnl
-
-        m2_tot = self._m2_wins + self._m2_losses
-        m2_wr  = (self._m2_wins / m2_tot * 100) if m2_tot > 0 else 0
-
-        self._log_m2(
-            "🟢" if is_win else "🔴",
-            f"EXIT {self._shadow_matrimonio} {'WIN' if is_win else 'LOSS'} "
-            f"PnL=${pnl:+.4f} WR={m2_wr:.0f}% score={self._shadow['score']:.1f} "
-            f"soglia={self._shadow['soglia']:.1f} [{reason}]"
-        )
-
-        # Reset shadow
-        self._shadow                   = None
-        self._shadow_entry_time        = None
-        self._shadow_entry_momentum    = None
-        self._shadow_entry_volatility  = None
-        self._shadow_entry_trend       = None
-        self._shadow_entry_fingerprint = None
-        self._shadow_max_price         = None
-        self._shadow_matrimonio        = None
-
-    def _m2_loss_consecutivi(self) -> int:
-        """Loss consecutivi del Motore 2."""
-        count = 0
-        for r in reversed(list(self.campo._recent_results)):
-            if not r:
-                count += 1
-            else:
-                break
-        return count
-
-    def _read_bridge_commands(self):
-        """
-        Legge bridge_commands.json e applica comandi al CampoGravitazionale.
-        Il bridge AI scrive qui, il bot esegue qui. Zero restart.
-        """
-        try:
-            if not os.path.exists(self._bridge_cmd_file):
-                return
-
-            with open(self._bridge_cmd_file) as f:
-                commands = json.load(f)
-
-            modified = False
-            for cmd in commands:
-                if cmd.get("executed"):
-                    continue
-
-                cmd_type = cmd.get("type", "")
-                data     = cmd.get("data", {})
-
-                if cmd_type == "modify_weight":
-                    param = data.get("param", "")
-                    value = data.get("value")
-                    if hasattr(self.campo, param) and value is not None:
-                        old = getattr(self.campo, param)
-                        setattr(self.campo, param, value)
-                        self._log("🌉", f"BRIDGE: {param} {old} → {value}")
-                        cmd["executed"] = True
-                        modified = True
-
-                elif cmd_type == "adjust_soglia":
-                    param = data.get("param", "")
-                    value = data.get("value")
-                    if hasattr(self.campo, param) and value is not None:
-                        old = getattr(self.campo, param)
-                        setattr(self.campo, param, value)
-                        self._log("🌉", f"BRIDGE: {param} {old} → {value}")
-                        cmd["executed"] = True
-                        modified = True
-
-            if modified:
-                with open(self._bridge_cmd_file, 'w') as f:
-                    json.dump(commands, f, indent=2)
-
-        except Exception as e:
-            log.error(f"[BRIDGE_READ] {e}")
-
-    # ════════════════════════════════════════════════════════════════════════
-    # ORDINI BINANCE (solo LIVE)
-    # ════════════════════════════════════════════════════════════════════════
-
-    def _place_order(self, side: str, price: float, size_mult: float = 1.0):
-        """
-        Placeholder per ordini reali su Binance.
-        Da completare con python-binance o requests REST API.
-        ATTIVO SOLO quando PAPER_TRADE = False.
-        """
-        log.info(f"[ORDER] 📤 {side} {SYMBOL} @ {price:.2f} size_mult={size_mult:.1f}")
-        # TODO: implementa chiamata Binance REST API
-        # import requests
-        # payload = {"symbol": SYMBOL, "side": side, "type": "MARKET", ...}
-        # requests.post("https://api.binance.com/api/v3/order", ...)
-
-    # ════════════════════════════════════════════════════════════════════════
-    # HEARTBEAT → app.py (Mission Control)
-    # ════════════════════════════════════════════════════════════════════════
-
-    def _update_heartbeat(self):
-        if self.heartbeat_lock:
-            self.heartbeat_lock.acquire()
-        try:
-            if self.heartbeat_data is not None:
-                tot = self.wins + self.losses
-                self.heartbeat_data.update({
-                    "status":          "RUNNING",
-                    "mode":            "PAPER" if self.paper_trade else "LIVE",
-                    "capital":         round(self.capital, 2),
-                    "trades":          self.total_trades,
-                    "wins":            self.wins,
-                    "losses":          self.losses,
-                    "wr":              round(self.wins / tot, 4) if tot > 0 else 0,
-                    "last_seen":       datetime.utcnow().isoformat(),
-                    "matrimoni_divorzio": list(self.memoria.divorzio),
-                    "oracolo_snapshot":   self.oracolo.dump(),
-                    "posizione_aperta":   self.trade_open is not None,
-                    "live_log":           list(self._live_log),
-                    "calibra_params":     self.calibratore.get_params(),
-                    "calibra_log":        self.calibratore.get_log(),
-                    "regime":             self._regime_current,
-                    "regime_conf":        round(self._regime_conf, 3),
-                    # ── MOTORE 2: CAMPO GRAVITAZIONALE stats ──────────
-                    "m2_trades":          self._m2_trades,
-                    "m2_wins":            self._m2_wins,
-                    "m2_losses":          self._m2_losses,
-                    "m2_wr":              round(self._m2_wins / max(1, self._m2_wins + self._m2_losses), 4),
-                    "m2_pnl":             round(self._m2_pnl, 4),
-                    "m2_shadow_open":     self._shadow is not None,
-                    "m2_log":             list(self._m2_log),
-                    "m2_campo_stats":     self.campo.get_stats(),
-                })
-        except Exception as e:
-            log.error(f"[HEARTBEAT_ERROR] {e}")
-        finally:
-            if self.heartbeat_lock:
-                self.heartbeat_lock.release()
-
-    # ════════════════════════════════════════════════════════════════════════
-    # RUN
-    # ════════════════════════════════════════════════════════════════════════
-
-    def _loss_consecutivi(self) -> int:
-        """Conta i loss consecutivi dalla coda del log_analyzer."""
-        count = 0
-        for t in reversed(list(self.log_analyzer.trades)):
-            if t.get('pnl', 0) < 0:
-                count += 1
-            else:
-                break
-        return count
-
-    def run(self):
-        log.info("[START] Bot avviato — connessione Binance WS...")
-        self.connect_binance()
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            log.info("[STOP] Bot fermato da utente")
-            self._persist.save(self.capital, self.total_trades)
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MAIN (standalone — Render lo avvia tramite bot_launcher.py)
-# ═══════════════════════════════════════════════════════════════════════════
-
-if __name__ == '__main__':
-    bot = OvertopBassanoV14Production()
-    bot.run()
