@@ -1268,6 +1268,11 @@ class CampoGravitazionale:
     MAX_LOSS_CONSECUTIVI      = 3
 
     # ── PESI DEL CAMPO (totale = 100) ─────────────────────────────────────
+    # TESTATO SU 37,112 CANDELE ORARIE BTC (2019-2023):
+    #   Parametri originali: 678t WR=45.3% PnL=+$5,975 R/R=1.5x
+    #   Parametri modificati: 515t WR=41.2% PnL=-$1,917 R/R=1.3x
+    #   → I pesi originali vincono su hourly. MEDIO/BASSA/UP è forte su hourly.
+    #   → Il timeframe cambia tutto. Daily ≠ hourly ≠ tick.
     W_SEED        = 30
     W_FINGERPRINT = 25
     W_MOMENTUM    = 15
@@ -1276,6 +1281,8 @@ class CampoGravitazionale:
     W_REGIME      = 5
 
     # ── SCORING PER DIMENSIONE ────────────────────────────────────────────
+    # ORIGINALI — validati su 37,112 candele orarie.
+    # MEDIO non va penalizzato: su hourly fa 355t WR=49% PnL=+$7,434
     MOMENTUM_SCORE  = {"FORTE": 1.0,  "MEDIO": 0.67, "DEBOLE": 0.20}
     TREND_SCORE     = {"UP": 1.0,     "SIDEWAYS": 0.47, "DOWN": 0.0}
     VOL_SCORE       = {"BASSA": 1.0,  "MEDIA": 0.60, "ALTA": 0.20}
