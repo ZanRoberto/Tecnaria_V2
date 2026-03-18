@@ -1317,6 +1317,10 @@ class CampoGravitazionale:
         self._volumes_short = deque(maxlen=50)    # ultimi 50 volumi per accelerazione
         # ── DRIFT DETECTOR ────────────────────────────────────────────────
         self._prices_long = deque(maxlen=200)     # ultimi 200 prezzi per drift
+        # ── PREBREAKOUT AUTO-TUNING (META-REGOLA) ─────────────────────────
+        self._pb3_results = deque(maxlen=20)       # ultimi 20 trade con pb=3/3: (is_win, exit_reason, pnl)
+        self._pb3_compression_threshold = 0.0003   # si stringe se WR pb3 < 50%
+        self._pb3_vol_acc_threshold = 1.3           # si stringe se troppi falsi
 
     def feed_tick(self, price: float, volume: float, seed_score: float):
         """Alimenta tutti i detector con dati tick-by-tick."""
@@ -1381,7 +1385,7 @@ class CampoGravitazionale:
         regime_f  = self.REGIME_FACTOR.get(regime, 1.0)
         vol_f     = self.VOL_FACTOR.get(volatility, 1.0)
         history_f = self._history_factor()
-        prebreak_f, prebreak_detail = self._pre_breakout_factor()
+        prebreak_f, prebreak_detail, prebreak_signals = self._pre_breakout_factor()
         drift_f, drift_detail = self._drift_factor()
 
         soglia = self.SOGLIA_BASE * regime_f * vol_f * history_f * prebreak_f * drift_f
@@ -1404,6 +1408,7 @@ class CampoGravitazionale:
             'soglia':    round(soglia, 2),
             'size':      round(size, 3),
             'veto':      None,
+            'pb_signals': prebreak_signals,
             'breakdown': {
                 'seed':    round(s_seed, 2),
                 'fp':      round(s_fp, 2),
@@ -1415,9 +1420,45 @@ class CampoGravitazionale:
             }
         }
 
-    def record_result(self, is_win: bool):
+    def record_result(self, is_win: bool, exit_reason: str = "", pb_signals: int = 0, pnl: float = 0.0):
         """Chiamato alla chiusura di ogni shadow trade."""
         self._recent_results.append(is_win)
+
+        # ── META-REGOLA: PREBREAKOUT AUTO-TUNING ─────────────────────────
+        # Traccia i risultati dei trade che sono entrati con pb=3/3
+        if pb_signals >= 3:
+            self._pb3_results.append({
+                'is_win': is_win,
+                'exit': exit_reason,
+                'pnl': pnl,
+            })
+
+            # Dopo 5+ trade pb3, valuta se le soglie vanno strette
+            if len(self._pb3_results) >= 5:
+                pb3_list = list(self._pb3_results)
+                pb3_wins = sum(1 for r in pb3_list if r['is_win'])
+                pb3_wr = pb3_wins / len(pb3_list)
+                pb3_smorz = sum(1 for r in pb3_list if r['exit'] == 'SMORZ' and not r['is_win'])
+
+                # Se WR pb3 < 50% → stringi compressione (da 0.0003 a 0.0002)
+                if pb3_wr < 0.50 and self._pb3_compression_threshold > 0.00015:
+                    self._pb3_compression_threshold -= 0.00005
+                    log.info(f"[META] 🧠 PreBreakout auto-tune: WR pb3={pb3_wr:.0%} < 50% → "
+                             f"compression threshold stretto a {self._pb3_compression_threshold:.5f}")
+
+                # Se > 40% dei LOSS pb3 escono per SMORZ → alza vol_acc threshold
+                if len(pb3_list) >= 5:
+                    smorz_ratio = pb3_smorz / max(1, len(pb3_list) - pb3_wins)
+                    if smorz_ratio > 0.40 and self._pb3_vol_acc_threshold < 3.0:
+                        self._pb3_vol_acc_threshold += 0.2
+                        log.info(f"[META] 🧠 PreBreakout auto-tune: SMORZ ratio={smorz_ratio:.0%} > 40% → "
+                                 f"vol_acc threshold alzato a {self._pb3_vol_acc_threshold:.1f}")
+
+                # Se WR pb3 > 70% → allenta (le soglie funzionano)
+                if pb3_wr > 0.70 and self._pb3_compression_threshold < 0.0003:
+                    self._pb3_compression_threshold += 0.00002
+                    log.info(f"[META] 🧠 PreBreakout auto-tune: WR pb3={pb3_wr:.0%} > 70% → "
+                             f"compression threshold allentato a {self._pb3_compression_threshold:.5f}")
 
     def _history_factor(self) -> float:
         """Soglia si muove con la storia recente."""
@@ -1448,7 +1489,7 @@ class CampoGravitazionale:
         Ritorna (factor: float, dettaglio: str)
         """
         if len(self._prices_short) < 30 or len(self._seed_history) < 5:
-            return 1.0, ""
+            return 1.0, "", 0
 
         signals = 0
         details = []
@@ -1461,7 +1502,7 @@ class CampoGravitazionale:
         p_mid = (p_max + p_min) / 2
         compression = (p_max - p_min) / p_mid if p_mid > 0 else 1.0
 
-        if compression < 0.0003:   # range < 0.03% — molla molto carica
+        if compression < self._pb3_compression_threshold:   # ADATTIVO — si stringe se pb3 WR < 50%
             signals += 1
             details.append(f"COMPRESS={compression:.5f}")
 
@@ -1472,7 +1513,7 @@ class CampoGravitazionale:
             vol_prev   = sum(vols[-20:-10]) / 10
             if vol_prev > 0:
                 vol_ratio = vol_recent / vol_prev
-                if vol_ratio > 1.3 and compression < 0.001:
+                if vol_ratio > self._pb3_vol_acc_threshold and compression < 0.001:   # ADATTIVO
                     # Volume sale MA prezzo fermo → accumulazione
                     signals += 1
                     details.append(f"VOL_ACC={vol_ratio:.2f}")
@@ -1509,7 +1550,7 @@ class CampoGravitazionale:
             factor = 1.00    # niente — soglia invariata
 
         detail_str = f"pb={factor:.2f}({signals}/3 {'+'.join(details)})" if signals > 0 else ""
-        return factor, detail_str
+        return factor, detail_str, signals
 
     def _drift_factor(self) -> tuple:
         """
@@ -1559,7 +1600,7 @@ class CampoGravitazionale:
 
     def _veto(self, reason: str) -> dict:
         return {'enter': False, 'score': 0.0, 'soglia': 0.0,
-                'size': 0.0, 'veto': reason, 'breakdown': {}}
+                'size': 0.0, 'veto': reason, 'pb_signals': 0, 'breakdown': {}}
 
     def get_stats(self) -> dict:
         total = len(self._recent_results)
@@ -2200,6 +2241,7 @@ class OvertopBassanoV14Production:
                 "size":          result['size'],
                 "score":         result['score'],
                 "soglia":        result['soglia'],
+                "pb_signals":    result.get('pb_signals', 0),
             }
             self._shadow_entry_time        = time.time()
             self._shadow_entry_momentum    = momentum
@@ -2305,7 +2347,9 @@ class OvertopBassanoV14Production:
             pnl    = price - self._shadow["price_entry"]
             is_win = pnl > 0
 
-            self.campo.record_result(is_win)
+            self.campo.record_result(is_win, exit_reason=reason, 
+                                     pb_signals=self._shadow.get("pb_signals", 0),
+                                     pnl=pnl)
 
             # ── INSEGNA ALL'ORACOLO — il cervello impara dai trade M2 ─────────
             if self._shadow_entry_momentum and self._shadow_entry_volatility and self._shadow_entry_trend:
