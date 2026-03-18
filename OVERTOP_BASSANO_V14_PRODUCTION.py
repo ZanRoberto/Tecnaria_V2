@@ -1461,15 +1461,15 @@ class CampoGravitazionale:
                              f"compression threshold allentato a {self._pb3_compression_threshold:.5f}")
 
     def _history_factor(self) -> float:
-        """Soglia si muove con la storia recente."""
+        """Soglia si muove con la storia recente.
+        MAI abbassare la soglia quando va bene — il pugile non abbassa le braccia.
+        Solo alzarla quando va male."""
         if len(self._recent_results) < 5:
             return 1.0
         recent_wr = sum(1 for r in self._recent_results if r) / len(self._recent_results)
-        if recent_wr > 0.70:
-            return 0.90    # va bene, soglia più bassa
-        elif recent_wr < 0.40:
+        if recent_wr < 0.40:
             return 1.20    # sta andando male, soglia più alta
-        return 1.0
+        return 1.0         # va bene O va nella media → NON TOCCARE
 
     def _pre_breakout_factor(self) -> tuple:
         """
