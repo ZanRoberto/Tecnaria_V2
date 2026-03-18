@@ -1305,18 +1305,26 @@ class CampoGravitazionale:
     SIZE_MIN = 0.5
     SIZE_MAX = 2.0
 
+    # ── WARMUP ─────────────────────────────────────────────────────────
+    WARMUP_TICKS = 200   # tick minimi prima di operare — buffer devono riempirsi
+
     def __init__(self):
         self._recent_results = deque(maxlen=20)
+        self._tick_count = 0   # conta tick dal boot
         # ── PRE-BREAKOUT DETECTOR ─────────────────────────────────────────
         self._prices_short = deque(maxlen=50)     # ultimi 50 prezzi per compressione
         self._seed_history = deque(maxlen=10)     # ultimi 10 seed per derivata
         self._volumes_short = deque(maxlen=50)    # ultimi 50 volumi per accelerazione
+        # ── DRIFT DETECTOR ────────────────────────────────────────────────
+        self._prices_long = deque(maxlen=200)     # ultimi 200 prezzi per drift
 
     def feed_tick(self, price: float, volume: float, seed_score: float):
-        """Alimenta il detector pre-breakout con dati tick-by-tick."""
+        """Alimenta tutti i detector con dati tick-by-tick."""
         self._prices_short.append(price)
         self._volumes_short.append(volume)
         self._seed_history.append(seed_score)
+        self._prices_long.append(price)
+        self._tick_count += 1
 
     def evaluate(self, seed_score, fingerprint_wr, momentum, volatility,
                  trend, regime, matrimonio_name, divorzio_set,
@@ -1350,6 +1358,10 @@ class CampoGravitazionale:
         if loss_consecutivi >= self.MAX_LOSS_CONSECUTIVI:
             return self._veto(f"LOSS_CONSECUTIVI_{loss_consecutivi}")
 
+        # ── WARMUP: buffer non ancora pieni → non operare ─────────────
+        if self._tick_count < self.WARMUP_TICKS:
+            return self._veto(f"WARMUP_{self._tick_count}/{self.WARMUP_TICKS}")
+
         # ── CALCOLO PUNTEGGIO CAMPO ───────────────────────────────────────
         # Seed: normalizza [0.3, 1.0] → [0, 1]
         s_seed = min(1.0, max(0.0, (seed_score - 0.30) / 0.70)) * self.W_SEED
@@ -1370,8 +1382,9 @@ class CampoGravitazionale:
         vol_f     = self.VOL_FACTOR.get(volatility, 1.0)
         history_f = self._history_factor()
         prebreak_f, prebreak_detail = self._pre_breakout_factor()
+        drift_f, drift_detail = self._drift_factor()
 
-        soglia = self.SOGLIA_BASE * regime_f * vol_f * history_f * prebreak_f
+        soglia = self.SOGLIA_BASE * regime_f * vol_f * history_f * prebreak_f * drift_f
         soglia = max(self.SOGLIA_MIN, min(self.SOGLIA_MAX, soglia))
 
         # ── DECISIONE ─────────────────────────────────────────────────────
@@ -1398,7 +1411,7 @@ class CampoGravitazionale:
                 'trend':   round(s_trend, 2),
                 'vol':     round(s_vol, 2),
                 'regime':  round(s_reg, 2),
-                'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f} {prebreak_detail}",
+                'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f} d={drift_f:.2f} {prebreak_detail} {drift_detail}".strip(),
             }
         }
 
@@ -1497,6 +1510,52 @@ class CampoGravitazionale:
 
         detail_str = f"pb={factor:.2f}({signals}/3 {'+'.join(details)})" if signals > 0 else ""
         return factor, detail_str
+
+    def _drift_factor(self) -> tuple:
+        """
+        ★ DRIFT DETECTOR — in che direzione soffia il vento?
+
+        Confronta il prezzo medio recente (ultimi 50 tick) con quello
+        più vecchio (primi 50 dei 200 tick). Se il prezzo SCENDE,
+        la soglia SALE — non entri LONG in un downtrend.
+
+        Ritorna (factor: float, dettaglio: str)
+          drift forte DOWN  → 1.30 (soglia +30% — quasi impossibile entrare)
+          drift lieve DOWN  → 1.15 (soglia +15%)
+          flat              → 1.00 (nessun effetto)
+          drift UP          → 0.95 (leggerissimo aiuto — il vento a favore)
+        """
+        if len(self._prices_long) < 100:
+            return 1.0, ""
+
+        prices = list(self._prices_long)
+
+        # Media primi 50 tick (passato) vs ultimi 50 tick (presente)
+        avg_old    = sum(prices[:50]) / 50
+        avg_recent = sum(prices[-50:]) / 50
+
+        if avg_old == 0:
+            return 1.0, ""
+
+        drift_pct = (avg_recent - avg_old) / avg_old * 100   # % cambio
+
+        if drift_pct < -0.10:
+            # Prezzo sceso > 0.10% su 200 tick — downtrend forte
+            factor = 1.30
+            detail = f"DRIFT={drift_pct:+.3f}%↓↓"
+        elif drift_pct < -0.03:
+            # Prezzo sceso 0.03-0.10% — downtrend lieve
+            factor = 1.15
+            detail = f"DRIFT={drift_pct:+.3f}%↓"
+        elif drift_pct > 0.05:
+            # Prezzo salito > 0.05% — vento a favore
+            factor = 0.95
+            detail = f"DRIFT={drift_pct:+.3f}%↑"
+        else:
+            # Flat — nessun effetto
+            return 1.0, ""
+
+        return factor, detail
 
     def _veto(self, reason: str) -> dict:
         return {'enter': False, 'score': 0.0, 'soglia': 0.0,
