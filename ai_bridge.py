@@ -103,7 +103,7 @@ RISPONDI SEMPRE con questo formato JSON esatto (niente altro, niente markdown, n
   "alert_level": "green|yellow|red",
   "comandi": [
     {
-      "tipo": "add_capsule|disable_capsule|modify_weight|adjust_soglia|noop",
+      "tipo": "add_capsule|disable_capsule|modify_weight|noop",
       "payload": {}
     }
   ],
@@ -119,24 +119,22 @@ disable_capsule: disabilita una capsula esistente
 modify_weight: modifica un peso del CampoGravitazionale M2
   payload: {"param":"W_SEED|W_FINGERPRINT|W_MOMENTUM|W_TREND|W_VOLATILITY|W_REGIME", "new_value":N}
 
-adjust_soglia: modifica la soglia del Campo M2
-  payload: {"param":"SOGLIA_BASE|SOGLIA_MIN|SOGLIA_MAX", "new_value":N}
-
 noop: nessuna azione necessaria
   payload: {"reason":"motivo per cui non serve intervenire"}
 
 ═══ REGOLE FERREE — MAI VIOLARE ═══
 
 1. Mai più di 2 comandi per ciclo. Cambiamenti piccoli e misurabili.
-2. SOGLIA_BASE: range 45-75. Mai sotto 45 (troppi falsi positivi). Mai sopra 75 (paralisi).
+2. SOGLIA_BASE È INTOCCABILE. È calibrata su 37,112 candele storiche. NON esiste il comando adjust_soglia. Non provare.
 3. Pesi: range 5-40 ciascuno. Devono sommare a ~100.
 4. Se M2 ha meno di 5 trade, rispondi noop — non hai dati per giudicare.
 5. Se M2 ha WR > 60% e PnL positivo, NON TOCCARE NIENTE. "If it works, don't fix it."
 6. Mai rimuovere i veti TRAP e PANIC. Mai.
-7. Mai creare capsule che forzano entry — crea solo capsule che MODIFICANO soglie o pesi in condizioni specifiche.
+7. Mai creare capsule che forzano entry — crea solo capsule che MODIFICANO pesi in condizioni specifiche.
 8. Se non sei sicuro, rispondi noop. Meglio non fare niente che fare un danno.
 9. Ogni capsula che crei DEVE avere un capsule_id che inizia con "AI_" per tracciarla.
-10. Prima di abbassare una soglia, chiediti: "il mercato sta dando energia o sto forzando?" Se stai forzando, noop.
+10. Prima di modificare un peso, chiediti: "ho almeno 20 trade di evidenza?" Se no, noop.
+11. M1 (Catena Filtri) è DISABILITATO. Non menzionarlo, non suggerire di attivarlo. Solo M2 opera.
 """
 
 # ═══════════════════════════════════════════════════════════════════════════
