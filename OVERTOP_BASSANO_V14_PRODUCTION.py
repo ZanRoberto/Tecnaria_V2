@@ -1366,6 +1366,16 @@ class CampoGravitazionale:
         if self._tick_count < self.WARMUP_TICKS:
             return self._veto(f"WARMUP_{self._tick_count}/{self.WARMUP_TICKS}")
 
+        # ── DRIFT VETO: mercato scende → NON ENTRARE LONG. PUNTO. ─────
+        # La volpe non entra nella tana del lupo. Non alza la soglia — non ci va.
+        if len(self._prices_long) >= 100:
+            _prices = list(self._prices_long)
+            _avg_old = sum(_prices[:50]) / 50
+            _avg_new = sum(_prices[-50:]) / 50
+            _drift = (_avg_new - _avg_old) / _avg_old * 100
+            if _drift < -0.05:
+                return self._veto(f"DRIFT_VETO_{_drift:+.3f}%")
+
         # ── CALCOLO PUNTEGGIO CAMPO ───────────────────────────────────────
         # Seed: normalizza [0.3, 1.0] → [0, 1]
         s_seed = min(1.0, max(0.0, (seed_score - 0.30) / 0.70)) * self.W_SEED
