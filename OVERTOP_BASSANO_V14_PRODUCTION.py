@@ -1298,7 +1298,7 @@ class CampoGravitazionale:
     #   1.20: 1788t WR=46.1% PnL=+$22,726 R/R=1.48x
     #   Più trade, WR migliore, R/R migliore, PnL 7x. Un solo parametro.
     VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.15}
-    SOGLIA_MIN    = 35
+    SOGLIA_MIN    = 58    # PAVIMENTO ASSOLUTO — nessun fattore scende sotto questo
     SOGLIA_MAX    = 90
 
     # ── SIZE CONTINUA ─────────────────────────────────────────────────────
