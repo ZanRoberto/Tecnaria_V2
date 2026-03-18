@@ -2122,10 +2122,17 @@ class OvertopBassanoV14Production:
             if result['veto']:
                 return   # veto silenzioso — non intasare i log
 
-            if result['enter']:
-                self._log_m2("🎯", f"ENTRY {matrimonio_name} | score={result['score']:.1f} "
-                                  f"soglia={result['soglia']:.1f} size={result['size']:.2f}x "
-                                  f"| {result['breakdown']} @ ${price:.1f}")
+            if not result['enter']:
+                return   # score < soglia → NON ENTRARE
+
+            # ── HARD GUARD: doppio check anti-bug ──────────────────────────
+            if result['score'] < result['soglia']:
+                self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} — BLOCCATO")
+                return
+
+            self._log_m2("🎯", f"ENTRY {matrimonio_name} | score={result['score']:.1f} "
+                              f"soglia={result['soglia']:.1f} size={result['size']:.2f}x "
+                              f"| {result['breakdown']} @ ${price:.1f}")
 
             self._shadow = {
                 "price_entry":   price,
