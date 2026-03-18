@@ -1292,7 +1292,11 @@ class CampoGravitazionale:
     # ── SOGLIA DINAMICA ───────────────────────────────────────────────────
     SOGLIA_BASE = 60
     REGIME_FACTOR = {"TRENDING_BULL": 0.80, "EXPLOSIVE": 0.85,
-                     "RANGING": 1.30, "TRENDING_BEAR": 1.20}
+                     "RANGING": 1.20, "TRENDING_BEAR": 1.20}
+    # RANGING: era 1.30, ora 1.20 — VALIDATO su 37,112 candele orarie:
+    #   1.30: 635t  WR=44.1% PnL=+$3,100  R/R=1.40x
+    #   1.20: 1788t WR=46.1% PnL=+$22,726 R/R=1.48x
+    #   Più trade, WR migliore, R/R migliore, PnL 7x. Un solo parametro.
     VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.15}
     SOGLIA_MIN    = 35
     SOGLIA_MAX    = 90
@@ -1626,6 +1630,7 @@ class OvertopBassanoV14Production:
             pass
         self._m2_log     = deque(maxlen=20)   # log dedicato M2
         self._last_volume = 1.0               # ultimo volume dal WebSocket
+        self._last_m2_heartbeat = time.time() # heartbeat M2 — monitora se il thread è vivo
 
         # ── BRIDGE COMMANDS READER ───────────────────────────────────────
         self._bridge_cmd_file = "bridge_commands.json"
@@ -1745,10 +1750,13 @@ class OvertopBassanoV14Production:
             return
         momentum, volatility, trend = contesto
 
-        if self.trade_open:
-            self._evaluate_exit(price, momentum, volatility, trend)
-        else:
-            self._evaluate_entry(price, momentum, volatility, trend)
+        # ── M1 DISABILITATO — 0 trade in 2 giorni, sistema paralizzato ────
+        # M2 (Campo Gravitazionale) è l'unico motore operativo.
+        # M1 resta nel codice per riferimento ma non valuta più.
+        # if self.trade_open:
+        #     self._evaluate_exit(price, momentum, volatility, trend)
+        # else:
+        #     self._evaluate_entry(price, momentum, volatility, trend)
 
         # ── MOTORE 2: Feed pre-breakout detector (OGNI tick) ─────────────
         _seed_quick = self.seed_scorer.score()
@@ -1760,6 +1768,12 @@ class OvertopBassanoV14Production:
             self._evaluate_shadow_exit(price, momentum, volatility, trend)
         else:
             self._evaluate_shadow_entry(price, momentum, volatility, trend)
+
+        # ── HEARTBEAT M2 — ogni 60s conferma che M2 è vivo ───────────────
+        if now - self._last_m2_heartbeat > 60:
+            self._log_m2("💓", f"M2 vivo | shadow={'aperto' if self._shadow else 'chiuso'} "
+                              f"| {self._m2_trades}t W={self._m2_wins} L={self._m2_losses}")
+            self._last_m2_heartbeat = now
 
     # ════════════════════════════════════════════════════════════════════════
     # ENTRY — catena decisionale completa
@@ -2082,35 +2096,36 @@ class OvertopBassanoV14Production:
 
     def _evaluate_shadow_entry(self, price, momentum, volatility, trend):
         """Motore 2 valuta entry con il Campo Gravitazionale."""
-        seed = self.seed_scorer.score()
-        if seed.get('reason') == 'insufficient_data':
-            return
+        try:
+            seed = self.seed_scorer.score()
+            if seed.get('reason') == 'insufficient_data':
+                return
 
-        fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend)
-        matrimonio     = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
-        matrimonio_name = matrimonio["name"]
-        fantasma_info  = self.oracolo.is_fantasma(momentum, volatility, trend)
+            fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend)
+            matrimonio     = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
+            matrimonio_name = matrimonio["name"]
+            fantasma_info  = self.oracolo.is_fantasma(momentum, volatility, trend)
 
-        result = self.campo.evaluate(
-            seed_score=seed['score'],
-            fingerprint_wr=fingerprint_wr,
-            momentum=momentum,
-            volatility=volatility,
-            trend=trend,
-            regime=self._regime_current,
-            matrimonio_name=matrimonio_name,
-            divorzio_set=self.memoria.divorzio,
-            fantasma_info=fantasma_info,
-            loss_consecutivi=self._m2_loss_consecutivi(),
-        )
+            result = self.campo.evaluate(
+                seed_score=seed['score'],
+                fingerprint_wr=fingerprint_wr,
+                momentum=momentum,
+                volatility=volatility,
+                trend=trend,
+                regime=self._regime_current,
+                matrimonio_name=matrimonio_name,
+                divorzio_set=self.memoria.divorzio,
+                fantasma_info=fantasma_info,
+                loss_consecutivi=self._m2_loss_consecutivi(),
+            )
 
-        if result['veto']:
-            return   # veto silenzioso — non intasare i log
+            if result['veto']:
+                return   # veto silenzioso — non intasare i log
 
-        if result['enter']:
-            self._log_m2("🎯", f"ENTRY {matrimonio_name} | score={result['score']:.1f} "
-                              f"soglia={result['soglia']:.1f} size={result['size']:.2f}x "
-                              f"| {result['breakdown']} @ ${price:.1f}")
+            if result['enter']:
+                self._log_m2("🎯", f"ENTRY {matrimonio_name} | score={result['score']:.1f} "
+                                  f"soglia={result['soglia']:.1f} size={result['size']:.2f}x "
+                                  f"| {result['breakdown']} @ ${price:.1f}")
 
             self._shadow = {
                 "price_entry":   price,
@@ -2149,179 +2164,193 @@ class OvertopBassanoV14Production:
             except Exception as e:
                 log.error(f"[M2_DB] Entry save: {e}")
 
+        except Exception as e:
+            import traceback
+            self._log_m2("💥", f"ERRORE shadow_entry: {e}")
+            log.error(f"[M2_ENTRY_ERROR] {e}\n{traceback.format_exc()}")
+
     def _evaluate_shadow_exit(self, price, momentum, volatility, trend):
         """Stessa logica di uscita del Motore 1 applicata al shadow trade."""
-        if not self._shadow:
-            return
-        if price > self._shadow_max_price:
-            self._shadow_max_price = price
+        try:
+            if not self._shadow:
+                return
+            if price > self._shadow_max_price:
+                self._shadow_max_price = price
 
-        duration     = time.time() - self._shadow_entry_time
-        duration_avg = self._shadow["duration_avg"]
+            duration     = time.time() - self._shadow_entry_time
+            duration_avg = self._shadow["duration_avg"]
 
-        # ── MINIMUM HOLD TIME ─────────────────────────────────────────────
-        # CALIBRATO SU DATI REALI: 2 trade SMORZ dopo 4-6 secondi = noise.
-        # Un impulso vero ha bisogno di almeno 10s per manifestarsi.
-        # Solo DIVORCE (sicurezza) può uscire prima.
-        MIN_HOLD_SECONDS = 10
+            # ── MINIMUM HOLD TIME ─────────────────────────────────────────────
+            MIN_HOLD_SECONDS = 10
 
-        # ── 4 DIVORCE TRIGGERS (SEMPRE ATTIVI — sicurezza) ───────────────
-        triggers = []
-        if self._shadow_entry_volatility == "BASSA" and volatility == "ALTA":
-            triggers.append("T1_VOL")
-        if self._shadow_entry_trend == "UP" and trend == "DOWN":
-            triggers.append("T2_TREND")
-        drawdown_pct = ((self._shadow_max_price - price) / self._shadow["price_entry"]) * 100
-        if drawdown_pct > DIVORCE_DRAWDOWN_PCT:
-            triggers.append("T3_DD")
-        current_fp = self.oracolo.get_wr(momentum, volatility, trend)
-        fp_div = abs(current_fp - self._shadow_entry_fingerprint) / max(self._shadow_entry_fingerprint, 0.001)
-        if fp_div > DIVORCE_FP_DIVERGE_PCT:
-            triggers.append("T4_FP")
-        if len(triggers) >= DIVORCE_MIN_TRIGGERS:
-            self._close_shadow_trade(price, f"DIVORZIO|{'|'.join(triggers)}")
-            return
-
-        # ── SOTTO MINIMUM HOLD → non uscire per DECEL/SMORZ/TIMEOUT ──────
-        if duration < MIN_HOLD_SECONDS:
-            return
-
-        # ── DECEL ─────────────────────────────────────────────────────────
-        if duration > duration_avg * 0.3:
-            decel = self.decelero.analyze()
-            if decel['should_exit']:
-                self._close_shadow_trade(price, "DECEL_MOMENTUM")
+            # ── 4 DIVORCE TRIGGERS (SEMPRE ATTIVI — sicurezza) ───────────────
+            triggers = []
+            if self._shadow_entry_volatility == "BASSA" and volatility == "ALTA":
+                triggers.append("T1_VOL")
+            if self._shadow_entry_trend == "UP" and trend == "DOWN":
+                triggers.append("T2_TREND")
+            drawdown_pct = ((self._shadow_max_price - price) / self._shadow["price_entry"]) * 100
+            if drawdown_pct > DIVORCE_DRAWDOWN_PCT:
+                triggers.append("T3_DD")
+            current_fp = self.oracolo.get_wr(momentum, volatility, trend)
+            fp_div = abs(current_fp - self._shadow_entry_fingerprint) / max(self._shadow_entry_fingerprint, 0.001)
+            if fp_div > DIVORCE_FP_DIVERGE_PCT:
+                triggers.append("T4_FP")
+            if len(triggers) >= DIVORCE_MIN_TRIGGERS:
+                self._close_shadow_trade(price, f"DIVORZIO|{'|'.join(triggers)}")
                 return
 
-        # ── SMORZ ─────────────────────────────────────────────────────────
-        if duration > duration_avg * 0.5 and momentum == "DEBOLE":
-            self._close_shadow_trade(price, "SMORZ")
-            return
+            # ── SOTTO MINIMUM HOLD → non uscire per DECEL/SMORZ/TIMEOUT ──────
+            if duration < MIN_HOLD_SECONDS:
+                return
 
-        # ── TIMEOUT ───────────────────────────────────────────────────────
-        if duration > duration_avg * 3:
-            self._close_shadow_trade(price, "TIMEOUT_3X")
-            return
-        if duration > duration_avg and drawdown_pct > 1.0:
-            self._close_shadow_trade(price, "TIMEOUT_DD")
-            return
+            # ── DECEL ─────────────────────────────────────────────────────────
+            if duration > duration_avg * 0.3:
+                decel = self.decelero.analyze()
+                if decel['should_exit']:
+                    self._close_shadow_trade(price, "DECEL_MOMENTUM")
+                    return
+
+            # ── SMORZ ─────────────────────────────────────────────────────────
+            if duration > duration_avg * 0.5 and momentum == "DEBOLE":
+                self._close_shadow_trade(price, "SMORZ")
+                return
+
+            # ── TIMEOUT ───────────────────────────────────────────────────────
+            if duration > duration_avg * 3:
+                self._close_shadow_trade(price, "TIMEOUT_3X")
+                return
+            if duration > duration_avg and drawdown_pct > 1.0:
+                self._close_shadow_trade(price, "TIMEOUT_DD")
+                return
+
+        except Exception as e:
+            import traceback
+            self._log_m2("💥", f"ERRORE shadow_exit: {e}")
+            log.error(f"[M2_EXIT_ERROR] {e}\n{traceback.format_exc()}")
 
     def _close_shadow_trade(self, price, reason):
         """Chiude il shadow trade e registra stats M2.
         CRITICO: insegna all'Oracolo e persiste su DB — altrimenti il sistema non impara MAI.
         """
-        if not self._shadow:
-            return
-        pnl    = price - self._shadow["price_entry"]
-        is_win = pnl > 0
+        try:
+            if not self._shadow:
+                return
+            pnl    = price - self._shadow["price_entry"]
+            is_win = pnl > 0
 
-        self.campo.record_result(is_win)
+            self.campo.record_result(is_win)
 
-        # ── INSEGNA ALL'ORACOLO — il cervello impara dai trade M2 ─────────
-        if self._shadow_entry_momentum and self._shadow_entry_volatility and self._shadow_entry_trend:
-            self.oracolo.record(
-                self._shadow_entry_momentum,
-                self._shadow_entry_volatility,
-                self._shadow_entry_trend,
-                is_win
+            # ── INSEGNA ALL'ORACOLO — il cervello impara dai trade M2 ─────────
+            if self._shadow_entry_momentum and self._shadow_entry_volatility and self._shadow_entry_trend:
+                self.oracolo.record(
+                    self._shadow_entry_momentum,
+                    self._shadow_entry_volatility,
+                    self._shadow_entry_trend,
+                    is_win
+                )
+
+            # ── AGGIORNA MEMORIA MATRIMONI — anche M2 conta ──────────────────
+            if self._shadow_matrimonio:
+                matrimonio = MatrimonioIntelligente.get_by_name(self._shadow_matrimonio)
+                wr_expected = matrimonio.get("wr", 0.50)
+                self.memoria.record_trade(self._shadow_matrimonio, is_win, wr_expected)
+
+            # ── CALIBRATORE — M2 insegna anche a lui ─────────────────────────
+            self.calibratore.registra_osservazione(
+                seed_score=self._shadow.get("score", 0) / 100.0,
+                fingerprint_wr=self._shadow_entry_fingerprint or 0.72,
+                is_win=is_win,
+                divorce_drawdown_usato=((self._shadow_max_price - price) / self._shadow["price_entry"] * 100)
+                                       if self._shadow_max_price and self._shadow.get("price_entry") else 0.0
             )
 
-        # ── AGGIORNA MEMORIA MATRIMONI — anche M2 conta ──────────────────
-        if self._shadow_matrimonio:
-            matrimonio = MatrimonioIntelligente.get_by_name(self._shadow_matrimonio)
-            wr_expected = matrimonio.get("wr", 0.50)
-            self.memoria.record_trade(self._shadow_matrimonio, is_win, wr_expected)
+            # ── REALTIME LEARNING — M2 genera capsule auto ───────────────────
+            self.realtime_engine.registra_trade({
+                'matrimonio': self._shadow_matrimonio, 'pnl': pnl, 'is_win': is_win
+            })
+            self.realtime_engine.analizza_e_genera()
 
-        # ── CALIBRATORE — M2 insegna anche a lui ─────────────────────────
-        self.calibratore.registra_osservazione(
-            seed_score=self._shadow.get("score", 0) / 100.0,  # normalizza 0-100 → 0-1
-            fingerprint_wr=self._shadow_entry_fingerprint or 0.72,
-            is_win=is_win,
-            divorce_drawdown_usato=((self._shadow_max_price - price) / self._shadow["price_entry"] * 100)
-                                   if self._shadow_max_price and self._shadow.get("price_entry") else 0.0
-        )
+            # ── LOG ANALYZER — stats per matrimonio includono M2 ─────────────
+            self.log_analyzer.registra({
+                'matrimonio': self._shadow_matrimonio, 'pnl': pnl, 'is_win': is_win
+            })
 
-        # ── REALTIME LEARNING — M2 genera capsule auto ───────────────────
-        self.realtime_engine.registra_trade({
-            'matrimonio': self._shadow_matrimonio, 'pnl': pnl, 'is_win': is_win
-        })
-        self.realtime_engine.analizza_e_genera()
+            if is_win:
+                self._m2_wins  += 1
+            else:
+                self._m2_losses += 1
+            self._m2_pnl += pnl
 
-        # ── LOG ANALYZER — stats per matrimonio includono M2 ─────────────
-        self.log_analyzer.registra({
-            'matrimonio': self._shadow_matrimonio, 'pnl': pnl, 'is_win': is_win
-        })
+            m2_tot = self._m2_wins + self._m2_losses
+            m2_wr  = (self._m2_wins / m2_tot * 100) if m2_tot > 0 else 0
 
-        if is_win:
-            self._m2_wins  += 1
-        else:
-            self._m2_losses += 1
-        self._m2_pnl += pnl
+            self._log_m2(
+                "🟢" if is_win else "🔴",
+                f"EXIT {self._shadow_matrimonio} {'WIN' if is_win else 'LOSS'} "
+                f"PnL=${pnl:+.4f} WR={m2_wr:.0f}% score={self._shadow['score']:.1f} "
+                f"soglia={self._shadow['soglia']:.1f} [{reason}]"
+            )
 
-        m2_tot = self._m2_wins + self._m2_losses
-        m2_wr  = (self._m2_wins / m2_tot * 100) if m2_tot > 0 else 0
+            # ── SCRIVI NEL DATABASE — sopravvive ai restart ───────────────────
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("""
+                    INSERT INTO trades (event_type, asset, price, size, pnl, direction, reason, data_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, ("M2_EXIT", SYMBOL, price, self._shadow.get("size", 0.5), pnl,
+                      "LONG_SHADOW", reason,
+                      json.dumps({
+                          "motore": "M2",
+                          "matrimonio": self._shadow_matrimonio,
+                          "score": self._shadow.get("score", 0),
+                          "soglia": self._shadow.get("soglia", 0),
+                          "entry_price": self._shadow.get("price_entry", 0),
+                          "momentum": self._shadow_entry_momentum,
+                          "volatility": self._shadow_entry_volatility,
+                          "trend": self._shadow_entry_trend,
+                          "is_win": is_win,
+                      })))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                log.error(f"[M2_DB] Errore salvataggio trade: {e}")
 
-        self._log_m2(
-            "🟢" if is_win else "🔴",
-            f"EXIT {self._shadow_matrimonio} {'WIN' if is_win else 'LOSS'} "
-            f"PnL=${pnl:+.4f} WR={m2_wr:.0f}% score={self._shadow['score']:.1f} "
-            f"soglia={self._shadow['soglia']:.1f} [{reason}]"
-        )
+            # ── PERSISTI IL CERVELLO — Oracolo, Memoria, Calibratore ──────────
+            self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
 
-        # ── SCRIVI NEL DATABASE — sopravvive ai restart ───────────────────
-        try:
-            conn = sqlite3.connect(DB_PATH)
-            conn.execute("""
-                INSERT INTO trades (event_type, asset, price, size, pnl, direction, reason, data_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, ("M2_EXIT", SYMBOL, price, self._shadow.get("size", 0.5), pnl,
-                  "LONG_SHADOW", reason,
-                  json.dumps({
-                      "motore": "M2",
-                      "matrimonio": self._shadow_matrimonio,
-                      "score": self._shadow.get("score", 0),
-                      "soglia": self._shadow.get("soglia", 0),
-                      "entry_price": self._shadow.get("price_entry", 0),
-                      "momentum": self._shadow_entry_momentum,
-                      "volatility": self._shadow_entry_volatility,
-                      "trend": self._shadow_entry_trend,
-                      "is_win": is_win,
-                  })))
-            conn.commit()
-            conn.close()
+            # ── PERSISTI STATS M2 — sopravvivono ai restart ──────────────────
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_wins', ?)", (str(self._m2_wins),))
+                conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_losses', ?)", (str(self._m2_losses),))
+                conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_pnl', ?)", (str(self._m2_pnl),))
+                conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_trades', ?)", (str(self._m2_trades),))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                log.error(f"[M2_PERSIST] {e}")
+
+            # ── LOG NARRATIVO ─────────────────────────────────────────────────
+            self.ai_explainer.log_decision("M2_EXIT",
+                f"M2 shadow {self._shadow_matrimonio} | PnL=${pnl:+.4f} | {reason}",
+                {'pnl': pnl, 'is_win': is_win, 'reason': reason,
+                 'score': self._shadow.get('score', 0), 'soglia': self._shadow.get('soglia', 0)})
+
         except Exception as e:
-            log.error(f"[M2_DB] Errore salvataggio trade: {e}")
-
-        # ── PERSISTI IL CERVELLO — Oracolo, Memoria, Calibratore ──────────
-        self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
-
-        # ── PERSISTI STATS M2 — sopravvivono ai restart ──────────────────
-        try:
-            conn = sqlite3.connect(DB_PATH)
-            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_wins', ?)", (str(self._m2_wins),))
-            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_losses', ?)", (str(self._m2_losses),))
-            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_pnl', ?)", (str(self._m2_pnl),))
-            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_trades', ?)", (str(self._m2_trades),))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            log.error(f"[M2_PERSIST] {e}")
-
-        # ── LOG NARRATIVO ─────────────────────────────────────────────────
-        self.ai_explainer.log_decision("M2_EXIT",
-            f"M2 shadow {self._shadow_matrimonio} | PnL=${pnl:+.4f} | {reason}",
-            {'pnl': pnl, 'is_win': is_win, 'reason': reason,
-             'score': self._shadow.get('score', 0), 'soglia': self._shadow.get('soglia', 0)})
-
-        # Reset shadow
-        self._shadow                   = None
-        self._shadow_entry_time        = None
-        self._shadow_entry_momentum    = None
-        self._shadow_entry_volatility  = None
-        self._shadow_entry_trend       = None
-        self._shadow_entry_fingerprint = None
-        self._shadow_max_price         = None
-        self._shadow_matrimonio        = None
+            import traceback
+            self._log_m2("💥", f"ERRORE close_shadow: {e}")
+            log.error(f"[M2_CLOSE_ERROR] {e}\n{traceback.format_exc()}")
+        finally:
+            # Reset shadow SEMPRE — anche se c'è un errore, non lasciare trade fantasma
+            self._shadow                   = None
+            self._shadow_entry_time        = None
+            self._shadow_entry_momentum    = None
+            self._shadow_entry_volatility  = None
+            self._shadow_entry_trend       = None
+            self._shadow_entry_fingerprint = None
+            self._shadow_max_price         = None
+            self._shadow_matrimonio        = None
 
     def _m2_loss_consecutivi(self) -> int:
         """Loss consecutivi del Motore 2."""
@@ -2366,7 +2395,13 @@ class OvertopBassanoV14Production:
                 elif cmd_type == "adjust_soglia":
                     param = data.get("param", "")
                     value = data.get("value")
-                    if hasattr(self.campo, param) and value is not None:
+                    # ── GUARDRAIL: SOGLIA_BASE è calibrata su 37,112 candele ──
+                    # Il bridge NON può toccarla. Solo pesi e capsule.
+                    if param == "SOGLIA_BASE":
+                        self._log("🌉", f"BRIDGE: RIFIUTATO {param} → {value} (protetto da calibrazione storica)")
+                        cmd["executed"] = True
+                        modified = True
+                    elif hasattr(self.campo, param) and value is not None:
                         old = getattr(self.campo, param)
                         setattr(self.campo, param, value)
                         self._log("🌉", f"BRIDGE: {param} {old} → {value}")
