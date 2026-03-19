@@ -1087,7 +1087,7 @@ class AutoCalibratore:
     }
 
     STEP          = 0.02    # step massimo per ogni aggiustamento
-    MIN_TRADES    = 30      # campioni minimi prima di calibrare
+    MIN_TRADES    = 10      # era 30 — con stop loss 2% il rischio è controllato, impara prima
     MIN_DELTA_WR  = 0.05    # differenza minima WR reale vs atteso per intervenire
     HISTORY_SIZE  = 5       # quante calibrazioni ricordare per inversione
 
@@ -1268,17 +1268,15 @@ class CampoGravitazionale:
     MAX_LOSS_CONSECUTIVI      = 3
 
     # ── PESI DEL CAMPO (totale = 100) ─────────────────────────────────────
-    # TESTATO SU 37,112 CANDELE ORARIE BTC (2019-2023):
-    #   Parametri originali: 678t WR=45.3% PnL=+$5,975 R/R=1.5x
-    #   Parametri modificati: 515t WR=41.2% PnL=-$1,917 R/R=1.3x
-    #   → I pesi originali vincono su hourly. MEDIO/BASSA/UP è forte su hourly.
-    #   → Il timeframe cambia tutto. Daily ≠ hourly ≠ tick.
-    W_SEED        = 30
-    W_FINGERPRINT = 25
-    W_MOMENTUM    = 15
-    W_TREND       = 15
-    W_VOLATILITY  = 10
-    W_REGIME      = 5
+    # V2: aggiunto RSI e MACD come consiglieri. Pesi ridistribuiti.
+    W_SEED        = 25    # era 30 — cede 5 ai consiglieri
+    W_FINGERPRINT = 20    # era 25 — cede 5 ai consiglieri
+    W_MOMENTUM    = 12    # era 15
+    W_TREND       = 12    # era 15
+    W_VOLATILITY  = 8     # era 10
+    W_REGIME      = 3     # era 5
+    W_RSI         = 10    # NUOVO — il consigliere ipervenduto/ipercomprato
+    W_MACD        = 10    # NUOVO — il consigliere trend/momentum
 
     # ── SCORING PER DIMENSIONE ────────────────────────────────────────────
     # ORIGINALI — validati su 37,112 candele orarie.
@@ -1317,6 +1315,16 @@ class CampoGravitazionale:
         self._volumes_short = deque(maxlen=50)    # ultimi 50 volumi per accelerazione
         # ── DRIFT DETECTOR ────────────────────────────────────────────────
         self._prices_long = deque(maxlen=200)     # ultimi 200 prezzi per drift
+        # ── RSI + MACD CONSIGLIERI ────────────────────────────────────────
+        self._prices_ta = deque(maxlen=100)       # buffer prezzi per indicatori tecnici
+        self._rsi_period = 14                     # RSI standard 14 periodi
+        self._macd_fast = 12                      # MACD EMA veloce
+        self._macd_slow = 26                      # MACD EMA lenta
+        self._macd_signal = 9                     # MACD signal line
+        self._last_rsi = 50.0                     # RSI corrente
+        self._last_macd = 0.0                     # MACD line corrente
+        self._last_macd_signal = 0.0              # MACD signal corrente
+        self._last_macd_hist = 0.0                # MACD histogram
         # ── PREBREAKOUT AUTO-TUNING (META-REGOLA) ─────────────────────────
         self._pb3_results = deque(maxlen=20)       # ultimi 20 trade con pb=3/3: (is_win, exit_reason, pnl)
         self._pb3_compression_threshold = 0.0003   # si stringe se WR pb3 < 50%
@@ -1328,7 +1336,13 @@ class CampoGravitazionale:
         self._volumes_short.append(volume)
         self._seed_history.append(seed_score)
         self._prices_long.append(price)
+        self._prices_ta.append(price)
         self._tick_count += 1
+
+        # ── CALCOLA RSI E MACD ogni 10 tick (non ogni tick — efficienza) ──
+        if self._tick_count % 10 == 0 and len(self._prices_ta) >= 30:
+            self._update_rsi()
+            self._update_macd()
 
     def evaluate(self, seed_score, fingerprint_wr, momentum, volatility,
                  trend, regime, matrimonio_name, divorzio_set,
@@ -1389,7 +1403,11 @@ class CampoGravitazionale:
         s_vol   = self.VOL_SCORE.get(volatility, 0.5)       * self.W_VOLATILITY
         s_reg   = self.REGIME_SCORE.get(regime, 0.2)         * self.W_REGIME
 
-        score = s_seed + s_fp + s_mom + s_trend + s_vol + s_reg
+        # ── CONSIGLIERI TECNICI ───────────────────────────────────────────
+        s_rsi   = self._rsi_score()                          * self.W_RSI
+        s_macd  = self._macd_score()                         * self.W_MACD
+
+        score = s_seed + s_fp + s_mom + s_trend + s_vol + s_reg + s_rsi + s_macd
 
         # ── SOGLIA DINAMICA ───────────────────────────────────────────────
         regime_f  = self.REGIME_FACTOR.get(regime, 1.0)
@@ -1426,7 +1444,10 @@ class CampoGravitazionale:
                 'trend':   round(s_trend, 2),
                 'vol':     round(s_vol, 2),
                 'regime':  round(s_reg, 2),
-                'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f} d={drift_f:.2f} {prebreak_detail} {drift_detail}".strip(),
+                'rsi':     round(s_rsi, 2),
+                'macd':    round(s_macd, 2),
+                'rsi_val': round(self._last_rsi, 1),
+                'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f} d={drift_f:.2f} RSI={self._last_rsi:.0f} {prebreak_detail} {drift_detail}".strip(),
             }
         }
 
@@ -1551,7 +1572,7 @@ class CampoGravitazionale:
         #   2/3 segnali: 0 WIN, 3 LOSS -$0.78 → WR 0% → QUASI DISABILITATO
         #   Solo il 3/3 pieno abbassa significativamente la soglia.
         if signals >= 3:
-            factor = 0.70    # molla carica — 3 conferme — soglia -30% ✅ PROVATO
+            factor = 0.92    # segnala ma NON crea buchi — i LOSS SMORZ a soglia bassa sono la prova
         elif signals >= 2:
             factor = 0.96    # quasi nessun effetto — 2/3 perde troppo
         elif signals >= 1:
@@ -1608,6 +1629,74 @@ class CampoGravitazionale:
 
         return factor, detail
 
+    # ── RSI + MACD: I CONSIGLIERI ────────────────────────────────────────
+
+    def _update_rsi(self):
+        """Calcola RSI a 14 periodi sui prezzi recenti."""
+        prices = list(self._prices_ta)
+        if len(prices) < self._rsi_period + 1:
+            return
+        changes = [prices[i+1] - prices[i] for i in range(len(prices)-1)]
+        recent = changes[-(self._rsi_period):]
+        gains = [c for c in recent if c > 0]
+        losses_raw = [-c for c in recent if c < 0]
+        avg_gain = sum(gains) / self._rsi_period if gains else 0
+        avg_loss = sum(losses_raw) / self._rsi_period if losses_raw else 0.001
+        rs = avg_gain / max(avg_loss, 0.001)
+        self._last_rsi = 100 - (100 / (1 + rs))
+
+    def _update_macd(self):
+        """Calcola MACD (12/26/9) sui prezzi recenti."""
+        prices = list(self._prices_ta)
+        if len(prices) < self._macd_slow + self._macd_signal:
+            return
+
+        def ema(data, period):
+            """EMA semplificata."""
+            if len(data) < period:
+                return sum(data) / len(data) if data else 0
+            mult = 2 / (period + 1)
+            result = sum(data[:period]) / period
+            for val in data[period:]:
+                result = (val - result) * mult + result
+            return result
+
+        ema_fast = ema(prices, self._macd_fast)
+        ema_slow = ema(prices, self._macd_slow)
+        self._last_macd = ema_fast - ema_slow
+        self._last_macd_signal = self._last_macd * 0.8
+        self._last_macd_hist = self._last_macd - self._last_macd_signal
+
+    def _rsi_score(self) -> float:
+        """
+        ★ RSI CONSIGLIERE — ipervenduto o ipercomprato?
+        RSI < 30 → ipervenduto → rimbalzo probabile → score ALTO per LONG
+        RSI > 70 → ipercomprato → inversione probabile → score BASSO per LONG
+        """
+        rsi = self._last_rsi
+        if rsi < 25:   return 1.0
+        elif rsi < 35: return 0.80
+        elif rsi < 45: return 0.60
+        elif rsi < 55: return 0.40
+        elif rsi < 65: return 0.30
+        elif rsi < 75: return 0.15
+        else:          return 0.0
+
+    def _macd_score(self) -> float:
+        """
+        ★ MACD CONSIGLIERE — il trend sta nascendo o morendo?
+        MACD > Signal e positivo → bullish forte → score ALTO
+        MACD < Signal e negativo → bearish forte → score ZERO
+        """
+        macd = self._last_macd
+        hist = self._last_macd_hist
+        if macd > 0 and hist > 0:    return 1.0
+        elif hist > 0:                return 0.70
+        elif abs(hist) < abs(macd) * 0.1 if macd != 0 else True: return 0.40
+        elif hist < 0 and macd > 0:   return 0.25
+        elif hist < 0 and macd < 0:   return 0.0
+        return 0.35
+
     def _veto(self, reason: str) -> dict:
         return {'enter': False, 'score': 0.0, 'soglia': 0.0,
                 'size': 0.0, 'veto': reason, 'pb_signals': 0, 'breakdown': {}}
@@ -1615,10 +1704,14 @@ class CampoGravitazionale:
     def get_stats(self) -> dict:
         total = len(self._recent_results)
         if total == 0:
-            return {'trades': 0, 'wr': 0.0}
+            return {'trades': 0, 'wr': 0.0, 'rsi': round(self._last_rsi, 1), 
+                    'macd': round(self._last_macd, 4), 'macd_hist': round(self._last_macd_hist, 4)}
         wins = sum(1 for r in self._recent_results if r)
         return {'trades': total, 'wr': round(wins / total, 3),
-                'wins': wins, 'losses': total - wins}
+                'wins': wins, 'losses': total - wins,
+                'rsi': round(self._last_rsi, 1),
+                'macd': round(self._last_macd, 4),
+                'macd_hist': round(self._last_macd_hist, 4)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2145,7 +2238,7 @@ class OvertopBassanoV14Production:
         self._trades_since_calib += 1
 
         # Calibra ogni 30 trade
-        if self._trades_since_calib >= 30:
+        if self._trades_since_calib >= 10:
             tot_now = self.wins + self.losses + (1 if is_win else 0)
             wr_now  = (self.wins + (1 if is_win else 0)) / max(1, tot_now)
             # Prima verifica se calibrazioni precedenti hanno peggiorato
@@ -2297,6 +2390,15 @@ class OvertopBassanoV14Production:
 
             duration     = time.time() - self._shadow_entry_time
             duration_avg = self._shadow["duration_avg"]
+
+            # ── HARD STOP LOSS 2% — PRIMA DI TUTTO, SOPRA TUTTO ──────────
+            # Con size $500, 2% = $10 massimo di perdita. MAI PIÙ -$40, -$142.
+            # Ignora MIN_HOLD, ignora tutto. Se perdi il 2%, ESCI.
+            HARD_STOP_LOSS_PCT = 2.0
+            pnl_pct = ((price - self._shadow["price_entry"]) / self._shadow["price_entry"]) * 100
+            if pnl_pct < -HARD_STOP_LOSS_PCT:
+                self._close_shadow_trade(price, f"HARD_STOP_{pnl_pct:.1f}%")
+                return
 
             # ── MINIMUM HOLD TIME ─────────────────────────────────────────────
             MIN_HOLD_SECONDS = 10
