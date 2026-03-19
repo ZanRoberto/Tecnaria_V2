@@ -2738,8 +2738,8 @@ class OvertopBassanoV14Production:
 
     def _get_phantom_summary(self) -> dict:
         """Riepilogo fantasmi per la dashboard."""
-        closed = list(self._phantoms_closed)
-        if not closed:
+        stats = self._phantom_stats
+        if not stats:
             return {
                 'total': 0, 'protezione': 0, 'zavorra': 0,
                 'pnl_saved': 0, 'pnl_missed': 0,
@@ -2748,10 +2748,12 @@ class OvertopBassanoV14Production:
                 'log': list(self._phantom_log),
             }
 
-        protezione = sum(1 for p in closed if not p['is_win'])
-        zavorra = sum(1 for p in closed if p['is_win'])
-        pnl_saved = sum(abs(p['pnl']) for p in closed if not p['is_win'])
-        pnl_missed = sum(p['pnl'] for p in closed if p['is_win'])
+        # Calcola totali dai dati per livello (COMPLETI, non troncati)
+        total_blocked = sum(s['blocked'] for s in stats.values())
+        protezione = sum(s['would_lose'] for s in stats.values())
+        zavorra = sum(s['would_win'] for s in stats.values())
+        pnl_saved = sum(s['pnl_saved'] for s in stats.values())
+        pnl_missed = sum(s['pnl_missed'] for s in stats.values())
 
         if pnl_saved > pnl_missed:
             verdetto = f"PROTEZIONE (+${pnl_saved - pnl_missed:.0f} risparmiati)"
@@ -2761,14 +2763,14 @@ class OvertopBassanoV14Production:
             verdetto = "NEUTRO"
 
         return {
-            'total':       len(closed),
+            'total':       total_blocked,
             'protezione':  protezione,
             'zavorra':     zavorra,
             'pnl_saved':   round(pnl_saved, 2),
             'pnl_missed':  round(pnl_missed, 2),
             'bilancio':    round(pnl_saved - pnl_missed, 2),
             'verdetto':    verdetto,
-            'per_livello': dict(self._phantom_stats),
+            'per_livello': dict(stats),
             'log':         list(self._phantom_log),
             'open':        len(self._phantoms_open),
         }
