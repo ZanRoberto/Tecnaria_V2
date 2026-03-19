@@ -673,18 +673,34 @@ Analizza e rispondi con comandi JSON."""
         Scrive in un file bridge_commands.json che il bot legge.
         """
         param     = payload.get("param", "")
-        new_value = payload.get("new_value", None)
+        new_value = payload.get("value", payload.get("new_value", None))
 
         valid_params = {"W_SEED", "W_FINGERPRINT", "W_MOMENTUM",
-                        "W_TREND", "W_VOLATILITY", "W_REGIME"}
+                        "W_TREND", "W_VOLATILITY", "W_REGIME",
+                        "W_RSI", "W_MACD",
+                        "SOGLIA_MAX", "SOGLIA_MIN", "DRIFT_VETO_THRESHOLD"}
 
         if param not in valid_params:
             self._log("❌", f"Parametro peso non valido: {param}")
             return
 
-        if new_value is None or not (5 <= new_value <= 40):
-            self._log("❌", f"Valore peso fuori range: {new_value} (deve essere 5-40)")
-            return
+        # Range diversi per tipo di parametro
+        if param.startswith("W_"):
+            if new_value is None or not (1 <= new_value <= 40):
+                self._log("❌", f"Valore peso fuori range: {new_value} (deve essere 1-40)")
+                return
+        elif param == "SOGLIA_MAX":
+            if new_value is None or not (65 <= new_value <= 95):
+                self._log("❌", f"SOGLIA_MAX fuori range: {new_value} (deve essere 65-95)")
+                return
+        elif param == "SOGLIA_MIN":
+            if new_value is None or not (45 <= new_value <= 65):
+                self._log("❌", f"SOGLIA_MIN fuori range: {new_value} (deve essere 45-65)")
+                return
+        elif param == "DRIFT_VETO_THRESHOLD":
+            if new_value is None or not (-0.30 <= new_value <= -0.03):
+                self._log("❌", f"DRIFT_VETO fuori range: {new_value} (deve essere -0.30 a -0.03)")
+                return
 
         self._write_bridge_command("modify_weight", {"param": param, "value": new_value})
         self._log("⚖️", f"Peso M2 {param} → {new_value}")
@@ -692,7 +708,7 @@ Analizza e rispondi con comandi JSON."""
     def _cmd_adjust_soglia(self, payload: dict):
         """Modifica la soglia del CampoGravitazionale."""
         param     = payload.get("param", "")
-        new_value = payload.get("new_value", None)
+        new_value = payload.get("value", payload.get("new_value", None))
 
         valid_params = {"SOGLIA_BASE": (45, 75), "SOGLIA_MIN": (25, 50), "SOGLIA_MAX": (70, 95)}
 
