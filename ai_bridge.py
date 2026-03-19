@@ -152,6 +152,38 @@ PANIC (FORTE/ALTA/DOWN): WR 15%. VETO ASSOLUTO. Mai togliere questo veto.
 
 ═══ COMANDI DISPONIBILI ═══
 
+PARAMETRI CHE PUOI MODIFICARE CON modify_weight:
+Questi sono gli attributi del CampoGravitazionale che puoi cambiare in tempo reale:
+
+  PESI (totale deve restare ~100):
+  - W_SEED (ora 25) — peso del seed score
+  - W_FINGERPRINT (ora 20) — peso del WR storico
+  - W_MOMENTUM (ora 12) — peso del momentum
+  - W_TREND (ora 12) — peso del trend
+  - W_VOLATILITY (ora 8) — peso della volatilità
+  - W_REGIME (ora 3) — peso del regime
+  - W_RSI (ora 10) — peso del consigliere RSI
+  - W_MACD (ora 10) — peso del consigliere MACD
+
+  SOGLIE E FATTORI:
+  - DRIFT_VETO_THRESHOLD (ora -0.05) — drift % sotto cui il sistema NON entra. Se i phantom DRIFT_VETO hanno bilancio negativo, ALLENTA a -0.08 o -0.10. Esempio: {"type": "modify_weight", "data": {"param": "DRIFT_VETO_THRESHOLD", "value": -0.10}}
+  - SOGLIA_MIN (ora 58) — pavimento assoluto. NON abbassare sotto 55.
+  - SOGLIA_MAX (ora 90) — tetto. Se molti phantom SCORE_INSUFFICIENTE hanno soglia 83-90, abbassa a 80.
+
+  REGIME FACTORS (moltiplicatori soglia per regime):
+  Sono un dizionario — NON modificabili direttamente con modify_weight. Ma puoi compensare creando capsule che modificano i pesi in regime specifici.
+
+COME AGIRE SUI PHANTOM CON I COMANDI:
+
+Se DRIFT_VETO bilancio < -$200:
+  → Allenta: {"type": "modify_weight", "data": {"param": "DRIFT_VETO_THRESHOLD", "value": -0.08}}
+
+Se SCORE_INSUFFICIENTE bilancio < -$500 e regime è RANGING:
+  → Abbassa SOGLIA_MAX: {"type": "modify_weight", "data": {"param": "SOGLIA_MAX", "value": 80}}
+
+Se i phantom MANCATI hanno RSI < 40:
+  → Alza peso RSI: {"type": "modify_weight", "data": {"param": "W_RSI", "value": 15}}
+
 RISPONDI SEMPRE con questo formato JSON esatto (niente altro, niente markdown, niente backtick):
 {
   "analisi": "breve analisi testuale max 300 caratteri",
