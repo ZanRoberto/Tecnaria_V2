@@ -1290,21 +1290,19 @@ class CampoGravitazionale:
     # ── SOGLIA DINAMICA ───────────────────────────────────────────────────
     SOGLIA_BASE = 60
     REGIME_FACTOR = {"TRENDING_BULL": 0.80, "EXPLOSIVE": 0.85,
-                     "RANGING": 1.20, "TRENDING_BEAR": 1.20}
-    # RANGING: era 1.30, ora 1.20 — VALIDATO su 37,112 candele orarie:
-    #   1.30: 635t  WR=44.1% PnL=+$3,100  R/R=1.40x
-    #   1.20: 1788t WR=46.1% PnL=+$22,726 R/R=1.48x
-    #   Più trade, WR migliore, R/R migliore, PnL 7x. Un solo parametro.
+                     "RANGING": 1.10, "TRENDING_BEAR": 1.20}
+    # RANGING: era 1.20, ora 1.10 — i phantom dicono -$3871 in SCORE_INSUFFICIENTE
+    # Soglia RANGING: 60 × 1.10 × 1.15 = 75.9 (raggiungibile) vs 82.8 (impossibile)
     VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.15}
     SOGLIA_MIN    = 58    # PAVIMENTO ASSOLUTO — nessun fattore scende sotto questo
-    SOGLIA_MAX    = 90
+    SOGLIA_MAX    = 80    # era 90 — phantom SCORE_INSUFFICIENTE dice -$3871, troppo alto in RANGING
 
     # ── SIZE CONTINUA ─────────────────────────────────────────────────────
     SIZE_MIN = 0.5
     SIZE_MAX = 2.0
 
     # ── DRIFT VETO ─────────────────────────────────────────────────────
-    DRIFT_VETO_THRESHOLD = -0.05   # % — il bridge può allentarlo se i phantom dicono ZAVORRA
+    DRIFT_VETO_THRESHOLD = -0.10   # era -0.05 — phantom dicono ZAVORRA, allentato
 
     # ── WARMUP ─────────────────────────────────────────────────────────
     WARMUP_TICKS = 200   # tick minimi prima di operare — buffer devono riempirsi
@@ -1319,7 +1317,9 @@ class CampoGravitazionale:
         # ── DRIFT DETECTOR ────────────────────────────────────────────────
         self._prices_long = deque(maxlen=200)     # ultimi 200 prezzi per drift
         # ── RSI + MACD CONSIGLIERI ────────────────────────────────────────
-        self._prices_ta = deque(maxlen=100)       # buffer prezzi per indicatori tecnici
+        self._prices_ta = deque(maxlen=200)       # buffer prezzi CAMPIONATI per indicatori tecnici
+        self._ta_tick_counter = 0                  # conta tick per campionamento
+        self._ta_sample_rate = 50                  # campiona ogni 50 tick (non ogni tick!)
         self._rsi_period = 14                     # RSI standard 14 periodi
         self._macd_fast = 12                      # MACD EMA veloce
         self._macd_slow = 26                      # MACD EMA lenta
@@ -1339,13 +1339,18 @@ class CampoGravitazionale:
         self._volumes_short.append(volume)
         self._seed_history.append(seed_score)
         self._prices_long.append(price)
-        self._prices_ta.append(price)
         self._tick_count += 1
 
-        # ── CALCOLA RSI E MACD ogni 10 tick (non ogni tick — efficienza) ──
-        if self._tick_count % 10 == 0 and len(self._prices_ta) >= 30:
-            self._update_rsi()
-            self._update_macd()
+        # ── CAMPIONA per RSI/MACD ogni 50 tick ────────────────────────
+        # I tick sono troppo veloci — RSI su tick-by-tick va a 100/0.
+        # Campionando ogni 50 tick creiamo "candele" virtuali stabili.
+        self._ta_tick_counter += 1
+        if self._ta_tick_counter >= self._ta_sample_rate:
+            self._ta_tick_counter = 0
+            self._prices_ta.append(price)
+            if len(self._prices_ta) >= 30:
+                self._update_rsi()
+                self._update_macd()
 
     def evaluate(self, seed_score, fingerprint_wr, momentum, volatility,
                  trend, regime, matrimonio_name, divorzio_set,
