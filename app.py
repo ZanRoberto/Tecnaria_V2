@@ -448,6 +448,25 @@ DASHBOARD_HTML = """
         </div>
     </div>
     <!-- AI BRIDGE -->
+    <!-- PHANTOM TRACKER — zavorra o protezione? -->
+    <div style="background:#0a0e1a; border:2px solid #d4ac0d; padding:12px; margin-bottom:20px; border-radius:3px;">
+        <div style="font-weight:bold; margin-bottom:8px; color:#d4ac0d;">👻 PHANTOM TRACKER — Se avessi fatto...</div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px,1fr)); gap:8px; font-size:12px;">
+            <span>Bloccati: <b id="ph-total" style="color:#d4ac0d">0</b></span>
+            <span>🛡️ Protezione: <b id="ph-protezione" style="color:#00ff00">0</b></span>
+            <span>⚠️ Zavorra: <b id="ph-zavorra" style="color:#ff4444">0</b></span>
+            <span>Risparmiati: <b id="ph-saved" style="color:#00ff00">$0</b></span>
+            <span>Mancati: <b id="ph-missed" style="color:#ff4444">$0</b></span>
+            <span>Bilancio: <b id="ph-bilancio" style="color:#d4ac0d">$0</b></span>
+        </div>
+        <div id="ph-verdetto" style="font-size:14px; font-weight:bold; text-align:center; padding:8px; margin-top:8px; border:1px solid #333; border-radius:3px;">
+            In attesa dati...
+        </div>
+        <div id="ph-livelli" style="font-size:11px; font-family:monospace; margin-top:8px; color:#aaa;">
+        </div>
+        <div id="ph-log" style="font-size:11px; font-family:monospace; margin-top:8px; max-height:100px; overflow-y:auto; color:#d4ac0d;">
+        </div>
+    </div>
     <div class="bridge-section">
         <div style="font-weight:bold; margin-bottom:8px; color:#a855f7;">🌉 AI BRIDGE — Claude Analista</div>
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px,1fr)); gap:8px; font-size:12px;">
@@ -542,6 +561,56 @@ function updateDashboard() {
         if (bl.length > 0) {
             document.getElementById('bridge-log').innerHTML = [...bl].reverse().map(line => {
                 let col = line.includes('❌') ? '#ff4444' : line.includes('📡') ? '#a855f7' : '#aa88dd';
+                return '<div style="color:'+col+';padding:1px 0">'+line+'</div>';
+            }).join('');
+        }
+
+        // Phantom tracker
+        const ph = hb.phantom || {};
+        document.getElementById('ph-total').textContent = ph.total || 0;
+        document.getElementById('ph-protezione').textContent = ph.protezione || 0;
+        document.getElementById('ph-zavorra').textContent = ph.zavorra || 0;
+        document.getElementById('ph-saved').textContent = '$' + (ph.pnl_saved || 0).toFixed(1);
+        document.getElementById('ph-missed').textContent = '$' + (ph.pnl_missed || 0).toFixed(1);
+        const bilancio = ph.bilancio || 0;
+        const bilEl = document.getElementById('ph-bilancio');
+        bilEl.textContent = (bilancio >= 0 ? '+' : '') + '$' + bilancio.toFixed(1);
+        bilEl.style.color = bilancio >= 0 ? '#00ff00' : '#ff4444';
+        // Verdetto
+        const vEl = document.getElementById('ph-verdetto');
+        const verdetto = ph.verdetto || 'In attesa dati...';
+        if (verdetto.includes('PROTEZIONE')) {
+            vEl.style.color = '#00ff00'; vEl.style.borderColor = '#00ff00';
+            vEl.textContent = '🛡️ ' + verdetto;
+        } else if (verdetto.includes('ZAVORRA')) {
+            vEl.style.color = '#ff4444'; vEl.style.borderColor = '#ff4444';
+            vEl.textContent = '⚠️ ' + verdetto;
+        } else {
+            vEl.style.color = '#d4ac0d'; vEl.style.borderColor = '#333';
+            vEl.textContent = verdetto;
+        }
+        // Dettaglio per livello
+        const perLiv = ph.per_livello || {};
+        const livKeys = Object.keys(perLiv);
+        if (livKeys.length > 0) {
+            document.getElementById('ph-livelli').innerHTML = livKeys.map(k => {
+                const s = perLiv[k];
+                const prot = s.would_lose || 0;
+                const zav = s.would_win || 0;
+                const saved = (s.pnl_saved || 0).toFixed(1);
+                const missed = (s.pnl_missed || 0).toFixed(1);
+                return '<div style="border-bottom:1px solid #222;padding:2px 0">' +
+                    '<b style="color:#d4ac0d">' + k + '</b>: ' +
+                    'bloccati=' + (s.blocked||0) + ' | ' +
+                    '<span style="color:#00ff00">🛡️ ' + prot + ' protetti ($' + saved + ' risparmiati)</span> | ' +
+                    '<span style="color:#ff4444">⚠️ ' + zav + ' mancati ($' + missed + ')</span></div>';
+            }).join('');
+        }
+        // Phantom log
+        const phl = ph.log || [];
+        if (phl.length > 0) {
+            document.getElementById('ph-log').innerHTML = [...phl].reverse().map(line => {
+                let col = line.includes('🛡️') ? '#00ff00' : line.includes('⚠️') ? '#ff4444' : '#d4ac0d';
                 return '<div style="color:'+col+';padding:1px 0">'+line+'</div>';
             }).join('');
         }
