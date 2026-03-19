@@ -508,6 +508,14 @@ class AIBridge:
 
         # Phantom tracker — la mappa dei depositi e delle tane vuote
         phantom = snapshot.get("phantom", {})
+        phantom_per_livello = json.dumps(phantom.get('per_livello', {}))
+        phantom_total = phantom.get('total', 0)
+        phantom_protezione = phantom.get('protezione', 0)
+        phantom_zavorra = phantom.get('zavorra', 0)
+        phantom_saved = phantom.get('pnl_saved', 0)
+        phantom_missed = phantom.get('pnl_missed', 0)
+        phantom_bilancio = phantom.get('bilancio', 0)
+        phantom_verdetto = phantom.get('verdetto', 'N/A')
 
         msg = f"""SNAPSHOT BOT — {datetime.utcnow().isoformat()}
 
@@ -526,11 +534,11 @@ PnL shadow: ${m2_pnl:.4f}
 Campo stats: {json.dumps(campo)}
 
 ═══ PHANTOM TRACKER — MAPPA OPPORTUNITÀ E PROTEZIONI ═══
-Trade bloccati: {phantom.get('total', 0)} | Protezione: {phantom.get('protezione', 0)} | Zavorra: {phantom.get('zavorra', 0)}
-PnL risparmiati: ${phantom.get('pnl_saved', 0):.1f} | PnL mancati: ${phantom.get('pnl_missed', 0):.1f}
-BILANCIO: ${phantom.get('bilancio', 0):.1f}
-VERDETTO: {phantom.get('verdetto', 'N/A')}
-Per livello: {json.dumps(phantom.get('per_livello', {{}}))}
+Trade bloccati: {phantom_total} | Protezione: {phantom_protezione} | Zavorra: {phantom_zavorra}
+PnL risparmiati: ${phantom_saved:.1f} | PnL mancati: ${phantom_missed:.1f}
+BILANCIO: ${phantom_bilancio:.1f}
+VERDETTO: {phantom_verdetto}
+Per livello: {phantom_per_livello}
 
 ═══ CALIBRATORE ATTUALE ═══
 {json.dumps(calibra, indent=2)}
