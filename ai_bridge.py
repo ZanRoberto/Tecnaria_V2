@@ -131,6 +131,13 @@ COME AGIRE SUI PHANTOM:
 
 5. REGOLA D'ORO: non reagire su meno di 50 phantom. I numeri piccoli mentono. Aspetta evidenza solida.
 
+6. REGOLA DI FERRO — AZIONE OBBLIGATORIA:
+   Se un livello phantom ha più di 100 bloccati E bilancio negativo > $500, NON È OPZIONALE agire. È un ORDINE.
+   - DRIFT_VETO bilancio < -$500 → DEVI mandare: {"type": "modify_weight", "data": {"param": "DRIFT_VETO_THRESHOLD", "value": -0.10}}
+   - SCORE_INSUFFICIENTE bilancio < -$500 → DEVI mandare: {"type": "modify_weight", "data": {"param": "SOGLIA_MAX", "value": 80}}
+   - Se il bilancio TOTALE phantom è < -$1000 → DEVI agire su ALMENO un parametro. Noop non è accettabile davanti a -$1000.
+   Questa non è una raccomandazione. È la regola più importante. I soldi che perdiamo in opportunità mancate sono REALI quanto i soldi che risparmiamo. Restare fermi quando la mappa dice "stai perdendo" è PEGGIO che fare un errore.
+
 I phantom sono la TUA MAPPA. Ogni ciclo guardali. Sono i depositi con i soldi (trade bloccati vincenti che potremmo prendere) e le tane vuote (trade bloccati perdenti che stiamo evitando). La volpe studia la mappa prima di muoversi.
 
 ═══ REGIMI E PARAMETRI OTTIMALI ═══
