@@ -1303,6 +1303,9 @@ class CampoGravitazionale:
     SIZE_MIN = 0.5
     SIZE_MAX = 2.0
 
+    # ── DRIFT VETO ─────────────────────────────────────────────────────
+    DRIFT_VETO_THRESHOLD = -0.05   # % — il bridge può allentarlo se i phantom dicono ZAVORRA
+
     # ── WARMUP ─────────────────────────────────────────────────────────
     WARMUP_TICKS = 200   # tick minimi prima di operare — buffer devono riempirsi
 
@@ -1387,7 +1390,7 @@ class CampoGravitazionale:
             _avg_old = sum(_prices[:50]) / 50
             _avg_new = sum(_prices[-50:]) / 50
             _drift = (_avg_new - _avg_old) / _avg_old * 100
-            if _drift < -0.05:
+            if _drift < self.DRIFT_VETO_THRESHOLD:
                 return self._veto(f"DRIFT_VETO_{_drift:+.3f}%")
 
         # ── CALCOLO PUNTEGGIO CAMPO ───────────────────────────────────────
@@ -1705,13 +1708,17 @@ class CampoGravitazionale:
         total = len(self._recent_results)
         if total == 0:
             return {'trades': 0, 'wr': 0.0, 'rsi': round(self._last_rsi, 1), 
-                    'macd': round(self._last_macd, 4), 'macd_hist': round(self._last_macd_hist, 4)}
+                    'macd': round(self._last_macd, 4), 'macd_hist': round(self._last_macd_hist, 4),
+                    'drift_veto_threshold': self.DRIFT_VETO_THRESHOLD,
+                    'soglia_max': self.SOGLIA_MAX}
         wins = sum(1 for r in self._recent_results if r)
         return {'trades': total, 'wr': round(wins / total, 3),
                 'wins': wins, 'losses': total - wins,
                 'rsi': round(self._last_rsi, 1),
                 'macd': round(self._last_macd, 4),
-                'macd_hist': round(self._last_macd_hist, 4)}
+                'macd_hist': round(self._last_macd_hist, 4),
+                'drift_veto_threshold': self.DRIFT_VETO_THRESHOLD,
+                'soglia_max': self.SOGLIA_MAX}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
