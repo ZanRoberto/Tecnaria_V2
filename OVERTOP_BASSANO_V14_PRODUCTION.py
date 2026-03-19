@@ -1839,6 +1839,17 @@ class OvertopBassanoV14Production:
         self._bridge_cmd_file = "bridge_commands.json"
         self._last_bridge_check = time.time()
 
+        # ── PHANTOM TRACKER — "se avessi fatto" ─────────────────────────
+        # Traccia i trade bloccati dai 5 livelli di protezione.
+        # Per ogni trade bloccato, segue il prezzo e calcola cosa sarebbe successo.
+        # Zavorra o protezione? I numeri rispondono.
+        self._phantoms_open = []       # trade fantasma aperti (max 5 simultanei)
+        self._phantoms_closed = deque(maxlen=100)  # ultimi 100 fantasmi chiusi
+        self._phantom_stats = {        # statistiche per livello di blocco
+            # 'BLOCK_REASON': {'blocked': N, 'would_win': N, 'would_lose': N, 'pnl_saved': $, 'pnl_missed': $}
+        }
+        self._phantom_log = deque(maxlen=20)  # log dedicato fantasmi
+
         # ── Banner ────────────────────────────────────────────────────────
         mode_label = "📄 PAPER TRADE" if self.paper_trade else "🔴 LIVE TRADING"
         log.info("=" * 80)
@@ -1971,6 +1982,10 @@ class OvertopBassanoV14Production:
             self._evaluate_shadow_exit(price, momentum, volatility, trend)
         else:
             self._evaluate_shadow_entry(price, momentum, volatility, trend)
+
+        # ── PHANTOM TRACKER: aggiorna trade fantasma ogni tick ────────────
+        if self._phantoms_open:
+            self._update_phantoms(price, momentum)
 
         # ── HEARTBEAT M2 — ogni 60s conferma che M2 è vivo ───────────────
         if now - self._last_m2_heartbeat > 60:
@@ -2323,10 +2338,18 @@ class OvertopBassanoV14Production:
             )
 
             if result['veto']:
-                return   # veto silenzioso — non intasare i log
+                # ── PHANTOM: registra il trade bloccato (solo veti significativi) ──
+                veto = result['veto']
+                if not veto.startswith("WARMUP") and len(self._phantoms_open) < 5:
+                    self._record_phantom(price, veto, seed['score'], momentum, volatility, trend)
+                return
 
             if not result['enter']:
-                return   # score < soglia → NON ENTRARE
+                # ── PHANTOM: score vicino alla soglia ma non abbastanza ──
+                if result['score'] > 50 and len(self._phantoms_open) < 5:
+                    self._record_phantom(price, f"SCORE_SOTTO_{result['score']:.0f}_vs_{result['soglia']:.0f}",
+                                        seed['score'], momentum, volatility, trend)
+                return
 
             # ── HARD GUARD: doppio check anti-bug ──────────────────────────
             if result['score'] < result['soglia']:
@@ -2584,6 +2607,172 @@ class OvertopBassanoV14Production:
                 break
         return count
 
+    # ════════════════════════════════════════════════════════════════════════
+    # PHANTOM TRACKER — "SE AVESSI FATTO"
+    # Traccia i trade bloccati e calcola cosa sarebbe successo.
+    # Zavorra o protezione? I numeri rispondono.
+    # ════════════════════════════════════════════════════════════════════════
+
+    def _record_phantom(self, price, block_reason, seed_score, momentum, volatility, trend):
+        """Registra un trade fantasma — bloccato da un livello di protezione."""
+        phantom = {
+            'price_entry':  price,
+            'block_reason': block_reason,
+            'seed_score':   seed_score,
+            'momentum':     momentum,
+            'volatility':   volatility,
+            'trend':        trend,
+            'entry_time':   time.time(),
+            'max_price':    price,
+            'regime':       self._regime_current,
+        }
+        self._phantoms_open.append(phantom)
+
+        # Classifica il blocco per statistiche
+        reason_key = block_reason.split("_")[0] if "_" in block_reason else block_reason
+        if "DRIFT" in block_reason:    reason_key = "DRIFT_VETO"
+        elif "TOSSICO" in block_reason: reason_key = "VETO_TOSSICO"
+        elif "LOSS_CONSEC" in block_reason: reason_key = "LOSS_CONSECUTIVI"
+        elif "SCORE_SOTTO" in block_reason: reason_key = "SCORE_INSUFFICIENTE"
+        elif "FANTASMA" in block_reason: reason_key = "FANTASMA"
+        else: reason_key = block_reason
+
+        if reason_key not in self._phantom_stats:
+            self._phantom_stats[reason_key] = {
+                'blocked': 0, 'would_win': 0, 'would_lose': 0,
+                'pnl_saved': 0.0, 'pnl_missed': 0.0
+            }
+        self._phantom_stats[reason_key]['blocked'] += 1
+
+    def _update_phantoms(self, price, momentum):
+        """Aggiorna tutti i fantasmi aperti — chiamato ad ogni tick."""
+        to_close = []
+        for i, ph in enumerate(self._phantoms_open):
+            if price > ph['max_price']:
+                ph['max_price'] = price
+
+            duration = time.time() - ph['entry_time']
+            pnl = price - ph['price_entry']
+            pnl_pct = (pnl / ph['price_entry']) * 100
+
+            # ── Stesse regole di uscita del bot reale ──
+            # Stop loss 2%
+            if pnl_pct < -2.0:
+                to_close.append((i, price, "HARD_STOP"))
+                continue
+            # DECEL (semplificato: dopo 15s se prezzo sotto entry)
+            if duration > 15 and pnl < 0:
+                to_close.append((i, price, "DECEL_SIM"))
+                continue
+            # SMORZ (dopo 10s se momentum debole)
+            if duration > 10 and momentum == "DEBOLE":
+                to_close.append((i, price, "SMORZ_SIM"))
+                continue
+            # WIN takeout (dopo 20s se in profitto, simula DECEL)
+            if duration > 20 and pnl > 0:
+                to_close.append((i, price, "DECEL_WIN_SIM"))
+                continue
+            # Timeout 60s
+            if duration > 60:
+                to_close.append((i, price, "TIMEOUT_SIM"))
+                continue
+
+        # Chiudi dal fondo per non rompere gli indici
+        for i, close_price, reason in reversed(to_close):
+            self._close_phantom(i, close_price, reason)
+
+    def _close_phantom(self, idx, price, reason):
+        """Chiude un fantasma e registra il risultato."""
+        try:
+            ph = self._phantoms_open.pop(idx)
+            pnl = price - ph['price_entry']
+            is_win = pnl > 0
+
+            # Aggiorna statistiche per livello di blocco
+            block = ph['block_reason']
+            reason_key = block.split("_")[0] if "_" in block else block
+            if "DRIFT" in block:    reason_key = "DRIFT_VETO"
+            elif "TOSSICO" in block: reason_key = "VETO_TOSSICO"
+            elif "LOSS_CONSEC" in block: reason_key = "LOSS_CONSECUTIVI"
+            elif "SCORE_SOTTO" in block: reason_key = "SCORE_INSUFFICIENTE"
+            elif "FANTASMA" in block: reason_key = "FANTASMA"
+            else: reason_key = block
+
+            if reason_key not in self._phantom_stats:
+                self._phantom_stats[reason_key] = {
+                    'blocked': 0, 'would_win': 0, 'would_lose': 0,
+                    'pnl_saved': 0.0, 'pnl_missed': 0.0
+                }
+
+            stats = self._phantom_stats[reason_key]
+            if is_win:
+                stats['would_win'] += 1
+                stats['pnl_missed'] += pnl   # soldi che NON abbiamo guadagnato
+            else:
+                stats['would_lose'] += 1
+                stats['pnl_saved'] += abs(pnl)   # soldi che NON abbiamo perso
+
+            result = {
+                'block_reason': block,
+                'price_entry':  ph['price_entry'],
+                'price_exit':   price,
+                'pnl':          round(pnl, 2),
+                'is_win':       is_win,
+                'exit_reason':  reason,
+                'regime':       ph['regime'],
+                'verdict':      "PROTEZIONE" if not is_win else "ZAVORRA",
+            }
+            self._phantoms_closed.append(result)
+
+            # Log solo se il fantasma è significativo
+            emoji = "🛡️" if not is_win else "⚠️"
+            label = "PROTETTO" if not is_win else "MANCATO"
+            ts = datetime.utcnow().strftime('%H:%M:%S')
+            log_entry = (f"{ts} {emoji} [PHANTOM] {label} ${pnl:+.2f} | "
+                        f"bloccato da: {block} | {reason}")
+            self._phantom_log.append(log_entry)
+            log.info(log_entry)
+
+        except Exception as e:
+            log.error(f"[PHANTOM] Errore close: {e}")
+
+    def _get_phantom_summary(self) -> dict:
+        """Riepilogo fantasmi per la dashboard."""
+        closed = list(self._phantoms_closed)
+        if not closed:
+            return {
+                'total': 0, 'protezione': 0, 'zavorra': 0,
+                'pnl_saved': 0, 'pnl_missed': 0,
+                'verdetto': 'DATI INSUFFICIENTI',
+                'per_livello': {},
+                'log': list(self._phantom_log),
+            }
+
+        protezione = sum(1 for p in closed if not p['is_win'])
+        zavorra = sum(1 for p in closed if p['is_win'])
+        pnl_saved = sum(abs(p['pnl']) for p in closed if not p['is_win'])
+        pnl_missed = sum(p['pnl'] for p in closed if p['is_win'])
+
+        if pnl_saved > pnl_missed:
+            verdetto = f"PROTEZIONE (+${pnl_saved - pnl_missed:.0f} risparmiati)"
+        elif pnl_missed > pnl_saved:
+            verdetto = f"ZAVORRA (-${pnl_missed - pnl_saved:.0f} persi in opportunità)"
+        else:
+            verdetto = "NEUTRO"
+
+        return {
+            'total':       len(closed),
+            'protezione':  protezione,
+            'zavorra':     zavorra,
+            'pnl_saved':   round(pnl_saved, 2),
+            'pnl_missed':  round(pnl_missed, 2),
+            'bilancio':    round(pnl_saved - pnl_missed, 2),
+            'verdetto':    verdetto,
+            'per_livello': dict(self._phantom_stats),
+            'log':         list(self._phantom_log),
+            'open':        len(self._phantoms_open),
+        }
+
     def _read_bridge_commands(self):
         """
         Legge bridge_commands.json e applica comandi al CampoGravitazionale.
@@ -2689,6 +2878,8 @@ class OvertopBassanoV14Production:
                     "m2_shadow_open":     self._shadow is not None,
                     "m2_log":             list(self._m2_log),
                     "m2_campo_stats":     self.campo.get_stats(),
+                    # ── PHANTOM TRACKER — zavorra o protezione? ───────
+                    "phantom":            self._get_phantom_summary(),
                 })
         except Exception as e:
             log.error(f"[HEARTBEAT_ERROR] {e}")
