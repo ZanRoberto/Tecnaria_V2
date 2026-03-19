@@ -101,6 +101,38 @@ COMBINAZIONI POTENTI da osservare:
 
 NON usare RSI e MACD come trigger singoli per creare capsule. Usali sempre IN COMBINAZIONE con il regime, il drift, e il WR dell'Oracolo. Un RSI < 30 in un crash verticale non è un buy — è un coltello che cade. Ma un RSI < 30 in RANGING con MACD che gira al rialzo è oro.
 
+═══ PHANTOM TRACKER — LA MAPPA DEI DEPOSITI E DELLE TANE VUOTE ═══
+
+Nel snapshot vedrai i dati PHANTOM TRACKER. Sono i trade che il sistema ha BLOCCATO — non eseguiti, ma tracciati come se lo fossero. Per ogni trade bloccato, il sistema segue il prezzo e calcola cosa sarebbe successo.
+
+COME LEGGERE I PHANTOM:
+- PROTEZIONE (would_lose): trade bloccati che avrebbero perso. Bene — il filtro ha funzionato.
+- ZAVORRA (would_win): trade bloccati che avrebbero vinto. Male — il filtro è troppo stretto.
+- BILANCIO: pnl_saved - pnl_missed. Positivo = i filtri proteggono. Negativo = i filtri costano troppo.
+- PER LIVELLO: ogni livello di blocco (DRIFT_VETO, SCORE_INSUFFICIENTE, etc.) ha i suoi numeri separati.
+
+COME AGIRE SUI PHANTOM:
+
+1. Se un livello ha BILANCIO NEGATIVO ALTO (es. DRIFT_VETO perde più di $500 in opportunità):
+   AZIONE: quel filtro è troppo stretto. Crea una capsula che ALLENTA quel filtro in condizioni favorevoli.
+   Esempio: se DRIFT_VETO blocca trade quando drift=-0.06% ma quei trade sarebbero vincenti il 60% delle volte → il veto dovrebbe scattare a -0.10%, non -0.05%.
+   Non puoi cambiare il drift veto direttamente, ma puoi creare una capsula che modifica il peso W_TREND per compensare.
+
+2. Se un livello ha BILANCIO POSITIVO ALTO (es. un veto risparmia $1000+):
+   Non toccare — quel filtro sta facendo il suo lavoro. Proteggilo.
+
+3. Se SCORE_INSUFFICIENTE ha molti ZAVORRA:
+   La soglia è troppo alta per il regime corrente. Il sistema blocca trade con score 55-58 che avrebbero vinto.
+   AZIONE: in regime RANGING stabile, crea una capsula che abbassa W_REGIME da 3 a 1 — questo aumenta leggermente lo score di tutti i trade e ne fa passare di più.
+
+4. COMBINAZIONI PHANTOM + RSI/MACD:
+   Se i phantom MANCATI hanno RSI < 40 e MACD positivo → il sistema sta bloccando trade in zona favorevole. Questo è il segnale più forte che i filtri sono troppo stretti.
+   Se i phantom PROTETTI hanno RSI > 65 e MACD negativo → i filtri stanno bloccando trade in zona pericolosa. Buon lavoro.
+
+5. REGOLA D'ORO: non reagire su meno di 50 phantom. I numeri piccoli mentono. Aspetta evidenza solida.
+
+I phantom sono la TUA MAPPA. Ogni ciclo guardali. Sono i depositi con i soldi (trade bloccati vincenti che potremmo prendere) e le tane vuote (trade bloccati perdenti che stiamo evitando). La volpe studia la mappa prima di muoversi.
+
 ═══ REGIMI E PARAMETRI OTTIMALI ═══
 
 TRENDING_BULL: soglia bassa (45-55), peso seed alto (30-35), peso trend alto (18-20). L'energia è chiara, lascia entrare.
@@ -435,6 +467,9 @@ class AIBridge:
         # Campo stats
         campo = snapshot.get("m2_campo_stats", {})
 
+        # Phantom tracker — la mappa dei depositi e delle tane vuote
+        phantom = snapshot.get("phantom", {})
+
         msg = f"""SNAPSHOT BOT — {datetime.utcnow().isoformat()}
 
 ═══ STATO GENERALE ═══
@@ -450,6 +485,13 @@ Trade: {m1_trades} | Win: {m1_wins} | Loss: {m1_losses} | WR: {m1_wr:.1%}
 Trade: {m2_trades} | Win: {m2_wins} | Loss: {m2_losses} | WR: {m2_wr:.1%}
 PnL shadow: ${m2_pnl:.4f}
 Campo stats: {json.dumps(campo)}
+
+═══ PHANTOM TRACKER — MAPPA OPPORTUNITÀ E PROTEZIONI ═══
+Trade bloccati: {phantom.get('total', 0)} | Protezione: {phantom.get('protezione', 0)} | Zavorra: {phantom.get('zavorra', 0)}
+PnL risparmiati: ${phantom.get('pnl_saved', 0):.1f} | PnL mancati: ${phantom.get('pnl_missed', 0):.1f}
+BILANCIO: ${phantom.get('bilancio', 0):.1f}
+VERDETTO: {phantom.get('verdetto', 'N/A')}
+Per livello: {json.dumps(phantom.get('per_livello', {{}}))}
 
 ═══ CALIBRATORE ATTUALE ═══
 {json.dumps(calibra, indent=2)}
