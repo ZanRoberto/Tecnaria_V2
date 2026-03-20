@@ -192,6 +192,14 @@ class StabilityTelemetry:
         e['matrimonio'] = matrimonio
         self._events.append(e)
 
+    def log_state_change(self, old_state, new_state, loss_streak,
+                         regime, direction, open_position):
+        e = self._base("STATE_CHANGE", regime, direction, open_position)
+        e['old_state'] = old_state
+        e['new_state'] = new_state
+        e['loss_streak'] = loss_streak
+        self._events.append(e)
+
     # ── REPORT ────────────────────────────────────────────────────────────
 
     def generate_report(self) -> dict:
@@ -2129,6 +2137,15 @@ class OvertopBassanoV14Production:
         self._shadow_max_price = None
         self._shadow_min_price = None
         self._shadow_matrimonio = None
+        # ── STATE ENGINE — AGGRESSIVO / NEUTRO / DIFENSIVO ────────────────
+        # Il tempismo. Non solo COSA fare, ma QUANDO NON FARLO.
+        self._state = "NEUTRO"                   # AGGRESSIVO | NEUTRO | DIFENSIVO
+        self._state_since = time.time()           # quando è entrato nello stato corrente
+        self._state_min_duration = 300            # minimo 5 minuti in ogni stato
+        self._m2_recent_trades = deque(maxlen=10) # ultimi 10 trade M2: {'ts', 'pnl', 'is_win', 'duration'}
+        self._m2_last_loss_time = 0               # timestamp dell'ultimo loss
+        self._m2_loss_streak = 0                  # loss consecutivi correnti
+        self._m2_cooldown_until = 0               # non entrare fino a questo timestamp
         # Stats separate per Motore 2 — ripristina da DB se disponibili
         self._m2_wins    = 0
         self._m2_losses  = 0
@@ -2627,6 +2644,95 @@ class OvertopBassanoV14Production:
         self.max_price          = None
 
     # ════════════════════════════════════════════════════════════════════════
+    # STATE ENGINE — TEMPISMO
+    # Non solo COSA fare, ma QUANDO NON FARLO.
+    # AGGRESSIVO: soglie normali, entra liberamente
+    # NEUTRO: soglie normali, entra con cautela
+    # DIFENSIVO: cooldown attivo, non entra finché non si calma
+    # ════════════════════════════════════════════════════════════════════════
+
+    def _state_engine_update(self, pnl, is_win, duration):
+        """Chiamato DOPO ogni trade chiuso. Aggiorna lo stato."""
+        now = time.time()
+
+        # Registra trade recente
+        self._m2_recent_trades.append({
+            'ts': now, 'pnl': pnl, 'is_win': is_win, 'duration': duration
+        })
+
+        if is_win:
+            self._m2_loss_streak = 0
+        else:
+            self._m2_loss_streak += 1
+            self._m2_last_loss_time = now
+
+            # ── COOLDOWN PROGRESSIVO DOPO LOSS ──────────────────────────
+            # 1 loss → 15 secondi di pausa
+            # 2 loss consecutivi → 60 secondi
+            # 3+ loss consecutivi → 180 secondi (3 minuti)
+            if self._m2_loss_streak == 1:
+                self._m2_cooldown_until = now + 15
+            elif self._m2_loss_streak == 2:
+                self._m2_cooldown_until = now + 60
+            else:
+                self._m2_cooldown_until = now + 180
+
+        # ── TRANSIZIONE DI STATO ────────────────────────────────────────
+        # Basata su performance recente, non sul singolo trade
+        old_state = self._state
+        in_state_time = now - self._state_since
+
+        # Guarda ultimi 5 trade
+        recent = list(self._m2_recent_trades)[-5:]
+        if len(recent) >= 3:
+            recent_wins = sum(1 for t in recent if t['is_win'])
+            recent_wr = recent_wins / len(recent)
+            recent_pnl = sum(t['pnl'] for t in recent)
+
+            # Solo transizioni se tempo minimo nello stato superato
+            if in_state_time >= self._state_min_duration:
+                if recent_wr >= 0.7 and recent_pnl > 0:
+                    self._state = "AGGRESSIVO"
+                elif recent_wr <= 0.3 or self._m2_loss_streak >= 3:
+                    self._state = "DIFENSIVO"
+                else:
+                    self._state = "NEUTRO"
+
+        if self._state != old_state:
+            self._state_since = now
+            self._log_m2("⚙️", f"STATO → {self._state} (loss_streak={self._m2_loss_streak} recent_wr={recent_wr:.0%} cooldown={self._m2_cooldown_until - now:.0f}s)")
+            self.telemetry.log_state_change(old_state, self._state, self._m2_loss_streak,
+                self._regime_current, self.campo._direction, self._shadow is not None)
+
+    def _state_engine_can_enter(self) -> tuple:
+        """Ritorna (can_enter: bool, reason: str). Gate PRIMA di qualsiasi entry."""
+        now = time.time()
+
+        # ── COOLDOWN ATTIVO → non entrare ──────────────────────────────
+        if now < self._m2_cooldown_until:
+            remaining = self._m2_cooldown_until - now
+            return False, f"COOLDOWN_{remaining:.0f}s (loss_streak={self._m2_loss_streak})"
+
+        # ── DIFENSIVO → non entrare finché non torna NEUTRO o AGGRESSIVO
+        if self._state == "DIFENSIVO":
+            return False, f"DIFENSIVO (loss_streak={self._m2_loss_streak})"
+
+        # ── VELOCITÀ: non entrare se ultimo trade chiuso < 5 secondi fa ─
+        if self._m2_recent_trades:
+            last = self._m2_recent_trades[-1]
+            if now - last['ts'] < 5:
+                return False, f"TROPPO_VELOCE ({now - last['ts']:.1f}s dall'ultimo)"
+
+        # ── LOSS PESANTE: se ultimo loss > $50, pausa 30 secondi ─────
+        if self._m2_recent_trades:
+            last = self._m2_recent_trades[-1]
+            if not last['is_win'] and abs(last['pnl']) > 50:
+                if now - last['ts'] < 30:
+                    return False, f"LOSS_PESANTE_${abs(last['pnl']):.0f}_pausa"
+
+        return True, "OK"
+
+    # ════════════════════════════════════════════════════════════════════════
     # MOTORE 2: CAMPO GRAVITAZIONALE — Shadow Entry/Exit/Close
     # ════════════════════════════════════════════════════════════════════════
 
@@ -2743,6 +2849,12 @@ class OvertopBassanoV14Production:
     def _evaluate_shadow_entry(self, price, momentum, volatility, trend):
         """Motore 2 valuta entry con il Campo Gravitazionale."""
         try:
+            # ── STATE ENGINE GATE — PRIMA DI TUTTO ───────────────────────
+            can_enter, gate_reason = self._state_engine_can_enter()
+            if not can_enter:
+                # Non logga phantom per cooldown — è silenzio voluto, non opportunità
+                return
+
             seed = self.seed_scorer.score()
             if seed.get('reason') == 'insufficient_data':
                 return
@@ -2955,6 +3067,9 @@ class OvertopBassanoV14Production:
                 **{k: ctx[k] for k in ('regime','direction','open_position',
                    'active_threshold','drift','macd','trend','volatility')}
             )
+
+            # ── STATE ENGINE: aggiorna stato dopo ogni trade ─────────────
+            self._state_engine_update(pnl, is_win, trade_duration)
 
             self.campo.record_result(is_win, exit_reason=reason, 
                                      pb_signals=self._shadow.get("pb_signals", 0),
@@ -3381,6 +3496,9 @@ class OvertopBassanoV14Production:
                     "m2_pnl":             round(self._m2_pnl, 4),
                     "m2_shadow_open":     self._shadow is not None,
                     "m2_direction":       self.campo._direction,
+                    "m2_state":           self._state,
+                    "m2_loss_streak":     self._m2_loss_streak,
+                    "m2_cooldown":        max(0, self._m2_cooldown_until - time.time()),
                     "m2_log":             list(self._m2_log),
                     "m2_campo_stats":     self.campo.get_stats(),
                     # ── PHANTOM TRACKER — zavorra o protezione? ───────
