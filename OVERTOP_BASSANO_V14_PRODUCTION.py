@@ -758,13 +758,36 @@ class MatrimonioIntelligente:
     La chiave è (momentum, volatility, trend).
     """
     MARRIAGES = {
-        ("FORTE", "BASSA",  "UP"):      {"name": "STRONG_BULL",  "wr": 0.85, "duration_avg": 45, "confidence": 0.95},
-        ("FORTE", "MEDIA",  "UP"):      {"name": "STRONG_MED",   "wr": 0.75, "duration_avg": 30, "confidence": 0.85},
-        ("MEDIO", "BASSA",  "UP"):      {"name": "MEDIUM_BULL",  "wr": 0.70, "duration_avg": 25, "confidence": 0.80},
-        ("MEDIO", "MEDIA",  "UP"):      {"name": "CAUTIOUS",     "wr": 0.60, "duration_avg": 15, "confidence": 0.65},
-        ("DEBOLE","MEDIA",  "SIDEWAYS"):{"name": "WEAK_NEUTRAL", "wr": 0.45, "duration_avg": 8,  "confidence": 0.40},
-        ("DEBOLE","ALTA",   "DOWN"):    {"name": "TRAP",         "wr": 0.05, "duration_avg": 2,  "confidence": 0.05},
-        ("FORTE", "ALTA",   "DOWN"):    {"name": "PANIC",        "wr": 0.15, "duration_avg": 3,  "confidence": 0.15},
+        # ── TREND UP ─────────────────────────────────────────────────────
+        ("FORTE", "BASSA",  "UP"):      {"name": "STRONG_BULL",    "wr": 0.85, "duration_avg": 45, "confidence": 0.95},
+        ("FORTE", "MEDIA",  "UP"):      {"name": "STRONG_MED",     "wr": 0.75, "duration_avg": 30, "confidence": 0.85},
+        ("FORTE", "ALTA",   "UP"):      {"name": "STRONG_VOLATILE","wr": 0.65, "duration_avg": 20, "confidence": 0.70},
+        ("MEDIO", "BASSA",  "UP"):      {"name": "MEDIUM_BULL",    "wr": 0.70, "duration_avg": 25, "confidence": 0.80},
+        ("MEDIO", "MEDIA",  "UP"):      {"name": "CAUTIOUS",       "wr": 0.60, "duration_avg": 15, "confidence": 0.65},
+        ("MEDIO", "ALTA",   "UP"):      {"name": "CAUTIOUS_VOL",   "wr": 0.50, "duration_avg": 12, "confidence": 0.55},
+        ("DEBOLE","BASSA",  "UP"):      {"name": "WEAK_BULL",      "wr": 0.55, "duration_avg": 15, "confidence": 0.55},
+        ("DEBOLE","MEDIA",  "UP"):      {"name": "WEAK_MED_UP",    "wr": 0.45, "duration_avg": 10, "confidence": 0.45},
+        ("DEBOLE","ALTA",   "UP"):      {"name": "WEAK_VOL_UP",    "wr": 0.35, "duration_avg": 8,  "confidence": 0.35},
+        # ── TREND SIDEWAYS ───────────────────────────────────────────────
+        ("FORTE", "BASSA",  "SIDEWAYS"):{"name": "RANGE_STRONG",   "wr": 0.65, "duration_avg": 20, "confidence": 0.70},
+        ("FORTE", "MEDIA",  "SIDEWAYS"):{"name": "RANGE_MED_F",    "wr": 0.60, "duration_avg": 15, "confidence": 0.65},
+        ("FORTE", "ALTA",   "SIDEWAYS"):{"name": "RANGE_VOL_F",    "wr": 0.55, "duration_avg": 12, "confidence": 0.55},
+        ("MEDIO", "BASSA",  "SIDEWAYS"):{"name": "RANGE_CALM",     "wr": 0.55, "duration_avg": 15, "confidence": 0.60},
+        ("MEDIO", "MEDIA",  "SIDEWAYS"):{"name": "RANGE_NEUTRAL",  "wr": 0.50, "duration_avg": 12, "confidence": 0.50},
+        ("MEDIO", "ALTA",   "SIDEWAYS"):{"name": "RANGE_VOL_M",    "wr": 0.45, "duration_avg": 10, "confidence": 0.45},
+        ("DEBOLE","BASSA",  "SIDEWAYS"):{"name": "RANGE_DEAD",     "wr": 0.40, "duration_avg": 8,  "confidence": 0.35},
+        ("DEBOLE","MEDIA",  "SIDEWAYS"):{"name": "WEAK_NEUTRAL",   "wr": 0.45, "duration_avg": 8,  "confidence": 0.40},
+        ("DEBOLE","ALTA",   "SIDEWAYS"):{"name": "RANGE_VOL_W",    "wr": 0.35, "duration_avg": 6,  "confidence": 0.30},
+        # ── TREND DOWN ───────────────────────────────────────────────────
+        ("FORTE", "BASSA",  "DOWN"):    {"name": "BEAR_STRONG",    "wr": 0.60, "duration_avg": 20, "confidence": 0.65},
+        ("FORTE", "MEDIA",  "DOWN"):    {"name": "BEAR_MED_F",     "wr": 0.50, "duration_avg": 15, "confidence": 0.55},
+        ("FORTE", "ALTA",   "DOWN"):    {"name": "PANIC",          "wr": 0.15, "duration_avg": 3,  "confidence": 0.15},
+        ("MEDIO", "BASSA",  "DOWN"):    {"name": "BEAR_CALM",      "wr": 0.45, "duration_avg": 12, "confidence": 0.50},
+        ("MEDIO", "MEDIA",  "DOWN"):    {"name": "BEAR_NEUTRAL",   "wr": 0.40, "duration_avg": 10, "confidence": 0.40},
+        ("MEDIO", "ALTA",   "DOWN"):    {"name": "BEAR_VOL",       "wr": 0.30, "duration_avg": 8,  "confidence": 0.30},
+        ("DEBOLE","BASSA",  "DOWN"):    {"name": "BEAR_WEAK",      "wr": 0.35, "duration_avg": 8,  "confidence": 0.35},
+        ("DEBOLE","MEDIA",  "DOWN"):    {"name": "BEAR_WEAK_M",    "wr": 0.25, "duration_avg": 5,  "confidence": 0.25},
+        ("DEBOLE","ALTA",   "DOWN"):    {"name": "TRAP",           "wr": 0.05, "duration_avg": 2,  "confidence": 0.05},
     }
 
     @staticmethod
