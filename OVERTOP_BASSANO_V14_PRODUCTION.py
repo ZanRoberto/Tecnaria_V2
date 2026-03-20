@@ -1343,10 +1343,11 @@ class AutoCalibratore:
         'divorce_drawdown':    (1.5,  5.0),    # drawdown trigger
     }
 
-    STEP          = 0.02    # step massimo per ogni aggiustamento
+    STEP          = 0.05    # era 0.02 — troppo lento, il mercato cambia regime in minuti
     MIN_TRADES    = 10      # era 30 — con stop loss 2% il rischio è controllato, impara prima
     MIN_DELTA_WR  = 0.05    # differenza minima WR reale vs atteso per intervenire
     HISTORY_SIZE  = 5       # quante calibrazioni ricordare per inversione
+    MIN_CALIB_INTERVAL = 900  # minimo 15 minuti tra calibrazioni — anti-oscillazione
 
     def __init__(self):
         # Parametri correnti — inizializzati ai valori di default
@@ -1364,6 +1365,7 @@ class AutoCalibratore:
         # Osservazioni per calibrazione: lista di (seed_score, wr_contesto, is_win)
         self._obs: list = []
         self._calibrazioni_log: list = []   # log narrativo
+        self._last_calib_time: float = 0    # rate limit anti-oscillazione
 
     def registra_osservazione(self, seed_score: float, fingerprint_wr: float,
                                is_win: bool, divorce_drawdown_usato: float):
@@ -1379,10 +1381,17 @@ class AutoCalibratore:
         """
         Analizza le osservazioni accumulate.
         Se ci sono evidenze solide (≥ MIN_TRADES) aggiusta i parametri.
+        Rate limit: massimo 1 calibrazione ogni MIN_CALIB_INTERVAL secondi.
         Ritorna dict con parametri aggiornati e log delle modifiche.
         """
         if len(self._obs) < self.MIN_TRADES:
             return {}   # troppo poco per giudicare
+
+        # Rate limit: non calibrare troppo spesso
+        now = time.time()
+        if now - self._last_calib_time < self.MIN_CALIB_INTERVAL:
+            return {}
+        self._last_calib_time = now
 
         modifiche = {}
         n = len(self._obs)
@@ -1563,8 +1572,9 @@ class CampoGravitazionale:
                      "RANGING": 1.00, "TRENDING_BEAR": 1.10}
     # RANGING: era 1.10, ora 1.00 — soglia formula 75.9 irraggiungibile, score max realistico 64
     # Con 1.00: soglia RANGING+ALTA = 60 × 1.00 × 1.05 = 63.0 (raggiungibile)
-    VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.05}
-    # ALTA: era 1.15, ora 1.05 — penalizzava troppo la condizione più comune
+    VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.00}
+    # ALTA: era 1.05, ora 1.00 — phantom SCORE_INSUFF WR 65% R/R 2.04, profittevoli
+    # Soglia RANGING+ALTA: 60 × 1.00 × 1.00 = 60.0 (trade score 58-63 passano)
     SOGLIA_MIN    = 58    # PAVIMENTO ASSOLUTO — nessun fattore scende sotto questo
     SOGLIA_MAX    = 80    # era 90 — phantom SCORE_INSUFFICIENTE dice -$3871, troppo alto in RANGING
 
@@ -1573,7 +1583,7 @@ class CampoGravitazionale:
     SIZE_MAX = 2.0
 
     # ── DRIFT VETO ─────────────────────────────────────────────────────
-    DRIFT_VETO_THRESHOLD = -0.10   # era -0.05 — phantom dicono ZAVORRA, allentato
+    DRIFT_VETO_THRESHOLD = -0.20   # era -0.10 — phantom WR 81% bloccati, sta bloccando i migliori
 
     # ── WARMUP ─────────────────────────────────────────────────────────
     WARMUP_TICKS = 200   # tick minimi prima di operare — buffer devono riempirsi
