@@ -1550,6 +1550,8 @@ class CampoGravitazionale:
         self._recent_results = deque(maxlen=20)
         self._tick_count = 0   # conta tick dal boot
         self._direction = "LONG"  # LONG o SHORT — il bridge decide
+        self._direction_last_change = 0       # timestamp ultimo flip
+        self._direction_bearish_streak = 0    # tick consecutivi bearish >=2
         # ── PRE-BREAKOUT DETECTOR ─────────────────────────────────────────
         self._prices_short = deque(maxlen=50)     # ultimi 50 prezzi per compressione
         self._seed_history = deque(maxlen=10)     # ultimi 10 seed per derivata
@@ -2633,12 +2635,17 @@ class OvertopBassanoV14Production:
 
     def _auto_detect_direction(self, trend):
         """
-        Decide automaticamente LONG o SHORT basandosi su drift, MACD, trend.
-        Il mercato decide la direzione — il sistema si adatta.
+        Decide automaticamente LONG o SHORT con ISTERESI + COOLDOWN + CONFERMA.
         
-        LONG quando: drift positivo O MACD positivo O trend UP
-        SHORT quando: drift negativo E MACD negativo E trend DOWN
-        Default: LONG (conservativo)
+        ISTERESI: soglie diverse per entrare e uscire da SHORT
+          - Per andare SHORT: drift < -0.12% (più lontano)
+          - Per tornare LONG: drift > -0.04% (deve risalire chiaramente)
+          - Zona morta tra -0.12% e -0.04%: resta dove è
+        
+        COOLDOWN: minimo 60 secondi tra un flip e il successivo.
+        
+        CONFERMA: 3 tick consecutivi con segnale bearish >=2 prima di flippare a SHORT.
+                  Per tornare LONG basta 1 tick con bearish < 2 (conservativo).
         """
         campo = self.campo
         
@@ -2652,20 +2659,44 @@ class OvertopBassanoV14Production:
         
         macd_hist = campo._last_macd_hist
         
-        # Tre segnali bearish = SHORT
+        # Segnali bearish con isteresi sul drift
         bearish_signals = 0
-        if drift < -0.08:
-            bearish_signals += 1
+        if campo._direction == "LONG":
+            # Per andare SHORT: soglia più severa
+            if drift < -0.12:
+                bearish_signals += 1
+        else:
+            # Per restare SHORT: soglia più morbida (zona morta)
+            if drift < -0.04:
+                bearish_signals += 1
+        
         if macd_hist < 0:
             bearish_signals += 1
         if trend == "DOWN":
             bearish_signals += 1
         
-        old_direction = campo._direction
+        # Conferma: conta tick consecutivi bearish
         if bearish_signals >= 2:
-            campo._direction = "SHORT"
+            campo._direction_bearish_streak += 1
         else:
+            campo._direction_bearish_streak = 0
+        
+        # Cooldown: blocca flip se troppo recente
+        now = time.time()
+        cooldown_ok = (now - campo._direction_last_change) >= 60
+        
+        old_direction = campo._direction
+        
+        # LONG → SHORT: serve conferma (3 tick) + cooldown
+        if campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
+            campo._direction = "SHORT"
+            campo._direction_last_change = now
+            campo._direction_bearish_streak = 0
+        # SHORT → LONG: basta 1 tick con bearish < 2 + cooldown
+        elif campo._direction == "SHORT" and bearish_signals < 2 and cooldown_ok:
             campo._direction = "LONG"
+            campo._direction_last_change = now
+            campo._direction_bearish_streak = 0
         
         if campo._direction != old_direction:
             self._log_m2("🔄", f"DIREZIONE → {campo._direction} (drift={drift:+.3f}% macd_hist={macd_hist:+.2f} trend={trend})")
