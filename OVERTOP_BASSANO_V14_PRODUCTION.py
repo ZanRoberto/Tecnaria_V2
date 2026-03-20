@@ -1552,10 +1552,11 @@ class CampoGravitazionale:
     # ── SOGLIA DINAMICA ───────────────────────────────────────────────────
     SOGLIA_BASE = 60
     REGIME_FACTOR = {"TRENDING_BULL": 0.80, "EXPLOSIVE": 0.85,
-                     "RANGING": 1.10, "TRENDING_BEAR": 1.20}
-    # RANGING: era 1.20, ora 1.10 — i phantom dicono -$3871 in SCORE_INSUFFICIENTE
-    # Soglia RANGING: 60 × 1.10 × 1.15 = 75.9 (raggiungibile) vs 82.8 (impossibile)
-    VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.15}
+                     "RANGING": 1.00, "TRENDING_BEAR": 1.10}
+    # RANGING: era 1.10, ora 1.00 — soglia formula 75.9 irraggiungibile, score max realistico 64
+    # Con 1.00: soglia RANGING+ALTA = 60 × 1.00 × 1.05 = 63.0 (raggiungibile)
+    VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.05}
+    # ALTA: era 1.15, ora 1.05 — penalizzava troppo la condizione più comune
     SOGLIA_MIN    = 58    # PAVIMENTO ASSOLUTO — nessun fattore scende sotto questo
     SOGLIA_MAX    = 80    # era 90 — phantom SCORE_INSUFFICIENTE dice -$3871, troppo alto in RANGING
 
