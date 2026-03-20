@@ -3419,7 +3419,27 @@ class OvertopBassanoV14Production:
                 if cmd_type == "modify_weight":
                     param = data.get("param", "")
                     value = data.get("value")
-                    if hasattr(self.campo, param) and value is not None:
+                    # ── PARAMETRI PROTETTI — calibrati sui dati reali ──────
+                    # Il bridge NON può toccarli. Solo noi dopo analisi phantom.
+                    PROTECTED_PARAMS = {
+                        "SOGLIA_BASE",           # calibrata su 37,112 candele
+                        "DRIFT_VETO_THRESHOLD",  # settato a -0.20% — phantom WR 81%
+                        "W_RSI",                 # peso RSI — calibrato
+                        "W_MACD",                # peso MACD — calibrato
+                        "W_SEED",                # peso seed — calibrato
+                        "W_FINGERPRINT",         # peso fingerprint — calibrato
+                        "W_MOMENTUM",            # peso momentum — calibrato
+                        "W_TREND",               # peso trend — calibrato
+                        "W_VOLATILITY",          # peso volatilità — calibrato
+                        "W_REGIME",              # peso regime — calibrato
+                    }
+                    if param in PROTECTED_PARAMS:
+                        self._log("🌉", f"BRIDGE: RIFIUTATO {param} → {value} (protetto)")
+                        ctx = self._tele_ctx()
+                        self.telemetry.log_param_rejected(param, value, "protetto_dati_reali", **{k: ctx[k] for k in ('regime','direction','open_position','active_threshold','drift','macd','trend','volatility')})
+                        cmd["executed"] = True
+                        modified = True
+                    elif hasattr(self.campo, param) and value is not None:
                         old = getattr(self.campo, param)
                         setattr(self.campo, param, value)
                         self._log("🌉", f"BRIDGE: {param} {old} → {value}")
