@@ -1767,8 +1767,11 @@ class CampoGravitazionale:
 
         # Soglia proporzionale: scala con il max raggiungibile
         soglia_raw = self.SOGLIA_BASE * context_ratio * regime_f * vol_f * history_f * prebreak_f * drift_f * loss_f
-        # Floor e ceiling proporzionali al contesto
-        soglia_min_ctx = self.SOGLIA_MIN * context_ratio
+        # Floor: proporzionale al contesto MA con pavimento assoluto a 48
+        # Questo impedisce che matrimoni deboli (RANGE_VOL_W score ~44) passino
+        # mentre RANGE_VOL_F (score ~54-66) passa tranquillamente
+        SOGLIA_FLOOR_ASSOLUTO = 48
+        soglia_min_ctx = max(SOGLIA_FLOOR_ASSOLUTO, self.SOGLIA_MIN * context_ratio)
         soglia = max(soglia_min_ctx, min(self.SOGLIA_MAX, soglia_raw))
 
         # ── DECISIONE ─────────────────────────────────────────────────────
