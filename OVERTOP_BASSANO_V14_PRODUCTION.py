@@ -2226,7 +2226,7 @@ class OvertopBassanoV14Production:
         # Il tempismo. Non solo COSA fare, ma QUANDO NON FARLO.
         self._state = "NEUTRO"                   # AGGRESSIVO | NEUTRO | DIFENSIVO
         self._state_since = time.time()           # quando è entrato nello stato corrente
-        self._state_min_duration = 300            # minimo 5 minuti in ogni stato
+        self._state_min_duration = 120            # minimo 2 minuti in ogni stato (era 5 — troppo lento)
         self._m2_recent_trades = deque(maxlen=10) # ultimi 10 trade M2: {'ts', 'pnl', 'is_win', 'duration'}
         self._m2_last_loss_time = 0               # timestamp dell'ultimo loss
         self._m2_loss_streak = 0                  # loss consecutivi correnti
@@ -2759,16 +2759,27 @@ class OvertopBassanoV14Production:
             self._m2_loss_streak += 1
             self._m2_last_loss_time = now
 
-            # ── COOLDOWN PROGRESSIVO DOPO LOSS ──────────────────────────
-            # 1 loss → 15 secondi di pausa
-            # 2 loss consecutivi → 60 secondi
-            # 3+ loss consecutivi → 180 secondi (3 minuti)
-            if self._m2_loss_streak == 1:
-                self._m2_cooldown_until = now + 15
-            elif self._m2_loss_streak == 2:
-                self._m2_cooldown_until = now + 60
+            # ── COOLDOWN PROPORZIONALE AL DANNO ──────────────────────────
+            # 3 loss da $0.01 ≠ 3 loss da $60. Il cooldown guarda il PnL.
+            #
+            # Loss streak × gravità del PnL:
+            #   loss < $1    → micro-loss, pausa minima (10s per streak)
+            #   loss $1-$20  → loss normale, pausa media (20s per streak)
+            #   loss > $20   → loss pesante, pausa lunga (45s per streak)
+            #
+            # Streak amplifica: streak=1 → 1x, streak=2 → 1.5x, streak=3+ → 2x
+            abs_pnl = abs(pnl)
+            if abs_pnl < 1.0:
+                base_cooldown = 10     # micro-loss
+            elif abs_pnl < 20.0:
+                base_cooldown = 20     # loss normale
             else:
-                self._m2_cooldown_until = now + 180
+                base_cooldown = 45     # loss pesante
+
+            streak_mult = min(2.0, 0.5 + self._m2_loss_streak * 0.5)  # 1.0, 1.5, 2.0
+            cooldown = base_cooldown * streak_mult
+            cooldown = min(cooldown, 120)  # cap a 2 minuti — mai più di 2 minuti
+            self._m2_cooldown_until = now + cooldown
 
         # ── TRANSIZIONE DI STATO ────────────────────────────────────────
         # Basata su performance recente, non sul singolo trade
@@ -2807,18 +2818,19 @@ class OvertopBassanoV14Production:
             return False, f"COOLDOWN_{remaining:.0f}s (loss_streak={self._m2_loss_streak})"
 
         # ── DIFENSIVO → non entrare finché non torna NEUTRO o AGGRESSIVO
-        # MA: deadlock protection — max 15 minuti in DIFENSIVO
+        # MA: deadlock protection — max 5 minuti in DIFENSIVO
+        # 15 minuti era troppo — il mercato cambia faccia in 2 minuti
         if self._state == "DIFENSIVO":
             time_in_defensive = now - self._state_since
-            if time_in_defensive > 900:  # 15 minuti
+            if time_in_defensive > 300:  # 5 minuti
                 self._state = "NEUTRO"
                 self._state_since = now
                 self._m2_loss_streak = 0
-                self._log_m2("⚙️", f"STATO → NEUTRO (auto-reset dopo {time_in_defensive/60:.0f} min in DIFENSIVO)")
+                self._log_m2("⚙️", f"STATO → NEUTRO (auto-reset dopo {time_in_defensive/60:.1f} min in DIFENSIVO)")
                 self.telemetry.log_state_change("DIFENSIVO", "NEUTRO", 0,
                     self._regime_current, self.campo._direction, self._shadow is not None)
             else:
-                return False, f"DIFENSIVO_{900-time_in_defensive:.0f}s (loss_streak={self._m2_loss_streak})"
+                return False, f"DIFENSIVO_{300-time_in_defensive:.0f}s (loss_streak={self._m2_loss_streak})"
 
         # ── VELOCITÀ: non entrare se ultimo trade chiuso < 5 secondi fa ─
         if self._m2_recent_trades:
