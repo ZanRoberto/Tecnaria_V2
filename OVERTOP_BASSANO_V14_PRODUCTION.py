@@ -1668,7 +1668,12 @@ class CampoGravitazionale:
                 pass  # non è un veto forte, il punteggio basso basta
 
         if loss_consecutivi >= self.MAX_LOSS_CONSECUTIVI:
-            return self._veto(f"LOSS_CONSECUTIVI_{loss_consecutivi}")
+            # Non bloccare per sempre — pausa proporzionale ai loss, poi riprova.
+            # Il State Engine gestisce già il cooldown e DIFENSIVO.
+            # Qui aggiungiamo solo un peso extra alla soglia, non un veto assoluto.
+            # 3 loss → soglia +10%, 4 loss → +20%, 5 loss → +30%
+            # Così i trade FORTI passano ancora, quelli deboli no.
+            pass  # gestito sotto come moltiplicatore soglia, non come veto
 
         # ── WARMUP: buffer non ancora pieni → non operare ─────────────
         if self._tick_count < self.WARMUP_TICKS:
@@ -1710,22 +1715,68 @@ class CampoGravitazionale:
 
         score = s_seed + s_fp + s_mom + s_trend + s_vol + s_reg + s_rsi + s_macd
 
-        # ── SOGLIA DINAMICA ───────────────────────────────────────────────
+        # ── SOGLIA PROPORZIONALE AL CONTESTO ─────────────────────────────
+        # La soglia è proporzionale allo score MASSIMO raggiungibile nel
+        # contesto corrente. Stessa % di selettività in ogni regime.
+        #
+        # In TRENDING_BULL+BASSA+UP: score_max=100, soglia=60 → chiedi 60%
+        # In RANGING+ALTA+SIDEWAYS:  score_max=65,  soglia=39 → chiedi 60%
+        #
+        # Senza questo, soglia 60 in RANGING chiede il 92% del max = blocca tutto.
+        # ─────────────────────────────────────────────────────────────────
+
+        # Score max per il contesto corrente (dimensioni NON controllabili)
+        if self._direction == "SHORT":
+            _ctx_mom   = self.MOMENTUM_SCORE_SHORT.get(momentum, 0.5)
+            _ctx_trend = self.TREND_SCORE_SHORT.get(trend, 0.5)
+            _ctx_reg   = self.REGIME_SCORE_SHORT.get(regime, 0.2)
+        else:
+            _ctx_mom   = self.MOMENTUM_SCORE_LONG.get(momentum, 0.5)
+            _ctx_trend = self.TREND_SCORE_LONG.get(trend, 0.5)
+            _ctx_reg   = self.REGIME_SCORE_LONG.get(regime, 0.2)
+        _ctx_vol = self.VOL_SCORE.get(volatility, 0.5)
+
+        score_max = (1.0 * self.W_SEED +           # seed perfetto
+                     1.0 * self.W_FINGERPRINT +     # fp_wr perfetto
+                     _ctx_mom * self.W_MOMENTUM +   # momentum attuale
+                     _ctx_trend * self.W_TREND +    # trend attuale
+                     _ctx_vol * self.W_VOLATILITY + # volatilità attuale
+                     _ctx_reg * self.W_REGIME +     # regime attuale
+                     1.0 * self.W_RSI +             # RSI perfetto
+                     1.0 * self.W_MACD)             # MACD perfetto
+
+        # context_ratio: quanto il contesto è favorevole (0.6–1.0)
+        context_ratio = score_max / 100.0
+
         regime_f  = self.REGIME_FACTOR.get(regime, 1.0)
         vol_f     = self.VOL_FACTOR.get(volatility, 1.0)
         history_f = self._history_factor()
         prebreak_f, prebreak_detail, prebreak_signals = self._pre_breakout_factor()
         drift_f, drift_detail = self._drift_factor()
 
-        soglia = self.SOGLIA_BASE * regime_f * vol_f * history_f * prebreak_f * drift_f
-        soglia = max(self.SOGLIA_MIN, min(self.SOGLIA_MAX, soglia))
+        # ── LOSS STREAK: alza la soglia, non bloccare ──────────────────
+        # Dopo 3+ loss consecutivi la soglia sale del 10% per loss extra.
+        # I trade FORTI (score alto) passano ancora. I deboli no.
+        # Nessun deadlock: il sistema continua a operare.
+        if loss_consecutivi >= self.MAX_LOSS_CONSECUTIVI:
+            extra = loss_consecutivi - self.MAX_LOSS_CONSECUTIVI + 1  # 1, 2, 3...
+            loss_f = 1.0 + (extra * 0.10)  # 1.10, 1.20, 1.30...
+            loss_f = min(loss_f, 1.50)      # cap a +50%
+        else:
+            loss_f = 1.0
+
+        # Soglia proporzionale: scala con il max raggiungibile
+        soglia_raw = self.SOGLIA_BASE * context_ratio * regime_f * vol_f * history_f * prebreak_f * drift_f * loss_f
+        # Floor e ceiling proporzionali al contesto
+        soglia_min_ctx = self.SOGLIA_MIN * context_ratio
+        soglia = max(soglia_min_ctx, min(self.SOGLIA_MAX, soglia_raw))
 
         # ── DECISIONE ─────────────────────────────────────────────────────
         enter = score >= soglia
 
         # ── SIZE CONTINUA ─────────────────────────────────────────────────
         if enter:
-            eccedenza = (score - soglia) / max(1.0, 100.0 - soglia)
+            eccedenza = (score - soglia) / max(1.0, score_max - soglia)
             size = self.SIZE_MIN + (self.SIZE_MAX - self.SIZE_MIN) * (eccedenza ** 1.5)
             size = min(self.SIZE_MAX, max(self.SIZE_MIN, size))
         else:
@@ -1738,6 +1789,7 @@ class CampoGravitazionale:
             'size':      round(size, 3),
             'veto':      None,
             'pb_signals': prebreak_signals,
+            'score_max': round(score_max, 1),
             'breakdown': {
                 'seed':    round(s_seed, 2),
                 'fp':      round(s_fp, 2),
@@ -1748,7 +1800,9 @@ class CampoGravitazionale:
                 'rsi':     round(s_rsi, 2),
                 'macd':    round(s_macd, 2),
                 'rsi_val': round(self._last_rsi, 1),
-                'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f} d={drift_f:.2f} RSI={self._last_rsi:.0f} {prebreak_detail} {drift_detail}".strip(),
+                'score_max': round(score_max, 1),
+                'ctx':     round(context_ratio, 2),
+                'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f} d={drift_f:.2f} l={loss_f:.2f} ctx={context_ratio:.2f} smax={score_max:.0f} RSI={self._last_rsi:.0f} {prebreak_detail} {drift_detail}".strip(),
             }
         }
 
@@ -2769,17 +2823,44 @@ class OvertopBassanoV14Production:
         """
         Legge i phantom SCORE_INSUFFICIENTE e aggiusta SOGLIA_MIN e SOGLIA_BASE.
         
-        Logica:
-        - Se WR phantom > 60% su 10+ campioni → soglia troppo alta, abbassa di 1
-        - Se WR phantom < 40% su 10+ campioni → soglia troppo bassa, alza di 1
-        - Se WR phantom 40-60% → soglia corretta, non toccare
+        INTERVALLO ADATTIVO — la velocità di reazione è proporzionale alla gravità:
+        - Bilancio phantom < -$500  → intervallo 120s, step 3 (emergenza)
+        - Bilancio phantom < -$200  → intervallo 300s, step 2 (urgente)
+        - Bilancio phantom < -$50   → intervallo 600s, step 1 (normale)
+        - Bilancio phantom ≥ $0     → intervallo 900s, step 1 (stabile)
         
-        Rate limit: max 1 aggiustamento ogni 15 minuti.
+        STEP PROPORZIONALE — la forza di correzione è proporzionale alla distanza:
+        - WR phantom > 75%  → step × 2 (molto lontano dall'equilibrio)
+        - WR phantom > 60%  → step × 1 (lontano)
+        - WR phantom < 40%  → step × 1 (troppo permissivo, alza)
+        - WR phantom 40-60% → non toccare (equilibrio)
+        
+        Stessa fisica del SMORZ: l'energia di correzione è proporzionale
+        alla distanza dall'equilibrio. Non step fissi.
+        
         Limiti: SOGLIA_MIN non scende sotto 50, non sale sopra 65.
                 SOGLIA_BASE non scende sotto 55, non sale sopra 70.
         """
         now = time.time()
-        if now - self._last_soglia_autotune < self._soglia_autotune_interval:
+
+        # ── INTERVALLO ADATTIVO — leggi la gravità dal bilancio phantom ──
+        phantom_summary = self._get_phantom_summary()
+        bilancio = phantom_summary.get('bilancio', 0)
+
+        if bilancio < -500:
+            adaptive_interval = 120    # emergenza: ogni 2 minuti
+            base_step = 3
+        elif bilancio < -200:
+            adaptive_interval = 300    # urgente: ogni 5 minuti
+            base_step = 2
+        elif bilancio < -50:
+            adaptive_interval = 600    # normale: ogni 10 minuti
+            base_step = 1
+        else:
+            adaptive_interval = 900    # stabile: ogni 15 minuti
+            base_step = 1
+
+        if now - self._last_soglia_autotune < adaptive_interval:
             return
 
         stats = self._phantom_stats.get("SCORE_INSUFFICIENTE")
@@ -2798,8 +2879,8 @@ class OvertopBassanoV14Production:
         delta_lose = stats['would_lose'] - prev_lose
         delta_total = delta_win + delta_lose
 
-        if delta_total < 5:
-            return  # troppo pochi nell'intervallo
+        if delta_total < 3:
+            return  # troppo pochi nell'intervallo (era 5, abbassato per reattività)
 
         delta_wr = delta_win / delta_total
 
@@ -2812,28 +2893,36 @@ class OvertopBassanoV14Production:
         old_min = self.campo.SOGLIA_MIN
         old_base = self.campo.SOGLIA_BASE
 
+        # ── STEP PROPORZIONALE — più lontano dall'equilibrio, più forte ──
+        if delta_wr > 0.75:
+            step = base_step * 2    # molto lontano → doppio step
+        else:
+            step = base_step
+
         if delta_wr > 0.60:
             # Phantom troppo profittevoli → soglia troppo alta → ABBASSA
-            new_min = max(50, old_min - 1)
-            new_base = max(55, old_base - 1)
+            new_min = max(50, old_min - step)
+            new_base = max(55, old_base - step)
             action = "ABBASSA"
         elif delta_wr < 0.40:
-            # Phantom non profittevoli → soglia corretta o troppo bassa → ALZA
-            new_min = min(65, old_min + 1)
-            new_base = min(70, old_base + 1)
+            # Phantom non profittevoli → soglia troppo bassa → ALZA
+            new_min = min(65, old_min + step)
+            new_base = min(70, old_base + step)
             action = "ALZA"
         else:
             # 40-60% → zona giusta, non toccare
             self._last_soglia_autotune = now
-            self._log_m2("🎯", f"AUTO-TUNE: soglia OK (phantom WR={delta_wr:.0%} su {delta_total} campioni)")
+            self._log_m2("🎯", f"AUTO-TUNE: soglia OK (phantom WR={delta_wr:.0%} su {delta_total} campioni, bil=${bilancio:.0f})")
             return
 
         self.campo.SOGLIA_MIN = new_min
         self.campo.SOGLIA_BASE = new_base
         self._last_soglia_autotune = now
 
-        self._log_m2("🎯", f"AUTO-TUNE: {action} soglia | phantom WR={delta_wr:.0%} ({delta_win}W/{delta_lose}L su {delta_total}) "
-                          f"| MIN {old_min}→{new_min} BASE {old_base}→{new_base}")
+        self._log_m2("🎯", f"AUTO-TUNE: {action} soglia step={step} | phantom WR={delta_wr:.0%} "
+                          f"({delta_win}W/{delta_lose}L su {delta_total}) bil=${bilancio:.0f} "
+                          f"| MIN {old_min}→{new_min} BASE {old_base}→{new_base} "
+                          f"[intervallo={adaptive_interval}s]")
 
     # ════════════════════════════════════════════════════════════════════════
     # MOTORE 2: CAMPO GRAVITAZIONALE — Shadow Entry/Exit/Close
@@ -2995,7 +3084,8 @@ class OvertopBassanoV14Production:
             if not result['enter']:
                 # ── PHANTOM: score vicino alla soglia ma non abbastanza ──
                 if result['score'] > 50 and len(self._phantoms_open) < 5:
-                    self._record_phantom(price, f"SCORE_SOTTO_{result['score']:.0f}_vs_{result['soglia']:.0f}",
+                    smax = result.get('score_max', 100)
+                    self._record_phantom(price, f"SCORE_SOTTO_{result['score']:.0f}_vs_{result['soglia']:.0f}_smax{smax:.0f}",
                                         seed['score'], momentum, volatility, trend)
                 return
 
@@ -3005,7 +3095,7 @@ class OvertopBassanoV14Production:
                 return
 
             self._log_m2("🎯", f"ENTRY {self.campo._direction} {matrimonio_name} | score={result['score']:.1f} "
-                              f"soglia={result['soglia']:.1f} size={result['size']:.2f}x "
+                              f"soglia={result['soglia']:.1f} smax={result.get('score_max',100):.0f} size={result['size']:.2f}x "
                               f"| {result['breakdown']} @ ${price:.1f}")
 
             self._shadow = {
