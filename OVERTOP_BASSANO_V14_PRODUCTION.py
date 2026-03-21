@@ -3100,6 +3100,12 @@ class OvertopBassanoV14Production:
     def _close_shadow_trade(self, price, reason):
         """Chiude il shadow trade e registra stats M2.
         CRITICO: insegna all'Oracolo e persiste su DB — altrimenti il sistema non impara MAI.
+        
+        NOTA FEE: Il PnL paper NON include fee Binance.
+        In live con BNB: 0.075% per lato + ~0.01% slippage = 0.17% round trip.
+        Su BTC a $70k = ~$119 per trade su 1 BTC.
+        Lo scalping a 10-15s con PnL $5-17 NON è profittevole in spot.
+        Serve: futures (fee 0.07% RT) con leva, oppure trade più lunghi con PnL > $150.
         """
         try:
             if not self._shadow:
