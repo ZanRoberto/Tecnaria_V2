@@ -2724,8 +2724,18 @@ class OvertopBassanoV14Production:
             return False, f"COOLDOWN_{remaining:.0f}s (loss_streak={self._m2_loss_streak})"
 
         # ── DIFENSIVO → non entrare finché non torna NEUTRO o AGGRESSIVO
+        # MA: deadlock protection — max 15 minuti in DIFENSIVO
         if self._state == "DIFENSIVO":
-            return False, f"DIFENSIVO (loss_streak={self._m2_loss_streak})"
+            time_in_defensive = now - self._state_since
+            if time_in_defensive > 900:  # 15 minuti
+                self._state = "NEUTRO"
+                self._state_since = now
+                self._m2_loss_streak = 0
+                self._log_m2("⚙️", f"STATO → NEUTRO (auto-reset dopo {time_in_defensive/60:.0f} min in DIFENSIVO)")
+                self.telemetry.log_state_change("DIFENSIVO", "NEUTRO", 0,
+                    self._regime_current, self.campo._direction, self._shadow is not None)
+            else:
+                return False, f"DIFENSIVO_{900-time_in_defensive:.0f}s (loss_streak={self._m2_loss_streak})"
 
         # ── VELOCITÀ: non entrare se ultimo trade chiuso < 5 secondi fa ─
         if self._m2_recent_trades:
@@ -3023,25 +3033,55 @@ class OvertopBassanoV14Production:
                 return
 
             # ── SOTTO MINIMUM HOLD → non uscire per DECEL/SMORZ/TIMEOUT ──────
-            if duration < MIN_HOLD_SECONDS:
+            # R/R FIX: se il trade è in profitto, hold più lungo
+            # Se è in perdita, esci prima
+            if self.campo._direction == "LONG":
+                current_pnl = price - self._shadow["price_entry"]
+            else:
+                current_pnl = self._shadow["price_entry"] - price
+
+            if current_pnl > 0:
+                # IN PROFITTO: lascia correre — min hold 15 secondi
+                effective_min_hold = 15
+            else:
+                # IN PERDITA: esci prima — min hold 8 secondi
+                effective_min_hold = 8
+
+            if duration < effective_min_hold:
                 return
 
             # ── DECEL ─────────────────────────────────────────────────────────
+            # Se in profitto: DECEL solo se il profitto sta SCENDENDO dal max
             if duration > duration_avg * 0.3:
                 decel = self.decelero.analyze()
                 if decel['should_exit']:
-                    self._close_shadow_trade(price, "DECEL_MOMENTUM")
-                    return
+                    if current_pnl > 0:
+                        # In profitto: esci per DECEL solo se il prezzo è sceso dal max
+                        if self.campo._direction == "LONG":
+                            retreat_from_max = self._shadow_max_price - price
+                        else:
+                            retreat_from_max = price - self._shadow_min_price
+                        # Esci solo se ha ritracciato almeno $5 dal massimo
+                        if retreat_from_max > 5:
+                            self._close_shadow_trade(price, f"DECEL_MOMENTUM_WIN_{current_pnl:+.0f}")
+                            return
+                        # Altrimenti lascia correre il WIN
+                    else:
+                        # In perdita: esci subito per DECEL
+                        self._close_shadow_trade(price, "DECEL_MOMENTUM")
+                        return
 
             # ── SMORZ — impulso finito ────────────────────────────────────────
             # LONG: exit quando momentum DEBOLE (impulso UP morto)
             # SHORT: exit quando momentum FORTE (impulso DOWN morto, risale)
-            if duration > duration_avg * 0.5:
+            # R/R FIX: se in profitto, SMORZ solo dopo duration_avg (non 0.5)
+            smorz_threshold = duration_avg * 0.5 if current_pnl <= 0 else duration_avg * 1.0
+            if duration > smorz_threshold:
                 if self.campo._direction == "LONG" and momentum == "DEBOLE":
-                    self._close_shadow_trade(price, "SMORZ")
+                    self._close_shadow_trade(price, f"SMORZ{'_WIN' if current_pnl > 0 else ''}")
                     return
                 elif self.campo._direction == "SHORT" and momentum == "FORTE":
-                    self._close_shadow_trade(price, "SMORZ")
+                    self._close_shadow_trade(price, f"SMORZ{'_WIN' if current_pnl > 0 else ''}")
                     return
 
             # ── TIMEOUT ───────────────────────────────────────────────────────
