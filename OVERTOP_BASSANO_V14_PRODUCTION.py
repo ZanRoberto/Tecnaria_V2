@@ -1851,14 +1851,32 @@ class CampoGravitazionale:
 
     def _history_factor(self) -> float:
         """Soglia si muove con la storia recente.
-        MAI abbassare la soglia quando va bene — il pugile non abbassa le braccia.
-        Solo alzarla quando va male."""
+        
+        Alza la soglia dopo una serie di loss — ma con DECADIMENTO TEMPORALE.
+        Il pugile alza le braccia dopo le botte, ma le riabbassa gradualmente
+        se non arrivano altri pugni. Altrimenti resta con le braccia alzate
+        per sempre e non può più tirare — deadlock.
+        
+        Decadimento: da 1.20 torna a 1.0 in 5 minuti (300 secondi).
+        Se arriva un altro loss, il timer si resetta.
+        """
         if len(self._recent_results) < 5:
             return 1.0
         recent_wr = sum(1 for r in self._recent_results if r) / len(self._recent_results)
         if recent_wr < 0.40:
-            return 1.20    # sta andando male, soglia più alta
-        return 1.0         # va bene O va nella media → NON TOCCARE
+            # Quanto tempo è passato dall'ultimo trade?
+            # Se non abbiamo il timestamp, usiamo il fattore pieno
+            if not hasattr(self, '_history_factor_since'):
+                self._history_factor_since = time.time()
+            elapsed = time.time() - self._history_factor_since
+            # Decade da 1.20 a 1.0 in 300 secondi (5 minuti)
+            decay = max(0.0, 1.0 - elapsed / 300.0)
+            factor = 1.0 + (0.20 * decay)  # 1.20 → 1.0
+            return factor
+        # WR OK → resetta il timer e torna a 1.0
+        if hasattr(self, '_history_factor_since'):
+            del self._history_factor_since
+        return 1.0
 
     def _pre_breakout_factor(self) -> tuple:
         """
