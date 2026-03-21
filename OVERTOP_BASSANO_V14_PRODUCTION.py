@@ -2156,6 +2156,13 @@ class OvertopBassanoV14Production:
         self._m2_last_loss_time = 0               # timestamp dell'ultimo loss
         self._m2_loss_streak = 0                  # loss consecutivi correnti
         self._m2_cooldown_until = 0               # non entrare fino a questo timestamp
+        # ── AUTO-TUNING SOGLIA — impara dai phantom ──────────────────────
+        # Il sistema legge i propri phantom e aggiusta SOGLIA_MIN automaticamente.
+        # Se i phantom bloccati hanno WR > 60% su 10+ campioni → soglia troppo alta.
+        # Se WR < 40% → soglia troppo bassa. Rate limit: 1 aggiustamento ogni 15 min.
+        self._last_soglia_autotune = 0            # timestamp ultimo aggiustamento
+        self._soglia_autotune_interval = 900      # 15 minuti tra aggiustamenti
+        self._phantom_stats_snapshot = {}         # snapshot per delta calcolo
         # Stats separate per Motore 2 — ripristina da DB se disponibili
         self._m2_wins    = 0
         self._m2_losses  = 0
@@ -2306,6 +2313,7 @@ class OvertopBassanoV14Production:
             self._persist.save(self.capital, self.total_trades)
             self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
             self.telemetry.persist_to_db(DB_PATH)
+            self._auto_tune_soglia()  # il sistema impara dai propri phantom
             self.last_persist = now
 
         contesto = self.analyzer.analyze()
@@ -2751,6 +2759,81 @@ class OvertopBassanoV14Production:
                     return False, f"LOSS_PESANTE_${abs(last['pnl']):.0f}_pausa"
 
         return True, "OK"
+
+    # ════════════════════════════════════════════════════════════════════════
+    # AUTO-TUNING SOGLIA — IL SISTEMA IMPARA DAI PROPRI PHANTOM
+    # Non servono manopole. I phantom dicono se la soglia è giusta.
+    # ════════════════════════════════════════════════════════════════════════
+
+    def _auto_tune_soglia(self):
+        """
+        Legge i phantom SCORE_INSUFFICIENTE e aggiusta SOGLIA_MIN e SOGLIA_BASE.
+        
+        Logica:
+        - Se WR phantom > 60% su 10+ campioni → soglia troppo alta, abbassa di 1
+        - Se WR phantom < 40% su 10+ campioni → soglia troppo bassa, alza di 1
+        - Se WR phantom 40-60% → soglia corretta, non toccare
+        
+        Rate limit: max 1 aggiustamento ogni 15 minuti.
+        Limiti: SOGLIA_MIN non scende sotto 50, non sale sopra 65.
+                SOGLIA_BASE non scende sotto 55, non sale sopra 70.
+        """
+        now = time.time()
+        if now - self._last_soglia_autotune < self._soglia_autotune_interval:
+            return
+
+        stats = self._phantom_stats.get("SCORE_INSUFFICIENTE")
+        if not stats:
+            return
+
+        total_closed = stats['would_win'] + stats['would_lose']
+        if total_closed < 10:
+            return  # troppo pochi per decidere
+
+        # Calcola delta dall'ultimo snapshot (non dati cumulativi)
+        prev = self._phantom_stats_snapshot.get("SCORE_INSUFFICIENTE", {})
+        prev_win = prev.get('would_win', 0)
+        prev_lose = prev.get('would_lose', 0)
+        delta_win = stats['would_win'] - prev_win
+        delta_lose = stats['would_lose'] - prev_lose
+        delta_total = delta_win + delta_lose
+
+        if delta_total < 5:
+            return  # troppo pochi nell'intervallo
+
+        delta_wr = delta_win / delta_total
+
+        # Salva snapshot per prossimo delta
+        self._phantom_stats_snapshot["SCORE_INSUFFICIENTE"] = {
+            'would_win': stats['would_win'],
+            'would_lose': stats['would_lose'],
+        }
+
+        old_min = self.campo.SOGLIA_MIN
+        old_base = self.campo.SOGLIA_BASE
+
+        if delta_wr > 0.60:
+            # Phantom troppo profittevoli → soglia troppo alta → ABBASSA
+            new_min = max(50, old_min - 1)
+            new_base = max(55, old_base - 1)
+            action = "ABBASSA"
+        elif delta_wr < 0.40:
+            # Phantom non profittevoli → soglia corretta o troppo bassa → ALZA
+            new_min = min(65, old_min + 1)
+            new_base = min(70, old_base + 1)
+            action = "ALZA"
+        else:
+            # 40-60% → zona giusta, non toccare
+            self._last_soglia_autotune = now
+            self._log_m2("🎯", f"AUTO-TUNE: soglia OK (phantom WR={delta_wr:.0%} su {delta_total} campioni)")
+            return
+
+        self.campo.SOGLIA_MIN = new_min
+        self.campo.SOGLIA_BASE = new_base
+        self._last_soglia_autotune = now
+
+        self._log_m2("🎯", f"AUTO-TUNE: {action} soglia | phantom WR={delta_wr:.0%} ({delta_win}W/{delta_lose}L su {delta_total}) "
+                          f"| MIN {old_min}→{new_min} BASE {old_base}→{new_base}")
 
     # ════════════════════════════════════════════════════════════════════════
     # MOTORE 2: CAMPO GRAVITAZIONALE — Shadow Entry/Exit/Close
