@@ -1675,15 +1675,15 @@ class CampoGravitazionale:
         # Non basta contare i tick. Ogni senso deve essere attivo:
         #   - Tick >= 200 (buffer base)
         #   - prices_long >= 100 (drift affidabile)
-        #   - prices_ta >= 30 (RSI e MACD calcolati su dati reali)
-        # ~5 minuti di warmup — la volpe annusa, guarda, ascolta.
+        #   - prices_ta >= 35 (RSI=14 periodi + MACD=26+9=35 periodi)
+        # ~6 minuti di warmup — la volpe annusa, guarda, ascolta.
         warmup_checks = []
         if self._tick_count < 200:
             warmup_checks.append(f"tick={self._tick_count}/200")
         if len(self._prices_long) < 100:
             warmup_checks.append(f"drift={len(self._prices_long)}/100")
-        if len(self._prices_ta) < 30:
-            warmup_checks.append(f"RSI_MACD={len(self._prices_ta)}/30")
+        if len(self._prices_ta) < 35:
+            warmup_checks.append(f"RSI_MACD={len(self._prices_ta)}/35")
         if warmup_checks:
             return self._veto(f"WARMUP_{'|'.join(warmup_checks)}")
 
