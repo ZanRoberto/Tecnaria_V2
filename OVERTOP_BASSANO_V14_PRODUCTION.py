@@ -1594,6 +1594,14 @@ class CampoGravitazionale:
         self._direction = "LONG"  # LONG o SHORT — il bridge decide
         self._direction_last_change = 0       # timestamp ultimo flip
         self._direction_bearish_streak = 0    # tick consecutivi bearish >=2
+        # ── POST-FLIP COOLDOWN ADATTIVO ────────────────────────────────
+        # Dopo un flip di direzione, aspetta prima di entrare.
+        # Il cooldown si auto-calibra: se i trade subito dopo il flip
+        # perdono → il cooldown cresce. Se vincono → si accorcia.
+        self._post_flip_cooldown = 30         # secondi di attesa dopo flip (parte da 30)
+        self._post_flip_results = deque(maxlen=10)  # ultimi 10 trade post-flip: (is_win, pnl)
+        self._POST_FLIP_COOLDOWN_MIN = 10     # minimo 10 secondi
+        self._POST_FLIP_COOLDOWN_MAX = 120    # massimo 2 minuti
         # ── PRE-BREAKOUT DETECTOR ─────────────────────────────────────────
         self._prices_short = deque(maxlen=50)     # ultimi 50 prezzi per compressione
         self._seed_history = deque(maxlen=10)     # ultimi 10 seed per derivata
@@ -3088,6 +3096,13 @@ class OvertopBassanoV14Production:
             # Il mercato decide, non noi. Drift + MACD + Trend = verdetto.
             self._auto_detect_direction(trend)
 
+            # ── POST-FLIP COOLDOWN — non entrare subito dopo un cambio direzione ──
+            # Il flip è una decisione grossa. Aspetta che il mercato confermi.
+            # Il cooldown si auto-calibra dai risultati dei trade post-flip.
+            time_since_flip = time.time() - self.campo._direction_last_change
+            if time_since_flip < self.campo._post_flip_cooldown and self.campo._direction_last_change > 0:
+                return  # silenzio — non phantom, è attesa voluta
+
             _dir = self.campo._direction
             fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend, _dir)
             matrimonio     = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
@@ -3332,6 +3347,38 @@ class OvertopBassanoV14Production:
 
             # ── STATE ENGINE: aggiorna stato dopo ogni trade ─────────────
             self._state_engine_update(pnl, is_win, trade_duration)
+
+            # ── POST-FLIP LEARNING — il cooldown impara dai propri errori ──
+            # Se questo trade è stato fatto entro 60s da un flip di direzione,
+            # registra il risultato. Se i trade post-flip perdono → allunga
+            # il cooldown. Se vincono → accorcia.
+            if self._shadow_entry_time and self.campo._direction_last_change > 0:
+                time_entry_after_flip = self._shadow_entry_time - self.campo._direction_last_change
+                if 0 < time_entry_after_flip < 120:  # trade entrato entro 2 min dal flip
+                    self.campo._post_flip_results.append({
+                        'is_win': is_win, 'pnl': pnl,
+                        'seconds_after_flip': time_entry_after_flip
+                    })
+                    # Auto-calibra ogni 5 trade post-flip
+                    if len(self.campo._post_flip_results) >= 5:
+                        pf_list = list(self.campo._post_flip_results)
+                        pf_wins = sum(1 for r in pf_list if r['is_win'])
+                        pf_wr = pf_wins / len(pf_list)
+                        pf_pnl = sum(r['pnl'] for r in pf_list)
+                        old_cd = self.campo._post_flip_cooldown
+                        if pf_wr < 0.40 or pf_pnl < -50:
+                            # Trade post-flip perdono → allunga cooldown
+                            self.campo._post_flip_cooldown = min(
+                                self.campo._POST_FLIP_COOLDOWN_MAX,
+                                old_cd + 10)
+                        elif pf_wr > 0.65 and pf_pnl > 0:
+                            # Trade post-flip vincono → accorcia cooldown
+                            self.campo._post_flip_cooldown = max(
+                                self.campo._POST_FLIP_COOLDOWN_MIN,
+                                old_cd - 5)
+                        if self.campo._post_flip_cooldown != old_cd:
+                            self._log_m2("🔄", f"POST-FLIP COOLDOWN: {old_cd}s → {self.campo._post_flip_cooldown}s "
+                                              f"(WR={pf_wr:.0%} PnL=${pf_pnl:.0f} su {len(pf_list)} trade)")
 
             self.campo.record_result(is_win, exit_reason=reason, 
                                      pb_signals=self._shadow.get("pb_signals", 0),
