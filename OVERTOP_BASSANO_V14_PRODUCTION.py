@@ -1594,14 +1594,6 @@ class CampoGravitazionale:
         self._direction = "LONG"  # LONG o SHORT — il bridge decide
         self._direction_last_change = 0       # timestamp ultimo flip
         self._direction_bearish_streak = 0    # tick consecutivi bearish >=2
-        # ── POST-FLIP COOLDOWN ADATTIVO ────────────────────────────────
-        # Dopo un flip di direzione, aspetta prima di entrare.
-        # Il cooldown si auto-calibra: se i trade subito dopo il flip
-        # perdono → il cooldown cresce. Se vincono → si accorcia.
-        self._post_flip_cooldown = 30         # secondi di attesa dopo flip (parte da 30)
-        self._post_flip_results = deque(maxlen=10)  # ultimi 10 trade post-flip: (is_win, pnl)
-        self._POST_FLIP_COOLDOWN_MIN = 10     # minimo 10 secondi
-        self._POST_FLIP_COOLDOWN_MAX = 120    # massimo 2 minuti
         # ── PRE-BREAKOUT DETECTOR ─────────────────────────────────────────
         self._prices_short = deque(maxlen=50)     # ultimi 50 prezzi per compressione
         self._seed_history = deque(maxlen=10)     # ultimi 10 seed per derivata
@@ -1676,31 +1668,11 @@ class CampoGravitazionale:
                 pass  # non è un veto forte, il punteggio basso basta
 
         if loss_consecutivi >= self.MAX_LOSS_CONSECUTIVI:
-            # Non bloccare per sempre — pausa proporzionale ai loss, poi riprova.
-            # Il State Engine gestisce già il cooldown e DIFENSIVO.
-            # Qui aggiungiamo solo un peso extra alla soglia, non un veto assoluto.
-            # 3 loss → soglia +10%, 4 loss → +20%, 5 loss → +30%
-            # Così i trade FORTI passano ancora, quelli deboli no.
-            pass  # gestito sotto come moltiplicatore soglia, non come veto
+            return self._veto(f"LOSS_CONSECUTIVI_{loss_consecutivi}")
 
-        # ── WARMUP INTELLIGENTE — la volpe non entra cieca ────────────
-        # Non basta contare i tick. Ogni senso deve essere attivo:
-        #   - Drift: serve _prices_long piena (200 tick)
-        #   - RSI/MACD: servono 30 campioni × 50 tick = 1500 tick
-        #   - RegimeDetector: serve 500 tick
-        #   - SeedScorer: serve 20 tick (veloce)
-        #
-        # Il sistema NON entra finché TUTTI i sensi sono pronti.
-        # Non un timer fisso — un check reale sui buffer.
-        warmup_checks = []
-        if self._tick_count < 200:
-            warmup_checks.append(f"tick={self._tick_count}/200")
-        if len(self._prices_long) < 100:
-            warmup_checks.append(f"drift={len(self._prices_long)}/100")
-        if len(self._prices_ta) < 30:
-            warmup_checks.append(f"RSI_MACD={len(self._prices_ta)}/30")
-        if warmup_checks:
-            return self._veto(f"WARMUP_{'|'.join(warmup_checks)}")
+        # ── WARMUP: buffer non ancora pieni → non operare ─────────────
+        if self._tick_count < self.WARMUP_TICKS:
+            return self._veto(f"WARMUP_{self._tick_count}/{self.WARMUP_TICKS}")
 
         # ── DRIFT VETO: direzione sbagliata → NON ENTRARE ────────────────
         # LONG: mercato scende → VETO. SHORT: mercato sale → VETO.
@@ -1739,16 +1711,10 @@ class CampoGravitazionale:
         score = s_seed + s_fp + s_mom + s_trend + s_vol + s_reg + s_rsi + s_macd
 
         # ── SOGLIA PROPORZIONALE AL CONTESTO ─────────────────────────────
-        # La soglia è proporzionale allo score MASSIMO raggiungibile nel
-        # contesto corrente. Stessa % di selettività in ogni regime.
-        #
+        # La soglia scala con lo score MASSIMO raggiungibile nel contesto.
         # In TRENDING_BULL+BASSA+UP: score_max=100, soglia=60 → chiedi 60%
         # In RANGING+ALTA+SIDEWAYS:  score_max=65,  soglia=39 → chiedi 60%
-        #
-        # Senza questo, soglia 60 in RANGING chiede il 92% del max = blocca tutto.
         # ─────────────────────────────────────────────────────────────────
-
-        # Score max per il contesto corrente (dimensioni NON controllabili)
         if self._direction == "SHORT":
             _ctx_mom   = self.MOMENTUM_SCORE_SHORT.get(momentum, 0.5)
             _ctx_trend = self.TREND_SCORE_SHORT.get(trend, 0.5)
@@ -1759,16 +1725,10 @@ class CampoGravitazionale:
             _ctx_reg   = self.REGIME_SCORE_LONG.get(regime, 0.2)
         _ctx_vol = self.VOL_SCORE.get(volatility, 0.5)
 
-        score_max = (1.0 * self.W_SEED +           # seed perfetto
-                     1.0 * self.W_FINGERPRINT +     # fp_wr perfetto
-                     _ctx_mom * self.W_MOMENTUM +   # momentum attuale
-                     _ctx_trend * self.W_TREND +    # trend attuale
-                     _ctx_vol * self.W_VOLATILITY + # volatilità attuale
-                     _ctx_reg * self.W_REGIME +     # regime attuale
-                     1.0 * self.W_RSI +             # RSI perfetto
-                     1.0 * self.W_MACD)             # MACD perfetto
-
-        # context_ratio: quanto il contesto è favorevole (0.6–1.0)
+        score_max = (1.0 * self.W_SEED + 1.0 * self.W_FINGERPRINT +
+                     _ctx_mom * self.W_MOMENTUM + _ctx_trend * self.W_TREND +
+                     _ctx_vol * self.W_VOLATILITY + _ctx_reg * self.W_REGIME +
+                     1.0 * self.W_RSI + 1.0 * self.W_MACD)
         context_ratio = score_max / 100.0
 
         regime_f  = self.REGIME_FACTOR.get(regime, 1.0)
@@ -1777,22 +1737,7 @@ class CampoGravitazionale:
         prebreak_f, prebreak_detail, prebreak_signals = self._pre_breakout_factor()
         drift_f, drift_detail = self._drift_factor()
 
-        # ── LOSS STREAK: alza la soglia, non bloccare ──────────────────
-        # Dopo 3+ loss consecutivi la soglia sale del 10% per loss extra.
-        # I trade FORTI (score alto) passano ancora. I deboli no.
-        # Nessun deadlock: il sistema continua a operare.
-        if loss_consecutivi >= self.MAX_LOSS_CONSECUTIVI:
-            extra = loss_consecutivi - self.MAX_LOSS_CONSECUTIVI + 1  # 1, 2, 3...
-            loss_f = 1.0 + (extra * 0.10)  # 1.10, 1.20, 1.30...
-            loss_f = min(loss_f, 1.50)      # cap a +50%
-        else:
-            loss_f = 1.0
-
-        # Soglia proporzionale: scala con il max raggiungibile
-        soglia_raw = self.SOGLIA_BASE * context_ratio * regime_f * vol_f * history_f * prebreak_f * drift_f * loss_f
-        # Floor: proporzionale al contesto MA con pavimento assoluto a 48
-        # Questo impedisce che matrimoni deboli (RANGE_VOL_W score ~44) passino
-        # mentre RANGE_VOL_F (score ~54-66) passa tranquillamente
+        soglia_raw = self.SOGLIA_BASE * context_ratio * regime_f * vol_f * history_f * prebreak_f * drift_f
         SOGLIA_FLOOR_ASSOLUTO = 48
         soglia_min_ctx = max(SOGLIA_FLOOR_ASSOLUTO, self.SOGLIA_MIN * context_ratio)
         soglia = max(soglia_min_ctx, min(self.SOGLIA_MAX, soglia_raw))
@@ -1828,7 +1773,7 @@ class CampoGravitazionale:
                 'rsi_val': round(self._last_rsi, 1),
                 'score_max': round(score_max, 1),
                 'ctx':     round(context_ratio, 2),
-                'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f} d={drift_f:.2f} l={loss_f:.2f} ctx={context_ratio:.2f} smax={score_max:.0f} RSI={self._last_rsi:.0f} {prebreak_detail} {drift_detail}".strip(),
+                'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f} d={drift_f:.2f} ctx={context_ratio:.2f} smax={score_max:.0f} RSI={self._last_rsi:.0f} {prebreak_detail} {drift_detail}".strip(),
             }
         }
 
@@ -1874,32 +1819,14 @@ class CampoGravitazionale:
 
     def _history_factor(self) -> float:
         """Soglia si muove con la storia recente.
-        
-        Alza la soglia dopo una serie di loss — ma con DECADIMENTO TEMPORALE.
-        Il pugile alza le braccia dopo le botte, ma le riabbassa gradualmente
-        se non arrivano altri pugni. Altrimenti resta con le braccia alzate
-        per sempre e non può più tirare — deadlock.
-        
-        Decadimento: da 1.20 torna a 1.0 in 5 minuti (300 secondi).
-        Se arriva un altro loss, il timer si resetta.
-        """
+        MAI abbassare la soglia quando va bene — il pugile non abbassa le braccia.
+        Solo alzarla quando va male."""
         if len(self._recent_results) < 5:
             return 1.0
         recent_wr = sum(1 for r in self._recent_results if r) / len(self._recent_results)
         if recent_wr < 0.40:
-            # Quanto tempo è passato dall'ultimo trade?
-            # Se non abbiamo il timestamp, usiamo il fattore pieno
-            if not hasattr(self, '_history_factor_since'):
-                self._history_factor_since = time.time()
-            elapsed = time.time() - self._history_factor_since
-            # Decade da 1.20 a 1.0 in 300 secondi (5 minuti)
-            decay = max(0.0, 1.0 - elapsed / 300.0)
-            factor = 1.0 + (0.20 * decay)  # 1.20 → 1.0
-            return factor
-        # WR OK → resetta il timer e torna a 1.0
-        if hasattr(self, '_history_factor_since'):
-            del self._history_factor_since
-        return 1.0
+            return 1.20    # sta andando male, soglia più alta
+        return 1.0         # va bene O va nella media → NON TOCCARE
 
     def _pre_breakout_factor(self) -> tuple:
         """
@@ -2249,7 +2176,7 @@ class OvertopBassanoV14Production:
         # Il tempismo. Non solo COSA fare, ma QUANDO NON FARLO.
         self._state = "NEUTRO"                   # AGGRESSIVO | NEUTRO | DIFENSIVO
         self._state_since = time.time()           # quando è entrato nello stato corrente
-        self._state_min_duration = 120            # minimo 2 minuti in ogni stato (era 5 — troppo lento)
+        self._state_min_duration = 300            # minimo 5 minuti in ogni stato
         self._m2_recent_trades = deque(maxlen=10) # ultimi 10 trade M2: {'ts', 'pnl', 'is_win', 'duration'}
         self._m2_last_loss_time = 0               # timestamp dell'ultimo loss
         self._m2_loss_streak = 0                  # loss consecutivi correnti
@@ -2782,27 +2709,16 @@ class OvertopBassanoV14Production:
             self._m2_loss_streak += 1
             self._m2_last_loss_time = now
 
-            # ── COOLDOWN PROPORZIONALE AL DANNO ──────────────────────────
-            # 3 loss da $0.01 ≠ 3 loss da $60. Il cooldown guarda il PnL.
-            #
-            # Loss streak × gravità del PnL:
-            #   loss < $1    → micro-loss, pausa minima (10s per streak)
-            #   loss $1-$20  → loss normale, pausa media (20s per streak)
-            #   loss > $20   → loss pesante, pausa lunga (45s per streak)
-            #
-            # Streak amplifica: streak=1 → 1x, streak=2 → 1.5x, streak=3+ → 2x
-            abs_pnl = abs(pnl)
-            if abs_pnl < 1.0:
-                base_cooldown = 10     # micro-loss
-            elif abs_pnl < 20.0:
-                base_cooldown = 20     # loss normale
+            # ── COOLDOWN PROGRESSIVO DOPO LOSS ──────────────────────────
+            # 1 loss → 15 secondi di pausa
+            # 2 loss consecutivi → 60 secondi
+            # 3+ loss consecutivi → 180 secondi (3 minuti)
+            if self._m2_loss_streak == 1:
+                self._m2_cooldown_until = now + 15
+            elif self._m2_loss_streak == 2:
+                self._m2_cooldown_until = now + 60
             else:
-                base_cooldown = 45     # loss pesante
-
-            streak_mult = min(2.0, 0.5 + self._m2_loss_streak * 0.5)  # 1.0, 1.5, 2.0
-            cooldown = base_cooldown * streak_mult
-            cooldown = min(cooldown, 120)  # cap a 2 minuti — mai più di 2 minuti
-            self._m2_cooldown_until = now + cooldown
+                self._m2_cooldown_until = now + 180
 
         # ── TRANSIZIONE DI STATO ────────────────────────────────────────
         # Basata su performance recente, non sul singolo trade
@@ -2841,19 +2757,18 @@ class OvertopBassanoV14Production:
             return False, f"COOLDOWN_{remaining:.0f}s (loss_streak={self._m2_loss_streak})"
 
         # ── DIFENSIVO → non entrare finché non torna NEUTRO o AGGRESSIVO
-        # MA: deadlock protection — max 5 minuti in DIFENSIVO
-        # 15 minuti era troppo — il mercato cambia faccia in 2 minuti
+        # MA: deadlock protection — max 15 minuti in DIFENSIVO
         if self._state == "DIFENSIVO":
             time_in_defensive = now - self._state_since
-            if time_in_defensive > 300:  # 5 minuti
+            if time_in_defensive > 900:  # 15 minuti
                 self._state = "NEUTRO"
                 self._state_since = now
                 self._m2_loss_streak = 0
-                self._log_m2("⚙️", f"STATO → NEUTRO (auto-reset dopo {time_in_defensive/60:.1f} min in DIFENSIVO)")
+                self._log_m2("⚙️", f"STATO → NEUTRO (auto-reset dopo {time_in_defensive/60:.0f} min in DIFENSIVO)")
                 self.telemetry.log_state_change("DIFENSIVO", "NEUTRO", 0,
                     self._regime_current, self.campo._direction, self._shadow is not None)
             else:
-                return False, f"DIFENSIVO_{300-time_in_defensive:.0f}s (loss_streak={self._m2_loss_streak})"
+                return False, f"DIFENSIVO_{900-time_in_defensive:.0f}s (loss_streak={self._m2_loss_streak})"
 
         # ── VELOCITÀ: non entrare se ultimo trade chiuso < 5 secondi fa ─
         if self._m2_recent_trades:
@@ -2879,44 +2794,17 @@ class OvertopBassanoV14Production:
         """
         Legge i phantom SCORE_INSUFFICIENTE e aggiusta SOGLIA_MIN e SOGLIA_BASE.
         
-        INTERVALLO ADATTIVO — la velocità di reazione è proporzionale alla gravità:
-        - Bilancio phantom < -$500  → intervallo 120s, step 3 (emergenza)
-        - Bilancio phantom < -$200  → intervallo 300s, step 2 (urgente)
-        - Bilancio phantom < -$50   → intervallo 600s, step 1 (normale)
-        - Bilancio phantom ≥ $0     → intervallo 900s, step 1 (stabile)
+        Logica:
+        - Se WR phantom > 60% su 10+ campioni → soglia troppo alta, abbassa di 1
+        - Se WR phantom < 40% su 10+ campioni → soglia troppo bassa, alza di 1
+        - Se WR phantom 40-60% → soglia corretta, non toccare
         
-        STEP PROPORZIONALE — la forza di correzione è proporzionale alla distanza:
-        - WR phantom > 75%  → step × 2 (molto lontano dall'equilibrio)
-        - WR phantom > 60%  → step × 1 (lontano)
-        - WR phantom < 40%  → step × 1 (troppo permissivo, alza)
-        - WR phantom 40-60% → non toccare (equilibrio)
-        
-        Stessa fisica del SMORZ: l'energia di correzione è proporzionale
-        alla distanza dall'equilibrio. Non step fissi.
-        
+        Rate limit: max 1 aggiustamento ogni 15 minuti.
         Limiti: SOGLIA_MIN non scende sotto 50, non sale sopra 65.
                 SOGLIA_BASE non scende sotto 55, non sale sopra 70.
         """
         now = time.time()
-
-        # ── INTERVALLO ADATTIVO — leggi la gravità dal bilancio phantom ──
-        phantom_summary = self._get_phantom_summary()
-        bilancio = phantom_summary.get('bilancio', 0)
-
-        if bilancio < -500:
-            adaptive_interval = 120    # emergenza: ogni 2 minuti
-            base_step = 3
-        elif bilancio < -200:
-            adaptive_interval = 300    # urgente: ogni 5 minuti
-            base_step = 2
-        elif bilancio < -50:
-            adaptive_interval = 600    # normale: ogni 10 minuti
-            base_step = 1
-        else:
-            adaptive_interval = 900    # stabile: ogni 15 minuti
-            base_step = 1
-
-        if now - self._last_soglia_autotune < adaptive_interval:
+        if now - self._last_soglia_autotune < self._soglia_autotune_interval:
             return
 
         stats = self._phantom_stats.get("SCORE_INSUFFICIENTE")
@@ -2935,8 +2823,8 @@ class OvertopBassanoV14Production:
         delta_lose = stats['would_lose'] - prev_lose
         delta_total = delta_win + delta_lose
 
-        if delta_total < 3:
-            return  # troppo pochi nell'intervallo (era 5, abbassato per reattività)
+        if delta_total < 5:
+            return  # troppo pochi nell'intervallo
 
         delta_wr = delta_win / delta_total
 
@@ -2949,36 +2837,28 @@ class OvertopBassanoV14Production:
         old_min = self.campo.SOGLIA_MIN
         old_base = self.campo.SOGLIA_BASE
 
-        # ── STEP PROPORZIONALE — più lontano dall'equilibrio, più forte ──
-        if delta_wr > 0.75:
-            step = base_step * 2    # molto lontano → doppio step
-        else:
-            step = base_step
-
         if delta_wr > 0.60:
             # Phantom troppo profittevoli → soglia troppo alta → ABBASSA
-            new_min = max(50, old_min - step)
-            new_base = max(55, old_base - step)
+            new_min = max(50, old_min - 1)
+            new_base = max(55, old_base - 1)
             action = "ABBASSA"
         elif delta_wr < 0.40:
-            # Phantom non profittevoli → soglia troppo bassa → ALZA
-            new_min = min(65, old_min + step)
-            new_base = min(70, old_base + step)
+            # Phantom non profittevoli → soglia corretta o troppo bassa → ALZA
+            new_min = min(65, old_min + 1)
+            new_base = min(70, old_base + 1)
             action = "ALZA"
         else:
             # 40-60% → zona giusta, non toccare
             self._last_soglia_autotune = now
-            self._log_m2("🎯", f"AUTO-TUNE: soglia OK (phantom WR={delta_wr:.0%} su {delta_total} campioni, bil=${bilancio:.0f})")
+            self._log_m2("🎯", f"AUTO-TUNE: soglia OK (phantom WR={delta_wr:.0%} su {delta_total} campioni)")
             return
 
         self.campo.SOGLIA_MIN = new_min
         self.campo.SOGLIA_BASE = new_base
         self._last_soglia_autotune = now
 
-        self._log_m2("🎯", f"AUTO-TUNE: {action} soglia step={step} | phantom WR={delta_wr:.0%} "
-                          f"({delta_win}W/{delta_lose}L su {delta_total}) bil=${bilancio:.0f} "
-                          f"| MIN {old_min}→{new_min} BASE {old_base}→{new_base} "
-                          f"[intervallo={adaptive_interval}s]")
+        self._log_m2("🎯", f"AUTO-TUNE: {action} soglia | phantom WR={delta_wr:.0%} ({delta_win}W/{delta_lose}L su {delta_total}) "
+                          f"| MIN {old_min}→{new_min} BASE {old_base}→{new_base}")
 
     # ════════════════════════════════════════════════════════════════════════
     # MOTORE 2: CAMPO GRAVITAZIONALE — Shadow Entry/Exit/Close
@@ -3065,13 +2945,19 @@ class OvertopBassanoV14Production:
         
         old_direction = campo._direction
         
-        # LONG → SHORT: serve conferma (3 tick) + cooldown
-        if campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
-            campo._direction = "SHORT"
-            campo._direction_last_change = now
-            campo._direction_bearish_streak = 0
-        # SHORT → LONG: basta 1 tick con bearish < 2 + cooldown
-        elif campo._direction == "SHORT" and bearish_signals < 2 and cooldown_ok:
+        # LONG → SHORT: DISABILITATO
+        # Lo SHORT non è stato calibrato sui dati reali.
+        # Tutti i profitti vengono da LONG. Lo SHORT costa e basta.
+        # Quando avremo dati SHORT sufficienti, lo riabiliteremo.
+        # Per ora: SOLO LONG.
+        #
+        # if campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
+        #     campo._direction = "SHORT"
+        #     campo._direction_last_change = now
+        #     campo._direction_bearish_streak = 0
+        
+        # SHORT → LONG: se per qualche motivo è in SHORT, torna LONG
+        if campo._direction == "SHORT":
             campo._direction = "LONG"
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
@@ -3111,13 +2997,6 @@ class OvertopBassanoV14Production:
             # Il mercato decide, non noi. Drift + MACD + Trend = verdetto.
             self._auto_detect_direction(trend)
 
-            # ── POST-FLIP COOLDOWN — non entrare subito dopo un cambio direzione ──
-            # Il flip è una decisione grossa. Aspetta che il mercato confermi.
-            # Il cooldown si auto-calibra dai risultati dei trade post-flip.
-            time_since_flip = time.time() - self.campo._direction_last_change
-            if time_since_flip < self.campo._post_flip_cooldown and self.campo._direction_last_change > 0:
-                return  # silenzio — non phantom, è attesa voluta
-
             _dir = self.campo._direction
             fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend, _dir)
             matrimonio     = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
@@ -3147,8 +3026,7 @@ class OvertopBassanoV14Production:
             if not result['enter']:
                 # ── PHANTOM: score vicino alla soglia ma non abbastanza ──
                 if result['score'] > 50 and len(self._phantoms_open) < 5:
-                    smax = result.get('score_max', 100)
-                    self._record_phantom(price, f"SCORE_SOTTO_{result['score']:.0f}_vs_{result['soglia']:.0f}_smax{smax:.0f}",
+                    self._record_phantom(price, f"SCORE_SOTTO_{result['score']:.0f}_vs_{result['soglia']:.0f}",
                                         seed['score'], momentum, volatility, trend)
                 return
 
@@ -3158,7 +3036,7 @@ class OvertopBassanoV14Production:
                 return
 
             self._log_m2("🎯", f"ENTRY {self.campo._direction} {matrimonio_name} | score={result['score']:.1f} "
-                              f"soglia={result['soglia']:.1f} smax={result.get('score_max',100):.0f} size={result['size']:.2f}x "
+                              f"soglia={result['soglia']:.1f} size={result['size']:.2f}x "
                               f"| {result['breakdown']} @ ${price:.1f}")
 
             self._shadow = {
@@ -3362,38 +3240,6 @@ class OvertopBassanoV14Production:
 
             # ── STATE ENGINE: aggiorna stato dopo ogni trade ─────────────
             self._state_engine_update(pnl, is_win, trade_duration)
-
-            # ── POST-FLIP LEARNING — il cooldown impara dai propri errori ──
-            # Se questo trade è stato fatto entro 60s da un flip di direzione,
-            # registra il risultato. Se i trade post-flip perdono → allunga
-            # il cooldown. Se vincono → accorcia.
-            if self._shadow_entry_time and self.campo._direction_last_change > 0:
-                time_entry_after_flip = self._shadow_entry_time - self.campo._direction_last_change
-                if 0 < time_entry_after_flip < 120:  # trade entrato entro 2 min dal flip
-                    self.campo._post_flip_results.append({
-                        'is_win': is_win, 'pnl': pnl,
-                        'seconds_after_flip': time_entry_after_flip
-                    })
-                    # Auto-calibra ogni 5 trade post-flip
-                    if len(self.campo._post_flip_results) >= 5:
-                        pf_list = list(self.campo._post_flip_results)
-                        pf_wins = sum(1 for r in pf_list if r['is_win'])
-                        pf_wr = pf_wins / len(pf_list)
-                        pf_pnl = sum(r['pnl'] for r in pf_list)
-                        old_cd = self.campo._post_flip_cooldown
-                        if pf_wr < 0.40 or pf_pnl < -50:
-                            # Trade post-flip perdono → allunga cooldown
-                            self.campo._post_flip_cooldown = min(
-                                self.campo._POST_FLIP_COOLDOWN_MAX,
-                                old_cd + 10)
-                        elif pf_wr > 0.65 and pf_pnl > 0:
-                            # Trade post-flip vincono → accorcia cooldown
-                            self.campo._post_flip_cooldown = max(
-                                self.campo._POST_FLIP_COOLDOWN_MIN,
-                                old_cd - 5)
-                        if self.campo._post_flip_cooldown != old_cd:
-                            self._log_m2("🔄", f"POST-FLIP COOLDOWN: {old_cd}s → {self.campo._post_flip_cooldown}s "
-                                              f"(WR={pf_wr:.0%} PnL=${pf_pnl:.0f} su {len(pf_list)} trade)")
 
             self.campo.record_result(is_win, exit_reason=reason, 
                                      pb_signals=self._shadow.get("pb_signals", 0),
