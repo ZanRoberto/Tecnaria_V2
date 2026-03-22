@@ -2875,6 +2875,13 @@ class OvertopBassanoV14Production:
             new_min = min(65, old_min + step)
             new_base = min(70, old_base + step)
             action = "ALZA"
+        elif bilancio < -100:
+            # WR nella zona morta (40-60%) MA bilancio molto negativo
+            # I WIN phantom sono più grossi dei LOSS → la soglia costa troppo
+            # Abbassa con step ridotto (1) — cautela nella zona morta
+            new_min = max(50, old_min - 1)
+            new_base = max(55, old_base - 1)
+            action = "ABBASSA_PNL"
         else:
             self._last_soglia_autotune = now
             self._log_m2("🎯", f"AUTO-TUNE: soglia OK (phantom WR={delta_wr:.0%} su {delta_total} campioni, bil=${bilancio:.0f})")
