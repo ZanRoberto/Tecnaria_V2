@@ -1671,9 +1671,21 @@ class CampoGravitazionale:
             # Soglia sale, non veto assoluto. Trade forti passano ancora.
             pass  # gestito sotto nel calcolo soglia come loss_f
 
-        # ── WARMUP: buffer non ancora pieni → non operare ─────────────
-        if self._tick_count < self.WARMUP_TICKS:
-            return self._veto(f"WARMUP_{self._tick_count}/{self.WARMUP_TICKS}")
+        # ── WARMUP INTELLIGENTE — la volpe non entra cieca ────────────
+        # Non basta contare i tick. Ogni senso deve essere attivo:
+        #   - Tick >= 200 (buffer base)
+        #   - prices_long >= 100 (drift affidabile)
+        #   - prices_ta >= 30 (RSI e MACD calcolati su dati reali)
+        # ~5 minuti di warmup — la volpe annusa, guarda, ascolta.
+        warmup_checks = []
+        if self._tick_count < 200:
+            warmup_checks.append(f"tick={self._tick_count}/200")
+        if len(self._prices_long) < 100:
+            warmup_checks.append(f"drift={len(self._prices_long)}/100")
+        if len(self._prices_ta) < 30:
+            warmup_checks.append(f"RSI_MACD={len(self._prices_ta)}/30")
+        if warmup_checks:
+            return self._veto(f"WARMUP_{'|'.join(warmup_checks)}")
 
         # ── DRIFT VETO: direzione sbagliata → NON ENTRARE ────────────────
         # LONG: mercato scende → VETO. SHORT: mercato sale → VETO.
@@ -1736,6 +1748,7 @@ class CampoGravitazionale:
         vol_f     = self.VOL_FACTOR.get(volatility, 1.0)
         history_f = self._history_factor()
         prebreak_f, prebreak_detail, prebreak_signals = self._pre_breakout_factor()
+        self._last_regime_for_drift = regime  # passa il regime al drift_factor
         drift_f, drift_detail = self._drift_factor()
 
         # Loss streak: alza soglia proporzionalmente, non blocca
@@ -1930,46 +1943,46 @@ class CampoGravitazionale:
     def _drift_factor(self) -> tuple:
         """
         ★ DRIFT DETECTOR — in che direzione soffia il vento?
-
-        Confronta il prezzo medio recente (ultimi 50 tick) con quello
-        più vecchio (primi 50 dei 200 tick). Se il prezzo SCENDE,
-        la soglia SALE — non entri LONG in un downtrend.
-
-        Ritorna (factor: float, dettaglio: str)
-          drift forte DOWN  → 1.30 (soglia +30% — quasi impossibile entrare)
-          drift lieve DOWN  → 1.15 (soglia +15%)
-          flat              → 1.00 (nessun effetto)
-          drift UP          → 0.95 (leggerissimo aiuto — il vento a favore)
+        
+        RANGING: il drift oscilla costantemente ±0.05%. Non è un segnale,
+        è rumore. Il fattore è DIMEZZATO per non bloccare trade buoni.
+        
+        TRENDING: il drift è un segnale reale. Fattore pieno.
         """
         if len(self._prices_long) < 100:
             return 1.0, ""
 
         prices = list(self._prices_long)
-
-        # Media primi 50 tick (passato) vs ultimi 50 tick (presente)
         avg_old    = sum(prices[:50]) / 50
         avg_recent = sum(prices[-50:]) / 50
 
         if avg_old == 0:
             return 1.0, ""
 
-        drift_pct = (avg_recent - avg_old) / avg_old * 100   # % cambio
+        drift_pct = (avg_recent - avg_old) / avg_old * 100
 
         if drift_pct < -0.10:
-            # Prezzo sceso > 0.10% su 200 tick — downtrend forte
             factor = 1.30
             detail = f"DRIFT={drift_pct:+.3f}%↓↓"
         elif drift_pct < -0.03:
-            # Prezzo sceso 0.03-0.10% — downtrend lieve
             factor = 1.15
             detail = f"DRIFT={drift_pct:+.3f}%↓"
         elif drift_pct > 0.05:
-            # Prezzo salito > 0.05% — vento a favore
             factor = 0.95
             detail = f"DRIFT={drift_pct:+.3f}%↑"
         else:
-            # Flat — nessun effetto
             return 1.0, ""
+
+        # In RANGING il drift è rumore — dimezza l'effetto
+        # factor 1.15 → 1.075, factor 1.30 → 1.15
+        # Così un drift -0.04% non alza la soglia da 49 a 56 ma solo a 53
+        if hasattr(self, '_last_regime_for_drift'):
+            regime = self._last_regime_for_drift
+        else:
+            regime = "RANGING"
+        if regime == "RANGING":
+            factor = 1.0 + (factor - 1.0) * 0.5
+            detail += " (R½)"
 
         return factor, detail
 
@@ -2351,8 +2364,10 @@ class OvertopBassanoV14Production:
             self._persist.save(self.capital, self.total_trades)
             self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
             self.telemetry.persist_to_db(DB_PATH)
-            self._auto_tune_soglia()  # il sistema impara dai propri phantom
             self.last_persist = now
+
+        # AUTO-TUNE soglia — ciclo indipendente, il timer adattivo è interno
+        self._auto_tune_soglia()
 
         contesto = self.analyzer.analyze()
         if not contesto[0]:
@@ -3619,6 +3634,8 @@ class OvertopBassanoV14Production:
                     # Il bridge NON può toccarli. Solo noi dopo analisi phantom.
                     PROTECTED_PARAMS = {
                         "SOGLIA_BASE",           # calibrata su 37,112 candele
+                        "SOGLIA_MAX",            # gestita dalla soglia proporzionale — il bridge non deve toccarla
+                        "SOGLIA_MIN",            # gestita dall'AUTO-TUNE — il bridge non deve toccarla
                         "DRIFT_VETO_THRESHOLD",  # settato a -0.20% — phantom WR 81%
                         "W_RSI",                 # peso RSI — calibrato
                         "W_MACD",                # peso MACD — calibrato
