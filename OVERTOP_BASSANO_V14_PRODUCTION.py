@@ -1683,9 +1683,24 @@ class CampoGravitazionale:
             # Così i trade FORTI passano ancora, quelli deboli no.
             pass  # gestito sotto come moltiplicatore soglia, non come veto
 
-        # ── WARMUP: buffer non ancora pieni → non operare ─────────────
-        if self._tick_count < self.WARMUP_TICKS:
-            return self._veto(f"WARMUP_{self._tick_count}/{self.WARMUP_TICKS}")
+        # ── WARMUP INTELLIGENTE — la volpe non entra cieca ────────────
+        # Non basta contare i tick. Ogni senso deve essere attivo:
+        #   - Drift: serve _prices_long piena (200 tick)
+        #   - RSI/MACD: servono 30 campioni × 50 tick = 1500 tick
+        #   - RegimeDetector: serve 500 tick
+        #   - SeedScorer: serve 20 tick (veloce)
+        #
+        # Il sistema NON entra finché TUTTI i sensi sono pronti.
+        # Non un timer fisso — un check reale sui buffer.
+        warmup_checks = []
+        if self._tick_count < 200:
+            warmup_checks.append(f"tick={self._tick_count}/200")
+        if len(self._prices_long) < 100:
+            warmup_checks.append(f"drift={len(self._prices_long)}/100")
+        if len(self._prices_ta) < 30:
+            warmup_checks.append(f"RSI_MACD={len(self._prices_ta)}/30")
+        if warmup_checks:
+            return self._veto(f"WARMUP_{'|'.join(warmup_checks)}")
 
         # ── DRIFT VETO: direzione sbagliata → NON ENTRARE ────────────────
         # LONG: mercato scende → VETO. SHORT: mercato sale → VETO.
