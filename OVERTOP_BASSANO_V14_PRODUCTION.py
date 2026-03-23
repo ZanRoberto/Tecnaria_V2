@@ -3201,8 +3201,23 @@ class OvertopBassanoV14Production:
                 self._close_shadow_trade(price, f"DIVORZIO|{'|'.join(triggers)}")
                 return
 
-            # ── MINIMUM HOLD — lascia tempo all'impulso ─────────────────────
-            # Lo stop loss 2% ($20) protegge SEMPRE dai disastri.
+            # ═══════════════════════════════════════════════════════════════
+            # EXIT INTELLIGENTE — CAMPO GRAVITAZIONALE DI USCITA
+            # Stessa filosofia dell'entry: legge l'energia, non l'orologio.
+            #
+            # L'impulso nasce (entry), vive (hold), muore (exit).
+            # L'exit misura l'energia RESIDUA dell'impulso:
+            #   - Momentum ancora vivo? → resta
+            #   - Prezzo ancora nella direzione? → resta  
+            #   - Decelerazione forte? → prepara uscita
+            #   - Inversione confermata? → esci
+            #
+            # Score di uscita 0-100:
+            #   0  = impulso morto, esci subito
+            #   50 = neutro, monitora
+            #   100 = impulso ancora forte, resta dentro
+            # ═══════════════════════════════════════════════════════════════
+            
             if self.campo._direction == "LONG":
                 current_pnl = price - self._shadow["price_entry"]
                 max_profit = self._shadow_max_price - self._shadow["price_entry"]
@@ -3212,39 +3227,66 @@ class OvertopBassanoV14Production:
                 max_profit = self._shadow["price_entry"] - self._shadow_min_price
                 retreat = price - self._shadow_min_price
 
-            MIN_HOLD_SECONDS = 45
-            if duration < MIN_HOLD_SECONDS:
-                return  # solo lo stop loss 2% può chiudere prima
-
-            # ── TRAILING STOP ADATTIVO ────────────────────────────────────────
-            # Il trailing stop si allarga con il profitto:
-            #   max_profit < $30:  trailing $30 (protezione base)
-            #   max_profit $30-80: trailing $40 
-            #   max_profit > $80:  trailing $50 (lascia correre)
-            #
-            # Se il prezzo ritraccia più del trailing dal massimo → esci
-            # Se in perdita dopo 45s → esci al prossimo SMORZ/DECEL
-            
-            if max_profit > 80:
-                trailing = 50
-            elif max_profit > 30:
-                trailing = 40
+            # ── COMPONENTE 1: MOMENTUM (peso 30) ─────────────────────
+            # FORTE=30, MEDIO=20, DEBOLE=5
+            # In direzione giusta = punteggio pieno
+            if self.campo._direction == "LONG":
+                mom_score = {'FORTE': 30, 'MEDIO': 20, 'DEBOLE': 5}.get(momentum, 15)
             else:
-                trailing = 30
+                mom_score = {'DEBOLE': 30, 'MEDIO': 20, 'FORTE': 5}.get(momentum, 15)
             
-            if max_profit > 0 and retreat > trailing:
-                exit_pnl = max_profit - retreat
-                self._close_shadow_trade(price, f"TRAIL_{trailing}_WIN_{exit_pnl:+.0f}")
+            # ── COMPONENTE 2: TREND (peso 20) ─────────────────────────
+            if self.campo._direction == "LONG":
+                trend_score = {'UP': 20, 'SIDEWAYS': 10, 'DOWN': 0}.get(trend, 10)
+            else:
+                trend_score = {'DOWN': 20, 'SIDEWAYS': 10, 'UP': 0}.get(trend, 10)
+            
+            # ── COMPONENTE 3: DECELERAZIONE (peso 25) ─────────────────
+            # Derivata seconda: l'impulso sta frenando?
+            decel = self.decelero.analyze()
+            decel_score_val = decel.get('decel_score', 0)
+            # Bassa decelerazione = alto punteggio (resta)
+            decel_comp = int((1.0 - decel_score_val) * 25)
+            
+            # ── COMPONENTE 4: PROFITTO PROTETTO (peso 25) ─────────────
+            # Se in profitto e non ritraccia molto → resta
+            # Se ritraccia > 50% del max → esci
+            if max_profit > 0:
+                retreat_pct = retreat / max_profit
+                profit_comp = int((1.0 - min(1.0, retreat_pct)) * 25)
+            elif current_pnl < 0:
+                # In perdita: punteggio basso
+                profit_comp = 5
+            else:
+                profit_comp = 15  # neutro
+            
+            # ── SCORE TOTALE EXIT ─────────────────────────────────────
+            exit_energy = mom_score + trend_score + decel_comp + profit_comp
+            
+            # ── SOGLIA EXIT ADATTIVA ──────────────────────────────────
+            # Dopo 45s: soglia sale gradualmente (impazienza)
+            # Il trade deve giustificare la sua esistenza
+            MIN_HOLD = 30  # secondi minimi assoluti (solo stop loss prima)
+            
+            if duration < MIN_HOLD:
+                return  # solo stop loss 2% può chiudere prima
+            
+            # Soglia base: 35. Sale di 1 punto ogni 10 secondi dopo MIN_HOLD
+            # A 30s: soglia 35, a 60s: soglia 38, a 120s: soglia 44
+            exit_soglia = 35 + int((duration - MIN_HOLD) / 10)
+            exit_soglia = min(exit_soglia, 60)  # cap a 60
+            
+            # Se in profitto significativo: soglia più bassa (lascia correre)
+            if current_pnl > 50:  # delta > $50
+                exit_soglia = max(25, exit_soglia - 10)
+            
+            # ── DECISIONE ─────────────────────────────────────────────
+            if exit_energy < exit_soglia:
+                if current_pnl > 0:
+                    self._close_shadow_trade(price, f"EXIT_E{exit_energy}_S{exit_soglia}_WIN_{current_pnl:+.0f}")
+                else:
+                    self._close_shadow_trade(price, f"EXIT_E{exit_energy}_S{exit_soglia}")
                 return
-            
-            # In perdita dopo 45s: esci se momentum morto
-            if current_pnl <= 0:
-                if self.campo._direction == "LONG" and momentum == "DEBOLE":
-                    self._close_shadow_trade(price, "SMORZ")
-                    return
-                elif self.campo._direction == "SHORT" and momentum == "FORTE":
-                    self._close_shadow_trade(price, "SMORZ")
-                    return
 
             # ── TIMEOUT ───────────────────────────────────────────────────────
             if duration > duration_avg * 3:
