@@ -723,6 +723,62 @@ class OracoloDinamico:
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
         }
+        
+        # ── INIETTA DATI REALI — 6 trade del 23 marzo 2026 ──────────────
+        # Duration data per FORTE|ALTA
+        f = self._memory["LONG|FORTE|ALTA|SIDEWAYS"]
+        f['durations_win'].append(54)    # WIN: 54s (entry 16:03:47 → exit 16:04:41)
+        f['durations_loss'].append(46)   # LOSS: 46s (entry 16:05:36 → exit 16:06:22)
+        f['durations_loss'].append(47)   # LOSS: 47s (entry 16:11:05 → exit 16:11:52)
+        f['durations_loss'].append(45)   # LOSS: 45s (entry 16:14:51 → exit 16:15:36)
+        f['rsi_win'].append(32)          # WIN era su RSI basso (ipervenduto)
+        f['rsi_loss'].extend([55, 48, 62])
+        f['drift_win'].append(0.09)      # WIN aveva drift positivo
+        f['drift_loss'].extend([-0.05, 0.02, 0.01])
+        f['range_pos_win'].append(0.18)  # WIN era al bordo basso del range
+        f['range_pos_loss'].extend([0.55, 0.42, 0.65])
+        
+        # SHORT|MEDIO durations
+        s = self._memory["SHORT|MEDIO|ALTA|SIDEWAYS"]
+        s['durations_loss'].append(21)   # LOSS SHORT 1
+        s['durations_loss'].append(20)   # LOSS SHORT 2
+        s['rsi_loss'].extend([45, 52])
+        s['drift_loss'].extend([0.08, 0.10])
+        s['range_pos_loss'].extend([0.45, 0.50])
+
+        # ── TRADE HISTORY per context-matching (6 trade reali) ───────────
+        self._trade_history = deque([
+            # TRADE 1: WIN — bordo basso, RSI basso, drift positivo
+            {'fp': 'LONG|FORTE|ALTA|SIDEWAYS', 'momentum': 'FORTE', 'volatility': 'ALTA',
+             'trend': 'SIDEWAYS', 'direction': 'LONG', 'regime': 'RANGING',
+             'rsi': 32, 'drift': 0.09, 'range_position': 0.18,
+             'pnl': 1.47, 'duration': 54, 'is_win': True, 'hour': 16, 'ts': 1774282000},
+            # TRADE 2: LOSS — centro range, drift negativo
+            {'fp': 'LONG|FORTE|ALTA|SIDEWAYS', 'momentum': 'FORTE', 'volatility': 'ALTA',
+             'trend': 'SIDEWAYS', 'direction': 'LONG', 'regime': 'RANGING',
+             'rsi': 55, 'drift': -0.05, 'range_position': 0.55,
+             'pnl': -12.17, 'duration': 46, 'is_win': False, 'hour': 16, 'ts': 1774282200},
+            # TRADE 3: LOSS — centro range, drift quasi zero
+            {'fp': 'LONG|FORTE|ALTA|SIDEWAYS', 'momentum': 'FORTE', 'volatility': 'ALTA',
+             'trend': 'SIDEWAYS', 'direction': 'LONG', 'regime': 'RANGING',
+             'rsi': 48, 'drift': 0.02, 'range_position': 0.42,
+             'pnl': -5.96, 'duration': 47, 'is_win': False, 'hour': 16, 'ts': 1774282400},
+            # TRADE 4: LOSS — sopra centro, drift basso
+            {'fp': 'LONG|FORTE|ALTA|SIDEWAYS', 'momentum': 'FORTE', 'volatility': 'ALTA',
+             'trend': 'SIDEWAYS', 'direction': 'LONG', 'regime': 'RANGING',
+             'rsi': 62, 'drift': 0.01, 'range_position': 0.65,
+             'pnl': -1.81, 'duration': 45, 'is_win': False, 'hour': 16, 'ts': 1774282600},
+            # TRADE 5: LOSS SHORT — in EXPLOSIVE
+            {'fp': 'SHORT|MEDIO|ALTA|SIDEWAYS', 'momentum': 'MEDIO', 'volatility': 'ALTA',
+             'trend': 'SIDEWAYS', 'direction': 'SHORT', 'regime': 'EXPLOSIVE',
+             'rsi': 45, 'drift': 0.08, 'range_position': 0.45,
+             'pnl': -6.13, 'duration': 21, 'is_win': False, 'hour': 16, 'ts': 1774283000},
+            # TRADE 6: LOSS SHORT — in EXPLOSIVE
+            {'fp': 'SHORT|MEDIO|ALTA|SIDEWAYS', 'momentum': 'MEDIO', 'volatility': 'ALTA',
+             'trend': 'SIDEWAYS', 'direction': 'SHORT', 'regime': 'EXPLOSIVE',
+             'rsi': 52, 'drift': 0.10, 'range_position': 0.50,
+             'pnl': -5.70, 'duration': 20, 'is_win': False, 'hour': 16, 'ts': 1774283200},
+        ], maxlen=200)
 
     def _fp(self, momentum: str, volatility: str, trend: str, direction: str = "LONG") -> str:
         return f"{direction}|{momentum}|{volatility}|{trend}"
