@@ -3004,19 +3004,13 @@ class OvertopBassanoV14Production:
         
         old_direction = campo._direction
         
-        # LONG → SHORT: DISABILITATO
-        # Lo SHORT non è stato calibrato sui dati reali.
-        # Tutti i profitti vengono da LONG. Lo SHORT costa e basta.
-        # Quando avremo dati SHORT sufficienti, lo riabiliteremo.
-        # Per ora: SOLO LONG.
-        #
-        # if campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
-        #     campo._direction = "SHORT"
-        #     campo._direction_last_change = now
-        #     campo._direction_bearish_streak = 0
-        
-        # SHORT → LONG: se per qualche motivo è in SHORT, torna LONG
-        if campo._direction == "SHORT":
+        # LONG → SHORT: serve conferma (3 tick) + cooldown
+        if campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
+            campo._direction = "SHORT"
+            campo._direction_last_change = now
+            campo._direction_bearish_streak = 0
+        # SHORT → LONG: basta 1 tick con bearish < 2 + cooldown
+        elif campo._direction == "SHORT" and bearish_signals < 2 and cooldown_ok:
             campo._direction = "LONG"
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
