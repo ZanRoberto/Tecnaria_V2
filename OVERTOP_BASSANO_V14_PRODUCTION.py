@@ -2971,44 +2971,77 @@ class OvertopBassanoV14Production:
         
         macd_hist = campo._last_macd_hist
         
-        # Segnali bearish con isteresi sul drift
-        bearish_signals = 0
+        # ═══════════════════════════════════════════════════════════════
+        # FLIP INTELLIGENTE — non reagisce al passato, anticipa il futuro
+        #
+        # Il drift misura cosa È SUCCESSO. Il momentum misura cosa STA SUCCEDENDO.
+        # Lo SHORT deve entrare all'INIZIO del calo, non alla fine.
+        #
+        # Per LONG → SHORT servono 3 condizioni SIMULTANEE:
+        #   1. Momentum attuale indica calo (non solo drift passato)
+        #   2. MACD conferma (histogram negativo)
+        #   3. Decelerazione bassa (l'impulso ribassista è FRESCO, non esaurito)
+        #
+        # Per SHORT → LONG:
+        #   1. Momentum non più ribassista
+        #   2. Drift torna positivo O MACD gira positivo
+        # ═══════════════════════════════════════════════════════════════
+        
+        # Analizza l'energia ribassista ATTUALE
+        decel = self.decelero.analyze()
+        decel_score = decel.get('decel_score', 0)
+        mom_fast = decel.get('mom_fast', 0)  # momentum veloce (ultimi 5 tick)
+        
+        bearish_energy = 0
+        
         if campo._direction == "LONG":
-            # Per andare SHORT: drift negativo significativo
-            if drift < -0.06:
-                bearish_signals += 1
-            # Drift molto forte → 2 segnali (basta da solo per flippare)
-            if drift < -0.10:
-                bearish_signals += 1
+            # Per andare SHORT: serve impulso ribassista FRESCO
+            # 1. Momentum veloce negativo (il prezzo sta scendendo ORA)
+            if mom_fast < -0.5:
+                bearish_energy += 1
+            if mom_fast < -1.0:
+                bearish_energy += 1  # impulso forte
+            
+            # 2. MACD conferma tendenza ribassista
+            if macd_hist < -2.0:
+                bearish_energy += 1
+            
+            # 3. Decelerazione BASSA = impulso fresco (non esaurito)
+            # Se decel è alta, il calo sta già finendo → NON flippare
+            if decel_score < 0.4:
+                bearish_energy += 1  # impulso ancora vivo
+            
+            # 4. Drift come conferma (non come trigger primario)
+            if drift < -0.08:
+                bearish_energy += 1
         else:
-            # Per restare SHORT: soglia più morbida (zona morta)
+            # Per restare SHORT: basta che l'impulso ribassista non sia morto
+            if mom_fast < 0:
+                bearish_energy += 1
             if drift < -0.03:
-                bearish_signals += 1
+                bearish_energy += 1
+            if macd_hist < 0:
+                bearish_energy += 1
         
-        if macd_hist < 0:
-            bearish_signals += 1
-        if trend == "DOWN":
-            bearish_signals += 1
-        
-        # Conferma: conta tick consecutivi bearish
-        if bearish_signals >= 2:
+        # Conferma: conta tick consecutivi con energia bearish alta
+        if bearish_energy >= 3:
             campo._direction_bearish_streak += 1
         else:
             campo._direction_bearish_streak = 0
         
-        # Cooldown: blocca flip se troppo recente
+        # Cooldown: minimo 120 secondi tra flip (non 60 — troppo nervoso)
         now = time.time()
-        cooldown_ok = (now - campo._direction_last_change) >= 60
+        cooldown_ok = (now - campo._direction_last_change) >= 120
         
         old_direction = campo._direction
         
-        # LONG → SHORT: serve conferma (2 tick) + cooldown
-        if campo._direction == "LONG" and campo._direction_bearish_streak >= 2 and cooldown_ok:
+        # LONG → SHORT: serve energia bearish alta (>=3) per 3 tick + cooldown
+        if campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
             campo._direction = "SHORT"
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
-        # SHORT → LONG: basta 1 tick con bearish < 2 + cooldown
-        elif campo._direction == "SHORT" and bearish_signals < 2 and cooldown_ok:
+        # SHORT → LONG: energia bearish scesa sotto 2 + cooldown
+        elif campo._direction == "SHORT" and bearish_energy < 2 and cooldown_ok:
             campo._direction = "LONG"
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
@@ -3563,11 +3596,16 @@ class OvertopBassanoV14Production:
         """Chiude un fantasma e registra il risultato."""
         try:
             ph = self._phantoms_open.pop(idx)
-            # PnL bidirezionale
+            # PnL REALE FUTURES — stessa formula dei trade veri
             if ph.get('direction', 'LONG') == 'SHORT':
-                pnl = ph['price_entry'] - price
+                delta_price = ph['price_entry'] - price
             else:
-                pnl = price - ph['price_entry']
+                delta_price = price - ph['price_entry']
+            exposure = self.TRADE_SIZE_USD * self.LEVERAGE
+            btc_qty = exposure / ph['price_entry']
+            pnl_gross = delta_price * btc_qty
+            total_fees = exposure * self.FEE_PCT * 2
+            pnl = pnl_gross - total_fees
             is_win = pnl > 0
 
             # Aggiorna statistiche per livello di blocco
