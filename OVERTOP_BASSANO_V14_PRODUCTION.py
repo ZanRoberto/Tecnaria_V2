@@ -2982,6 +2982,9 @@ class OvertopBassanoV14Production:
             # Per andare SHORT: drift negativo significativo
             if drift < -0.06:
                 bearish_signals += 1
+            # Drift molto forte → 2 segnali (basta da solo per flippare)
+            if drift < -0.10:
+                bearish_signals += 1
         else:
             # Per restare SHORT: soglia più morbida (zona morta)
             if drift < -0.03:
@@ -3004,8 +3007,8 @@ class OvertopBassanoV14Production:
         
         old_direction = campo._direction
         
-        # LONG → SHORT: serve conferma (3 tick) + cooldown
-        if campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
+        # LONG → SHORT: serve conferma (2 tick) + cooldown
+        if campo._direction == "LONG" and campo._direction_bearish_streak >= 2 and cooldown_ok:
             campo._direction = "SHORT"
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
