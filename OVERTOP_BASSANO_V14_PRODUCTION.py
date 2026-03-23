@@ -1719,12 +1719,7 @@ class CampoGravitazionale:
 
         # ── CONSIGLIERI TECNICI — invertiti per SHORT ────────────────────
         s_rsi   = self._rsi_score()                          * self.W_RSI
-        
-        # MACD in RANGING è rumore — floor a 0.4 (4 punti su 10)
-        macd_raw = self._macd_score()
-        if regime == "RANGING":
-            macd_raw = max(0.4, macd_raw)  # non toglie più di 6 punti
-        s_macd  = macd_raw                                   * self.W_MACD
+        s_macd  = self._macd_score()                         * self.W_MACD
 
         score = s_seed + s_fp + s_mom + s_trend + s_vol + s_reg + s_rsi + s_macd
 
@@ -3208,58 +3203,48 @@ class OvertopBassanoV14Production:
 
             # ── MINIMUM HOLD — lascia tempo all'impulso ─────────────────────
             # Lo stop loss 2% ($20) protegge SEMPRE dai disastri.
-            # Il SMORZ/DECEL non chiude prima di 45 secondi.
-            # Dati reali: trade tenuti 32-36s fanno delta $94-98.
-            # Trade chiusi dopo 8s fanno delta $1-16 → LOSS dopo fee.
             if self.campo._direction == "LONG":
                 current_pnl = price - self._shadow["price_entry"]
+                max_profit = self._shadow_max_price - self._shadow["price_entry"]
+                retreat = self._shadow_max_price - price
             else:
                 current_pnl = self._shadow["price_entry"] - price
+                max_profit = self._shadow["price_entry"] - self._shadow_min_price
+                retreat = price - self._shadow_min_price
 
-            MIN_HOLD_SECONDS = 45  # l'impulso ha bisogno di tempo
+            MIN_HOLD_SECONDS = 45
             if duration < MIN_HOLD_SECONDS:
                 return  # solo lo stop loss 2% può chiudere prima
 
-            # ── DECEL — dopo 45s, esci se ritraccia dal max ──────────────────
-            decel = self.decelero.analyze()
-            if decel['should_exit']:
-                if current_pnl > 0:
-                    if self.campo._direction == "LONG":
-                        max_profit = self._shadow_max_price - self._shadow["price_entry"]
-                        retreat_from_max = self._shadow_max_price - price
-                    else:
-                        max_profit = self._shadow["price_entry"] - self._shadow_min_price
-                        retreat_from_max = price - self._shadow_min_price
-                    if max_profit > 0 and retreat_from_max > max_profit * 0.30:
-                        self._close_shadow_trade(price, f"DECEL_WIN_{current_pnl:+.0f}")
-                        return
-                else:
-                    # In perdita dopo 45s con DECEL → esci
-                    self._close_shadow_trade(price, "DECEL_LOSS")
-                    return
-
-            # ── SMORZ — impulso finito dopo 45s ──────────────────────────────
-            if self.campo._direction == "LONG" and momentum == "DEBOLE":
-                if current_pnl <= 0:
+            # ── TRAILING STOP ADATTIVO ────────────────────────────────────────
+            # Il trailing stop si allarga con il profitto:
+            #   max_profit < $30:  trailing $30 (protezione base)
+            #   max_profit $30-80: trailing $40 
+            #   max_profit > $80:  trailing $50 (lascia correre)
+            #
+            # Se il prezzo ritraccia più del trailing dal massimo → esci
+            # Se in perdita dopo 45s → esci al prossimo SMORZ/DECEL
+            
+            if max_profit > 80:
+                trailing = 50
+            elif max_profit > 30:
+                trailing = 40
+            else:
+                trailing = 30
+            
+            if max_profit > 0 and retreat > trailing:
+                exit_pnl = max_profit - retreat
+                self._close_shadow_trade(price, f"TRAIL_{trailing}_WIN_{exit_pnl:+.0f}")
+                return
+            
+            # In perdita dopo 45s: esci se momentum morto
+            if current_pnl <= 0:
+                if self.campo._direction == "LONG" and momentum == "DEBOLE":
                     self._close_shadow_trade(price, "SMORZ")
                     return
-                else:
-                    # In profitto: esci solo se ritraccia > 30% dal max
-                    max_profit = self._shadow_max_price - self._shadow["price_entry"]
-                    retreat = self._shadow_max_price - price
-                    if max_profit > 0 and retreat > max_profit * 0.30:
-                        self._close_shadow_trade(price, "SMORZ_WIN")
-                        return
-            elif self.campo._direction == "SHORT" and momentum == "FORTE":
-                if current_pnl <= 0:
+                elif self.campo._direction == "SHORT" and momentum == "FORTE":
                     self._close_shadow_trade(price, "SMORZ")
                     return
-                else:
-                    max_profit = self._shadow["price_entry"] - self._shadow_min_price
-                    retreat = price - self._shadow_min_price
-                    if max_profit > 0 and retreat > max_profit * 0.30:
-                        self._close_shadow_trade(price, "SMORZ_WIN")
-                        return
 
             # ── TIMEOUT ───────────────────────────────────────────────────────
             if duration > duration_avg * 3:
