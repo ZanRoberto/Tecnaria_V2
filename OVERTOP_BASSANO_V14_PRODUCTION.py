@@ -650,48 +650,93 @@ class SeedScorer:
 
 class OracoloDinamico:
     """
-    Memorizza il WR per ogni fingerprint (combinazione momentum+volatility+trend).
-    Applica decay temporale: i ricordi vecchi pesano meno di quelli recenti.
-    Blocca entry se il fingerprint ha un WR storico < soglia.
-    Restituisce anche il fingerprint_wr corrente usato dalle 5 Capsule.
+    ORACOLO 2.0 — Il cervello della volpe.
+    
+    Non è un contatore. È un sistema che:
+    1. Salva TUTTO il contesto di ogni trade (regime, RSI, drift, range_position, ora, durata)
+    2. Trova i trade passati PIÙ SIMILI alla situazione attuale (context-matching)
+    3. Genera capsule automatiche dai pattern che emergono
+    4. Traccia cosa succede DOPO l'uscita (post-trade)
+    5. Adatta il MIN_HOLD per ogni fingerprint (duration memory)
+    
+    Macroregole:
+    - "Più contesto salvi, meglio decidi"
+    - "Non chiedere se il pattern vince. Chiedi se QUESTA SITUAZIONE somiglia ai miei WIN"
+    - "Ogni trade che esce genera una lezione"
     """
 
-    FANTASMA_WR_THRESHOLD = 0.45   # sotto questa soglia il pattern è FANTASMA
-    DECAY_FACTOR          = 0.95   # ogni trade, il peso storico si riduce del 5%
-    MIN_SAMPLES           = 5      # campioni minimi prima di giudicare
-    MIN_PNL_EDGE          = 2.0    # PnL medio minimo per NON essere FANTASMA (2x fee)
-    MIN_REAL_SAMPLES      = 5      # trade reali minimi prima di applicare FANTASMA_PNL
+    FANTASMA_WR_THRESHOLD = 0.45
+    DECAY_FACTOR          = 0.95
+    MIN_SAMPLES           = 5
+    MIN_PNL_EDGE          = 2.0
+    MIN_REAL_SAMPLES      = 5
 
     def __init__(self):
         self._memory: dict = {}
+        # Trade completi per context-matching (ultimi 200)
+        self._trade_history = deque(maxlen=200)
+        # Capsule generate automaticamente
+        self._auto_capsules = []
+        # Post-trade tracking
+        self._post_trade_queue = deque(maxlen=20)
         
         # ── INTELLIGENZA REALE — dati da trade veri 23 marzo 2026 ──────
-        # real_samples = trade REALI eseguiti con PnL corretto
-        # FORTE|ALTA: 4 trade reali, 1 WIN (+1.47), 3 LOSS (-12.17, -5.96, -1.81)
-        # SHORT|MEDIO: 2 trade reali, 0 WIN, 2 LOSS (-6.13, -5.70)
-        # Questi NON sono stime — sono i risultati veri del mercato di oggi
         self._memory = {
-            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 13.0, 'samples': 24.0, 'pnl_sum': -8.47, 'real_samples': 4},
-            # 4 real: +1.47, -12.17, -5.96, -1.81 = -18.47 + bootstrap 10.0 = -8.47
-            # WR reale: 1/4=25%. WR totale: 13/24=54%. pnl_avg: -0.35
-            "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0, 'pnl_sum': -15.0, 'real_samples': 0},
-            # FANTASMA_WR (43%) — bloccato dal boot
-            "LONG|DEBOLE|ALTA|SIDEWAYS":  {'wins': 1.4,  'samples': 7.4,  'pnl_sum': -20.0, 'real_samples': 0},
-            # FANTASMA_WR (19%) — bloccato dal boot
-            "LONG|FORTE|MEDIA|SIDEWAYS":  {'wins': 4.5,  'samples': 6.0,  'pnl_sum': 8.0, 'real_samples': 0},
-            "LONG|MEDIO|MEDIA|SIDEWAYS":  {'wins': 1.0,  'samples': 2.0,  'pnl_sum': -1.0, 'real_samples': 0},
-            "LONG|DEBOLE|MEDIA|SIDEWAYS": {'wins': 0.5,  'samples': 3.7,  'pnl_sum': -8.0, 'real_samples': 0},
-            "LONG|DEBOLE|BASSA|SIDEWAYS": {'wins': 1.9,  'samples': 2.9,  'pnl_sum': 2.0, 'real_samples': 0},
-            "SHORT|MEDIO|ALTA|SIDEWAYS":  {'wins': 0.3,  'samples': 4.0,  'pnl_sum': -16.83, 'real_samples': 2},
-            # 2 real: -6.13, -5.70 = -11.83 + bootstrap -5.0 = -16.83
-            # WR reale: 0/2=0%. pnl_avg: -4.21
+            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 13.0, 'samples': 24.0, 'pnl_sum': -8.47, 'real_samples': 4,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
+                                           'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
+            "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0, 'pnl_sum': -15.0, 'real_samples': 0,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
+                                           'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
+            "LONG|DEBOLE|ALTA|SIDEWAYS":  {'wins': 1.4,  'samples': 7.4,  'pnl_sum': -20.0, 'real_samples': 0,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
+                                           'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
+            "LONG|FORTE|MEDIA|SIDEWAYS":  {'wins': 4.5,  'samples': 6.0,  'pnl_sum': 8.0, 'real_samples': 0,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
+                                           'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
+            "LONG|MEDIO|MEDIA|SIDEWAYS":  {'wins': 1.0,  'samples': 2.0,  'pnl_sum': -1.0, 'real_samples': 0,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
+                                           'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
+            "LONG|DEBOLE|MEDIA|SIDEWAYS": {'wins': 0.5,  'samples': 3.7,  'pnl_sum': -8.0, 'real_samples': 0,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
+                                           'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
+            "LONG|DEBOLE|BASSA|SIDEWAYS": {'wins': 1.9,  'samples': 2.9,  'pnl_sum': 2.0, 'real_samples': 0,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
+                                           'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
+            "SHORT|MEDIO|ALTA|SIDEWAYS":  {'wins': 0.3,  'samples': 4.0,  'pnl_sum': -16.83, 'real_samples': 2,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
+                                           'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
         }
 
     def _fp(self, momentum: str, volatility: str, trend: str, direction: str = "LONG") -> str:
         return f"{direction}|{momentum}|{volatility}|{trend}"
 
+    def _new_memory_entry(self):
+        return {'wins': 0.0, 'samples': 0.0, 'pnl_sum': 0.0, 'real_samples': 0,
+                'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
+                'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)}
+
+    # ── LETTURA ──────────────────────────────────────────────────────────
+
     def get_wr(self, momentum: str, volatility: str, trend: str, direction: str = "LONG") -> float:
-        """Ritorna il WR stimato per questo contesto (0.0–1.0). Default 0.72 se ignoto."""
         fp = self._fp(momentum, volatility, trend, direction)
         if fp not in self._memory or self._memory[fp]['samples'] < self.MIN_SAMPLES:
             return 0.72
@@ -699,62 +744,322 @@ class OracoloDinamico:
         return m['wins'] / m['samples'] if m['samples'] > 0 else 0.72
 
     def get_pnl_avg(self, momentum: str, volatility: str, trend: str, direction: str = "LONG") -> float:
-        """Ritorna il PnL medio netto per questo fingerprint. Default 0 se ignoto."""
         fp = self._fp(momentum, volatility, trend, direction)
         if fp not in self._memory or self._memory[fp]['samples'] < self.MIN_SAMPLES:
             return 0.0
         m = self._memory[fp]
         return m.get('pnl_sum', 0) / m['samples'] if m['samples'] > 0 else 0.0
 
+    def get_avg_duration(self, momentum: str, volatility: str, trend: str, 
+                         direction: str = "LONG", is_win: bool = True) -> float:
+        """Durata media dei WIN o LOSS per questo fingerprint. None se dati insufficienti."""
+        fp = self._fp(momentum, volatility, trend, direction)
+        mem = self._memory.get(fp)
+        if not mem:
+            return None
+        key = 'durations_win' if is_win else 'durations_loss'
+        durations = mem.get(key)
+        if not durations or len(durations) < 3:
+            return None
+        return sum(durations) / len(durations)
+
+    # ── FANTASMA (PNL-aware + WR) ────────────────────────────────────────
+
     def is_fantasma(self, momentum: str, volatility: str, trend: str, direction: str = "LONG") -> tuple:
-        """
-        FANTASMA PNL-AWARE: un fingerprint è tossico se:
-        - WR basso (< threshold) → perde spesso
-        - OPPURE PnL medio netto <= 0 → vince male, le fee mangiano tutto
-        """
         fp  = self._fp(momentum, volatility, trend, direction)
         wr  = self.get_wr(momentum, volatility, trend, direction)
         pnl_avg = self.get_pnl_avg(momentum, volatility, trend, direction)
         mem = self._memory.get(fp, {})
         if mem.get('samples', 0) < self.MIN_SAMPLES:
             return False, ''
-        # Check 1: WR troppo basso
         if wr < self.FANTASMA_WR_THRESHOLD:
             return True, f"FANTASMA_WR fp={fp} wr={wr:.2f}"
-        # Check 2: PnL medio netto sotto margine economico
-        # SOLO se abbiamo abbastanza trade REALI (non bootstrap)
         real_samples = mem.get('real_samples', 0)
         if real_samples >= self.MIN_REAL_SAMPLES and pnl_avg <= self.MIN_PNL_EDGE:
             return True, f"FANTASMA_PNL fp={fp} wr={wr:.2f} pnl_avg={pnl_avg:+.2f} real={real_samples}"
         return False, ''
 
-    def record(self, momentum: str, volatility: str, trend: str, is_win: bool, direction: str = "LONG", pnl: float = 0.0):
-        """Aggiorna la memoria con decay. Chiamato ad ogni chiusura trade."""
+    # ── CONTEXT-MATCHING — trova i trade passati più simili ──────────────
+
+    def context_match(self, regime: str, momentum: str, volatility: str, trend: str,
+                      direction: str, rsi: float, drift: float, range_position: float) -> dict:
+        """
+        Cerca i 5 trade passati più simili a questa situazione.
+        Ritorna il PnL medio dei vicini e la predizione.
+        """
+        if len(self._trade_history) < 10:
+            return {'pnl_predicted': 0, 'confidence': 0, 'neighbors': 0, 'verdict': 'DATI_INSUFFICIENTI'}
+
+        # Calcola distanza pesata per ogni trade passato
+        scored = []
+        for t in self._trade_history:
+            dist = 0.0
+            # Regime match (peso 3)
+            dist += (0 if t['regime'] == regime else 3.0)
+            # Direction match (peso 2)
+            dist += (0 if t['direction'] == direction else 2.0)
+            # Momentum match (peso 2)
+            mom_map = {'FORTE': 2, 'MEDIO': 1, 'DEBOLE': 0}
+            dist += abs(mom_map.get(t['momentum'], 1) - mom_map.get(momentum, 1)) * 1.0
+            # Volatility match (peso 1)
+            vol_map = {'ALTA': 2, 'MEDIA': 1, 'BASSA': 0}
+            dist += abs(vol_map.get(t['volatility'], 1) - vol_map.get(volatility, 1)) * 0.5
+            # RSI distance (peso 1.5)
+            dist += abs(t.get('rsi', 50) - rsi) / 20.0 * 1.5
+            # Drift distance (peso 1.5)
+            dist += abs(t.get('drift', 0) - drift) / 0.10 * 1.5
+            # Range position (peso 2)
+            dist += abs(t.get('range_position', 0.5) - range_position) * 2.0
+
+            scored.append((dist, t))
+
+        # I 5 più vicini
+        scored.sort(key=lambda x: x[0])
+        neighbors = scored[:5]
+        
+        if not neighbors:
+            return {'pnl_predicted': 0, 'confidence': 0, 'neighbors': 0, 'verdict': 'NO_NEIGHBORS'}
+
+        pnls = [t['pnl'] for _, t in neighbors]
+        pnl_avg = sum(pnls) / len(pnls)
+        wins = sum(1 for p in pnls if p > 0)
+        avg_dist = sum(d for d, _ in neighbors) / len(neighbors)
+        confidence = max(0, min(1, 1.0 - avg_dist / 10.0))
+
+        verdict = 'ENTRA' if pnl_avg > self.MIN_PNL_EDGE and wins >= 3 else 'BLOCCA'
+
+        return {
+            'pnl_predicted': round(pnl_avg, 2),
+            'confidence': round(confidence, 2),
+            'neighbors': len(neighbors),
+            'wins': wins,
+            'avg_distance': round(avg_dist, 2),
+            'verdict': verdict,
+        }
+
+    # ── CAPSULE ORACOLO STATICHE (OC1-OC5) ──────────────────────────────
+
+    def check_capsules(self, regime, direction, rsi, drift, range_position, momentum, loss_streak) -> tuple:
+        """
+        5 capsule statiche dell'Oracolo. Ritorna (block, reason) o (False, '').
+        """
+        # OC1 — RANGING_MIDZONE: non tradare al centro del range
+        if regime == "RANGING" and 0.40 <= range_position <= 0.60:
+            return True, f"OC1_MIDZONE_{range_position:.0%}"
+
+        # OC2 — RSI_EXTREME: non andare LONG in ipercomprato, SHORT in ipervenduto
+        if direction == "LONG" and rsi > 75:
+            return True, f"OC2_RSI_HIGH_{rsi:.0f}"
+        if direction == "SHORT" and rsi < 25:
+            return True, f"OC2_RSI_LOW_{rsi:.0f}"
+
+        # OC3 — DRIFT_DIRECTION: non andare contro la corrente
+        if direction == "LONG" and drift < -0.10:
+            return True, f"OC3_DRIFT_CONTRO_{drift:+.3f}"
+        if direction == "SHORT" and drift > 0.10:
+            return True, f"OC3_DRIFT_CONTRO_{drift:+.3f}"
+
+        # OC4 — MOMENTUM_RANGING: in RANGING FORTE senza drift = falso
+        if regime == "RANGING" and momentum == "FORTE" and abs(drift) < 0.05:
+            return True, f"OC4_FALSO_FORTE_drift{drift:+.3f}"
+
+        # OC5 — LOSS_STREAK: dopo 5 loss, fermati
+        if loss_streak >= 5:
+            return True, f"OC5_LOSS_STREAK_{loss_streak}"
+
+        return False, ''
+
+    # ── CAPSULE AUTO-GENERATIVE ──────────────────────────────────────────
+
+    def maybe_generate_capsule(self, fp: str):
+        """Genera capsule automatiche quando un fingerprint ha abbastanza dati."""
+        mem = self._memory.get(fp)
+        if not mem or mem.get('real_samples', 0) < 10:
+            return
+        
+        wr = mem['wins'] / mem['samples'] if mem['samples'] > 0 else 0
+        pnl_avg = mem.get('pnl_sum', 0) / mem['samples'] if mem['samples'] > 0 else 0
+        
+        # Pattern FORTE vincente: RSI basso + drift positivo + bordo basso
+        if wr > 0.65 and pnl_avg > self.MIN_PNL_EDGE:
+            rsi_wins = list(mem.get('rsi_win', []))
+            drift_wins = list(mem.get('drift_win', []))
+            rp_wins = list(mem.get('range_pos_win', []))
+            
+            if rsi_wins and drift_wins and rp_wins:
+                avg_rsi = sum(rsi_wins) / len(rsi_wins)
+                avg_drift = sum(drift_wins) / len(drift_wins)
+                avg_rp = sum(rp_wins) / len(rp_wins)
+                
+                capsule = {
+                    'fp': fp,
+                    'type': 'WINNER_PATTERN',
+                    'avg_rsi_win': round(avg_rsi, 1),
+                    'avg_drift_win': round(avg_drift, 3),
+                    'avg_range_pos_win': round(avg_rp, 2),
+                    'wr': round(wr, 2),
+                    'pnl_avg': round(pnl_avg, 2),
+                    'samples': mem['real_samples'],
+                    'created': time.time(),
+                }
+                # Non duplicare
+                if not any(c['fp'] == fp and c['type'] == 'WINNER_PATTERN' for c in self._auto_capsules):
+                    self._auto_capsules.append(capsule)
+                    log.info(f"[ORACOLO] 🧬 CAPSULE AUTO: {fp} → WR {wr:.0%} pnl ${pnl_avg:+.2f} | "
+                             f"RSI~{avg_rsi:.0f} drift~{avg_drift:+.3f} rpos~{avg_rp:.2f}")
+
+        # Pattern TOSSICO: genera alert
+        if wr < 0.30 and mem['real_samples'] >= 10:
+            capsule = {
+                'fp': fp,
+                'type': 'TOXIC_PATTERN',
+                'wr': round(wr, 2),
+                'pnl_avg': round(pnl_avg, 2),
+                'samples': mem['real_samples'],
+                'created': time.time(),
+            }
+            if not any(c['fp'] == fp and c['type'] == 'TOXIC_PATTERN' for c in self._auto_capsules):
+                self._auto_capsules.append(capsule)
+                log.info(f"[ORACOLO] ☠️ TOXIC PATTERN: {fp} → WR {wr:.0%} pnl ${pnl_avg:+.2f}")
+
+    # ── DURATION MEMORY — MIN_HOLD adattivo ──────────────────────────────
+
+    def get_dynamic_min_hold(self, momentum: str, volatility: str, trend: str,
+                             direction: str = "LONG", regime: str = "RANGING") -> float:
+        """MIN_HOLD adattivo: 70% della durata media dei WIN per questo pattern."""
+        avg_dur = self.get_avg_duration(momentum, volatility, trend, direction, is_win=True)
+        if avg_dur and avg_dur > 10:
+            return avg_dur * 0.7
+        # Default per regime se non ci sono dati
+        defaults = {'RANGING': 45, 'TRENDING_BULL': 30, 'TRENDING_BEAR': 30, 'EXPLOSIVE': 20}
+        return defaults.get(regime, 30)
+
+    # ── SCRITTURA — registra trade completo ──────────────────────────────
+
+    def record(self, momentum: str, volatility: str, trend: str, is_win: bool,
+               direction: str = "LONG", pnl: float = 0.0, duration: float = 0.0,
+               rsi: float = 50.0, drift: float = 0.0, range_position: float = 0.5,
+               regime: str = "RANGING", hour: int = None):
+        """Aggiorna memoria + salva trade completo per context-matching."""
         fp = self._fp(momentum, volatility, trend, direction)
         if fp not in self._memory:
-            self._memory[fp] = {'wins': 0.0, 'samples': 0, 'pnl_sum': 0.0, 'real_samples': 0}
+            self._memory[fp] = self._new_memory_entry()
         m = self._memory[fp]
-        # Applica decay ai valori esistenti
+        
+        # Decay
         m['wins']    *= self.DECAY_FACTOR
         m['samples'] *= self.DECAY_FACTOR
         m['pnl_sum']  = m.get('pnl_sum', 0.0) * self.DECAY_FACTOR
-        # Aggiungi nuovo dato
+        
+        # Nuovo dato
         m['wins']    += 1.0 if is_win else 0.0
         m['samples'] += 1.0
         m['pnl_sum'] += pnl
-        m['real_samples'] = m.get('real_samples', 0) + 1  # conta solo trade reali
+        m['real_samples'] = m.get('real_samples', 0) + 1
+
+        # Memoria multi-dimensionale
+        if is_win:
+            m.setdefault('durations_win', deque(maxlen=50)).append(duration)
+            m.setdefault('rsi_win', deque(maxlen=50)).append(rsi)
+            m.setdefault('drift_win', deque(maxlen=50)).append(drift)
+            m.setdefault('range_pos_win', deque(maxlen=50)).append(range_position)
+        else:
+            m.setdefault('durations_loss', deque(maxlen=50)).append(duration)
+            m.setdefault('rsi_loss', deque(maxlen=50)).append(rsi)
+            m.setdefault('drift_loss', deque(maxlen=50)).append(drift)
+            m.setdefault('range_pos_loss', deque(maxlen=50)).append(range_position)
+
+        # Trade history per context-matching
+        self._trade_history.append({
+            'fp': fp, 'momentum': momentum, 'volatility': volatility,
+            'trend': trend, 'direction': direction, 'regime': regime,
+            'rsi': rsi, 'drift': drift, 'range_position': range_position,
+            'pnl': pnl, 'duration': duration, 'is_win': is_win,
+            'hour': hour or datetime.utcnow().hour, 'ts': time.time(),
+        })
+
+        # Prova a generare capsule
+        self.maybe_generate_capsule(fp)
+
         pnl_avg = m['pnl_sum'] / m['samples'] if m['samples'] > 0 else 0
-        log.debug(f"[ORACOLO] {fp} → WR={m['wins']/m['samples']:.2f} pnl_avg={pnl_avg:+.2f} real={m['real_samples']} samples={m['samples']:.1f}")
+        log.debug(f"[ORACOLO] {fp} → WR={m['wins']/m['samples']:.2f} pnl_avg={pnl_avg:+.2f} real={m['real_samples']}")
+
+    # ── POST-TRADE TRACKER ───────────────────────────────────────────────
+
+    def start_post_trade(self, fp: str, exit_price: float, direction: str):
+        """Inizia il monitoraggio post-trade per 60 secondi."""
+        self._post_trade_queue.append({
+            'fp': fp, 'exit_price': exit_price, 'direction': direction,
+            'start_time': time.time(), 'prices_after': [],
+        })
+
+    def update_post_trade(self, current_price: float):
+        """Chiamato ogni tick — aggiorna i post-trade attivi."""
+        to_close = []
+        for i, pt in enumerate(self._post_trade_queue):
+            elapsed = time.time() - pt['start_time']
+            pt['prices_after'].append(current_price)
+            
+            if elapsed >= 60:
+                # Valuta se il prezzo ha continuato nella direzione
+                if pt['direction'] == 'LONG':
+                    continued = current_price > pt['exit_price']
+                    delta_after = current_price - pt['exit_price']
+                else:
+                    continued = current_price < pt['exit_price']
+                    delta_after = pt['exit_price'] - current_price
+                
+                # Registra nell'Oracolo
+                mem = self._memory.get(pt['fp'])
+                if mem:
+                    mem.setdefault('post_continued', deque(maxlen=50)).append(continued)
+                    mem.setdefault('post_delta', deque(maxlen=50)).append(delta_after)
+                
+                if continued:
+                    log.info(f"[POST-TRADE] ⚠️ {pt['fp']}: prezzo ha CONTINUATO +${delta_after:.0f} → exit era PRESTO")
+                else:
+                    log.info(f"[POST-TRADE] ✅ {pt['fp']}: prezzo ha INVERTITO ${delta_after:.0f} → exit era CORRETTA")
+                
+                to_close.append(i)
+        
+        for i in reversed(to_close):
+            self._post_trade_queue.popleft() if i == 0 else None
+
+    def get_exit_too_early_rate(self, fp: str) -> float:
+        """% di volte che l'exit era troppo presto per questo fingerprint."""
+        mem = self._memory.get(fp)
+        if not mem or 'post_continued' not in mem or len(mem['post_continued']) < 3:
+            return 0.5  # default neutro
+        continued = list(mem['post_continued'])
+        return sum(1 for c in continued if c) / len(continued)
+
+    # ── DUMP ─────────────────────────────────────────────────────────────
 
     def dump(self) -> dict:
-        """Snapshot completo della memoria — per heartbeat/debug."""
-        return {fp: {
-                    'wr': round(m['wins']/m['samples'], 3) if m['samples'] > 0 else 0,
-                    'pnl_avg': round(m.get('pnl_sum', 0)/m['samples'], 2) if m['samples'] > 0 else 0,
-                    'samples': round(m['samples'], 1),
-                    'real': m.get('real_samples', 0),
-                }
-                for fp, m in self._memory.items()}
+        result = {}
+        for fp, m in self._memory.items():
+            entry = {
+                'wr': round(m['wins']/m['samples'], 3) if m['samples'] > 0 else 0,
+                'pnl_avg': round(m.get('pnl_sum', 0)/m['samples'], 2) if m['samples'] > 0 else 0,
+                'samples': round(m['samples'], 1),
+                'real': m.get('real_samples', 0),
+            }
+            # Duration info
+            dw = m.get('durations_win')
+            if dw and len(dw) > 0:
+                entry['dur_win_avg'] = round(sum(dw)/len(dw), 1)
+            dl = m.get('durations_loss')
+            if dl and len(dl) > 0:
+                entry['dur_loss_avg'] = round(sum(dl)/len(dl), 1)
+            # Post-trade info
+            pc = m.get('post_continued')
+            if pc and len(pc) > 0:
+                entry['exit_too_early'] = round(sum(1 for c in pc if c)/len(pc), 2)
+            result[fp] = entry
+        
+        result['_auto_capsules'] = len(self._auto_capsules)
+        result['_trade_history'] = len(self._trade_history)
+        return result
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 5 CAPSULE INTELLIGENTI
@@ -1019,9 +1324,19 @@ class PersistenzaStato:
             import json
             conn = sqlite3.connect(self.db_path)
 
-            # ── OracoloDinamico ─────────────────────────────────────────
+            # ── OracoloDinamico 2.0 ──────────────────────────────────────
+            # Serializza _memory con deque → list per JSON
+            oracolo_data = {}
+            for fp, m in oracolo._memory.items():
+                entry = {}
+                for k, v in m.items():
+                    if isinstance(v, deque):
+                        entry[k] = list(v)
+                    else:
+                        entry[k] = v
+                oracolo_data[fp] = entry
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('oracolo', ?)",
-                        (json.dumps(oracolo._memory),))
+                        (json.dumps(oracolo_data),))
 
             # ── MemoriaMatrimoni ────────────────────────────────────────
             memoria_data = {
@@ -1058,18 +1373,27 @@ class PersistenzaStato:
 
             restored = []
 
-            # ── OracoloDinamico ─────────────────────────────────────────
+            # ── OracoloDinamico 2.0 ──────────────────────────────────────
             if 'oracolo' in rows:
                 raw = json.loads(rows['oracolo'])
-                # Ricostruisce la struttura interna
+                deque_fields = ['durations_win', 'durations_loss', 'rsi_win', 'rsi_loss',
+                               'drift_win', 'drift_loss', 'range_pos_win', 'range_pos_loss',
+                               'post_continued', 'post_delta']
                 for fp, data in raw.items():
-                    oracolo._memory[fp] = {
+                    entry = {
                         'wins':    float(data.get('wins', 0)),
                         'samples': float(data.get('samples', 0)),
                         'pnl_sum': float(data.get('pnl_sum', 0)),
                         'real_samples': int(data.get('real_samples', 0)),
                     }
-                restored.append(f"Oracolo: {len(oracolo._memory)} fingerprint")
+                    for df in deque_fields:
+                        if df in data and isinstance(data[df], list):
+                            entry[df] = deque(data[df], maxlen=50)
+                        else:
+                            entry[df] = deque(maxlen=50)
+                    oracolo._memory[fp] = entry
+                restored.append(f"Oracolo 2.0: {len(oracolo._memory)} fingerprint, "
+                               f"{sum(m.get('real_samples',0) for m in oracolo._memory.values())} real")
 
             # ── MemoriaMatrimoni ────────────────────────────────────────
             if 'memoria' in rows:
@@ -1823,7 +2147,10 @@ class CampoGravitazionale:
         soglia_raw = self.SOGLIA_BASE * context_ratio * regime_f * vol_f * history_f * prebreak_f * drift_f * loss_f
         SOGLIA_FLOOR_ASSOLUTO = 48
         soglia_min_ctx = max(SOGLIA_FLOOR_ASSOLUTO, self.SOGLIA_MIN * context_ratio)
-        soglia = max(soglia_min_ctx, min(self.SOGLIA_MAX, soglia_raw))
+        
+        # SOGLIA_MAX ADATTIVA PER REGIME — non più fissa
+        dynamic_max = self._get_dynamic_soglia_max(regime, volatility)
+        soglia = max(soglia_min_ctx, min(dynamic_max, soglia_raw))
 
         # ── DECISIONE ─────────────────────────────────────────────────────
         enter = score >= soglia
@@ -1859,6 +2186,64 @@ class CampoGravitazionale:
                 'soglia_f': f"r={regime_f:.2f} v={vol_f:.2f} h={history_f:.2f} d={drift_f:.2f} ctx={context_ratio:.2f} smax={score_max:.0f} RSI={self._last_rsi:.0f} {prebreak_detail} {drift_detail}".strip(),
             }
         }
+
+    def _get_dynamic_soglia_max(self, regime: str, volatility: str) -> float:
+        """
+        SOGLIA_MAX ADATTIVA — il regime e il contesto decidono il tetto.
+        Usa range_position, drift, volatility per calibrare.
+        """
+        # Calcola range_position dai prezzi recenti
+        range_position = 0.5  # default centro
+        if len(self._prices_long) >= 200:
+            recent = list(self._prices_long)[-200:]
+            r_high = max(recent)
+            r_low = min(recent)
+            r_size = r_high - r_low
+            if r_size > 0:
+                range_position = (recent[-1] - r_low) / r_size
+        
+        # Calcola drift
+        drift_pct = 0.0
+        if len(self._prices_long) >= 100:
+            _p = list(self._prices_long)
+            _avg_old = sum(_p[:50]) / 50
+            _avg_new = sum(_p[-50:]) / 50
+            drift_pct = (_avg_new - _avg_old) / _avg_old * 100
+        
+        if regime == "RANGING":
+            base = 80
+            # Centro del range → più selettivo
+            if 0.40 <= range_position <= 0.60:
+                base = 83
+                if volatility == "ALTA":
+                    base += 2  # 85 — molto selettivo al centro con alta vol
+            # Bordi del range → più permissivo
+            elif range_position <= 0.25 or range_position >= 0.75:
+                base = 76
+                if abs(drift_pct) >= 0.10:
+                    base -= 2  # 74 — drift vero al bordo, lascia entrare
+        
+        elif regime == "TRENDING_BULL":
+            base = 70
+            if drift_pct > 0.10:
+                base = 66  # trend confermato, più permissivo
+            if volatility == "BASSA":
+                base -= 2  # trend pulito, ancora più permissivo
+        
+        elif regime == "TRENDING_BEAR":
+            base = 75
+            if drift_pct < -0.10:
+                base = 72  # trend bear confermato
+        
+        elif regime == "EXPLOSIVE":
+            base = 65
+            if volatility == "ALTA":
+                base = 63  # esplosione vera, cattura subito
+        
+        else:
+            base = 80
+        
+        return float(base)
 
     def record_result(self, is_win: bool, exit_reason: str = "", pb_signals: int = 0, pnl: float = 0.0):
         """Chiamato alla chiusura di ogni shadow trade."""
@@ -2472,6 +2857,10 @@ class OvertopBassanoV14Production:
         # ── PHANTOM TRACKER: aggiorna trade fantasma ogni tick ────────────
         if self._phantoms_open:
             self._update_phantoms(price, momentum)
+
+        # ── POST-TRADE TRACKER: monitora cosa succede dopo exit ──────────
+        if self.oracolo._post_trade_queue:
+            self.oracolo.update_post_trade(price)
 
         # ── HEARTBEAT M2 — ogni 60s conferma che M2 è vivo ───────────────
         if now - self._last_m2_heartbeat > 60:
@@ -3157,6 +3546,13 @@ class OvertopBassanoV14Production:
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
         
+        # ── FORZA LONG IN RANGING — se SHORT da EXPLOSIVE, torna LONG ────
+        # Il buco: flippava a SHORT in EXPLOSIVE, restava SHORT in RANGING
+        if self._regime_current == "RANGING" and campo._direction == "SHORT":
+            campo._direction = "LONG"
+            campo._direction_last_change = now
+            self._log_m2("🔄", f"FORZA LONG in RANGING (era SHORT, regime tornato RANGING)")
+        
         if campo._direction != old_direction:
             self._log_m2("🔄", f"DIREZIONE → {campo._direction} (drift={drift:+.3f}% macd_hist={macd_hist:+.2f} trend={trend})")
             self.telemetry.log_direction_flip(
@@ -3288,7 +3684,6 @@ class OvertopBassanoV14Production:
             
             if self._regime_current == "RANGING":
                 # ── NO-TRADE ZONE: non tradare al centro del range ────
-                # Calcola range recente su ultimi 200 tick
                 regime_prices = list(self.regime_detector.prices)
                 if len(regime_prices) >= 200:
                     recent = regime_prices[-200:]
@@ -3298,13 +3693,50 @@ class OvertopBassanoV14Production:
                     
                     if range_size > 0:
                         position_in_range = (price - range_low) / range_size
-                        # Se nel 40%-60% del range → centro → NO TRADE
                         if 0.40 <= position_in_range <= 0.60:
                             if len(self._phantoms_open) < 5:
                                 self._record_phantom(price,
                                     f"RANGE_MIDZONE_{position_in_range:.0%}",
                                     seed['score'], momentum, volatility, trend)
                             return
+
+            # ═══════════════════════════════════════════════════════════════
+            # ORACOLO 2.0 — CAPSULE STATICHE + CONTEXT-MATCHING
+            # Il cervello della volpe decide se QUESTA situazione vale
+            # ═══════════════════════════════════════════════════════════════
+            
+            # Calcola contesto per Oracolo
+            _oc_rsi = getattr(self.campo, '_last_rsi', 50)
+            _oc_drift = 0.0
+            _oc_rpos = 0.5
+            if len(self.campo._prices_long) >= 100:
+                _p = list(self.campo._prices_long)
+                _oc_drift = (sum(_p[-50:])/50 - sum(_p[:50])/50) / (sum(_p[:50])/50) * 100
+            if len(self.campo._prices_long) >= 200:
+                _r = list(self.campo._prices_long)[-200:]
+                _rh, _rl = max(_r), min(_r)
+                if _rh > _rl:
+                    _oc_rpos = (price - _rl) / (_rh - _rl)
+            
+            # Capsule OC1-OC5
+            oc_block, oc_reason = self.oracolo.check_capsules(
+                self._regime_current, self.campo._direction, _oc_rsi,
+                _oc_drift, _oc_rpos, momentum, self._m2_loss_streak)
+            if oc_block:
+                if len(self._phantoms_open) < 5:
+                    self._record_phantom(price, oc_reason, seed['score'], momentum, volatility, trend)
+                return
+
+            # Context-matching: cerca trade simili passati
+            ctx = self.oracolo.context_match(
+                self._regime_current, momentum, volatility, trend,
+                self.campo._direction, _oc_rsi, _oc_drift, _oc_rpos)
+            if ctx['verdict'] == 'BLOCCA' and ctx['confidence'] > 0.4:
+                if len(self._phantoms_open) < 5:
+                    self._record_phantom(price,
+                        f"CTX_MATCH_BLOCK_pnl{ctx['pnl_predicted']:+.1f}_w{ctx['wins']}/5",
+                        seed['score'], momentum, volatility, trend)
+                return
 
             self._log_m2("🎯", f"ENTRY {self.campo._direction} {matrimonio_name} | score={result['score']:.1f} "
                               f"soglia={result['soglia']:.1f} size={result['size']:.2f}x "
@@ -3484,16 +3916,16 @@ class OvertopBassanoV14Production:
             # ── SCORE TOTALE EXIT ─────────────────────────────────────
             exit_energy = mom_score + trend_score + decel_comp + profit_comp
             
-            # ── SOGLIA EXIT ADATTIVA — REGIME-AWARE ─────────────────────
-            # RANGING: hold più lungo (il laterale richiede pazienza)
-            # TRENDING: hold standard
-            # EXPLOSIVE: hold più corto (lascia correre ma esci se decel)
-            if self._regime_current == "RANGING":
-                MIN_HOLD = 45  # RANGING: più pazienza
-            elif self._regime_current == "EXPLOSIVE":
-                MIN_HOLD = 20  # EXPLOSIVE: più reattivo
-            else:
-                MIN_HOLD = 30  # TRENDING: standard
+            # ── MIN_HOLD ADATTIVO — ORACOLO 2.0 DURATION MEMORY ─────────
+            # Prima chiede all'Oracolo: quanto durano i WIN per questo pattern?
+            # Se ha dati → 70% della durata media WIN. Se no → default per regime.
+            MIN_HOLD = self.oracolo.get_dynamic_min_hold(
+                self._shadow_entry_momentum or momentum,
+                self._shadow_entry_volatility or volatility,
+                self._shadow_entry_trend or trend,
+                direction=entry_direction,
+                regime=self._regime_current
+            )
             
             if duration < MIN_HOLD:
                 return  # solo stop loss 2% può chiudere prima
@@ -3577,16 +4009,41 @@ class OvertopBassanoV14Production:
                                      pb_signals=self._shadow.get("pb_signals", 0),
                                      pnl=pnl)
 
-            # ── INSEGNA ALL'ORACOLO — il cervello impara dai trade M2 ─────────
+            # ── INSEGNA ALL'ORACOLO 2.0 — il cervello impara TUTTO ─────────
             if self._shadow_entry_momentum and self._shadow_entry_volatility and self._shadow_entry_trend:
+                # Calcola range_position e drift per contesto
+                _rp = 0.5
+                _dr = 0.0
+                if len(self.campo._prices_long) >= 200:
+                    _recent = list(self.campo._prices_long)[-200:]
+                    _rh, _rl = max(_recent), min(_recent)
+                    if _rh > _rl:
+                        _rp = (price - _rl) / (_rh - _rl)
+                if len(self.campo._prices_long) >= 100:
+                    _p = list(self.campo._prices_long)
+                    _dr = (sum(_p[-50:])/50 - sum(_p[:50])/50) / (sum(_p[:50])/50) * 100
+
                 self.oracolo.record(
                     self._shadow_entry_momentum,
                     self._shadow_entry_volatility,
                     self._shadow_entry_trend,
                     is_win,
-                    direction=self._shadow.get("direction", "LONG"),
-                    pnl=pnl
+                    direction=entry_direction,
+                    pnl=pnl,
+                    duration=trade_duration,
+                    rsi=getattr(self.campo, '_last_rsi', 50),
+                    drift=_dr,
+                    range_position=_rp,
+                    regime=self._regime_current,
+                    hour=datetime.utcnow().hour,
                 )
+                
+                # Avvia post-trade tracker
+                fp = self.oracolo._fp(self._shadow_entry_momentum,
+                                       self._shadow_entry_volatility,
+                                       self._shadow_entry_trend,
+                                       entry_direction)
+                self.oracolo.start_post_trade(fp, price, entry_direction)
 
             # ── AGGIORNA MEMORIA MATRIMONI — anche M2 conta ──────────────────
             if self._shadow_matrimonio:
@@ -3735,6 +4192,12 @@ class OvertopBassanoV14Production:
         elif "ENERGY_SCORE" in block_reason: reason_key = "ENERGY_SCORE"
         elif "ENERGY_TREND" in block_reason: reason_key = "ENERGY_TREND"
         elif "RANGE_MIDZONE" in block_reason: reason_key = "RANGE_MIDZONE"
+        elif "OC1" in block_reason: reason_key = "OC1_MIDZONE"
+        elif "OC2" in block_reason: reason_key = "OC2_RSI"
+        elif "OC3" in block_reason: reason_key = "OC3_DRIFT"
+        elif "OC4" in block_reason: reason_key = "OC4_FALSO_FORTE"
+        elif "OC5" in block_reason: reason_key = "OC5_LOSS_STREAK"
+        elif "CTX_MATCH" in block_reason: reason_key = "CTX_MATCH"
         elif "FANTASMA" in block_reason: reason_key = "FANTASMA"
         else: reason_key = block_reason
 
@@ -3866,6 +4329,12 @@ class OvertopBassanoV14Production:
             elif "ENERGY_SCORE" in block: reason_key = "ENERGY_SCORE"
             elif "ENERGY_TREND" in block: reason_key = "ENERGY_TREND"
             elif "RANGE_MIDZONE" in block: reason_key = "RANGE_MIDZONE"
+            elif "OC1" in block: reason_key = "OC1_MIDZONE"
+            elif "OC2" in block: reason_key = "OC2_RSI"
+            elif "OC3" in block: reason_key = "OC3_DRIFT"
+            elif "OC4" in block: reason_key = "OC4_FALSO_FORTE"
+            elif "OC5" in block: reason_key = "OC5_LOSS_STREAK"
+            elif "CTX_MATCH" in block: reason_key = "CTX_MATCH"
             elif "FANTASMA" in block: reason_key = "FANTASMA"
             else: reason_key = block
 
