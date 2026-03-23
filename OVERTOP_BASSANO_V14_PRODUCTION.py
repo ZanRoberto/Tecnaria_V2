@@ -665,18 +665,26 @@ class OracoloDinamico:
     def __init__(self):
         self._memory: dict = {}
         
-        # ── INTELLIGENZA INIZIALE — prior, NON verità economica ────────
-        # real_samples = 0 → dati bootstrap, FANTASMA_PNL non si applica
-        # FANTASMA_PNL si attiva solo dopo MIN_REAL_SAMPLES trade reali
+        # ── INTELLIGENZA REALE — dati da trade veri 23 marzo 2026 ──────
+        # real_samples = trade REALI eseguiti con PnL corretto
+        # FORTE|ALTA: 4 trade reali, 1 WIN (+1.47), 3 LOSS (-12.17, -5.96, -1.81)
+        # SHORT|MEDIO: 2 trade reali, 0 WIN, 2 LOSS (-6.13, -5.70)
+        # Questi NON sono stime — sono i risultati veri del mercato di oggi
         self._memory = {
-            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 12.0, 'samples': 20.0, 'pnl_sum': 10.0, 'real_samples': 0},
+            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 13.0, 'samples': 24.0, 'pnl_sum': -8.47, 'real_samples': 4},
+            # 4 real: +1.47, -12.17, -5.96, -1.81 = -18.47 + bootstrap 10.0 = -8.47
+            # WR reale: 1/4=25%. WR totale: 13/24=54%. pnl_avg: -0.35
             "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0, 'pnl_sum': -15.0, 'real_samples': 0},
+            # FANTASMA_WR (43%) — bloccato dal boot
             "LONG|DEBOLE|ALTA|SIDEWAYS":  {'wins': 1.4,  'samples': 7.4,  'pnl_sum': -20.0, 'real_samples': 0},
+            # FANTASMA_WR (19%) — bloccato dal boot
             "LONG|FORTE|MEDIA|SIDEWAYS":  {'wins': 4.5,  'samples': 6.0,  'pnl_sum': 8.0, 'real_samples': 0},
             "LONG|MEDIO|MEDIA|SIDEWAYS":  {'wins': 1.0,  'samples': 2.0,  'pnl_sum': -1.0, 'real_samples': 0},
             "LONG|DEBOLE|MEDIA|SIDEWAYS": {'wins': 0.5,  'samples': 3.7,  'pnl_sum': -8.0, 'real_samples': 0},
             "LONG|DEBOLE|BASSA|SIDEWAYS": {'wins': 1.9,  'samples': 2.9,  'pnl_sum': 2.0, 'real_samples': 0},
-            "SHORT|MEDIO|ALTA|SIDEWAYS":  {'wins': 0.3,  'samples': 2.0,  'pnl_sum': -5.0, 'real_samples': 0},
+            "SHORT|MEDIO|ALTA|SIDEWAYS":  {'wins': 0.3,  'samples': 4.0,  'pnl_sum': -16.83, 'real_samples': 2},
+            # 2 real: -6.13, -5.70 = -11.83 + bootstrap -5.0 = -16.83
+            # WR reale: 0/2=0%. pnl_avg: -4.21
         }
 
     def _fp(self, momentum: str, volatility: str, trend: str, direction: str = "LONG") -> str:
