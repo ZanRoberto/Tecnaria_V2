@@ -3057,7 +3057,7 @@ class OvertopBassanoV14Production:
                 volatility=getattr(self, '_last_volatility', 'UNKNOWN'))
         else:
             self.telemetry.log_direction_hold(
-                bearish_signals,
+                bearish_energy,
                 regime=self._regime_current, direction=campo._direction,
                 open_position=self._shadow is not None,
                 active_threshold=getattr(campo, 'SOGLIA_MAX', 0),
