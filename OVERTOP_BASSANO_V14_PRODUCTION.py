@@ -2979,12 +2979,12 @@ class OvertopBassanoV14Production:
         # Segnali bearish con isteresi sul drift
         bearish_signals = 0
         if campo._direction == "LONG":
-            # Per andare SHORT: soglia più severa
-            if drift < -0.12:
+            # Per andare SHORT: drift negativo significativo
+            if drift < -0.06:
                 bearish_signals += 1
         else:
             # Per restare SHORT: soglia più morbida (zona morta)
-            if drift < -0.04:
+            if drift < -0.03:
                 bearish_signals += 1
         
         if macd_hist < 0:
