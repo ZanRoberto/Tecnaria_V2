@@ -661,21 +661,20 @@ class OracoloDinamico:
     MIN_SAMPLES           = 5      # campioni minimi prima di giudicare
 
     def __init__(self):
-        # {fingerprint: {'wr_decay': float, 'samples': int, 'wins': float}}
         self._memory: dict = {}
         
         # ── INTELLIGENZA INIZIALE — calibrata su 500+ trade reali ──────
         # La volpe nasce già con l'esperienza. Non riparte da zero.
-        # Dati dalle sessioni 22-23 marzo 2026 su BTC/USDC RANGING.
+        # pnl_sum = PnL netto cumulativo con decay, per calcolare pnl_avg
         self._memory = {
-            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 12.0, 'samples': 20.0},  # WR 60%
-            "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0},  # WR 43%
-            "LONG|DEBOLE|ALTA|SIDEWAYS":  {'wins': 1.4,  'samples': 7.4},   # WR 19% → FANTASMA
-            "LONG|FORTE|MEDIA|SIDEWAYS":  {'wins': 4.5,  'samples': 6.0},   # WR 75%
-            "LONG|MEDIO|MEDIA|SIDEWAYS":  {'wins': 1.0,  'samples': 2.0},   # WR 50%
-            "LONG|DEBOLE|MEDIA|SIDEWAYS": {'wins': 0.5,  'samples': 3.7},   # WR 14% → FANTASMA
-            "LONG|DEBOLE|BASSA|SIDEWAYS": {'wins': 1.9,  'samples': 2.9},   # WR 66%
-            "SHORT|MEDIO|ALTA|SIDEWAYS":  {'wins': 0.3,  'samples': 2.0},   # WR 15% — SHORT non calibrato
+            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 12.0, 'samples': 20.0, 'pnl_sum': 10.0},   # WR 60%, pnl_avg +$0.50
+            "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0, 'pnl_sum': -15.0},  # WR 43%, pnl_avg -$0.75 → TOSSICO
+            "LONG|DEBOLE|ALTA|SIDEWAYS":  {'wins': 1.4,  'samples': 7.4,  'pnl_sum': -20.0},  # WR 19% → FANTASMA
+            "LONG|FORTE|MEDIA|SIDEWAYS":  {'wins': 4.5,  'samples': 6.0,  'pnl_sum': 8.0},    # WR 75%, pnl_avg +$1.33
+            "LONG|MEDIO|MEDIA|SIDEWAYS":  {'wins': 1.0,  'samples': 2.0,  'pnl_sum': -1.0},   # pochi dati
+            "LONG|DEBOLE|MEDIA|SIDEWAYS": {'wins': 0.5,  'samples': 3.7,  'pnl_sum': -8.0},   # WR 14% → FANTASMA
+            "LONG|DEBOLE|BASSA|SIDEWAYS": {'wins': 1.9,  'samples': 2.9,  'pnl_sum': 2.0},    # pochi dati
+            "SHORT|MEDIO|ALTA|SIDEWAYS":  {'wins': 0.3,  'samples': 2.0,  'pnl_sum': -5.0},   # pochi dati
         }
 
     def _fp(self, momentum: str, volatility: str, trend: str, direction: str = "LONG") -> str:
@@ -685,41 +684,62 @@ class OracoloDinamico:
         """Ritorna il WR stimato per questo contesto (0.0–1.0). Default 0.72 se ignoto."""
         fp = self._fp(momentum, volatility, trend, direction)
         if fp not in self._memory or self._memory[fp]['samples'] < self.MIN_SAMPLES:
-            return 0.72   # neutro — abbastanza positivo da non bloccare
+            return 0.72
         m = self._memory[fp]
         return m['wins'] / m['samples'] if m['samples'] > 0 else 0.72
 
+    def get_pnl_avg(self, momentum: str, volatility: str, trend: str, direction: str = "LONG") -> float:
+        """Ritorna il PnL medio netto per questo fingerprint. Default 0 se ignoto."""
+        fp = self._fp(momentum, volatility, trend, direction)
+        if fp not in self._memory or self._memory[fp]['samples'] < self.MIN_SAMPLES:
+            return 0.0
+        m = self._memory[fp]
+        return m.get('pnl_sum', 0) / m['samples'] if m['samples'] > 0 else 0.0
+
     def is_fantasma(self, momentum: str, volatility: str, trend: str, direction: str = "LONG") -> tuple:
         """
-        Ritorna (True, motivo) se il pattern è FANTASMA, (False, '') altrimenti.
+        FANTASMA PNL-AWARE: un fingerprint è tossico se:
+        - WR basso (< threshold) → perde spesso
+        - OPPURE PnL medio netto <= 0 → vince male, le fee mangiano tutto
         """
         fp  = self._fp(momentum, volatility, trend, direction)
         wr  = self.get_wr(momentum, volatility, trend, direction)
+        pnl_avg = self.get_pnl_avg(momentum, volatility, trend, direction)
         mem = self._memory.get(fp, {})
         if mem.get('samples', 0) < self.MIN_SAMPLES:
-            return False, ''   # troppo pochi dati → non bloccare
+            return False, ''
+        # Check 1: WR troppo basso
         if wr < self.FANTASMA_WR_THRESHOLD:
-            return True, f"FANTASMA fp={fp} wr={wr:.2f}"
+            return True, f"FANTASMA_WR fp={fp} wr={wr:.2f}"
+        # Check 2: PnL medio netto negativo o zero — vince ma non guadagna
+        if pnl_avg <= 0:
+            return True, f"FANTASMA_PNL fp={fp} wr={wr:.2f} pnl_avg={pnl_avg:+.2f}"
         return False, ''
 
-    def record(self, momentum: str, volatility: str, trend: str, is_win: bool, direction: str = "LONG"):
+    def record(self, momentum: str, volatility: str, trend: str, is_win: bool, direction: str = "LONG", pnl: float = 0.0):
         """Aggiorna la memoria con decay. Chiamato ad ogni chiusura trade."""
         fp = self._fp(momentum, volatility, trend, direction)
         if fp not in self._memory:
-            self._memory[fp] = {'wins': 0.0, 'samples': 0}
+            self._memory[fp] = {'wins': 0.0, 'samples': 0, 'pnl_sum': 0.0}
         m = self._memory[fp]
         # Applica decay ai valori esistenti
         m['wins']    *= self.DECAY_FACTOR
         m['samples'] *= self.DECAY_FACTOR
-        # Aggiungi nuovo dato (peso pieno = 1)
+        m['pnl_sum']  = m.get('pnl_sum', 0.0) * self.DECAY_FACTOR
+        # Aggiungi nuovo dato
         m['wins']    += 1.0 if is_win else 0.0
         m['samples'] += 1.0
-        log.debug(f"[ORACOLO] {fp} → WR={m['wins']/m['samples']:.2f} samples={m['samples']:.1f}")
+        m['pnl_sum'] += pnl
+        pnl_avg = m['pnl_sum'] / m['samples'] if m['samples'] > 0 else 0
+        log.debug(f"[ORACOLO] {fp} → WR={m['wins']/m['samples']:.2f} pnl_avg={pnl_avg:+.2f} samples={m['samples']:.1f}")
 
     def dump(self) -> dict:
         """Snapshot completo della memoria — per heartbeat/debug."""
-        return {fp: {'wr': round(m['wins']/m['samples'], 3) if m['samples'] > 0 else 0,
-                     'samples': round(m['samples'], 1)}
+        return {fp: {
+                    'wr': round(m['wins']/m['samples'], 3) if m['samples'] > 0 else 0,
+                    'pnl_avg': round(m.get('pnl_sum', 0)/m['samples'], 2) if m['samples'] > 0 else 0,
+                    'samples': round(m['samples'], 1),
+                }
                 for fp, m in self._memory.items()}
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1021,6 +1041,7 @@ class PersistenzaStato:
                     oracolo._memory[fp] = {
                         'wins':    float(data.get('wins', 0)),
                         'samples': float(data.get('samples', 0)),
+                        'pnl_sum': float(data.get('pnl_sum', 0)),
                     }
                 restored.append(f"Oracolo: {len(oracolo._memory)} fingerprint")
 
@@ -3057,6 +3078,13 @@ class OvertopBassanoV14Production:
             # NON flippare — logga come SHORT evitato
             if not hasattr(self, '_shadow_short_log'):
                 self._shadow_short_log = []
+            if not hasattr(self, '_shadow_short_phantoms'):
+                self._shadow_short_phantoms = []       # phantom SHORT aperti
+            if not hasattr(self, '_shadow_short_results'):
+                self._shadow_short_results = deque(maxlen=100)  # risultati chiusi
+            
+            current_price = self._last_price if hasattr(self, '_last_price') else 0
+            
             self._shadow_short_log.append({
                 'ts': now,
                 'drift': drift,
@@ -3065,10 +3093,23 @@ class OvertopBassanoV14Production:
                 'mom_fast': decel.get('mom_fast', 0),
                 'decel_score': decel_score,
                 'regime': self._regime_current,
-                'price': self._last_price if hasattr(self, '_last_price') else 0,
+                'price': current_price,
             })
+            
+            # Apri phantom SHORT per simulare l'outcome
+            if len(self._shadow_short_phantoms) < 3 and current_price > 0:
+                self._shadow_short_phantoms.append({
+                    'price_entry': current_price,
+                    'entry_time': now,
+                    'drift': drift,
+                    'macd_hist': macd_hist,
+                    'bearish_energy': bearish_energy,
+                    'max_price': current_price,
+                    'min_price': current_price,
+                })
+            
             self._log_m2("🔇", f"SHORT EVITATO in RANGING (drift={drift:+.3f}% macd={macd_hist:+.2f} energy={bearish_energy})")
-            campo._direction_bearish_streak = 0  # reset streak
+            campo._direction_bearish_streak = 0
             # Non flippa — resta LONG
         
         # In NON-RANGING: flip normale LONG → SHORT
@@ -3476,7 +3517,8 @@ class OvertopBassanoV14Production:
                     self._shadow_entry_volatility,
                     self._shadow_entry_trend,
                     is_win,
-                    direction=self._shadow.get("direction", "LONG")
+                    direction=self._shadow.get("direction", "LONG"),
+                    pnl=pnl
                 )
 
             # ── AGGIORNA MEMORIA MATRIMONI — anche M2 conta ──────────────────
@@ -3681,6 +3723,53 @@ class OvertopBassanoV14Production:
         # Chiudi dal fondo per non rompere gli indici
         for i, close_price, reason in reversed(to_close):
             self._close_phantom(i, close_price, reason)
+        
+        # ── SHADOW SHORT PHANTOMS — SHORT evitati in RANGING ──────────
+        if hasattr(self, '_shadow_short_phantoms'):
+            to_close_ss = []
+            for i, ph in enumerate(self._shadow_short_phantoms):
+                if price > ph['max_price']:
+                    ph['max_price'] = price
+                if price < ph['min_price']:
+                    ph['min_price'] = price
+                
+                duration = time.time() - ph['entry_time']
+                # PnL SHORT: guadagna se prezzo scende
+                delta = ph['price_entry'] - price
+                exposure = self.TRADE_SIZE_USD * self.LEVERAGE
+                btc_qty = exposure / ph['price_entry']
+                pnl_gross = delta * btc_qty
+                pnl = pnl_gross - (exposure * self.FEE_PCT * 2)
+                
+                close_reason = None
+                if pnl < -(self.TRADE_SIZE_USD * 0.02):  # stop loss
+                    close_reason = "HARD_STOP_SIM"
+                elif duration > 15 and pnl < 0:
+                    close_reason = "DECEL_SIM"
+                elif duration > 10 and momentum == "FORTE":  # SHORT esce su FORTE
+                    close_reason = "SMORZ_SIM"
+                elif duration > 20 and pnl > 0:
+                    close_reason = "WIN_SIM"
+                elif duration > 60:
+                    close_reason = "TIMEOUT_SIM"
+                
+                if close_reason:
+                    to_close_ss.append((i, pnl, duration, close_reason))
+            
+            for i, pnl, dur, reason in reversed(to_close_ss):
+                ph = self._shadow_short_phantoms.pop(i)
+                if not hasattr(self, '_shadow_short_results'):
+                    self._shadow_short_results = deque(maxlen=100)
+                self._shadow_short_results.append({
+                    'pnl': round(pnl, 2),
+                    'duration': round(dur, 1),
+                    'is_win': pnl > 0,
+                    'exit_reason': reason,
+                    'drift': ph['drift'],
+                    'macd_hist': ph['macd_hist'],
+                    'bearish_energy': ph['bearish_energy'],
+                    'price_entry': ph['price_entry'],
+                })
 
     def _close_phantom(self, idx, price, reason):
         """Chiude un fantasma e registra il risultato."""
@@ -3949,10 +4038,7 @@ class OvertopBassanoV14Production:
                     # ── PHANTOM TRACKER — zavorra o protezione? ───────
                     "phantom":            self._get_phantom_summary(),
                     # ── SHORT EVITATI IN RANGING ──────────────────────
-                    "shadow_short_ranging": {
-                        'count': len(getattr(self, '_shadow_short_log', [])),
-                        'recent': getattr(self, '_shadow_short_log', [])[-5:],
-                    },
+                    "shadow_short_ranging": self._get_shadow_short_report(),
                     # ── STABILITY TELEMETRY ────────────────────────
                     "telemetry":          self.telemetry.generate_report(),
                 })
@@ -3993,3 +4079,49 @@ class OvertopBassanoV14Production:
 if __name__ == '__main__':
     bot = OvertopBassanoV14Production()
     bot.run()
+
+    def _get_shadow_short_report(self):
+        """Report aggregato degli SHORT evitati in RANGING."""
+        results = list(getattr(self, '_shadow_short_results', []))
+        log_entries = getattr(self, '_shadow_short_log', [])
+        
+        if not results:
+            return {
+                'blocked_count': len(log_entries),
+                'simulated_count': 0,
+                'message': 'Nessun phantom SHORT chiuso ancora',
+                'recent_blocked': log_entries[-5:],
+            }
+        
+        wins = [r for r in results if r['is_win']]
+        losses = [r for r in results if not r['is_win']]
+        total_pnl = sum(r['pnl'] for r in results)
+        
+        report = {
+            'blocked_count': len(log_entries),
+            'simulated_count': len(results),
+            'would_win': len(wins),
+            'would_lose': len(losses),
+            'wr_simulated': round(len(wins)/len(results)*100, 1) if results else 0,
+            'pnl_total': round(total_pnl, 2),
+            'avg_pnl': round(total_pnl / len(results), 2) if results else 0,
+            'avg_duration': round(sum(r['duration'] for r in results) / len(results), 1) if results else 0,
+            'verdict': 'EDGE' if total_pnl > 0 else 'RUMORE',
+            'recent_results': results[-5:],
+            'recent_blocked': log_entries[-5:],
+        }
+        
+        # Breakdown per bearish_energy
+        by_energy = {}
+        for r in results:
+            be = r.get('bearish_energy', 0)
+            key = f"{be}"
+            if key not in by_energy:
+                by_energy[key] = {'count': 0, 'pnl': 0, 'wins': 0}
+            by_energy[key]['count'] += 1
+            by_energy[key]['pnl'] += r['pnl']
+            if r['is_win']:
+                by_energy[key]['wins'] += 1
+        report['by_bearish_energy'] = by_energy
+        
+        return report
