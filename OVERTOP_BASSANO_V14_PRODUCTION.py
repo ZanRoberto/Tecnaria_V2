@@ -2134,7 +2134,9 @@ class OvertopBassanoV14Production:
         # ── Persistenza ──────────────────────────────────────────────────
         self._persist        = PersistenzaStato(db_path=DB_PATH)
         self.capital, self.total_trades = self._persist.load()
-        self.TRADE_SIZE_USD = 1000.0  # SIZE FISSA $1000 per trade
+        self.TRADE_SIZE_USD = 1000.0  # SIZE FISSA $1000 margine per trade
+        self.LEVERAGE = 5             # LEVA 5x — $1000 margine = $5000 esposizione
+        self.FEE_PCT = 0.0002        # 0.02% maker futures (vs 0.075% spot)
         self.wins    = 0
         self.losses  = 0
 
@@ -3164,15 +3166,17 @@ class OvertopBassanoV14Production:
             duration     = time.time() - self._shadow_entry_time
             duration_avg = self._shadow["duration_avg"]
 
-            # ── HARD STOP LOSS 2% SUL PNL REALE ──────────────────────
-            # Size $1000 × 2% = max -$20 per trade. Punto.
-            btc_qty_sl = self.TRADE_SIZE_USD / self._shadow["price_entry"]
+            # ── HARD STOP LOSS 2% SUL MARGINE ──────────────────────────
+            # Margine $1000 × 2% = max -$20 per trade.
+            # Con leva 5x, esposizione $5000, -$20 = delta $272 su BTC
+            exposure_sl = self.TRADE_SIZE_USD * self.LEVERAGE
+            btc_qty_sl = exposure_sl / self._shadow["price_entry"]
             if self.campo._direction == "SHORT":
                 current_pnl_real = (self._shadow["price_entry"] - price) * btc_qty_sl
             else:
                 current_pnl_real = (price - self._shadow["price_entry"]) * btc_qty_sl
             
-            HARD_STOP_USD = self.TRADE_SIZE_USD * 0.02  # 2% di $1000 = $20
+            HARD_STOP_USD = self.TRADE_SIZE_USD * 0.02  # 2% del margine = $20
             if current_pnl_real < -HARD_STOP_USD:
                 self._close_shadow_trade(price, f"HARD_STOP_${abs(current_pnl_real):.1f}_max${HARD_STOP_USD:.0f}")
                 return
@@ -3205,78 +3209,60 @@ class OvertopBassanoV14Production:
                 self._close_shadow_trade(price, f"DIVORZIO|{'|'.join(triggers)}")
                 return
 
-            # ── SOTTO MINIMUM HOLD → non uscire per DECEL/SMORZ/TIMEOUT ──────
-            # Il trade deve avere TEMPO di catturare il delta.
-            # Lo stop loss 2% protegge dai disastri.
+            # ── MINIMUM HOLD — lascia tempo all'impulso ─────────────────────
+            # Lo stop loss 2% ($20) protegge SEMPRE dai disastri.
+            # Il SMORZ/DECEL non chiude prima di 45 secondi.
+            # Dati reali: trade tenuti 32-36s fanno delta $94-98.
+            # Trade chiusi dopo 8s fanno delta $1-16 → LOSS dopo fee.
             if self.campo._direction == "LONG":
                 current_pnl = price - self._shadow["price_entry"]
             else:
                 current_pnl = self._shadow["price_entry"] - price
 
-            if current_pnl > 0:
-                # IN PROFITTO: lascia correre — min hold 30 secondi
-                # L'impulso ha bisogno di tempo per svilupparsi
-                effective_min_hold = 30
-            else:
-                # IN PERDITA: esci prima — min hold 8 secondi
-                # Lo stop loss 2% protegge dai disastri
-                effective_min_hold = 8
+            MIN_HOLD_SECONDS = 45  # l'impulso ha bisogno di tempo
+            if duration < MIN_HOLD_SECONDS:
+                return  # solo lo stop loss 2% può chiudere prima
 
-            if duration < effective_min_hold:
-                return
-
-            # ── DECEL ─────────────────────────────────────────────────────────
-            # Se in profitto: DECEL solo se ha ritracciato SIGNIFICATIVAMENTE
-            if duration > duration_avg * 0.5:
-                decel = self.decelero.analyze()
-                if decel['should_exit']:
-                    if current_pnl > 0:
-                        # In profitto: esci per DECEL solo se ha ritracciato > 30% del max profit
-                        if self.campo._direction == "LONG":
-                            max_profit = self._shadow_max_price - self._shadow["price_entry"]
-                            retreat_from_max = self._shadow_max_price - price
-                        else:
-                            max_profit = self._shadow["price_entry"] - self._shadow_min_price
-                            retreat_from_max = price - self._shadow_min_price
-                        # Esci solo se ha perso > 30% del profitto massimo raggiunto
-                        if max_profit > 0 and retreat_from_max > max_profit * 0.30:
-                            self._close_shadow_trade(price, f"DECEL_MOMENTUM_WIN_{current_pnl:+.0f}")
-                            return
-                        # Altrimenti lascia correre — l'impulso sta ancora andando
-                    else:
-                        # In perdita: esci per DECEL dopo 15 secondi
-                        if duration > 15:
-                            self._close_shadow_trade(price, "DECEL_MOMENTUM")
-                            return
-
-            # ── SMORZ — impulso VERAMENTE finito ─────────────────────────────
-            # Non al primo rallentamento — serve conferma.
-            # LONG: exit quando momentum DEBOLE E il prezzo sta scendendo dal max
-            # SHORT: exit quando momentum FORTE E il prezzo sta salendo dal min
-            smorz_threshold = duration_avg * 0.5 if current_pnl <= 0 else duration_avg * 1.5
-            if duration > smorz_threshold:
-                if self.campo._direction == "LONG" and momentum == "DEBOLE":
-                    if current_pnl <= 0:
-                        # In perdita con momentum morto → esci
-                        self._close_shadow_trade(price, "SMORZ")
-                        return
-                    else:
-                        # In profitto: esci solo se ritraccia > 30% dal max
+            # ── DECEL — dopo 45s, esci se ritraccia dal max ──────────────────
+            decel = self.decelero.analyze()
+            if decel['should_exit']:
+                if current_pnl > 0:
+                    if self.campo._direction == "LONG":
                         max_profit = self._shadow_max_price - self._shadow["price_entry"]
-                        retreat = self._shadow_max_price - price
-                        if max_profit > 0 and retreat > max_profit * 0.30:
-                            self._close_shadow_trade(price, "SMORZ_WIN")
-                            return
-                elif self.campo._direction == "SHORT" and momentum == "FORTE":
-                    if current_pnl <= 0:
-                        self._close_shadow_trade(price, "SMORZ")
-                        return
+                        retreat_from_max = self._shadow_max_price - price
                     else:
                         max_profit = self._shadow["price_entry"] - self._shadow_min_price
-                        retreat = price - self._shadow_min_price
-                        if max_profit > 0 and retreat > max_profit * 0.30:
-                            self._close_shadow_trade(price, "SMORZ_WIN")
-                            return
+                        retreat_from_max = price - self._shadow_min_price
+                    if max_profit > 0 and retreat_from_max > max_profit * 0.30:
+                        self._close_shadow_trade(price, f"DECEL_WIN_{current_pnl:+.0f}")
+                        return
+                else:
+                    # In perdita dopo 45s con DECEL → esci
+                    self._close_shadow_trade(price, "DECEL_LOSS")
+                    return
+
+            # ── SMORZ — impulso finito dopo 45s ──────────────────────────────
+            if self.campo._direction == "LONG" and momentum == "DEBOLE":
+                if current_pnl <= 0:
+                    self._close_shadow_trade(price, "SMORZ")
+                    return
+                else:
+                    # In profitto: esci solo se ritraccia > 30% dal max
+                    max_profit = self._shadow_max_price - self._shadow["price_entry"]
+                    retreat = self._shadow_max_price - price
+                    if max_profit > 0 and retreat > max_profit * 0.30:
+                        self._close_shadow_trade(price, "SMORZ_WIN")
+                        return
+            elif self.campo._direction == "SHORT" and momentum == "FORTE":
+                if current_pnl <= 0:
+                    self._close_shadow_trade(price, "SMORZ")
+                    return
+                else:
+                    max_profit = self._shadow["price_entry"] - self._shadow_min_price
+                    retreat = price - self._shadow_min_price
+                    if max_profit > 0 and retreat > max_profit * 0.30:
+                        self._close_shadow_trade(price, "SMORZ_WIN")
+                        return
 
             # ── TIMEOUT ───────────────────────────────────────────────────────
             if duration > duration_avg * 3:
@@ -3304,17 +3290,18 @@ class OvertopBassanoV14Production:
         try:
             if not self._shadow:
                 return
-            # PnL REALE = delta_prezzo × quantità BTC nella posizione
-            # Size fissa $1000 per trade (non moltiplicatore × capitale)
-            # btc_qty = TRADE_SIZE_USD / prezzo_entry
+            # PnL REALE FUTURES = delta_prezzo × quantità BTC nella posizione
+            # Esposizione = TRADE_SIZE × LEVERAGE ($1000 × 5 = $5000)
+            # btc_qty = esposizione / prezzo_entry
             delta_price = (price - self._shadow["price_entry"]) if self.campo._direction == "LONG" \
                   else (self._shadow["price_entry"] - price)
-            btc_qty = self.TRADE_SIZE_USD / self._shadow["price_entry"]
+            exposure_usd = self.TRADE_SIZE_USD * self.LEVERAGE
+            btc_qty = exposure_usd / self._shadow["price_entry"]
             pnl_gross = delta_price * btc_qty
             
-            # FEE REALI: 0.075% × 2 (andata + ritorno) sulla size $1000
-            # $1000 × 0.075% × 2 = $1.50 per trade
-            total_fees = self.TRADE_SIZE_USD * 0.00075 * 2
+            # FEE FUTURES: 0.02% maker × 2 (andata + ritorno) sulla esposizione
+            # $5000 × 0.02% × 2 = $2.00 per trade
+            total_fees = exposure_usd * self.FEE_PCT * 2
             
             pnl = pnl_gross - total_fees
             is_win = pnl > 0
