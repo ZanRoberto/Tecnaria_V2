@@ -659,6 +659,7 @@ class OracoloDinamico:
     FANTASMA_WR_THRESHOLD = 0.45   # sotto questa soglia il pattern è FANTASMA
     DECAY_FACTOR          = 0.95   # ogni trade, il peso storico si riduce del 5%
     MIN_SAMPLES           = 5      # campioni minimi prima di giudicare
+    MIN_PNL_EDGE          = 2.0    # PnL medio minimo per NON essere FANTASMA (2x fee)
 
     def __init__(self):
         self._memory: dict = {}
@@ -711,9 +712,9 @@ class OracoloDinamico:
         # Check 1: WR troppo basso
         if wr < self.FANTASMA_WR_THRESHOLD:
             return True, f"FANTASMA_WR fp={fp} wr={wr:.2f}"
-        # Check 2: PnL medio netto negativo o zero — vince ma non guadagna
-        if pnl_avg <= 0:
-            return True, f"FANTASMA_PNL fp={fp} wr={wr:.2f} pnl_avg={pnl_avg:+.2f}"
+        # Check 2: PnL medio netto sotto margine economico — vince ma non guadagna abbastanza
+        if pnl_avg <= self.MIN_PNL_EDGE:
+            return True, f"FANTASMA_PNL fp={fp} wr={wr:.2f} pnl_avg={pnl_avg:+.2f} min={self.MIN_PNL_EDGE}"
         return False, ''
 
     def record(self, momentum: str, volatility: str, trend: str, is_win: bool, direction: str = "LONG", pnl: float = 0.0):
@@ -3244,6 +3245,34 @@ class OvertopBassanoV14Production:
                         seed['score'], momentum, volatility, trend)
                 return
 
+            # ═══════════════════════════════════════════════════════════════
+            # REGIME-AWARE BEHAVIOR — il laterale è un altro mestiere
+            #
+            # RANGING: no-trade zone al centro, min hold lungo, più selettivo
+            # TRENDING: fluido, comportamento quasi invariato
+            # EXPLOSIVE: lascia correre, min hold corto
+            # ═══════════════════════════════════════════════════════════════
+            
+            if self._regime_current == "RANGING":
+                # ── NO-TRADE ZONE: non tradare al centro del range ────
+                # Calcola range recente su ultimi 200 tick
+                regime_prices = list(self.regime_detector.prices)
+                if len(regime_prices) >= 200:
+                    recent = regime_prices[-200:]
+                    range_high = max(recent)
+                    range_low = min(recent)
+                    range_size = range_high - range_low
+                    
+                    if range_size > 0:
+                        position_in_range = (price - range_low) / range_size
+                        # Se nel 40%-60% del range → centro → NO TRADE
+                        if 0.40 <= position_in_range <= 0.60:
+                            if len(self._phantoms_open) < 5:
+                                self._record_phantom(price,
+                                    f"RANGE_MIDZONE_{position_in_range:.0%}",
+                                    seed['score'], momentum, volatility, trend)
+                            return
+
             self._log_m2("🎯", f"ENTRY {self.campo._direction} {matrimonio_name} | score={result['score']:.1f} "
                               f"soglia={result['soglia']:.1f} size={result['size']:.2f}x "
                               f"| {result['breakdown']} @ ${price:.1f}")
@@ -3422,18 +3451,23 @@ class OvertopBassanoV14Production:
             # ── SCORE TOTALE EXIT ─────────────────────────────────────
             exit_energy = mom_score + trend_score + decel_comp + profit_comp
             
-            # ── SOGLIA EXIT ADATTIVA ──────────────────────────────────
-            # Dopo 45s: soglia sale gradualmente (impazienza)
-            # Il trade deve giustificare la sua esistenza
-            MIN_HOLD = 30  # secondi minimi assoluti (solo stop loss prima)
+            # ── SOGLIA EXIT ADATTIVA — REGIME-AWARE ─────────────────────
+            # RANGING: hold più lungo (il laterale richiede pazienza)
+            # TRENDING: hold standard
+            # EXPLOSIVE: hold più corto (lascia correre ma esci se decel)
+            if self._regime_current == "RANGING":
+                MIN_HOLD = 45  # RANGING: più pazienza
+            elif self._regime_current == "EXPLOSIVE":
+                MIN_HOLD = 20  # EXPLOSIVE: più reattivo
+            else:
+                MIN_HOLD = 30  # TRENDING: standard
             
             if duration < MIN_HOLD:
                 return  # solo stop loss 2% può chiudere prima
             
             # Soglia base: 35. Sale di 1 punto ogni 10 secondi dopo MIN_HOLD
-            # A 30s: soglia 35, a 60s: soglia 38, a 120s: soglia 44
             exit_soglia = 35 + int((duration - MIN_HOLD) / 10)
-            exit_soglia = min(exit_soglia, 60)  # cap a 60
+            exit_soglia = min(exit_soglia, 60)
             
             # Se in profitto significativo: soglia più bassa (lascia correre)
             if current_pnl > 50:  # delta > $50
@@ -3667,6 +3701,7 @@ class OvertopBassanoV14Production:
         elif "ENERGY_BOTH" in block_reason: reason_key = "ENERGY_BOTH"
         elif "ENERGY_SCORE" in block_reason: reason_key = "ENERGY_SCORE"
         elif "ENERGY_TREND" in block_reason: reason_key = "ENERGY_TREND"
+        elif "RANGE_MIDZONE" in block_reason: reason_key = "RANGE_MIDZONE"
         elif "FANTASMA" in block_reason: reason_key = "FANTASMA"
         else: reason_key = block_reason
 
@@ -3797,6 +3832,7 @@ class OvertopBassanoV14Production:
             elif "ENERGY_BOTH" in block: reason_key = "ENERGY_BOTH"
             elif "ENERGY_SCORE" in block: reason_key = "ENERGY_SCORE"
             elif "ENERGY_TREND" in block: reason_key = "ENERGY_TREND"
+            elif "RANGE_MIDZONE" in block: reason_key = "RANGE_MIDZONE"
             elif "FANTASMA" in block: reason_key = "FANTASMA"
             else: reason_key = block
 
