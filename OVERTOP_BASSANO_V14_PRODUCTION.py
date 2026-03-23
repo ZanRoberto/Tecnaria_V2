@@ -3157,13 +3157,14 @@ class OvertopBassanoV14Production:
 
             duration     = time.time() - self._shadow_entry_time
             duration_avg = self._shadow["duration_avg"]
+            
+            # CRITICO: direzione al momento dell'ENTRY, non quella attuale
+            entry_direction = self._shadow.get("direction", "LONG")
 
             # ── HARD STOP LOSS 2% SUL MARGINE ──────────────────────────
-            # Margine $1000 × 2% = max -$20 per trade.
-            # Con leva 5x, esposizione $5000, -$20 = delta $272 su BTC
             exposure_sl = self.TRADE_SIZE_USD * self.LEVERAGE
             btc_qty_sl = exposure_sl / self._shadow["price_entry"]
-            if self.campo._direction == "SHORT":
+            if entry_direction == "SHORT":
                 current_pnl_real = (self._shadow["price_entry"] - price) * btc_qty_sl
             else:
                 current_pnl_real = (price - self._shadow["price_entry"]) * btc_qty_sl
@@ -3181,19 +3182,19 @@ class OvertopBassanoV14Production:
             if self._shadow_entry_volatility == "BASSA" and volatility == "ALTA":
                 triggers.append("T1_VOL")
             # T2: trend inverte CONTRO la nostra direzione
-            if self.campo._direction == "LONG" and self._shadow_entry_trend == "UP" and trend == "DOWN":
+            if entry_direction == "LONG" and self._shadow_entry_trend == "UP" and trend == "DOWN":
                 triggers.append("T2_TREND")
-            elif self.campo._direction == "SHORT" and self._shadow_entry_trend == "DOWN" and trend == "UP":
+            elif entry_direction == "SHORT" and self._shadow_entry_trend == "DOWN" and trend == "UP":
                 triggers.append("T2_TREND")
             # T3: drawdown dal migliore raggiunto
-            if self.campo._direction == "SHORT":
+            if entry_direction == "SHORT":
                 # SHORT: drawdown = prezzo sale dal minimo
                 drawdown_pct = ((price - self._shadow_min_price) / self._shadow["price_entry"]) * 100
             else:
                 drawdown_pct = ((self._shadow_max_price - price) / self._shadow["price_entry"]) * 100
             if drawdown_pct > DIVORCE_DRAWDOWN_PCT:
                 triggers.append("T3_DD")
-            current_fp = self.oracolo.get_wr(momentum, volatility, trend, self.campo._direction)
+            current_fp = self.oracolo.get_wr(momentum, volatility, trend, entry_direction)
             fp_div = abs(current_fp - self._shadow_entry_fingerprint) / max(self._shadow_entry_fingerprint, 0.001)
             if fp_div > DIVORCE_FP_DIVERGE_PCT:
                 triggers.append("T4_FP")
@@ -3218,7 +3219,7 @@ class OvertopBassanoV14Production:
             #   100 = impulso ancora forte, resta dentro
             # ═══════════════════════════════════════════════════════════════
             
-            if self.campo._direction == "LONG":
+            if entry_direction == "LONG":
                 current_pnl = price - self._shadow["price_entry"]
                 max_profit = self._shadow_max_price - self._shadow["price_entry"]
                 retreat = self._shadow_max_price - price
@@ -3230,13 +3231,13 @@ class OvertopBassanoV14Production:
             # ── COMPONENTE 1: MOMENTUM (peso 30) ─────────────────────
             # FORTE=30, MEDIO=20, DEBOLE=5
             # In direzione giusta = punteggio pieno
-            if self.campo._direction == "LONG":
+            if entry_direction == "LONG":
                 mom_score = {'FORTE': 30, 'MEDIO': 20, 'DEBOLE': 5}.get(momentum, 15)
             else:
                 mom_score = {'DEBOLE': 30, 'MEDIO': 20, 'FORTE': 5}.get(momentum, 15)
             
             # ── COMPONENTE 2: TREND (peso 20) ─────────────────────────
-            if self.campo._direction == "LONG":
+            if entry_direction == "LONG":
                 trend_score = {'UP': 20, 'SIDEWAYS': 10, 'DOWN': 0}.get(trend, 10)
             else:
                 trend_score = {'DOWN': 20, 'SIDEWAYS': 10, 'UP': 0}.get(trend, 10)
@@ -3315,9 +3316,10 @@ class OvertopBassanoV14Production:
             if not self._shadow:
                 return
             # PnL REALE FUTURES = delta_prezzo × quantità BTC nella posizione
-            # Esposizione = TRADE_SIZE × LEVERAGE ($1000 × 5 = $5000)
-            # btc_qty = esposizione / prezzo_entry
-            delta_price = (price - self._shadow["price_entry"]) if self.campo._direction == "LONG" \
+            # CRITICO: usa la direzione al momento dell'ENTRY, non quella attuale
+            # Se il campo ha flippato durante il trade, la direzione attuale è sbagliata
+            entry_direction = self._shadow.get("direction", "LONG")
+            delta_price = (price - self._shadow["price_entry"]) if entry_direction == "LONG" \
                   else (self._shadow["price_entry"] - price)
             exposure_usd = self.TRADE_SIZE_USD * self.LEVERAGE
             btc_qty = exposure_usd / self._shadow["price_entry"]
