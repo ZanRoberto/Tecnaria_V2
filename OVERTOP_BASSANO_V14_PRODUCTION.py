@@ -660,22 +660,23 @@ class OracoloDinamico:
     DECAY_FACTOR          = 0.95   # ogni trade, il peso storico si riduce del 5%
     MIN_SAMPLES           = 5      # campioni minimi prima di giudicare
     MIN_PNL_EDGE          = 2.0    # PnL medio minimo per NON essere FANTASMA (2x fee)
+    MIN_REAL_SAMPLES      = 5      # trade reali minimi prima di applicare FANTASMA_PNL
 
     def __init__(self):
         self._memory: dict = {}
         
-        # ── INTELLIGENZA INIZIALE — calibrata su 500+ trade reali ──────
-        # La volpe nasce già con l'esperienza. Non riparte da zero.
-        # pnl_sum = PnL netto cumulativo con decay, per calcolare pnl_avg
+        # ── INTELLIGENZA INIZIALE — prior, NON verità economica ────────
+        # real_samples = 0 → dati bootstrap, FANTASMA_PNL non si applica
+        # FANTASMA_PNL si attiva solo dopo MIN_REAL_SAMPLES trade reali
         self._memory = {
-            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 12.0, 'samples': 20.0, 'pnl_sum': 10.0},   # WR 60%, pnl_avg +$0.50
-            "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0, 'pnl_sum': -15.0},  # WR 43%, pnl_avg -$0.75 → TOSSICO
-            "LONG|DEBOLE|ALTA|SIDEWAYS":  {'wins': 1.4,  'samples': 7.4,  'pnl_sum': -20.0},  # WR 19% → FANTASMA
-            "LONG|FORTE|MEDIA|SIDEWAYS":  {'wins': 4.5,  'samples': 6.0,  'pnl_sum': 8.0},    # WR 75%, pnl_avg +$1.33
-            "LONG|MEDIO|MEDIA|SIDEWAYS":  {'wins': 1.0,  'samples': 2.0,  'pnl_sum': -1.0},   # pochi dati
-            "LONG|DEBOLE|MEDIA|SIDEWAYS": {'wins': 0.5,  'samples': 3.7,  'pnl_sum': -8.0},   # WR 14% → FANTASMA
-            "LONG|DEBOLE|BASSA|SIDEWAYS": {'wins': 1.9,  'samples': 2.9,  'pnl_sum': 2.0},    # pochi dati
-            "SHORT|MEDIO|ALTA|SIDEWAYS":  {'wins': 0.3,  'samples': 2.0,  'pnl_sum': -5.0},   # pochi dati
+            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 12.0, 'samples': 20.0, 'pnl_sum': 10.0, 'real_samples': 0},
+            "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0, 'pnl_sum': -15.0, 'real_samples': 0},
+            "LONG|DEBOLE|ALTA|SIDEWAYS":  {'wins': 1.4,  'samples': 7.4,  'pnl_sum': -20.0, 'real_samples': 0},
+            "LONG|FORTE|MEDIA|SIDEWAYS":  {'wins': 4.5,  'samples': 6.0,  'pnl_sum': 8.0, 'real_samples': 0},
+            "LONG|MEDIO|MEDIA|SIDEWAYS":  {'wins': 1.0,  'samples': 2.0,  'pnl_sum': -1.0, 'real_samples': 0},
+            "LONG|DEBOLE|MEDIA|SIDEWAYS": {'wins': 0.5,  'samples': 3.7,  'pnl_sum': -8.0, 'real_samples': 0},
+            "LONG|DEBOLE|BASSA|SIDEWAYS": {'wins': 1.9,  'samples': 2.9,  'pnl_sum': 2.0, 'real_samples': 0},
+            "SHORT|MEDIO|ALTA|SIDEWAYS":  {'wins': 0.3,  'samples': 2.0,  'pnl_sum': -5.0, 'real_samples': 0},
         }
 
     def _fp(self, momentum: str, volatility: str, trend: str, direction: str = "LONG") -> str:
@@ -712,16 +713,18 @@ class OracoloDinamico:
         # Check 1: WR troppo basso
         if wr < self.FANTASMA_WR_THRESHOLD:
             return True, f"FANTASMA_WR fp={fp} wr={wr:.2f}"
-        # Check 2: PnL medio netto sotto margine economico — vince ma non guadagna abbastanza
-        if pnl_avg <= self.MIN_PNL_EDGE:
-            return True, f"FANTASMA_PNL fp={fp} wr={wr:.2f} pnl_avg={pnl_avg:+.2f} min={self.MIN_PNL_EDGE}"
+        # Check 2: PnL medio netto sotto margine economico
+        # SOLO se abbiamo abbastanza trade REALI (non bootstrap)
+        real_samples = mem.get('real_samples', 0)
+        if real_samples >= self.MIN_REAL_SAMPLES and pnl_avg <= self.MIN_PNL_EDGE:
+            return True, f"FANTASMA_PNL fp={fp} wr={wr:.2f} pnl_avg={pnl_avg:+.2f} real={real_samples}"
         return False, ''
 
     def record(self, momentum: str, volatility: str, trend: str, is_win: bool, direction: str = "LONG", pnl: float = 0.0):
         """Aggiorna la memoria con decay. Chiamato ad ogni chiusura trade."""
         fp = self._fp(momentum, volatility, trend, direction)
         if fp not in self._memory:
-            self._memory[fp] = {'wins': 0.0, 'samples': 0, 'pnl_sum': 0.0}
+            self._memory[fp] = {'wins': 0.0, 'samples': 0, 'pnl_sum': 0.0, 'real_samples': 0}
         m = self._memory[fp]
         # Applica decay ai valori esistenti
         m['wins']    *= self.DECAY_FACTOR
@@ -731,8 +734,9 @@ class OracoloDinamico:
         m['wins']    += 1.0 if is_win else 0.0
         m['samples'] += 1.0
         m['pnl_sum'] += pnl
+        m['real_samples'] = m.get('real_samples', 0) + 1  # conta solo trade reali
         pnl_avg = m['pnl_sum'] / m['samples'] if m['samples'] > 0 else 0
-        log.debug(f"[ORACOLO] {fp} → WR={m['wins']/m['samples']:.2f} pnl_avg={pnl_avg:+.2f} samples={m['samples']:.1f}")
+        log.debug(f"[ORACOLO] {fp} → WR={m['wins']/m['samples']:.2f} pnl_avg={pnl_avg:+.2f} real={m['real_samples']} samples={m['samples']:.1f}")
 
     def dump(self) -> dict:
         """Snapshot completo della memoria — per heartbeat/debug."""
@@ -740,6 +744,7 @@ class OracoloDinamico:
                     'wr': round(m['wins']/m['samples'], 3) if m['samples'] > 0 else 0,
                     'pnl_avg': round(m.get('pnl_sum', 0)/m['samples'], 2) if m['samples'] > 0 else 0,
                     'samples': round(m['samples'], 1),
+                    'real': m.get('real_samples', 0),
                 }
                 for fp, m in self._memory.items()}
 
@@ -1043,6 +1048,7 @@ class PersistenzaStato:
                         'wins':    float(data.get('wins', 0)),
                         'samples': float(data.get('samples', 0)),
                         'pnl_sum': float(data.get('pnl_sum', 0)),
+                        'real_samples': int(data.get('real_samples', 0)),
                     }
                 restored.append(f"Oracolo: {len(oracolo._memory)} fingerprint")
 
