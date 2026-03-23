@@ -923,7 +923,7 @@ class ContestoAnalyzer:
         self.prices.append(price)
         self.tick_count += 1
 
-    def analyze(self):
+    def analyze(self, regime=None, drift=None):
         if len(self.prices) < 10:
             return None, None, None
         prices    = list(self.prices)
@@ -939,6 +939,17 @@ class ContestoAnalyzer:
 
         chg_pct = (prices[-1] - prices[0]) / prices[0] * 100
         trend   = "UP" if chg_pct > 0.3 else ("DOWN" if chg_pct < -0.3 else "SIDEWAYS")
+
+        # ── RANGING DOWNGRADE: FORTE in laterale senza direzione = falso ──
+        # 4 tick su = FORTE, ma in RANGING con drift ~0 è solo rumore.
+        # Declassa solo se drift conferma assenza di direzione reale.
+        # NON declassare se drift è forte (impulso vero al bordo del range).
+        if regime == "RANGING" and trend == "SIDEWAYS" and drift is not None:
+            if abs(drift) < 0.10:  # drift sotto 0.10% = nessuna direzione
+                if momentum == "FORTE":
+                    momentum = "MEDIO"
+                elif momentum == "MEDIO":
+                    momentum = "DEBOLE"
 
         return momentum, volatility, trend
 
@@ -2415,7 +2426,15 @@ class OvertopBassanoV14Production:
         # AUTO-TUNE soglia — ciclo indipendente, il timer adattivo è interno
         self._auto_tune_soglia()
 
-        contesto = self.analyzer.analyze()
+        # Calcola drift per il downgrade momentum in RANGING
+        _drift_for_classify = 0.0
+        if len(self.campo._prices_long) >= 100:
+            _pl = list(self.campo._prices_long)
+            _avg_old = sum(_pl[:50]) / 50
+            _avg_new = sum(_pl[-50:]) / 50
+            _drift_for_classify = (_avg_new - _avg_old) / _avg_old * 100
+
+        contesto = self.analyzer.analyze(regime=self._regime_current, drift=_drift_for_classify)
         if not contesto[0]:
             return
         momentum, volatility, trend = contesto
