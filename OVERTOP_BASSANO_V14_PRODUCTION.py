@@ -3050,8 +3050,29 @@ class OvertopBassanoV14Production:
         
         old_direction = campo._direction
         
-        # LONG → SHORT: serve energia bearish alta (>=3) per 3 tick + cooldown
-        if campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
+        # ── RANGING GATE: in laterale NON flippare a SHORT ──────────────
+        # Il flip SHORT in RANGING è rumore (18 flip in 53 min, WR 0%).
+        # Resta LONG, logga lo SHORT come shadow per misurare se c'è edge.
+        if self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
+            # NON flippare — logga come SHORT evitato
+            if not hasattr(self, '_shadow_short_log'):
+                self._shadow_short_log = []
+            self._shadow_short_log.append({
+                'ts': now,
+                'drift': drift,
+                'macd_hist': macd_hist,
+                'bearish_energy': bearish_energy,
+                'mom_fast': decel.get('mom_fast', 0),
+                'decel_score': decel_score,
+                'regime': self._regime_current,
+                'price': self._last_price if hasattr(self, '_last_price') else 0,
+            })
+            self._log_m2("🔇", f"SHORT EVITATO in RANGING (drift={drift:+.3f}% macd={macd_hist:+.2f} energy={bearish_energy})")
+            campo._direction_bearish_streak = 0  # reset streak
+            # Non flippa — resta LONG
+        
+        # In NON-RANGING: flip normale LONG → SHORT
+        elif campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
             campo._direction = "SHORT"
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
@@ -3927,6 +3948,11 @@ class OvertopBassanoV14Production:
                     "m2_campo_stats":     self.campo.get_stats(),
                     # ── PHANTOM TRACKER — zavorra o protezione? ───────
                     "phantom":            self._get_phantom_summary(),
+                    # ── SHORT EVITATI IN RANGING ──────────────────────
+                    "shadow_short_ranging": {
+                        'count': len(getattr(self, '_shadow_short_log', [])),
+                        'recent': getattr(self, '_shadow_short_log', [])[-5:],
+                    },
                     # ── STABILITY TELEMETRY ────────────────────────
                     "telemetry":          self.telemetry.generate_report(),
                 })
