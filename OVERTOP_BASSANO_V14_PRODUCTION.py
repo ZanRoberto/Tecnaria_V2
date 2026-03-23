@@ -4090,38 +4090,6 @@ class OvertopBassanoV14Production:
             if self.heartbeat_lock:
                 self.heartbeat_lock.release()
 
-    # ════════════════════════════════════════════════════════════════════════
-    # RUN
-    # ════════════════════════════════════════════════════════════════════════
-
-    def _loss_consecutivi(self) -> int:
-        """Conta i loss consecutivi dalla coda del log_analyzer."""
-        count = 0
-        for t in reversed(list(self.log_analyzer.trades)):
-            if t.get('pnl', 0) < 0:
-                count += 1
-            else:
-                break
-        return count
-
-    def run(self):
-        log.info("[START] Bot avviato — connessione Binance WS...")
-        self.connect_binance()
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            log.info("[STOP] Bot fermato da utente")
-            self._persist.save(self.capital, self.total_trades)
-
-# ═══════════════════════════════════════════════════════════════════════════
-# MAIN (standalone — Render lo avvia tramite bot_launcher.py)
-# ═══════════════════════════════════════════════════════════════════════════
-
-if __name__ == '__main__':
-    bot = OvertopBassanoV14Production()
-    bot.run()
-
     def _get_shadow_short_report(self):
         """Report aggregato degli SHORT evitati in RANGING."""
         results = list(getattr(self, '_shadow_short_results', []))
@@ -4153,7 +4121,6 @@ if __name__ == '__main__':
             'recent_blocked': log_entries[-5:],
         }
         
-        # Breakdown per bearish_energy
         by_energy = {}
         for r in results:
             be = r.get('bearish_energy', 0)
@@ -4167,3 +4134,35 @@ if __name__ == '__main__':
         report['by_bearish_energy'] = by_energy
         
         return report
+
+    # ════════════════════════════════════════════════════════════════════════
+    # RUN
+    # ════════════════════════════════════════════════════════════════════════
+
+    def _loss_consecutivi(self) -> int:
+        """Conta i loss consecutivi dalla coda del log_analyzer."""
+        count = 0
+        for t in reversed(list(self.log_analyzer.trades)):
+            if t.get('pnl', 0) < 0:
+                count += 1
+            else:
+                break
+        return count
+
+    def run(self):
+        log.info("[START] Bot avviato — connessione Binance WS...")
+        self.connect_binance()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            log.info("[STOP] Bot fermato da utente")
+            self._persist.save(self.capital, self.total_trades)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MAIN (standalone — Render lo avvia tramite bot_launcher.py)
+# ═══════════════════════════════════════════════════════════════════════════
+
+if __name__ == '__main__':
+    bot = OvertopBassanoV14Production()
+    bot.run()
