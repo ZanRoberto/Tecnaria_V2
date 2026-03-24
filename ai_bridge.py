@@ -286,7 +286,53 @@ M8. ANTICIPA, NON REAGIRE: Non aspettare il LOSS per creare la regola. Se vedi u
 
 M9. SCRIVI PER ROBERTO: Ogni ciclo, se hai trovato qualcosa di importante, scrivilo nel campo "note_per_roberto" in modo SEMPLICE: cosa hai visto, cosa hai fatto, perché. Roberto non è un programmatore — è l'architetto. Parlagli come un generale parla al re.
 
-La volpe non aspetta di essere morsa per imparare. Annusa, osserva, collega. TU sei la volpe del sistema."""
+La volpe non aspetta di essere morsa per imparare. Annusa, osserva, collega. TU sei la volpe del sistema.
+
+═══ NUOVE CAPACITÀ V15 ═══
+
+INTELLIGENZA AUTONOMA (IntelligenzaAutonoma):
+Il sistema ora genera capsule da solo in 3 livelli:
+- L1: capsule strutturali hardcoded (TRAP/PANIC/FANTASMA) — non toccare mai
+- L2: capsule di esperienza (vita 30min-12h) — generate dai pattern statistici sui trade reali
+- L3: capsule di evento (vita 1-8min) — generate da anomalie immediate
+
+Nel heartbeat vedrai "ia_stats": {attive, l2, l3, scadono_presto, trade_osservati}.
+Le capsule L3 auto-scadono. Le L2 muoiono se il WR si normalizza.
+TU non devi generare capsule che l'IA già genera. Genera solo capsule che vanno OLTRE i pattern statistici — quelle basate su RSI/MACD/contesto che l'IA non vede.
+
+EXIT DATA-DRIVEN:
+La soglia di uscita ora nasce da:
+1. Durata media WIN su quel fingerprint (MIN_HOLD adattivo)
+2. Rapporto tempo_corrente/durata_media_WIN (time_ratio)
+3. Feedback exit_too_early dal post-trade tracker
+4. Tolleranza retreat dal PnL medio WIN del fingerprint
+NESSUN numero fisso. Se vedi exit_too_early alto nel dump oracolo → il sistema si sta autocorreggendo.
+
+DRIFT VETO CONTESTUALE:
+La soglia drift non è più fissa. Dipende dal regime:
+- RANGING: -0.25% (oscillazione normale, tollerata)
+- TRENDING_BULL/BEAR: -0.08% (segnale vero, bloccato subito)
+- EXPLOSIVE: -0.15%
+Nel log vedrai "OC3_DRIFT_RANGING" o "OC3_DRIFT_TRENDING_BULL" con la soglia usata.
+
+BRAIN INJECTION:
+Al primo boot il sistema inietta dati storici da 10.058 trade reali V14.
+I trade reali sovrascrivono rapidamente i sintetici (peso 25%).
+Dopo 10 trade reali il cervello è già calibrato sulla realtà attuale.
+
+FORMATO RISPOSTA AGGIORNATO:
+Aggiungi sempre "prossimo_setup" — una frase su cosa stai aspettando per il prossimo trade positivo.
+Esempio: "prossimo_setup": "RSI scende sotto 50 + MACD histogram positivo in RANGING = setup oro"
+
+RISPOSTA COMPLETA:
+{
+  "analisi": "max 300 caratteri — cosa sta succedendo ADESSO",
+  "alert_level": "green|yellow|red",
+  "prossimo_setup": "cosa aspettare per il prossimo trade forte",
+  "mercato_ora": "FAVOREVOLE|NEUTRO|PERICOLOSO|IN_ATTESA",
+  "comandi": [...],
+  "note_per_roberto": "messaggio semplice per Roberto"
+}"""
 
 # ═══════════════════════════════════════════════════════════════════════════
 # AI BRIDGE
@@ -528,6 +574,9 @@ class AIBridge:
         # Campo stats
         campo = snapshot.get("m2_campo_stats", {})
 
+        # IA stats V15
+        ia_stats = snapshot.get("ia_stats", {})
+
         # Phantom tracker — la mappa dei depositi e delle tane vuote
         phantom = snapshot.get("phantom", {})
         phantom_per_livello = json.dumps(phantom.get('per_livello', {}))
@@ -554,7 +603,13 @@ Trade: {m1_trades} | Win: {m1_wins} | Loss: {m1_losses} | WR: {m1_wr:.1%}
 ═══ MOTORE 2 (Campo Gravitazionale) ═══
 Trade: {m2_trades} | Win: {m2_wins} | Loss: {m2_losses} | WR: {m2_wr:.1%}
 PnL shadow: ${m2_pnl:.4f}
+Stato: {snapshot.get("m2_state","?")} | Loss streak: {snapshot.get("m2_loss_streak",0)} | Cooldown: {snapshot.get("m2_cooldown",0):.0f}s
+RSI: {campo.get("rsi",50):.1f} | MACD hist: {campo.get("macd_hist",0):.3f} | Soglia base: {snapshot.get("m2_soglia_base",60)} | Soglia min: {snapshot.get("m2_soglia_min",58)}
 Campo stats: {json.dumps(campo)}
+
+═══ INTELLIGENZA AUTONOMA V15 ═══
+Capsule attive: {ia_stats.get("attive",0)} (L2={ia_stats.get("l2",0)} L3={ia_stats.get("l3",0)})
+Trade osservati: {ia_stats.get("trade_osservati",0)} | Scadono presto: {ia_stats.get("scadono_presto",0)}
 
 ═══ PHANTOM TRACKER — MAPPA OPPORTUNITÀ E PROTEZIONI ═══
 Trade bloccati: {phantom_total} | Protezione: {phantom_protezione} | Zavorra: {phantom_zavorra}
@@ -584,18 +639,42 @@ Analizza e rispondi con comandi JSON."""
 
     def _execute_commands(self, response: dict):
         """Esegue i comandi ricevuti da Claude."""
-        comandi = response.get("comandi", [])
-        alert   = response.get("alert_level", "green")
-        analisi = response.get("analisi", "")
-        note    = response.get("note_per_roberto", "")
+        comandi        = response.get("comandi", [])
+        alert          = response.get("alert_level", "green")
+        analisi        = response.get("analisi", "")
+        note           = response.get("note_per_roberto", "")
+        prossimo_setup = response.get("prossimo_setup", "")
+        mercato_ora    = response.get("mercato_ora", "NEUTRO")
+
+        # Esponi immediatamente nel heartbeat per la dashboard
+        if self.heartbeat_lock:
+            self.heartbeat_lock.acquire()
+        try:
+            if self.heartbeat_data is not None:
+                self.heartbeat_data["bridge_analisi"]       = analisi
+                self.heartbeat_data["bridge_alert"]         = alert
+                self.heartbeat_data["bridge_prossimo"]      = prossimo_setup
+                self.heartbeat_data["bridge_mercato_ora"]   = mercato_ora
+                self.heartbeat_data["bridge_note"]          = note
+                self.heartbeat_data["bridge_last_ts"]       = datetime.utcnow().strftime('%H:%M:%S')
+        except Exception:
+            pass
+        finally:
+            if self.heartbeat_lock:
+                self.heartbeat_lock.release()
 
         if alert == "red":
             self._log("🔴", f"ALERT RED: {analisi}")
         elif alert == "yellow":
             self._log("🟡", f"ALERT: {analisi}")
+        else:
+            self._log("🟢", f"{analisi[:80]}")
+
+        if prossimo_setup:
+            self._log("🎯", f"Setup: {prossimo_setup[:80]}")
 
         if note:
-            self._log("📝", f"Per Roberto: {note[:100]}")
+            self._log("📝", f"Per Roberto: {note[:120]}")
 
         for cmd in comandi:
             tipo    = cmd.get("tipo", "noop")
