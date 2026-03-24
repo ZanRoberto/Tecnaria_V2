@@ -1400,6 +1400,15 @@ class OracoloDinamico:
         if loss_streak >= 5:
             return True, f"OC5_LOSS_STREAK_{loss_streak}"
 
+        # OC6 - RSI ESTREMO IN RANGING = rumore, non segnale
+        # RSI > 72 in RANGING con SHORT: mercato ipercomprato ma laterale = instabile
+        # RSI < 28 in RANGING con LONG: mercato ipervenduto ma laterale = instabile
+        # In TRENDING questi RSI sono normali. In RANGING sono veleno.
+        if regime == "RANGING" and direction == "SHORT" and rsi > 72:
+            return True, f"OC6_RSI_RANGING_SHORT_{rsi:.0f}"
+        if regime == "RANGING" and direction == "LONG" and rsi < 28:
+            return True, f"OC6_RSI_RANGING_LONG_{rsi:.0f}"
+
         return False, ''
 
     # -- CAPSULE AUTO-GENERATIVE ------------------------------------------
