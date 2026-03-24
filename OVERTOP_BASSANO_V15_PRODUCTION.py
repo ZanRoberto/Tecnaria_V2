@@ -1665,7 +1665,7 @@ class PreTradeSignalTracker:
     """
 
     WINDOWS = [30, 60, 120]  # secondi di osservazione post-segnale
-    MAX_OPEN  = 10            # max segnali aperti simultanei
+    MAX_OPEN  = 20            # max segnali aperti simultanei
     MAX_CLOSED = 500          # ultimi N segnali chiusi in memoria
 
     def __init__(self):
@@ -1683,9 +1683,11 @@ class PreTradeSignalTracker:
                       volatility: str, trend: str, rsi: float,
                       macd_hist: float, drift: float):
         """
-        Registra un nuovo segnale di entry.
-        Chiamato ogni volta che score ≥ soglia — prima ancora di entrare.
+        Registra segnale se score >= 25.
+        Soglia bassa = più dati = distribuzione previsionale più ricca.
         """
+        if score < 25:
+            return  # sotto 25 è rumore puro
         if len(self._open) >= self.MAX_OPEN:
             return  # non sovraccaricare
 
@@ -2131,6 +2133,103 @@ class PersistenzaStato:
             conn.close()
         except Exception as e:
             log.error(f"[BRAIN_SAVE] {e}")
+
+    def save_runtime_state(self, bot):
+        """
+        Persiste TUTTO lo stato runtime che ha valore statistico.
+        Chiamato ogni 5 minuti. Zero dati preziosi persi tra deploy.
+        """
+        try:
+            data = {
+                # Phantom stats — storico protezioni/zavorre
+                'phantom_stats': bot._phantom_stats,
+
+                # Ultimi 100 fantasmi chiusi
+                'phantoms_closed': [
+                    {k: v for k, v in ph.items()
+                     if k not in ('prices',)} # escludi liste grandi
+                    for ph in list(bot._phantoms_closed)
+                ],
+
+                # Trade buffer IntelligenzaAutonoma
+                'ia_trade_buffer': list(bot.realtime_engine._trade_buffer),
+
+                # PreBreakout results per auto-tune
+                'pb3_results': list(bot.campo._pb3_results)
+                    if hasattr(bot.campo, '_pb3_results') else [],
+
+                # Ultimi risultati campo per history_factor
+                'campo_recent_results': list(bot.campo._recent_results)
+                    if hasattr(bot.campo, '_recent_results') else [],
+
+                # State engine — ultimi trade M2
+                'm2_recent_trades': list(bot._m2_recent_trades),
+
+                # Contatori M2
+                'm2_wins':   bot._m2_wins,
+                'm2_losses': bot._m2_losses,
+                'm2_pnl':    bot._m2_pnl,
+                'm2_trades': bot._m2_trades,
+            }
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('runtime_state', ?)",
+                        (json.dumps(data, default=str),))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            log.error(f"[RUNTIME_SAVE] {e}")
+
+    def load_runtime_state(self, bot):
+        """Ripristina lo stato runtime dal DB."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            rows = dict(conn.execute(
+                "SELECT key, value FROM bot_state WHERE key='runtime_state'"
+            ).fetchall())
+            conn.close()
+
+            if 'runtime_state' not in rows:
+                return
+
+            data = json.loads(rows['runtime_state'])
+            restored = []
+
+            # Phantom stats
+            if 'phantom_stats' in data:
+                for k, v in data['phantom_stats'].items():
+                    if k not in bot._phantom_stats:
+                        bot._phantom_stats[k] = v
+                restored.append(f"phantom_stats:{len(data['phantom_stats'])}")
+
+            # IA trade buffer
+            if 'ia_trade_buffer' in data:
+                for t in data['ia_trade_buffer']:
+                    bot.realtime_engine._trade_buffer.append(t)
+                restored.append(f"ia_buffer:{len(data['ia_trade_buffer'])}")
+
+            # PreBreakout results
+            if 'pb3_results' in data and hasattr(bot.campo, '_pb3_results'):
+                for r in data['pb3_results']:
+                    bot.campo._pb3_results.append(r)
+                restored.append(f"pb3:{len(data['pb3_results'])}")
+
+            # Campo recent results
+            if 'campo_recent_results' in data and hasattr(bot.campo, '_recent_results'):
+                for r in data['campo_recent_results']:
+                    bot.campo._recent_results.append(r)
+                restored.append(f"campo_recent:{len(data['campo_recent_results'])}")
+
+            # State engine recent trades
+            if 'm2_recent_trades' in data:
+                for t in data['m2_recent_trades']:
+                    bot._m2_recent_trades.append(t)
+                restored.append(f"m2_trades:{len(data['m2_recent_trades'])}")
+
+            if restored:
+                log.info(f"[RUNTIME_LOAD] 💾 Stato runtime ripristinato → {' | '.join(restored)}")
+
+        except Exception as e:
+            log.error(f"[RUNTIME_LOAD] {e}")
 
     def save_signal_tracker(self, tracker):
         """Persiste le stats del PreTradeSignalTracker su DB — sopravvive ai restart."""
@@ -2850,6 +2949,62 @@ class CampoGravitazionale:
                 self._update_rsi()
                 self._update_macd()
 
+    def score_now(self, seed_score: float, fingerprint_wr: float,
+                  momentum: str, volatility: str, trend: str,
+                  regime: str, direction: str = "LONG") -> dict:
+        """
+        Calcola score e soglia ORA senza decidere nulla.
+        Nessun veto, nessun effetto collaterale — pura osservazione.
+        Chiamato ogni tick per il SignalTracker.
+        """
+        if self._tick_count < 200:
+            return {'score': 0, 'soglia': 60, 'valid': False}
+
+        W = {"seed":25,"fp":20,"mom":12,"trend":12,"vol":8,"regime":3,"rsi":10,"mac":10}
+        MOM_L  = {"FORTE":1.0,"MEDIO":0.67,"DEBOLE":0.20}
+        MOM_S  = {"FORTE":0.20,"MEDIO":0.67,"DEBOLE":1.0}
+        TRD_L  = {"UP":1.0,"SIDEWAYS":0.47,"DOWN":0.0}
+        TRD_S  = {"UP":0.0,"SIDEWAYS":0.47,"DOWN":1.0}
+        REG_L  = {"TRENDING_BULL":1.0,"EXPLOSIVE":0.80,"RANGING":0.20,"TRENDING_BEAR":0.0}
+        REG_S  = {"TRENDING_BULL":0.0,"EXPLOSIVE":0.80,"RANGING":0.20,"TRENDING_BEAR":1.0}
+        VOL_S  = {"BASSA":1.0,"MEDIA":0.60,"ALTA":0.20}
+        REG_F  = {"TRENDING_BULL":0.80,"EXPLOSIVE":0.85,"RANGING":1.00,"TRENDING_BEAR":1.10}
+
+        if direction == "SHORT":
+            s_mom = MOM_S.get(momentum,0.5)*W["mom"]
+            s_trd = TRD_S.get(trend,0.5)*W["trend"]
+            s_reg = REG_S.get(regime,0.2)*W["regime"]
+        else:
+            s_mom = MOM_L.get(momentum,0.5)*W["mom"]
+            s_trd = TRD_L.get(trend,0.5)*W["trend"]
+            s_reg = REG_L.get(regime,0.2)*W["regime"]
+
+        s_seed = min(1.0,max(0.0,(seed_score-0.30)/0.70))*W["seed"]
+        s_fp   = min(1.0,max(0.0,(fingerprint_wr-0.30)/0.70))*W["fp"]
+        s_vol  = VOL_S.get(volatility,0.5)*W["vol"]
+        s_rsi  = self._rsi_score()*W["rsi"]
+        s_macd = self._macd_score()*W["mac"]
+        score  = s_seed+s_fp+s_mom+s_trd+s_vol+s_reg+s_rsi+s_macd
+
+        # Score max per context_ratio
+        sm = (W["seed"]+W["fp"]+
+              (MOM_S if direction=="SHORT" else MOM_L).get(momentum,0.5)*W["mom"]+
+              (TRD_S if direction=="SHORT" else TRD_L).get(trend,0.5)*W["trend"]+
+              VOL_S.get(volatility,0.5)*W["vol"]+
+              (REG_S if direction=="SHORT" else REG_L).get(regime,0.2)*W["regime"]+
+              W["rsi"]+W["mac"])
+        ctx   = sm/100.0
+        rf    = REG_F.get(regime,1.0)
+        soglia_raw = 60*ctx*rf
+        soglia = max(max(48,58*ctx), min(80,soglia_raw))
+
+        return {
+            'score':  round(score,1),
+            'soglia': round(soglia,1),
+            'valid':  True,
+            'ctx':    round(ctx,2),
+        }
+
     def evaluate(self, seed_score, fingerprint_wr, momentum, volatility,
                  trend, regime, matrimonio_name, divorzio_set,
                  fantasma_info, loss_consecutivi, direction="LONG", **kwargs) -> dict:
@@ -3444,6 +3599,7 @@ class OvertopBassanoV14Production:
         # -- Ripristina intelligenza accumulata ----------------------------
         self._persist.load_brain(self.oracolo, self.memoria, self.calibratore)
         self._persist.load_signal_tracker(self.signal_tracker)
+        self._persist.load_runtime_state(self)
         self._regime_current = 'RANGING'
         self._regime_conf    = 0.0
         self._last_regime_check = time.time()
@@ -3658,6 +3814,7 @@ class OvertopBassanoV14Production:
             self._persist.save(self.capital, self.total_trades)
             self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
             self._persist.save_signal_tracker(self.signal_tracker)
+            self._persist.save_runtime_state(self)
             self.telemetry.persist_to_db(DB_PATH)
             self.last_persist = now
 
@@ -3707,7 +3864,34 @@ class OvertopBassanoV14Production:
         if self.oracolo._post_trade_queue:
             self.oracolo.update_post_trade(price)
 
-        # -- PRE-TRADE SIGNAL TRACKER: misura il movimento post-segnale ----
+        # -- PRE-TRADE SIGNAL TRACKER: osservazione continua ogni tick ------
+        # score_now() calcola senza decidere — pura mappa del segnale nel tempo.
+        # Registra tutto ciò che supera 25, prima di qualsiasi filtro.
+        if self._tick_count > 200 and momentum:
+            _seed_q = self.seed_scorer.score()
+            _seed_v = _seed_q.get('score', 0.0) if _seed_q.get('reason') != 'insufficient_data' else 0.0
+            _fp_wr  = self.oracolo.get_wr(momentum, volatility, trend, self.campo._direction)
+            _sn     = self.campo.score_now(_seed_v, _fp_wr, momentum, volatility,
+                                            trend, self._regime_current, self.campo._direction)
+            if _sn['valid']:
+                # Salva sempre l'ultimo score per il grafico
+                self.campo._last_score  = _sn['score']
+                self.campo._last_soglia = _sn['soglia']
+                # Registra nel tracker se score >= 25
+                self.signal_tracker.record_signal(
+                    price=price,
+                    direction=self.campo._direction,
+                    score=_sn['score'],
+                    soglia=_sn['soglia'],
+                    regime=self._regime_current,
+                    momentum=momentum,
+                    volatility=volatility,
+                    trend=trend,
+                    rsi=self.campo._last_rsi,
+                    macd_hist=getattr(self.campo, '_macd_hist', 0.0),
+                    drift=getattr(self.campo, '_last_drift', 0.0),
+                )
+        # Aggiorna segnali aperti
         if self.signal_tracker.get_open_count() > 0:
             self.signal_tracker.update(price)
 
@@ -4492,23 +4676,7 @@ class OvertopBassanoV14Production:
                 self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
                 return
 
-            # -- PRE-TRADE SIGNAL: score ≥ soglia → registra il segnale ----
-            # Il sistema VUOLE entrare. Registriamo PRIMA di qualsiasi altro filtro.
-            # Così misuriamo il valore previsionale PURO del score/soglia,
-            # indipendentemente da energy filter, OC, CTX match.
-            self.signal_tracker.record_signal(
-                price=price,
-                direction=self.campo._direction,
-                score=result['score'],
-                soglia=result['soglia'],
-                regime=self._regime_current,
-                momentum=momentum,
-                volatility=volatility,
-                trend=trend,
-                rsi=self.campo._last_rsi,
-                macd_hist=self.campo.macd_hist if hasattr(self.campo, 'macd_hist') else 0.0,
-                drift=getattr(self.campo, '_last_drift', 0.0),
-            )
+
 
             # ===============================================================
             # ENERGY FILTER - la volpe caccia solo prede che valgono
