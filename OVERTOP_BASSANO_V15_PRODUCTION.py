@@ -2132,6 +2132,62 @@ class PersistenzaStato:
         except Exception as e:
             log.error(f"[BRAIN_SAVE] {e}")
 
+    def save_signal_tracker(self, tracker):
+        """Persiste le stats del PreTradeSignalTracker su DB — sopravvive ai restart."""
+        try:
+            import json
+            # Serializza solo _stats (le distribuzioni) — non i segnali aperti
+            stats_data = {}
+            for key, s in tracker._stats.items():
+                stats_data[key] = {
+                    'n':        s['n'],
+                    'delta_30': list(s.get('delta_30', [])),
+                    'delta_60': list(s.get('delta_60', [])),
+                    'delta_120':list(s.get('delta_120',[])),
+                    'hit_30':   list(s.get('hit_30',   [])),
+                    'hit_60':   list(s.get('hit_60',   [])),
+                    'hit_120':  list(s.get('hit_120',  [])),
+                    'pnl_sim':  list(s.get('pnl_sim',  [])),
+                }
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('signal_tracker', ?)",
+                        (json.dumps({
+                            'stats':        stats_data,
+                            'total_closed': len(tracker._closed),
+                        }),))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            log.error(f"[SIGNAL_SAVE] {e}")
+
+    def load_signal_tracker(self, tracker):
+        """Ripristina le stats del PreTradeSignalTracker dal DB."""
+        try:
+            import json
+            conn = sqlite3.connect(self.db_path)
+            rows = dict(conn.execute("SELECT key, value FROM bot_state WHERE key='signal_tracker'").fetchall())
+            conn.close()
+            if 'signal_tracker' not in rows:
+                return
+            data = json.loads(rows['signal_tracker'])
+            stats = data.get('stats', {})
+            for key, s in stats.items():
+                tracker._stats[key] = {
+                    'n':        s.get('n', 0),
+                    'delta_30': s.get('delta_30', []),
+                    'delta_60': s.get('delta_60', []),
+                    'delta_120':s.get('delta_120',[]),
+                    'hit_30':   s.get('hit_30',   []),
+                    'hit_60':   s.get('hit_60',   []),
+                    'hit_120':  s.get('hit_120',  []),
+                    'pnl_sim':  s.get('pnl_sim',  []),
+                }
+            total = data.get('total_closed', 0)
+            log.info(f"[SIGNAL_LOAD] 📡 SignalTracker ripristinato: "
+                     f"{len(stats)} contesti, {total} segnali storici")
+        except Exception as e:
+            log.error(f"[SIGNAL_LOAD] {e}")
+
     def load_brain(self, oracolo, memoria, calibratore):
         """
         Ripristina l'intelligenza accumulata da SQLite dopo un restart.
@@ -3387,6 +3443,7 @@ class OvertopBassanoV14Production:
 
         # -- Ripristina intelligenza accumulata ----------------------------
         self._persist.load_brain(self.oracolo, self.memoria, self.calibratore)
+        self._persist.load_signal_tracker(self.signal_tracker)
         self._regime_current = 'RANGING'
         self._regime_conf    = 0.0
         self._last_regime_check = time.time()
@@ -3600,6 +3657,7 @@ class OvertopBassanoV14Production:
         if now - self.last_persist > 300:
             self._persist.save(self.capital, self.total_trades)
             self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
+            self._persist.save_signal_tracker(self.signal_tracker)
             self.telemetry.persist_to_db(DB_PATH)
             self.last_persist = now
 
