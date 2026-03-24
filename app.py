@@ -981,187 +981,230 @@ canvas.spark { width:100%; height:40px; }
 const $ = id => document.getElementById(id);
 
 // ============================================================
-// GRAFICO LIVE — Canvas nativo, zero librerie, zero peso
+// GRAFICO LIVE — Mostra la TENSIONE, non la storia
 // ============================================================
 const LiveChart = (() => {
-  const MAX_PTS = 180;
-  let prices    = [];   // {ts, v}
-  let events    = [];   // {ts, type:'entry'|'exit'|'signal', dir:'LONG'|'SHORT', score}
-  let lastPrice = null;
+  const MAX_PTS = 150;
+  let prices   = [];   // {ts, v}
+  let events   = [];   // {ts, type, dir, score, soglia}
+  let curScore  = 0;
+  let curSoglia = 60;
   let shadowOpen = false;
   let shadowDir  = 'LONG';
+  let entryPrice = null;
 
   function addPrice(price, ts) {
-    prices.push({ts: ts || Date.now(), v: price});
+    prices.push({ts: ts||Date.now(), v:price});
     if (prices.length > MAX_PTS) prices.shift();
   }
 
-  function addEvent(type, dir, score, ts) {
-    events.push({ts: ts || Date.now(), type, dir, score});
-    // Mantieni solo eventi degli ultimi 5 minuti
-    const cutoff = Date.now() - 300000;
-    events = events.filter(e => e.ts > cutoff);
+  function addEvent(type, dir, score, soglia, ts) {
+    events.push({ts:ts||Date.now(), type, dir, score, soglia});
+    const cut = Date.now() - 600000;
+    events = events.filter(e => e.ts > cut);
+    if (type === 'entry') entryPrice = prices.length ? prices[prices.length-1].v : null;
+    if (type === 'exit')  entryPrice = null;
   }
+
+  function setScore(score, soglia) { curScore=score; curSoglia=soglia; }
+  function setShadow(open, dir)    { shadowOpen=open; shadowDir=dir; }
 
   function draw() {
     const canvas = document.getElementById('priceChart');
     if (!canvas || prices.length < 2) return;
-    const ctx  = canvas.getContext('2d');
-    const W    = canvas.offsetWidth;
-    const H    = canvas.offsetHeight || 220;
-    canvas.width  = W;
-    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.offsetWidth, H = canvas.offsetHeight||240;
+    canvas.width=W; canvas.height=H;
 
-    const PAD = {top:20, right:60, bottom:28, left:12};
-    const w   = W - PAD.left - PAD.right;
-    const h   = H - PAD.top  - PAD.bottom;
+    // Layout
+    const TENSION_H = 28;  // altezza barra tensione in alto
+    const PAD = {top: TENSION_H+12, right:64, bottom:32, left:10};
+    const w = W-PAD.left-PAD.right;
+    const h = H-PAD.top-PAD.bottom;
 
     // Sfondo
-    ctx.fillStyle = '#0c1020';
-    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle='#060810'; ctx.fillRect(0,0,W,H);
 
-    // Range prezzi
-    const vals = prices.map(p => p.v);
-    let mn = Math.min(...vals), mx = Math.max(...vals);
-    const spread = mx - mn;
-    if (spread < 20) { mn -= 10; mx += 10; }
-    else { mn -= spread * 0.05; mx += spread * 0.05; }
+    // ── BARRA DI TENSIONE ─────────────────────────────────────
+    // Mostra quanto il sistema è vicino alla soglia
+    // 0% = lontano | 100% = ENTRA
+    const tension = curSoglia > 0 ? Math.min(1, curScore/curSoglia) : 0;
+    const tensionW = w * tension;
 
-    const xOf = i => PAD.left + (i / (prices.length - 1)) * w;
-    const yOf = v => PAD.top  + h - ((v - mn) / (mx - mn)) * h;
+    // Sfondo barra
+    ctx.fillStyle='#0c1020';
+    ctx.fillRect(PAD.left, 6, w, TENSION_H-4);
 
-    // Griglia orizzontale
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    // Colore barra in base alla tensione
+    let tCol, tGlow;
+    if (tension >= 1.0)      { tCol='#00ff88'; tGlow='rgba(0,255,136,0.4)'; }
+    else if (tension >= 0.85) { tCol='#ffd700'; tGlow='rgba(255,215,0,0.3)'; }
+    else if (tension >= 0.65) { tCol='#ff8800'; tGlow='rgba(255,136,0,0.2)'; }
+    else                      { tCol='#334455'; tGlow='transparent'; }
+
+    // Gradiente barra
+    const tGrad = ctx.createLinearGradient(PAD.left, 0, PAD.left+tensionW, 0);
+    tGrad.addColorStop(0, tCol+'44');
+    tGrad.addColorStop(1, tCol);
+    ctx.fillStyle = tGrad;
+    ctx.fillRect(PAD.left, 6, tensionW, TENSION_H-4);
+
+    // Bordo barra
+    ctx.strokeStyle = '#1a2535';
     ctx.lineWidth = 1;
-    for (let i = 0; i <= 4; i++) {
-      const y = PAD.top + (h / 4) * i;
-      ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + w, y); ctx.stroke();
-      const val = mx - ((mx - mn) / 4) * i;
-      ctx.fillStyle = '#445566'; ctx.font = '9px Share Tech Mono';
-      ctx.textAlign = 'left';
-      ctx.fillText('$' + val.toFixed(0), PAD.left + w + 4, y + 3);
+    ctx.strokeRect(PAD.left, 6, w, TENSION_H-4);
+
+    // Linea soglia (marker verticale sulla barra)
+    ctx.strokeStyle = '#ffffff33';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2,2]);
+    ctx.beginPath();
+    ctx.moveTo(PAD.left+w, 6); ctx.lineTo(PAD.left+w, TENSION_H+2);
+    ctx.stroke(); ctx.setLineDash([]);
+
+    // Testo tensione
+    ctx.font = 'bold 10px Share Tech Mono';
+    ctx.textAlign = 'left';
+    if (tension >= 1.0) {
+      ctx.fillStyle = '#00ff88';
+      ctx.fillText('⚡ PRONTO — score ' + curScore.toFixed(0) + ' / ' + curSoglia, PAD.left+4, 20);
+    } else if (tension >= 0.85) {
+      ctx.fillStyle = '#ffd700';
+      ctx.fillText('⚠ IN AVVICINAMENTO — ' + (tension*100).toFixed(0) + '% soglia', PAD.left+4, 20);
+    } else {
+      ctx.fillStyle = '#334455';
+      ctx.fillText('· in attesa  score ' + curScore.toFixed(0) + ' / soglia ' + curSoglia, PAD.left+4, 20);
+    }
+    // Direzione attesa
+    ctx.textAlign = 'right';
+    ctx.fillStyle = shadowDir==='LONG' ? '#00ff88' : '#ff3355';
+    ctx.fillText(shadowDir==='LONG' ? '↑ LONG' : '↓ SHORT', PAD.left+w-2, 20);
+
+    // ── GRAFICO PREZZO ────────────────────────────────────────
+    const vals = prices.map(p=>p.v);
+    let mn=Math.min(...vals), mx=Math.max(...vals);
+    const sp=mx-mn;
+    if(sp<15){mn-=8;mx+=8;}else{mn-=sp*.06;mx+=sp*.06;}
+
+    const xOf = i => PAD.left + (i/(prices.length-1))*w;
+    const yOf = v => PAD.top  + h - ((v-mn)/(mx-mn))*h;
+
+    // Griglia
+    ctx.strokeStyle='rgba(255,255,255,0.03)'; ctx.lineWidth=1;
+    for(let i=0;i<=3;i++){
+      const y=PAD.top+(h/3)*i;
+      ctx.beginPath(); ctx.moveTo(PAD.left,y); ctx.lineTo(PAD.left+w,y); ctx.stroke();
+      const val=mx-((mx-mn)/3)*i;
+      ctx.fillStyle='#2a3a4a'; ctx.font='9px Share Tech Mono';
+      ctx.textAlign='left';
+      ctx.fillText('$'+val.toFixed(0), PAD.left+w+4, y+3);
     }
 
-    // Linea prezzo — gradiente verde/rosso in base alla direzione
-    const first = prices[0].v, last = prices[prices.length-1].v;
-    const lineColor = last >= first ? '#00ff88' : '#ff3355';
-    ctx.beginPath();
-    ctx.strokeStyle = lineColor;
-    ctx.lineWidth = 2;
-    ctx.shadowColor = lineColor;
-    ctx.shadowBlur = 6;
-    prices.forEach((p, i) => {
-      i === 0 ? ctx.moveTo(xOf(i), yOf(p.v)) : ctx.lineTo(xOf(i), yOf(p.v));
-    });
-    ctx.stroke();
-    ctx.shadowBlur = 0;
+    // Livello entry se posizione aperta
+    if(shadowOpen && entryPrice){
+      const ey=yOf(entryPrice);
+      ctx.setLineDash([5,3]);
+      ctx.strokeStyle=shadowDir==='LONG'?'rgba(0,255,136,0.5)':'rgba(255,51,85,0.5)';
+      ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(PAD.left,ey); ctx.lineTo(PAD.left+w,ey); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font='9px Share Tech Mono'; ctx.textAlign='left';
+      ctx.fillStyle=shadowDir==='LONG'?'#00ff88':'#ff3355';
+      ctx.fillText('ENTRY '+shadowDir+' $'+entryPrice.toFixed(0), PAD.left+4, ey-3);
 
-    // Area sotto la linea
-    ctx.beginPath();
-    prices.forEach((p, i) => {
-      i === 0 ? ctx.moveTo(xOf(i), yOf(p.v)) : ctx.lineTo(xOf(i), yOf(p.v));
-    });
-    ctx.lineTo(xOf(prices.length-1), PAD.top + h);
-    ctx.lineTo(PAD.left, PAD.top + h);
-    ctx.closePath();
-    const grad = ctx.createLinearGradient(0, PAD.top, 0, PAD.top + h);
-    grad.addColorStop(0, last >= first ? 'rgba(0,255,136,0.12)' : 'rgba(255,51,85,0.12)');
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = grad;
-    ctx.fill();
-
-    // Punto corrente
-    if (prices.length > 0) {
-      const lp = prices[prices.length-1];
-      const lx = xOf(prices.length-1), ly = yOf(lp.v);
-      ctx.beginPath();
-      ctx.arc(lx, ly, 4, 0, Math.PI*2);
-      ctx.fillStyle = lineColor;
-      ctx.shadowColor = lineColor; ctx.shadowBlur = 10;
-      ctx.fill(); ctx.shadowBlur = 0;
-    }
-
-    // Soglia score visuale — linea tratteggiata orizzontale al prezzo corrente
-    if (shadowOpen) {
-      const entryEv = [...events].reverse().find(e => e.type === 'entry');
-      if (entryEv) {
-        const entryPriceApprox = prices.find(p => Math.abs(p.ts - entryEv.ts) < 5000);
-        if (entryPriceApprox) {
-          const ey = yOf(entryPriceApprox.v);
-          ctx.setLineDash([4, 4]);
-          ctx.strokeStyle = shadowDir === 'LONG' ? 'rgba(0,255,136,0.4)' : 'rgba(255,51,85,0.4)';
-          ctx.lineWidth = 1;
-          ctx.beginPath(); ctx.moveTo(PAD.left, ey); ctx.lineTo(PAD.left + w, ey); ctx.stroke();
-          ctx.setLineDash([]);
-          ctx.fillStyle = shadowDir === 'LONG' ? 'rgba(0,255,136,0.7)' : 'rgba(255,51,85,0.7)';
-          ctx.font = '9px Share Tech Mono';
-          ctx.textAlign = 'left';
-          ctx.fillText('ENTRY ' + shadowDir, PAD.left + 4, ey - 3);
-        }
+      // PnL corrente
+      if(prices.length>0){
+        const cur=prices[prices.length-1].v;
+        const pnlDelta=shadowDir==='LONG'?cur-entryPrice:entryPrice-cur;
+        const pnlUSD=(pnlDelta/entryPrice)*5000;
+        ctx.textAlign='right';
+        ctx.fillStyle=pnlDelta>=0?'#00ff88':'#ff3355';
+        ctx.font='bold 10px Share Tech Mono';
+        ctx.fillText((pnlDelta>=0?'+':'')+pnlUSD.toFixed(2)+'$', PAD.left+w-4, ey-3);
       }
     }
 
-    // Marker eventi
-    const tMin = prices[0].ts, tMax = prices[prices.length-1].ts;
-    const tRange = tMax - tMin || 1;
-    events.forEach(ev => {
-      if (ev.ts < tMin || ev.ts > tMax) return;
-      const xPos = PAD.left + ((ev.ts - tMin) / tRange) * w;
-      // Trova prezzo più vicino
-      let closest = prices[0];
-      prices.forEach(p => { if (Math.abs(p.ts - ev.ts) < Math.abs(closest.ts - ev.ts)) closest = p; });
-      const yPos = yOf(closest.v);
+    // Colore linea prezzo
+    const first=prices[0].v, last=prices[prices.length-1].v;
+    let lCol='#00ff88';
+    if(tension>=0.85) lCol='#ffd700';
+    if(shadowOpen) lCol=shadowDir==='LONG'?'#00ff88':'#ff3355';
+    if(last<first && !shadowOpen) lCol='#ff3355';
 
-      if (ev.type === 'signal') {
-        // Rombo giallo = segnale in avvicinamento
-        ctx.fillStyle = '#ffd700';
-        ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 8;
-        ctx.beginPath();
-        ctx.moveTo(xPos, yPos-6); ctx.lineTo(xPos+5, yPos);
-        ctx.lineTo(xPos, yPos+6); ctx.lineTo(xPos-5, yPos);
-        ctx.closePath(); ctx.fill();
-        ctx.shadowBlur = 0;
-      } else if (ev.type === 'entry') {
-        const col = ev.dir === 'LONG' ? '#00ff88' : '#ff3355';
-        ctx.fillStyle = col; ctx.strokeStyle = col;
-        ctx.shadowColor = col; ctx.shadowBlur = 12;
-        ctx.font = 'bold 14px Share Tech Mono';
-        ctx.textAlign = 'center';
-        ctx.fillText(ev.dir === 'LONG' ? '▲' : '▼', xPos, ev.dir === 'LONG' ? yPos+16 : yPos-6);
-        ctx.shadowBlur = 0;
-        // Etichetta score
-        ctx.font = '8px Share Tech Mono';
-        ctx.fillStyle = col;
-        ctx.fillText(ev.score ? ev.score.toFixed(0) : '', xPos, ev.dir === 'LONG' ? yPos+26 : yPos-16);
-      } else if (ev.type === 'exit') {
-        ctx.fillStyle = '#888';
-        ctx.font = 'bold 12px Share Tech Mono';
-        ctx.textAlign = 'center';
-        ctx.fillText('✕', xPos, yPos - 8);
+    // Area sotto
+    ctx.beginPath();
+    prices.forEach((p,i)=>i===0?ctx.moveTo(xOf(i),yOf(p.v)):ctx.lineTo(xOf(i),yOf(p.v)));
+    ctx.lineTo(xOf(prices.length-1),PAD.top+h);
+    ctx.lineTo(PAD.left,PAD.top+h); ctx.closePath();
+    const ag=ctx.createLinearGradient(0,PAD.top,0,PAD.top+h);
+    ag.addColorStop(0,lCol+'22'); ag.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=ag; ctx.fill();
+
+    // Linea prezzo
+    ctx.beginPath();
+    ctx.strokeStyle=lCol; ctx.lineWidth=2;
+    ctx.shadowColor=lCol; ctx.shadowBlur=tension>=0.85?8:4;
+    prices.forEach((p,i)=>i===0?ctx.moveTo(xOf(i),yOf(p.v)):ctx.lineTo(xOf(i),yOf(p.v)));
+    ctx.stroke(); ctx.shadowBlur=0;
+
+    // Punto live pulsante
+    const lp=prices[prices.length-1];
+    const lx=xOf(prices.length-1), ly=yOf(lp.v);
+    const pulse=tension>=0.85?6:4;
+    ctx.beginPath(); ctx.arc(lx,ly,pulse,0,Math.PI*2);
+    ctx.fillStyle=lCol;
+    ctx.shadowColor=lCol; ctx.shadowBlur=12; ctx.fill(); ctx.shadowBlur=0;
+
+    // ── MARKER EVENTI ─────────────────────────────────────────
+    const tMin=prices[0].ts, tMax=prices[prices.length-1].ts, tRng=tMax-tMin||1;
+    events.forEach(ev=>{
+      if(ev.ts<tMin||ev.ts>tMax) return;
+      const xp=PAD.left+((ev.ts-tMin)/tRng)*w;
+      let closest=prices[0];
+      prices.forEach(p=>{ if(Math.abs(p.ts-ev.ts)<Math.abs(closest.ts-ev.ts)) closest=p; });
+      const yp=yOf(closest.v);
+
+      if(ev.type==='entry'){
+        const col=ev.dir==='LONG'?'#00ff88':'#ff3355';
+        // Linea verticale evento
+        ctx.strokeStyle=col+'66'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+        ctx.beginPath(); ctx.moveTo(xp,PAD.top); ctx.lineTo(xp,PAD.top+h); ctx.stroke();
+        ctx.setLineDash([]);
+        // Freccia
+        ctx.font='bold 16px Share Tech Mono'; ctx.textAlign='center';
+        ctx.fillStyle=col;
+        ctx.shadowColor=col; ctx.shadowBlur=10;
+        ctx.fillText(ev.dir==='LONG'?'▲':'▼', xp, ev.dir==='LONG'?yp+18:yp-8);
+        ctx.shadowBlur=0;
+        // Score badge
+        ctx.font='bold 9px Share Tech Mono';
+        ctx.fillStyle='#000';
+        ctx.fillRect(xp-14, ev.dir==='LONG'?yp+20:yp-28, 28, 12);
+        ctx.fillStyle=col;
+        ctx.fillText(ev.score.toFixed(0)+'/'+ev.soglia.toFixed(0), xp, ev.dir==='LONG'?yp+30:yp-18);
+      } else if(ev.type==='exit'){
+        ctx.strokeStyle='#55667788'; ctx.lineWidth=1; ctx.setLineDash([2,4]);
+        ctx.beginPath(); ctx.moveTo(xp,PAD.top); ctx.lineTo(xp,PAD.top+h); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font='11px Share Tech Mono'; ctx.textAlign='center';
+        ctx.fillStyle='#667788'; ctx.fillText('✕', xp, yp-6);
       }
     });
 
-    // Label prezzo corrente
-    if (prices.length > 0) {
-      const lp = prices[prices.length-1];
-      ctx.fillStyle = lineColor;
-      ctx.font = 'bold 11px Share Tech Mono';
-      ctx.textAlign = 'left';
-      ctx.fillText('$' + lp.v.toLocaleString('en-US', {minimumFractionDigits:2}), PAD.left + w + 4, yOf(lp.v) + 4);
-    }
+    // Prezzo corrente label
+    ctx.font='bold 11px Share Tech Mono'; ctx.textAlign='left';
+    ctx.fillStyle=lCol;
+    ctx.fillText('$'+lp.v.toLocaleString('en-US',{minimumFractionDigits:2}), PAD.left+w+4, yOf(lp.v)+4);
 
-    // Timestamp asse X (inizio e fine)
-    if (prices.length >= 2) {
-      ctx.fillStyle = '#445566'; ctx.font = '8px Share Tech Mono';
-      ctx.textAlign = 'left';
-      ctx.fillText(new Date(prices[0].ts).toLocaleTimeString(), PAD.left, H - 6);
-      ctx.textAlign = 'right';
-      ctx.fillText(new Date(prices[prices.length-1].ts).toLocaleTimeString(), PAD.left + w, H - 6);
-    }
+    // Timestamp
+    ctx.fillStyle='#2a3a4a'; ctx.font='8px Share Tech Mono';
+    ctx.textAlign='left';
+    ctx.fillText(new Date(prices[0].ts).toLocaleTimeString(), PAD.left, H-6);
+    ctx.textAlign='right';
+    ctx.fillText(new Date(tMax).toLocaleTimeString(), PAD.left+w, H-6);
   }
 
-  return { addPrice, addEvent, draw,
-           setShadow: (open, dir) => { shadowOpen=open; shadowDir=dir; } };
+  return { addPrice, addEvent, setScore, setShadow, draw };
 })();
 const fmt = (n,d=2) => (n>=0?'+':'')+n.toFixed(d);
 const fmtUSD = n => (n>=0?'+$':'-$')+Math.abs(n).toFixed(2);
@@ -1451,6 +1494,11 @@ function update() {
     }
     // Shadow aperto/chiuso + direzione
     LiveChart.setShadow(hb.m2_shadow_open || false, hb.m2_direction || 'LONG');
+
+    // Score corrente per la barra tensione
+    const lastScore  = hb.m2_last_score  || 0;
+    const lastSoglia = hb.m2_last_soglia || hb.m2_soglia_base || 60;
+    LiveChart.setScore(lastScore, lastSoglia);
 
     // Rileva nuovi eventi dal log M2
     const m2log = hb.m2_log || [];
