@@ -60,6 +60,14 @@ FINGERPRINT_DATA = {
     "LONG|MEDIO|BASSA|DOWN":     {"wr": 0.45, "pnl_win": 8.0,  "pnl_loss": -7.0,  "dur_win": 15, "dur_loss": 10, "n": 25},
     "LONG|FORTE|MEDIA|DOWN":     {"wr": 0.50, "pnl_win": 9.0,  "pnl_loss": -8.0,  "dur_win": 18, "dur_loss": 12, "n": 20},
 
+    # ── RANGING TOSSICI — il cimitero degli scalper ──────────────────────
+    # RANGING+ALTA = mercato laterale con volatilità alta = massima entropia
+    # Score massimo raggiungibile ~65. Il sistema entra con 58-62 e perde sempre.
+    # Iniettati con n alto e WR basso per far scattare subito il FANTASMA.
+    "LONG|FORTE|ALTA|SIDEWAYS":  {"wr": 0.35, "pnl_win": 4.0,  "pnl_loss": -8.0,  "dur_win": 40, "dur_loss": 25, "n": 150},
+    "LONG|MEDIO|ALTA|SIDEWAYS":  {"wr": 0.28, "pnl_win": 3.0,  "pnl_loss": -7.0,  "dur_win": 35, "dur_loss": 22, "n": 150},
+    "LONG|DEBOLE|ALTA|SIDEWAYS": {"wr": 0.12, "pnl_win": 2.0,  "pnl_loss": -6.0,  "dur_win": 20, "dur_loss": 18, "n": 120},
+
     # ── SHORT (dati limitati ma velenosi) ────────────────────────────────
     "SHORT|MEDIO|ALTA|SIDEWAYS": {"wr": 0.08, "pnl_win": 5.0,  "pnl_loss": -8.0,  "dur_win": 20, "dur_loss": 20, "n": 25},
     "SHORT|FORTE|ALTA|DOWN":     {"wr": 0.35, "pnl_win": 15.0, "pnl_loss": -12.0, "dur_win": 18, "dur_loss": 10, "n": 20},
