@@ -569,7 +569,10 @@ class AIBridge:
 
         # Oracolo (top 5 fingerprint)
         oracolo = snapshot.get("oracolo_snapshot", {})
-        top_fp  = sorted(oracolo.items(), key=lambda x: x[1].get("samples", 0), reverse=True)[:5]
+        top_fp  = sorted(
+            [(k,v) for k,v in oracolo.items() if isinstance(v, dict)],
+            key=lambda x: x[1].get("samples", 0), reverse=True
+        )[:5]
 
         # Campo stats
         campo = snapshot.get("m2_campo_stats", {})
