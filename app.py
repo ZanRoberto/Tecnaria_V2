@@ -1,5 +1,5 @@
 """
-MISSION CONTROL V5.9 — BOT V14 PRODUCTION + AI BRIDGE
+MISSION CONTROL V6.0 — BOT V14 PRODUCTION + AI BRIDGE
 =====================================================
 ✅ Bot gira DENTRO app.py come thread daemon
 ✅ Memoria condivisa thread-safe (heartbeat_data + Lock)
@@ -11,7 +11,7 @@ MISSION CONTROL V5.9 — BOT V14 PRODUCTION + AI BRIDGE
 """
 
 from flask import Flask, jsonify, render_template_string, request, send_file, abort
-from OVERTOP_BASSANO_V14_PRODUCTION import OvertopBassanoV14Production
+from OVERTOP_BASSANO_V15_PRODUCTION import OvertopBassanoV14Production
 from ai_bridge import AIBridge
 import sqlite3
 import json
@@ -251,7 +251,7 @@ def send_command():
 
 @app.route('/trading/config', methods=['GET'])
 def get_config():
-    return jsonify({"version": "V5.9+V14_PRODUCTION+AI_BRIDGE", "db": DB_PATH}), 200
+    return jsonify({"version": "V6.0+V15_PRODUCTION+IA", "db": DB_PATH}), 200
 
 # ═══════════════════════════════════════════════════════════════════════════
 # DOWNLOAD ENDPOINTS — scarica DB, narratives, capsule
@@ -370,7 +370,7 @@ def bot_thread_launcher():
             time.sleep(5)
     log(f"[BOT_LAUNCHER] ❌ Bot non avviabile dopo {max_retries} tentativi")
 
-threading.Thread(target=bot_thread_launcher, daemon=True, name='bot_v14').start()
+threading.Thread(target=bot_thread_launcher, daemon=True, name='bot_v15').start()
 log("[MAIN] ✅ Bot thread + AI Bridge avviati")
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -379,350 +379,735 @@ log("[MAIN] ✅ Bot thread + AI Bridge avviati")
 
 DASHBOARD_HTML = """
 <!DOCTYPE html>
-<html>
+<html lang="it">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MISSION CONTROL V5.9</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Courier New', monospace; background: #0a0e27; color: #00ff00; padding: 15px; }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .header { font-size: 26px; font-weight: bold; text-align: center; margin-bottom: 20px;
-                  border-bottom: 2px solid #00ff00; padding-bottom: 10px; }
-        .mode-badge { display:inline-block; padding:3px 10px; border-radius:3px; font-size:13px;
-                      margin-left:10px; font-weight:bold; }
-        .mode-paper { background:#555; color:#ffff00; }
-        .mode-live  { background:#ff0000; color:#fff; }
-        .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-                        gap: 12px; margin-bottom: 20px; }
-        .metric-card { background: #1a1f3a; border: 2px solid #00ff00; padding: 12px; border-radius: 3px; }
-        .metric-label { font-size: 11px; color: #888; }
-        .metric-value { font-size: 22px; font-weight: bold; color: #00ff00; margin-top: 4px; }
-        .status-running { color: #00ff00; } .status-offline { color: #ff0000; }
-        .controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
-        button { background: #00ff00; color: #0a0e27; border: none; padding: 10px 15px;
-                 border-radius: 3px; cursor: pointer; font-weight: bold; font-size: 13px; }
-        button:hover { background: #00cc00; }
-        .suggestions { background: #1a1f3a; border-left: 4px solid #ffff00; padding: 12px;
-                       margin-bottom: 20px; border-radius: 3px; }
-        .oracolo-section { background: #1a1f3a; border: 1px solid #555; padding: 10px;
-                           margin-bottom: 20px; border-radius: 3px; font-size: 11px; }
-        .trades-section { background: #1a1f3a; border: 2px solid #00ff00; padding: 12px;
-                          border-radius: 3px; overflow-x: auto; }
-        .trade-row { display: grid;
-                     grid-template-columns: 90px 60px 70px 80px 70px 70px 110px;
-                     gap: 8px; padding: 7px; border-bottom: 1px solid #333; font-size: 11px; }
-        .trade-row.header { font-weight: bold; border-bottom: 2px solid #00ff00; background: #0f1420; }
-        .win { color: #00ff00; } .loss { color: #ff0000; }
-        .bridge-section { background: #1a1020; border: 2px solid #a855f7; padding: 12px;
-                          margin-bottom: 20px; border-radius: 3px; }
-        .m2-section { background: #0f1a2a; border: 2px solid #3b82f6; padding: 12px;
-                      margin-bottom: 20px; border-radius: 3px; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MISSION CONTROL V6.0</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:       #060810;
+  --bg2:      #0c1020;
+  --bg3:      #111828;
+  --green:    #00ff88;
+  --green2:   #00cc66;
+  --red:      #ff3355;
+  --yellow:   #ffd700;
+  --blue:     #00aaff;
+  --purple:   #bb66ff;
+  --orange:   #ff8800;
+  --gray:     #445566;
+  --text:     #ccd6e0;
+  --dim:      #667788;
+  --border:   #1a2535;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Share Tech Mono',monospace; background:var(--bg); color:var(--text); min-height:100vh; }
+body::before { content:''; position:fixed; inset:0; background:
+  radial-gradient(ellipse 80% 50% at 20% 0%, rgba(0,255,136,0.04) 0%, transparent 60%),
+  radial-gradient(ellipse 60% 40% at 80% 100%, rgba(0,170,255,0.03) 0%, transparent 60%);
+  pointer-events:none; z-index:0; }
+
+.wrap { max-width:1300px; margin:0 auto; padding:14px; position:relative; z-index:1; }
+
+/* ── HEADER ── */
+.hdr { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;
+       border-bottom:1px solid var(--border); padding-bottom:12px; flex-wrap:wrap; gap:10px; }
+.hdr-title { font-family:'Orbitron',monospace; font-size:18px; font-weight:900;
+             letter-spacing:3px; color:var(--green); text-shadow:0 0 20px rgba(0,255,136,0.4); }
+.hdr-right { display:flex; align-items:center; gap:12px; font-size:12px; }
+.badge { padding:3px 10px; border-radius:2px; font-weight:700; font-size:11px; letter-spacing:1px; }
+.badge-paper { background:#1a1500; color:var(--yellow); border:1px solid var(--yellow); }
+.badge-live  { background:#1a0000; color:var(--red);    border:1px solid var(--red); animation:pulse 1s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+.status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:5px; }
+.dot-run { background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s infinite; }
+.dot-off { background:var(--red); }
+
+/* ── TICKER BAR ── */
+.ticker { background:var(--bg2); border:1px solid var(--border); border-left:3px solid var(--green);
+          padding:8px 14px; margin-bottom:14px; border-radius:2px;
+          display:flex; gap:24px; align-items:center; flex-wrap:wrap; font-size:12px; }
+.price-big { font-family:'Orbitron',monospace; font-size:22px; font-weight:700; color:var(--green); }
+
+/* ── ALERT BAR ── */
+.alert-bar { padding:8px 14px; margin-bottom:14px; border-radius:2px; font-size:12px;
+             display:none; border-left:3px solid var(--red); background:rgba(255,51,85,0.08); color:var(--red); }
+
+/* ── KPI GRID ── */
+.kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:8px; margin-bottom:14px; }
+.kpi { background:var(--bg2); border:1px solid var(--border); padding:10px 12px; border-radius:2px;
+       position:relative; overflow:hidden; transition:border-color .2s; }
+.kpi:hover { border-color:var(--green); }
+.kpi::after { content:''; position:absolute; bottom:0; left:0; right:0; height:2px; background:var(--green); transform:scaleX(0); transition:transform .3s; }
+.kpi:hover::after { transform:scaleX(1); }
+.kpi-lbl { font-size:9px; color:var(--dim); letter-spacing:1px; text-transform:uppercase; }
+.kpi-val { font-family:'Orbitron',monospace; font-size:18px; font-weight:700; margin-top:3px; }
+.kpi-val.pos { color:var(--green); } .kpi-val.neg { color:var(--red); }
+.kpi-val.neu { color:var(--text); }
+.kpi-sub { font-size:9px; color:var(--dim); margin-top:2px; }
+
+/* ── TWO COLUMN LAYOUT ── */
+.two-col { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
+@media(max-width:800px){ .two-col { grid-template-columns:1fr; } }
+.three-col { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:10px; }
+@media(max-width:900px){ .three-col { grid-template-columns:1fr 1fr; } }
+@media(max-width:600px){ .three-col { grid-template-columns:1fr; } }
+
+/* ── PANEL ── */
+.panel { background:var(--bg2); border:1px solid var(--border); border-radius:2px; overflow:hidden; }
+.panel-head { padding:8px 12px; font-size:10px; letter-spacing:2px; text-transform:uppercase;
+              display:flex; align-items:center; justify-content:space-between;
+              border-bottom:1px solid var(--border); }
+.panel-head.green  { border-left:3px solid var(--green);  color:var(--green); }
+.panel-head.blue   { border-left:3px solid var(--blue);   color:var(--blue); }
+.panel-head.yellow { border-left:3px solid var(--yellow); color:var(--yellow); }
+.panel-head.purple { border-left:3px solid var(--purple); color:var(--purple); }
+.panel-head.orange { border-left:3px solid var(--orange); color:var(--orange); }
+.panel-head.red    { border-left:3px solid var(--red);    color:var(--red); }
+.panel-body { padding:10px 12px; }
+
+/* ── M2 DIRECTION BOX ── */
+.dir-box { margin:8px 0; padding:12px; border-radius:2px; text-align:center;
+           font-family:'Orbitron',monospace; font-size:20px; font-weight:900; letter-spacing:4px;
+           transition:all .3s; }
+.dir-long  { background:linear-gradient(135deg,rgba(0,255,136,0.08),rgba(0,204,102,0.04));
+             border:1px solid var(--green); color:var(--green); text-shadow:0 0 15px rgba(0,255,136,0.5); }
+.dir-short { background:linear-gradient(135deg,rgba(255,51,85,0.08),rgba(200,0,40,0.04));
+             border:1px solid var(--red); color:var(--red); text-shadow:0 0 15px rgba(255,51,85,0.5); }
+
+/* ── MINI STATS ROW ── */
+.stat-row { display:flex; flex-wrap:wrap; gap:10px; font-size:11px; padding:6px 0; border-bottom:1px solid var(--border); }
+.stat-row:last-child { border-bottom:none; }
+.stat-item { display:flex; gap:4px; align-items:center; }
+.stat-lbl { color:var(--dim); }
+.stat-val { font-weight:700; }
+
+/* ── ORACOLO TABLE ── */
+.oracolo-table { width:100%; border-collapse:collapse; font-size:10px; }
+.oracolo-table th { color:var(--dim); font-size:9px; letter-spacing:1px; padding:4px 6px;
+                    text-transform:uppercase; border-bottom:1px solid var(--border); text-align:left; }
+.oracolo-table td { padding:4px 6px; border-bottom:1px solid rgba(255,255,255,0.03); }
+.oracolo-table tr:hover td { background:rgba(255,255,255,0.02); }
+.wr-bar { display:inline-block; height:3px; border-radius:1px; vertical-align:middle; margin-left:4px; }
+
+/* ── IA CAPSULE ── */
+.capsule-item { padding:5px 8px; margin-bottom:4px; border-radius:1px; font-size:10px;
+                display:flex; justify-content:space-between; align-items:center; }
+.cap-l2-blk  { background:rgba(255,51,85,0.08);   border-left:2px solid var(--red); }
+.cap-l2-bst  { background:rgba(0,255,136,0.08);   border-left:2px solid var(--green); }
+.cap-l3-stk  { background:rgba(255,215,0,0.08);   border-left:2px solid var(--yellow); }
+.cap-l3-reg  { background:rgba(255,136,0,0.08);   border-left:2px solid var(--orange); }
+.cap-l3-opp  { background:rgba(0,170,255,0.08);   border-left:2px solid var(--blue); }
+.ttl-bar { font-size:9px; color:var(--dim); }
+
+/* ── LOG FEED ── */
+.log-feed { font-size:10px; line-height:1.9; max-height:180px; overflow-y:auto;
+            scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
+.log-feed::-webkit-scrollbar { width:3px; }
+.log-feed::-webkit-scrollbar-thumb { background:var(--border); }
+.log-line { padding:1px 0; border-bottom:1px solid rgba(255,255,255,0.02); }
+
+/* ── PHANTOM ── */
+.phantom-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-bottom:8px; }
+.ph-kpi { background:var(--bg3); padding:8px; border-radius:1px; text-align:center; }
+.ph-kpi-lbl { font-size:9px; color:var(--dim); }
+.ph-kpi-val { font-size:16px; font-weight:700; margin-top:2px; }
+.verdict-box { padding:8px; text-align:center; border-radius:1px; font-size:12px; font-weight:700;
+               letter-spacing:1px; margin-bottom:8px; }
+.verdict-green  { background:rgba(0,255,136,0.08); border:1px solid var(--green); color:var(--green); }
+.verdict-red    { background:rgba(255,51,85,0.08);  border:1px solid var(--red);   color:var(--red); }
+.verdict-yellow { background:rgba(255,215,0,0.08);  border:1px solid var(--yellow); color:var(--yellow); }
+
+/* ── TRADES TABLE ── */
+.trade-tbl { width:100%; border-collapse:collapse; font-size:10px; }
+.trade-tbl th { color:var(--dim); font-size:9px; letter-spacing:1px; padding:5px 6px;
+                border-bottom:1px solid var(--border); text-align:left; text-transform:uppercase; }
+.trade-tbl td { padding:5px 6px; border-bottom:1px solid rgba(255,255,255,0.02); }
+.trade-tbl tr:hover td { background:rgba(255,255,255,0.02); }
+.pnl-pos { color:var(--green); font-weight:700; }
+.pnl-neg { color:var(--red); font-weight:700; }
+
+/* ── CONTROLS ── */
+.controls { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+.btn { background:transparent; border:1px solid var(--green); color:var(--green); padding:7px 14px;
+       border-radius:2px; cursor:pointer; font-family:'Share Tech Mono',monospace; font-size:11px;
+       letter-spacing:1px; transition:all .15s; }
+.btn:hover { background:rgba(0,255,136,0.1); }
+.btn-red   { border-color:var(--red); color:var(--red); }
+.btn-red:hover { background:rgba(255,51,85,0.1); }
+
+/* ── REGIME INDICATOR ── */
+.regime-badge { display:inline-block; padding:2px 8px; border-radius:1px; font-size:10px;
+                font-weight:700; letter-spacing:1px; }
+.regime-trending-bull  { background:rgba(0,255,136,0.12); color:var(--green); border:1px solid var(--green2); }
+.regime-trending-bear  { background:rgba(255,51,85,0.12);  color:var(--red);   border:1px solid var(--red); }
+.regime-explosive      { background:rgba(255,215,0,0.12);  color:var(--yellow); border:1px solid var(--yellow); }
+.regime-ranging        { background:rgba(0,170,255,0.12);  color:var(--blue);   border:1px solid var(--blue); }
+
+/* ── DRIFT INDICATOR ── */
+.drift-bar-wrap { height:4px; background:var(--bg3); border-radius:2px; overflow:hidden; margin-top:4px; }
+.drift-bar-fill { height:100%; border-radius:2px; transition:width .5s,background .5s; }
+
+/* ── SPARKLINE AREA ── */
+.sparkline-wrap { height:40px; margin-top:6px; position:relative; }
+canvas.spark { width:100%; height:40px; }
+
+/* ── SECTION SEPARATOR ── */
+.sep { height:1px; background:linear-gradient(90deg,transparent,var(--border),transparent); margin:10px 0; }
+</style>
 </head>
 <body>
-<div class="container">
-    <div class="header">
-        🔴 MISSION CONTROL V5.9 + AI BRIDGE
-        <span class="mode-badge" id="mode-badge">--</span>
+<div class="wrap">
+
+  <!-- HEADER -->
+  <div class="hdr">
+    <div class="hdr-title">⚡ MISSION CONTROL V6.0</div>
+    <div class="hdr-right">
+      <span><span class="status-dot" id="status-dot"></span><span id="status-txt" style="font-size:11px">OFFLINE</span></span>
+      <span id="mode-badge" class="badge badge-paper">PAPER</span>
+      <span style="font-size:10px; color:var(--dim)" id="last-seen">--</span>
     </div>
-    <div class="metrics-grid">
-        <div class="metric-card"><div class="metric-label">PnL $</div><div class="metric-value" id="pnl">--</div></div>
-        <div class="metric-card"><div class="metric-label">WR %</div><div class="metric-value" id="wr">--</div></div>
-        <div class="metric-card"><div class="metric-label">Capital $</div><div class="metric-value" id="capital">--</div></div>
-        <div class="metric-card"><div class="metric-label">ROI %</div><div class="metric-value" id="roi">--</div></div>
-        <div class="metric-card"><div class="metric-label">Trade #</div><div class="metric-value" id="n_trades">--</div></div>
-        <div class="metric-card"><div class="metric-label">STATUS</div><div class="metric-value" id="status">OFFLINE</div></div>
-        <div class="metric-card"><div class="metric-label">Regime</div><div class="metric-value" id="regime" style="font-size:13px">--</div></div>
-        <div class="metric-card"><div class="metric-label">Divorzi</div><div class="metric-value" id="divorzi" style="font-size:13px">--</div></div>
+  </div>
+
+  <!-- ALERT BAR -->
+  <div class="alert-bar" id="alert-bar"></div>
+
+  <!-- TICKER -->
+  <div class="ticker">
+    <span class="price-big" id="btc-price">--</span>
+    <span style="color:var(--dim)">BTC/USDC</span>
+    <span>⚡ <span id="tick-n" style="color:var(--yellow)">0</span></span>
+    <span>🕐 <span id="last-tick" style="color:var(--dim)">--</span></span>
+    <span id="trade-status-txt" style="color:var(--dim)">🔍 Analizzando...</span>
+    <span style="margin-left:auto; font-size:10px;" id="regime-badge-ticker"></span>
+  </div>
+
+  <!-- KPI ROW -->
+  <div class="kpi-grid">
+    <div class="kpi">
+      <div class="kpi-lbl">PnL M2</div>
+      <div class="kpi-val" id="k-pnl">--</div>
+      <div class="kpi-sub" id="k-roi">ROI --</div>
     </div>
-    <!-- LIVE TICKER -->
-    <div style="background:#0f1420; border:1px solid #00ff00; padding:10px; margin-bottom:15px; border-radius:3px; font-size:13px; display:flex; gap:30px; align-items:center; flex-wrap:wrap;">
-        <span>💹 BTC/USDC: <span id="live-price" style="color:#00ffff; font-size:18px; font-weight:bold">--</span></span>
-        <span>⚡ Tick: <span id="tick-count" style="color:#ffff00">#0</span></span>
-        <span>🕐 Ultimo: <span id="last-tick" style="color:#888">--</span></span>
-        <span id="trade-status" style="color:#aaa">🔍 Analizzando mercato...</span>
+    <div class="kpi">
+      <div class="kpi-lbl">Win Rate</div>
+      <div class="kpi-val" id="k-wr">--</div>
+      <div class="kpi-sub" id="k-wl">0W / 0L</div>
     </div>
+    <div class="kpi">
+      <div class="kpi-lbl">Capitale</div>
+      <div class="kpi-val neu" id="k-cap">--</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">Trade M2</div>
+      <div class="kpi-val neu" id="k-trades">--</div>
+      <div class="kpi-sub" id="k-avg-dur">avg dur --</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">Soglia</div>
+      <div class="kpi-val neu" id="k-soglia">--</div>
+      <div class="kpi-sub">base / min</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">IA Capsule</div>
+      <div class="kpi-val neu" id="k-caps">--</div>
+      <div class="kpi-sub" id="k-caps-sub">L2: 0  L3: 0</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">Phantom</div>
+      <div class="kpi-val" id="k-phantom">--</div>
+      <div class="kpi-sub" id="k-phantom-sub">bilancio --</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">State</div>
+      <div class="kpi-val neu" id="k-state">--</div>
+      <div class="kpi-sub" id="k-streak">streak 0</div>
+    </div>
+  </div>
+
+  <!-- ROW 1: M2 + ORACOLO -->
+  <div class="two-col">
+
     <!-- M2 CAMPO GRAVITAZIONALE -->
-    <div class="m2-section">
-        <div style="font-weight:bold; margin-bottom:8px; color:#3b82f6;">🎯 MOTORE 2 — CAMPO GRAVITAZIONALE (shadow)</div>
-        <div id="m2-direction-box" style="text-align:center; padding:8px; margin-bottom:8px; border-radius:6px; font-size:20px; font-weight:bold; letter-spacing:2px; background:#111;">
-            <span id="m2-direction">⏳ ATTESA</span>
+    <div class="panel">
+      <div class="panel-head blue">🎯 MOTORE 2 — CAMPO GRAVITAZIONALE
+        <span id="m2-shadow-badge" style="font-size:9px; color:var(--dim)">shadow chiuso</span>
+      </div>
+      <div class="panel-body">
+        <div class="dir-box dir-long" id="dir-box"><span id="dir-txt">⏳ ATTESA</span></div>
+        <div class="stat-row">
+          <div class="stat-item"><span class="stat-lbl">WR</span><span class="stat-val" id="m2-wr-detail">0%</span></div>
+          <div class="stat-item"><span class="stat-lbl">PnL</span><span class="stat-val" id="m2-pnl-detail">$0</span></div>
+          <div class="stat-item"><span class="stat-lbl">Trades</span><span class="stat-val" id="m2-t-detail">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">Loss streak</span><span class="stat-val" id="m2-streak">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">Cooldown</span><span class="stat-val" id="m2-cooldown">0s</span></div>
         </div>
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(100px,1fr)); gap:8px; font-size:12px;" id="m2-stats">
-            <span>Trade: <b id="m2-trades">0</b></span>
-            <span>Win: <b id="m2-wins" style="color:#00ff00">0</b></span>
-            <span>Loss: <b id="m2-losses" style="color:#ff4444">0</b></span>
-            <span>WR: <b id="m2-wr">0%</b></span>
-            <span>PnL: <b id="m2-pnl">$0</b></span>
-            <span>Shadow: <b id="m2-shadow">-</b></span>
+        <div class="stat-row">
+          <div class="stat-item"><span class="stat-lbl">RSI</span><span class="stat-val" id="m2-rsi">--</span></div>
+          <div class="stat-item"><span class="stat-lbl">MACD hist</span><span class="stat-val" id="m2-macd">--</span></div>
+          <div class="stat-item"><span class="stat-lbl">Soglia base</span><span class="stat-val" id="m2-sog-base">60</span></div>
+          <div class="stat-item"><span class="stat-lbl">Drift thr</span><span class="stat-val" id="m2-drift-thr">--</span></div>
         </div>
-        <div id="m2-log" style="font-size:11px; font-family:monospace; margin-top:8px; max-height:150px; overflow-y:auto; color:#8888cc;">
-            In attesa dati M2...
-        </div>
+        <div class="drift-bar-wrap"><div class="drift-bar-fill" id="drift-fill" style="width:50%;background:var(--blue)"></div></div>
+        <div style="font-size:9px;color:var(--dim);margin-top:2px;text-align:center" id="drift-lbl">drift 0.000%</div>
+        <div class="log-feed" id="m2-log" style="margin-top:8px">In attesa M2...</div>
+      </div>
     </div>
-    <!-- AI BRIDGE -->
-    <!-- PHANTOM TRACKER — zavorra o protezione? -->
-    <div style="background:#0a0e1a; border:2px solid #d4ac0d; padding:12px; margin-bottom:20px; border-radius:3px;">
-        <div style="font-weight:bold; margin-bottom:8px; color:#d4ac0d;">👻 PHANTOM TRACKER — Se avessi fatto...</div>
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px,1fr)); gap:8px; font-size:12px;">
-            <span>Bloccati: <b id="ph-total" style="color:#d4ac0d">0</b></span>
-            <span>🛡️ Protezione: <b id="ph-protezione" style="color:#00ff00">0</b></span>
-            <span>⚠️ Zavorra: <b id="ph-zavorra" style="color:#ff4444">0</b></span>
-            <span>Risparmiati: <b id="ph-saved" style="color:#00ff00">$0</b></span>
-            <span>Mancati: <b id="ph-missed" style="color:#ff4444">$0</b></span>
-            <span>Bilancio: <b id="ph-bilancio" style="color:#d4ac0d">$0</b></span>
+
+    <!-- ORACOLO DINAMICO -->
+    <div class="panel">
+      <div class="panel-head purple">🔮 ORACOLO DINAMICO — Fingerprint Memory</div>
+      <div class="panel-body">
+        <div style="font-size:9px; color:var(--dim); margin-bottom:6px;">
+          Fingerprint = (momentum × volatilità × trend × direction). WR pesato con decay 0.95.
+          🟢 ≥60% vincente  🟡 45-60% neutro  🔴 &lt;45% tossico
         </div>
-        <div id="ph-verdetto" style="font-size:14px; font-weight:bold; text-align:center; padding:8px; margin-top:8px; border:1px solid #333; border-radius:3px;">
-            In attesa dati...
-        </div>
-        <div id="ph-livelli" style="font-size:11px; font-family:monospace; margin-top:8px; color:#aaa;">
-        </div>
-        <div id="ph-log" style="font-size:11px; font-family:monospace; margin-top:8px; max-height:100px; overflow-y:auto; color:#d4ac0d;">
-        </div>
+        <table class="oracolo-table" id="oracolo-tbl">
+          <thead>
+            <tr>
+              <th>FINGERPRINT</th>
+              <th>WR</th>
+              <th>CAMPIONI</th>
+              <th>PnL avg</th>
+              <th>EXIT EARLY</th>
+              <th>STATUS</th>
+            </tr>
+          </thead>
+          <tbody id="oracolo-body">
+            <tr><td colspan="6" style="color:var(--dim);text-align:center;padding:12px">Nessun dato ancora</td></tr>
+          </tbody>
+        </table>
+        <div class="sep"></div>
+        <div style="font-size:9px; color:var(--dim)">Divorzi permanenti: <span id="divorzi-list" style="color:var(--red)">nessuno</span></div>
+        <div style="font-size:9px; color:var(--dim); margin-top:4px">Calibratore: <span id="calib-params" style="color:var(--text)">--</span></div>
+      </div>
     </div>
-    <div class="bridge-section">
-        <div style="font-weight:bold; margin-bottom:8px; color:#a855f7;">🌉 AI BRIDGE — Claude Analista</div>
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px,1fr)); gap:8px; font-size:12px;">
-            <span>Attivo: <b id="bridge-active" style="color:#a855f7">-</b></span>
-            <span>Ultima call: <b id="bridge-last">-</b></span>
-            <span>Errori: <b id="bridge-errors">0</b></span>
-            <span>Comandi: <b id="bridge-cmds">0</b></span>
+  </div>
+
+  <!-- ROW 2: IA CAPSULE + PHANTOM -->
+  <div class="two-col">
+
+    <!-- INTELLIGENZA AUTONOMA -->
+    <div class="panel">
+      <div class="panel-head orange">🧠 INTELLIGENZA AUTONOMA — Capsule Vive
+        <span id="ia-gen-count" style="font-size:9px; color:var(--dim)">gen: 0 / exp: 0</span>
+      </div>
+      <div class="panel-body">
+        <div class="stat-row" style="margin-bottom:8px">
+          <div class="stat-item"><span class="stat-lbl">L2 (esperienza)</span><span class="stat-val" id="ia-l2">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">L3 (evento)</span><span class="stat-val" id="ia-l3">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">Blocchi</span><span class="stat-val" id="ia-blocks">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">Boost soglia</span><span class="stat-val" id="ia-boosts">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">Trade osservati</span><span class="stat-val" id="ia-observed">0</span></div>
         </div>
-        <div id="bridge-log" style="font-size:11px; font-family:monospace; margin-top:8px; max-height:120px; overflow-y:auto; color:#aa88dd;">
-            Bridge non ancora attivo...
+        <div id="ia-capsule-list" style="max-height:200px; overflow-y:auto;">
+          <div style="color:var(--dim); font-size:10px; text-align:center; padding:20px 0">
+            Nessuna capsule attiva.<br>Il sistema impara dai trade.
+          </div>
         </div>
+      </div>
     </div>
-    <div class="controls">
-        <button onclick="sendCommand('STOP')">⏹️ STOP</button>
-        <button onclick="sendCommand('RESUME')">▶️ RESUME</button>
-        <button onclick="sendCommand('RESET_LOSSES')">🔄 RESET</button>
-    </div>
-    <div class="suggestions" id="suggestions"></div>
-    <div class="oracolo-section">
-        <div style="font-weight:bold; margin-bottom:6px;">🔮 ORACOLO DINAMICO — Fingerprint WR</div>
-        <div id="oracolo-data" style="color:#aaa;">Nessun dato ancora</div>
-    </div>
-    <!-- LIVE LOG DECISIONI -->
-    <div style="background:#0a0e1a; border:2px solid #333; padding:12px; margin-bottom:20px; border-radius:3px;">
-        <div style="font-weight:bold; margin-bottom:8px; color:#00ff00;">📋 LOG LIVE DECISIONI BOT (ultimi 20)</div>
-        <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:10px; font-size:11px; border-bottom:1px solid #222; padding-bottom:8px;">
-            <span style="color:#00ff00">🚀 ENTRY</span>
-            <span style="color:#00ff00">🟢 WIN</span>
-            <span style="color:#ff4444">🔴 LOSS/blocco</span>
-            <span style="color:#666">⚡ SEED basso</span>
-            <span style="color:#aa44ff">👻 FANTASMA</span>
-            <span style="color:#ff6600">🚫 MEMORIA</span>
-            <span style="color:#ffaa00">💊 CAPSULE</span>
-            <span style="color:#ff0000">💔 DIVORZIO</span>
-            <span style="color:#aaaaff">🌙 SMORZ</span>
-            <span style="color:#00aaff">🌉 BRIDGE</span>
+
+    <!-- PHANTOM TRACKER -->
+    <div class="panel">
+      <div class="panel-head yellow">👻 PHANTOM — Se avessi fatto...
+        <span style="font-size:9px; color:var(--dim)">Zavorra o Protezione?</span>
+      </div>
+      <div class="panel-body">
+        <div class="phantom-grid">
+          <div class="ph-kpi">
+            <div class="ph-kpi-lbl">BLOCCATI</div>
+            <div class="ph-kpi-val" id="ph-tot" style="color:var(--yellow)">0</div>
+          </div>
+          <div class="ph-kpi">
+            <div class="ph-kpi-lbl">🛡️ PROTETTI</div>
+            <div class="ph-kpi-val" id="ph-prot" style="color:var(--green)">0</div>
+          </div>
+          <div class="ph-kpi">
+            <div class="ph-kpi-lbl">⚠️ MANCATI</div>
+            <div class="ph-kpi-val" id="ph-zav" style="color:var(--red)">0</div>
+          </div>
+          <div class="ph-kpi">
+            <div class="ph-kpi-lbl">💰 SALVATI</div>
+            <div class="ph-kpi-val" id="ph-saved" style="color:var(--green)">$0</div>
+          </div>
+          <div class="ph-kpi">
+            <div class="ph-kpi-lbl">💸 PERSI</div>
+            <div class="ph-kpi-val" id="ph-miss" style="color:var(--red)">$0</div>
+          </div>
+          <div class="ph-kpi">
+            <div class="ph-kpi-lbl">⚖️ BILANCIO</div>
+            <div class="ph-kpi-val" id="ph-bil">$0</div>
+          </div>
         </div>
-        <div id="live-log" style="font-size:11px; font-family:monospace; line-height:1.8; color:#ccc; max-height:320px; overflow-y:auto;">
-            In attesa dati...
-        </div>
+        <div class="verdict-box" id="ph-verdict">In attesa dati...</div>
+        <div id="ph-levels" style="font-size:10px; max-height:80px; overflow-y:auto;"></div>
+        <div class="log-feed" id="ph-log" style="max-height:80px; margin-top:6px;"></div>
+      </div>
     </div>
-    <div class="trades-section">
-        <div style="margin-bottom:10px; font-weight:bold;">📊 ULTIMI 20 TRADE</div>
-        <div class="trade-row header">
-            <div>TIME</div><div>TYPE</div><div>ASSET</div><div>PRICE</div>
-            <div>PnL</div><div>WR%</div><div>REASON</div>
+  </div>
+
+  <!-- ROW 3: LOG DECISIONI + LIVE LOG M2 -->
+  <div class="two-col">
+    <div class="panel">
+      <div class="panel-head green">📋 DECISIONI BOT — Live Log</div>
+      <div class="panel-body">
+        <div style="display:flex; flex-wrap:wrap; gap:8px; font-size:9px; margin-bottom:8px; color:var(--dim)">
+          <span style="color:var(--green)">🚀 ENTRY</span>
+          <span style="color:var(--green)">🟢 WIN</span>
+          <span style="color:var(--red)">🔴 LOSS</span>
+          <span>⚡ SEED</span>
+          <span style="color:#aa44ff">👻 FANTASMA</span>
+          <span style="color:var(--orange)">🚫 MEM</span>
+          <span style="color:var(--yellow)">💊 CAPSULE</span>
+          <span style="color:var(--red)">💔 DIVORZIO</span>
+          <span style="color:#aaaaff">🌙 SMORZ</span>
+          <span style="color:var(--blue)">🌉 BRIDGE</span>
+          <span style="color:var(--orange)">🧭 OC3</span>
+          <span style="color:var(--purple)">🛑 STOP</span>
         </div>
-        <div id="trades-list"></div>
+        <div class="log-feed" id="live-log" style="max-height:280px">In attesa...</div>
+      </div>
     </div>
-</div>
+
+    <div class="panel">
+      <div class="panel-head blue">🎯 LOG M2 — Campo Gravitazionale</div>
+      <div class="panel-body">
+        <div class="log-feed" id="m2-log-full" style="max-height:330px">In attesa M2...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 4: TRADES TABLE -->
+  <div class="panel" style="margin-bottom:10px">
+    <div class="panel-head green">📊 ULTIMI TRADE</div>
+    <div class="panel-body" style="overflow-x:auto">
+      <table class="trade-tbl">
+        <thead>
+          <tr>
+            <th>ORA</th><th>TIPO</th><th>DIR</th><th>PREZZO</th>
+            <th>PnL $</th><th>SIZE</th><th>MOTIVO</th>
+          </tr>
+        </thead>
+        <tbody id="trades-body">
+          <tr><td colspan="7" style="color:var(--dim); text-align:center; padding:16px">Nessun trade ancora</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- CONTROLS + ALERTS -->
+  <div class="controls">
+    <button class="btn" onclick="sendCmd('RESUME')">▶ RESUME</button>
+    <button class="btn btn-red" onclick="sendCmd('STOP')">■ STOP</button>
+    <button class="btn" onclick="sendCmd('RESET_LOSSES')">↺ RESET</button>
+  </div>
+  <div id="suggestions-box" style="font-size:11px; color:var(--dim); padding:6px 0;"></div>
+
+</div><!-- /wrap -->
+
 <script>
-function updateDashboard() {
-    fetch('/trading/status').then(r => r.json()).then(d => {
-        const m  = d.metrics;
-        const hb = d.heartbeat;
-        document.getElementById('pnl').textContent      = (m.pnl >= 0 ? '+' : '') + m.pnl.toFixed(2) + '$';
-        document.getElementById('wr').textContent       = m.wr.toFixed(1) + '%';
-        document.getElementById('capital').textContent  = '$' + m.capital.toFixed(0);
-        document.getElementById('roi').textContent      = m.roi.toFixed(2) + '%';
-        document.getElementById('n_trades').textContent = m.n_trades;
-        document.getElementById('status').textContent   = hb.status || 'OFFLINE';
-        document.getElementById('status').className = 'metric-value ' +
-            (hb.status === 'RUNNING' ? 'status-running' : 'status-offline');
-        document.getElementById('regime').textContent = (hb.regime || '?') + ' (' + ((hb.regime_conf||0)*100).toFixed(0) + '%)';
+const $ = id => document.getElementById(id);
+const fmt = (n,d=2) => (n>=0?'+':'')+n.toFixed(d);
+const fmtUSD = n => (n>=0?'+$':'-$')+Math.abs(n).toFixed(2);
 
-        // M2 stats
-        document.getElementById('m2-trades').textContent = hb.m2_trades || 0;
-        document.getElementById('m2-wins').textContent = hb.m2_wins || 0;
-        document.getElementById('m2-losses').textContent = hb.m2_losses || 0;
-        document.getElementById('m2-wr').textContent = ((hb.m2_wr||0)*100).toFixed(1) + '%';
-        document.getElementById('m2-pnl').textContent = '$' + (hb.m2_pnl||0).toFixed(4);
-        document.getElementById('m2-shadow').textContent = hb.m2_shadow_open ? '🟢 APERTO' : '⚪ chiuso';
-
-        // M2 direction — LONG/SHORT
-        const dir = hb.m2_direction || 'LONG';
-        const dirEl = document.getElementById('m2-direction');
-        const dirBox = document.getElementById('m2-direction-box');
-        if (dir === 'SHORT') {
-            dirEl.textContent = '🔴 SHORT ↓';
-            dirBox.style.background = 'linear-gradient(135deg, #4a0000, #8b0000)';
-            dirBox.style.border = '2px solid #ff4444';
-            dirBox.style.color = '#ff6666';
-        } else {
-            dirEl.textContent = '🟢 LONG ↑';
-            dirBox.style.background = 'linear-gradient(135deg, #003300, #006600)';
-            dirBox.style.border = '2px solid #00ff00';
-            dirBox.style.color = '#00ff88';
-        }
-        const m2l = hb.m2_log || [];
-        if (m2l.length > 0) {
-            document.getElementById('m2-log').innerHTML = [...m2l].reverse().map(line => {
-                let col = line.includes('🟢') ? '#00ff00' : line.includes('🔴') ? '#ff4444' : '#8888cc';
-                return '<div style="color:'+col+';border-bottom:1px solid #111;padding:1px 0">'+line+'</div>';
-            }).join('');
-        }
-
-        // Bridge stats
-        document.getElementById('bridge-active').textContent = hb.bridge_active ? '✅ SÌ' : '❌ NO';
-        document.getElementById('bridge-last').textContent = hb.bridge_last_call ? new Date(hb.bridge_last_call).toLocaleTimeString() : '-';
-        document.getElementById('bridge-errors').textContent = hb.bridge_errors || 0;
-        const bcmds = hb.bridge_commands || [];
-        document.getElementById('bridge-cmds').textContent = bcmds.length;
-
-        // Bridge log
-        const bl = hb.bridge_log || [];
-        if (bl.length > 0) {
-            document.getElementById('bridge-log').innerHTML = [...bl].reverse().map(line => {
-                let col = line.includes('❌') ? '#ff4444' : line.includes('📡') ? '#a855f7' : '#aa88dd';
-                return '<div style="color:'+col+';padding:1px 0">'+line+'</div>';
-            }).join('');
-        }
-
-        // Phantom tracker
-        const ph = hb.phantom || {};
-        document.getElementById('ph-total').textContent = ph.total || 0;
-        document.getElementById('ph-protezione').textContent = ph.protezione || 0;
-        document.getElementById('ph-zavorra').textContent = ph.zavorra || 0;
-        document.getElementById('ph-saved').textContent = '$' + (ph.pnl_saved || 0).toFixed(1);
-        document.getElementById('ph-missed').textContent = '$' + (ph.pnl_missed || 0).toFixed(1);
-        const bilancio = ph.bilancio || 0;
-        const bilEl = document.getElementById('ph-bilancio');
-        bilEl.textContent = (bilancio >= 0 ? '+' : '') + '$' + bilancio.toFixed(1);
-        bilEl.style.color = bilancio >= 0 ? '#00ff00' : '#ff4444';
-        // Verdetto
-        const vEl = document.getElementById('ph-verdetto');
-        const verdetto = ph.verdetto || 'In attesa dati...';
-        if (verdetto.includes('PROTEZIONE')) {
-            vEl.style.color = '#00ff00'; vEl.style.borderColor = '#00ff00';
-            vEl.textContent = '🛡️ ' + verdetto;
-        } else if (verdetto.includes('ZAVORRA')) {
-            vEl.style.color = '#ff4444'; vEl.style.borderColor = '#ff4444';
-            vEl.textContent = '⚠️ ' + verdetto;
-        } else {
-            vEl.style.color = '#d4ac0d'; vEl.style.borderColor = '#333';
-            vEl.textContent = verdetto;
-        }
-        // Dettaglio per livello
-        const perLiv = ph.per_livello || {};
-        const livKeys = Object.keys(perLiv);
-        if (livKeys.length > 0) {
-            document.getElementById('ph-livelli').innerHTML = livKeys.map(k => {
-                const s = perLiv[k];
-                const prot = s.would_lose || 0;
-                const zav = s.would_win || 0;
-                const saved = (s.pnl_saved || 0).toFixed(1);
-                const missed = (s.pnl_missed || 0).toFixed(1);
-                return '<div style="border-bottom:1px solid #222;padding:2px 0">' +
-                    '<b style="color:#d4ac0d">' + k + '</b>: ' +
-                    'bloccati=' + (s.blocked||0) + ' | ' +
-                    '<span style="color:#00ff00">🛡️ ' + prot + ' protetti ($' + saved + ' risparmiati)</span> | ' +
-                    '<span style="color:#ff4444">⚠️ ' + zav + ' mancati ($' + missed + ')</span></div>';
-            }).join('');
-        }
-        // Phantom log
-        const phl = ph.log || [];
-        if (phl.length > 0) {
-            document.getElementById('ph-log').innerHTML = [...phl].reverse().map(line => {
-                let col = line.includes('🛡️') ? '#00ff00' : line.includes('⚠️') ? '#ff4444' : '#d4ac0d';
-                return '<div style="color:'+col+';padding:1px 0">'+line+'</div>';
-            }).join('');
-        }
-
-        // Live log decisioni
-        const ll = hb.live_log || [];
-        if (ll.length > 0) {
-            document.getElementById('live-log').innerHTML = [...ll].reverse().map(line => {
-                let col = '#ccc';
-                if (line.includes('🚀')) col = '#00ff00';
-                else if (line.includes('🟢')) col = '#00ff00';
-                else if (line.includes('🔴')) col = '#ff4444';
-                else if (line.includes('💔')) col = '#ff0000';
-                else if (line.includes('⚡')) col = '#666';
-                else if (line.includes('👻')) col = '#aa44ff';
-                else if (line.includes('🚫')) col = '#ff6600';
-                else if (line.includes('💊')) col = '#ffaa00';
-                else if (line.includes('🌙')) col = '#aaaaff';
-                else if (line.includes('🌉')) col = '#00aaff';
-                return '<div style="color:'+col+';border-bottom:1px solid #111;padding:2px 0">'+line+'</div>';
-            }).join('');
-        }
-
-        // Live ticker
-        if (hb.last_price) document.getElementById('live-price').textContent = '$' + hb.last_price.toLocaleString('en-US', {minimumFractionDigits:2});
-        document.getElementById('tick-count').textContent = '#' + (hb.tick_count||0).toLocaleString();
-        document.getElementById('last-tick').textContent = hb.last_tick ? new Date(hb.last_tick).toLocaleTimeString() : '--';
-
-        // Trade status
-        const ts = document.getElementById('trade-status');
-        if (hb.posizione_aperta) { ts.textContent = '🟢 M1 TRADE APERTO'; ts.style.color = '#00ff00'; }
-        else if (hb.m2_shadow_open) { ts.textContent = '🎯 M2 SHADOW APERTO'; ts.style.color = '#3b82f6'; }
-        else if ((hb.tick_count||0) < 20) { ts.textContent = '⏳ Warmup'; ts.style.color = '#ffff00'; }
-        else { ts.textContent = '🔍 In attesa setup'; ts.style.color = '#aaa'; }
-
-        const mode  = hb.mode || 'PAPER';
-        const badge = document.getElementById('mode-badge');
-        badge.textContent = mode === 'LIVE' ? '🔴 LIVE' : '📄 PAPER';
-        badge.className   = 'mode-badge ' + (mode === 'LIVE' ? 'mode-live' : 'mode-paper');
-
-        // Divorzi
-        const divorzi = hb.matrimoni_divorzio || [];
-        document.getElementById('divorzi').textContent = divorzi.length > 0 ? divorzi.join(', ') : '✅ nessuno';
-
-        // Oracolo snapshot
-        const oracolo = hb.oracolo_snapshot || {};
-        const fps = Object.keys(oracolo);
-        if (fps.length > 0) {
-            document.getElementById('oracolo-data').innerHTML = fps.map(fp => {
-                const d2 = oracolo[fp];
-                const wr = (d2.wr * 100).toFixed(0);
-                const col = d2.wr >= 0.60 ? '#00ff00' : (d2.wr >= 0.45 ? '#ffff00' : '#ff4444');
-                return '<span style="margin-right:14px;color:'+col+'">'+fp+': WR='+wr+'% ('+d2.samples+')</span>';
-            }).join('');
-        }
-
-        // Suggerimenti
-        let sh = '<div style="font-weight:bold;margin-bottom:5px;">💡 ALERT:</div>';
-        (d.suggestions||[]).forEach(s => { sh += '<div style="margin:4px 0">'+s+'</div>'; });
-        if (!d.suggestions||d.suggestions.length===0) sh += '<div>✅ Sistema OK</div>';
-        document.getElementById('suggestions').innerHTML = sh;
-
-        // Trade list
-        let th = '';
-        if (d.trades && d.trades.length > 0) {
-            d.trades.forEach(t => {
-                const cls = t.pnl > 0 ? 'win' : 'loss';
-                const tts = new Date(t.timestamp).toLocaleTimeString();
-                const dirTag = (t.direction||'LONG').includes('SHORT') ? '<span style="color:#ff4444;font-weight:bold">S</span>' : '<span style="color:#00ff88;font-weight:bold">L</span>';
-                th += '<div class="trade-row '+cls+'"><div>'+tts+'</div><div>'+dirTag+' '+t.type+'</div><div>'+t.asset+'</div><div>'+t.price.toFixed(1)+'</div><div>'+(t.pnl>=0?'+':'')+t.pnl.toFixed(2)+'$</div><div></div><div>'+(t.reason||'N/A').substring(0,18)+'</div></div>';
-            });
-        } else {
-            th = '<div class="trade-row" style="color:#555">Nessun trade ancora</div>';
-        }
-        document.getElementById('trades-list').innerHTML = th;
-    }).catch(() => { document.getElementById('status').textContent = 'OFFLINE'; });
+function colorWR(wr) {
+  if(wr>=60) return 'var(--green)';
+  if(wr>=45) return 'var(--yellow)';
+  return 'var(--red)';
 }
-function sendCommand(cmd) {
-    fetch('/trading/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({command:cmd})})
-    .then(r => r.json()).then(() => alert('✅ Comando: '+cmd));
+function colorPnL(p) { return p>=0?'var(--green)':'var(--red)'; }
+
+function renderLog(lines, elId, maxH) {
+  const el = $(elId);
+  if(!lines||lines.length===0) return;
+  const LOG_COLORS = {
+    '🚀':'var(--green)','🟢':'var(--green)','🔴':'var(--red)','💔':'var(--red)',
+    '🛑':'var(--red)','⚡':'var(--dim)','👻':'#aa44ff','🚫':'var(--orange)',
+    '💊':'var(--yellow)','🌙':'#aaaaff','🌉':'var(--blue)','🎯':'var(--blue)',
+    '🧭':'var(--orange)','🌍':'var(--purple)','💓':'var(--dim)','🔄':'var(--blue)',
+    '🧠':'var(--orange)','🗑️':'var(--dim)','⚡':'var(--yellow)',
+  };
+  el.innerHTML = [...lines].reverse().map(line => {
+    let col = 'var(--text)';
+    for(const [emoji,c] of Object.entries(LOG_COLORS)) {
+      if(line.includes(emoji)){ col=c; break; }
+    }
+    return `<div class="log-line" style="color:${col}">${line}</div>`;
+  }).join('');
 }
-updateDashboard();
-setInterval(updateDashboard, 2000);
+
+function regimeClass(r) {
+  const m = {'TRENDING_BULL':'regime-trending-bull','TRENDING_BEAR':'regime-trending-bear',
+             'EXPLOSIVE':'regime-explosive','RANGING':'regime-ranging'};
+  return m[r]||'regime-ranging';
+}
+
+let pnlHistory = [];
+
+function update() {
+  fetch('/trading/status').then(r=>r.json()).then(d => {
+    const m=d.metrics, hb=d.heartbeat;
+
+    // STATUS
+    const running = hb.status==='RUNNING';
+    $('status-dot').className = 'status-dot '+(running?'dot-run':'dot-off');
+    $('status-txt').textContent = hb.status||'OFFLINE';
+    $('status-txt').style.color = running?'var(--green)':'var(--red)';
+    const mode = hb.mode||'PAPER';
+    $('mode-badge').textContent = mode==='LIVE'?'🔴 LIVE':'📄 PAPER';
+    $('mode-badge').className = 'badge '+(mode==='LIVE'?'badge-live':'badge-paper');
+    $('last-seen').textContent = hb.last_seen ? new Date(hb.last_seen).toLocaleTimeString() : '--';
+
+    // TICKER
+    if(hb.last_price) $('btc-price').textContent = '$'+hb.last_price.toLocaleString('en-US',{minimumFractionDigits:2});
+    $('tick-n').textContent = (hb.tick_count||0).toLocaleString();
+    $('last-tick').textContent = hb.last_tick ? new Date(hb.last_tick).toLocaleTimeString() : '--';
+
+    // Regime badge ticker
+    const reg = hb.regime||'RANGING';
+    const regConf = ((hb.regime_conf||0)*100).toFixed(0);
+    $('regime-badge-ticker').innerHTML = `<span class="regime-badge ${regimeClass(reg)}">${reg} ${regConf}%</span>`;
+
+    // Trade status
+    const ts = $('trade-status-txt');
+    if(hb.posizione_aperta){ts.textContent='🟢 M1 APERTO';ts.style.color='var(--green)';}
+    else if(hb.m2_shadow_open){ts.textContent='🎯 M2 SHADOW APERTO';ts.style.color='var(--blue)';}
+    else if((hb.tick_count||0)<200){ts.textContent='⏳ Warmup';ts.style.color='var(--yellow)';}
+    else{ts.textContent='🔍 In attesa setup';ts.style.color='var(--dim)';}
+
+    // KPI
+    const m2pnl = hb.m2_pnl||0;
+    const m2wr  = ((hb.m2_wr||0)*100);
+    const m2t   = hb.m2_trades||0;
+    const m2w   = hb.m2_wins||0;
+    const m2l   = hb.m2_losses||0;
+    pnlHistory.push(m2pnl); if(pnlHistory.length>60) pnlHistory.shift();
+
+    const pnlEl = $('k-pnl');
+    pnlEl.textContent = fmtUSD(m2pnl);
+    pnlEl.className = 'kpi-val '+(m2pnl>=0?'pos':'neg');
+    $('k-roi').textContent = 'ROI '+(m2pnl/10000*100).toFixed(3)+'%';
+
+    const wrEl = $('k-wr');
+    wrEl.textContent = m2wr.toFixed(1)+'%';
+    wrEl.style.color = colorWR(m2wr);
+    $('k-wl').textContent = m2w+'W / '+m2l+'L';
+
+    $('k-cap').textContent = '$'+(hb.capital||10000).toFixed(0);
+    $('k-trades').textContent = m2t;
+    const cs = hb.m2_campo_stats||{};
+    const avgDur = cs.avg_duration || (hb.telemetry?.D_performance?.total?.avg_duration)||0;
+    $('k-avg-dur').textContent = 'avg '+avgDur.toFixed(0)+'s';
+
+    const sogMin = hb.m2_soglia_min||58, sogBase = hb.m2_soglia_base||60;
+    $('k-soglia').textContent = sogBase+'/'+sogMin;
+
+    const ia = hb.ia_stats||{};
+    $('k-caps').textContent = ia.attive||0;
+    $('k-caps-sub').textContent = 'L2:'+(ia.l2||0)+'  L3:'+(ia.l3||0);
+
+    const ph = hb.phantom||{};
+    const bilancio = ph.bilancio||0;
+    $('k-phantom').textContent = (bilancio>=0?'+':'')+bilancio.toFixed(1);
+    $('k-phantom').style.color = bilancio>=0?'var(--green)':'var(--red)';
+    $('k-phantom-sub').textContent = 'bloccati '+(ph.total||0);
+
+    const state = hb.m2_state||'NEUTRO';
+    $('k-state').textContent = state;
+    $('k-state').style.color = state==='AGGRESSIVO'?'var(--green)':state==='DIFENSIVO'?'var(--red)':'var(--text)';
+    $('k-streak').textContent = 'streak '+(hb.m2_loss_streak||0);
+
+    // ALERT BAR
+    const alerts=[];
+    if((hb.m2_loss_streak||0)>=3) alerts.push('⚠️ LOSS STREAK '+hb.m2_loss_streak);
+    if(m2wr<40 && m2t>5) alerts.push('⚠️ WR BASSO '+m2wr.toFixed(0)+'%');
+    if(m2pnl<-50) alerts.push('🔴 DRAWDOWN '+fmtUSD(m2pnl));
+    if((hb.m2_cooldown||0)>0) alerts.push('⏳ COOLDOWN '+(hb.m2_cooldown||0).toFixed(0)+'s');
+    const ab = $('alert-bar');
+    if(alerts.length>0){ ab.style.display='block'; ab.innerHTML=alerts.join('  &nbsp;|&nbsp;  '); }
+    else { ab.style.display='none'; }
+
+    // M2 DIRECTION
+    const dir = hb.m2_direction||'LONG';
+    const db = $('dir-box'), dt = $('dir-txt');
+    dt.textContent = dir==='SHORT'?'🔴 SHORT ↓':'🟢 LONG ↑';
+    db.className = 'dir-box '+(dir==='SHORT'?'dir-short':'dir-long');
+    $('m2-shadow-badge').textContent = hb.m2_shadow_open?'🟢 SHADOW APERTO':'⚪ shadow chiuso';
+    $('m2-shadow-badge').style.color = hb.m2_shadow_open?'var(--green)':'var(--dim)';
+
+    $('m2-wr-detail').textContent = m2wr.toFixed(1)+'%';
+    $('m2-wr-detail').style.color = colorWR(m2wr);
+    $('m2-pnl-detail').textContent = fmtUSD(m2pnl);
+    $('m2-pnl-detail').style.color = colorPnL(m2pnl);
+    $('m2-t-detail').textContent = m2t;
+    $('m2-streak').textContent = hb.m2_loss_streak||0;
+    $('m2-streak').style.color = (hb.m2_loss_streak||0)>=2?'var(--red)':'var(--text)';
+    const cd = hb.m2_cooldown||0;
+    $('m2-cooldown').textContent = cd>0?cd.toFixed(0)+'s':'—';
+    $('m2-cooldown').style.color = cd>0?'var(--yellow)':'var(--dim)';
+
+    const rsi = cs.rsi||50, macd_h = cs.macd_hist||0;
+    $('m2-rsi').textContent = rsi.toFixed(1);
+    $('m2-rsi').style.color = rsi>70?'var(--red)':rsi<30?'var(--green)':'var(--text)';
+    $('m2-macd').textContent = (macd_h>=0?'+':'')+macd_h.toFixed(2);
+    $('m2-macd').style.color = macd_h>=0?'var(--green)':'var(--red)';
+    $('m2-sog-base').textContent = sogBase+' / '+sogMin;
+
+    // Drift bar
+    const driftVeto = cs.drift_veto_threshold||-0.20;
+    $('m2-drift-thr').textContent = (driftVeto*100).toFixed(0)+'%';
+    const telRaw = (hb.telemetry?.raw_events_last_50||[]);
+    const lastDrift = telRaw.length>0 ? (telRaw[telRaw.length-1].drift||0) : 0;
+    const driftPct = Math.max(-0.4,Math.min(0.4,lastDrift));
+    const fillW = ((driftPct+0.4)/0.8)*100;
+    const driftFill = $('drift-fill');
+    driftFill.style.width = fillW+'%';
+    driftFill.style.background = driftPct>0.05?'var(--green)':driftPct<-0.05?'var(--red)':'var(--blue)';
+    $('drift-lbl').textContent = 'drift '+(driftPct>=0?'+':'')+driftPct.toFixed(3)+'%';
+
+    renderLog(hb.m2_log, 'm2-log');
+    renderLog(hb.m2_log, 'm2-log-full');
+
+    // ORACOLO TABLE
+    const orac = hb.oracolo_snapshot||{};
+    const fps = Object.entries(orac).filter(([k])=>!k.startsWith('_'));
+    if(fps.length>0) {
+      const rows = fps
+        .filter(([k,v]) => v.samples > 0.5)
+        .sort((a,b)=>(b[1].samples||0)-(a[1].samples||0))
+        .map(([fp,v]) => {
+          const wr100 = (v.wr*100);
+          const wrCol = colorWR(wr100);
+          const pnlA = v.pnl_avg||0;
+          const earlyPct = v.exit_too_early ? (v.exit_too_early*100).toFixed(0)+'%' : '—';
+          const barW = Math.round(wr100)+'px';
+          const realTag = v.real>0?`<span style="color:var(--green);font-size:9px"> ★${v.real}</span>`:'';
+          const status = wr100>=60?'<span style="color:var(--green)">●</span>':
+                         wr100>=45?'<span style="color:var(--yellow)">◐</span>':
+                         '<span style="color:var(--red)">○</span>';
+          return `<tr>
+            <td style="font-size:9px;color:var(--dim)">${fp.replace('LONG|','').replace('SHORT|','<span style="color:var(--red)">S</span> ')}${realTag}</td>
+            <td><span style="color:${wrCol};font-weight:700">${wr100.toFixed(0)}%</span>
+                <div class="wr-bar" style="width:${Math.round(wr100/2)}px;background:${wrCol}"></div></td>
+            <td style="color:var(--dim)">${v.samples?.toFixed(1)||'0'}</td>
+            <td style="color:${colorPnL(pnlA)}">${pnlA>=0?'+':''}\$${Math.abs(pnlA).toFixed(2)}</td>
+            <td style="color:var(--dim)">${earlyPct}</td>
+            <td>${status}</td>
+          </tr>`;
+        }).join('');
+      $('oracolo-body').innerHTML = rows||'<tr><td colspan="6" style="color:var(--dim);text-align:center;padding:8px">Nessun dato</td></tr>';
+    }
+    const divl = hb.matrimoni_divorzio||[];
+    $('divorzi-list').textContent = divl.length>0?divl.join(', '):'nessuno';
+
+    const cp = hb.calibra_params||{};
+    $('calib-params').textContent = cp.seed_threshold?
+      `seed≥${cp.seed_threshold} cap1≥${cp.cap1_soglia_buona} cap3≥${cp.cap3_fp_minimo}`:'--';
+
+    // IA CAPSULE LIST
+    $('ia-l2').textContent = ia.l2||0;
+    $('ia-l3').textContent = ia.l3||0;
+    $('ia-blocks').textContent = ia.blocchi||0;
+    $('ia-boosts').textContent = ia.boost_soglia_usati||0;
+    $('ia-observed').textContent = ia.trade_osservati||0;
+    $('ia-gen-count').textContent = 'gen:'+(ia.generate_totali||0)+' / exp:'+(ia.scadute||0);
+
+    // Carica capsule da API capsule o da ia_stats
+    const capsule = hb.ia_capsule_attive||[];
+    if(capsule.length>0) {
+      $('ia-capsule-list').innerHTML = capsule.map(c=>{
+        const ttl = c.ttl_seconds||0;
+        const ttlStr = ttl>3600?(ttl/3600).toFixed(1)+'h':ttl>60?(ttl/60).toFixed(0)+'m':ttl+'s';
+        const typeClass = {
+          'L2_BLK':'cap-l2-blk','L2_BST':'cap-l2-bst',
+          'L3_STK':'cap-l3-stk','L3_RBLO':'cap-l3-reg','L3_OPP':'cap-l3-opp'
+        }[c.tipo]||'cap-l3-stk';
+        const icon = c.tipo?.includes('BLK')||c.tipo?.includes('RBLO')?'🚫':
+                     c.tipo?.includes('BST')||c.tipo?.includes('OPP')?'🚀':
+                     c.tipo?.includes('STK')?'⚡':'💊';
+        return `<div class="capsule-item ${typeClass}">
+          <span>${icon} ${c.id||c.capsule_id||'?'}</span>
+          <span class="ttl-bar">TTL ${ttlStr} | ${c.tipo||'?'}</span>
+        </div>`;
+      }).join('');
+    } else {
+      $('ia-capsule-list').innerHTML = '<div style="color:var(--dim);font-size:10px;text-align:center;padding:16px 0">Nessuna capsule attiva. Il sistema impara dai trade.</div>';
+    }
+
+    // PHANTOM
+    $('ph-tot').textContent = ph.total||0;
+    $('ph-prot').textContent = ph.protezione||0;
+    $('ph-zav').textContent = ph.zavorra||0;
+    $('ph-saved').textContent = '$'+(ph.pnl_saved||0).toFixed(1);
+    $('ph-miss').textContent = '$'+(ph.pnl_missed||0).toFixed(1);
+    const bil = ph.bilancio||0;
+    $('ph-bil').textContent = (bil>=0?'+':'')+bil.toFixed(1);
+    $('ph-bil').style.color = bil>=0?'var(--green)':'var(--red)';
+    const verd = ph.verdetto||'';
+    const vEl = $('ph-verdict');
+    vEl.textContent = verd||'In attesa dati...';
+    vEl.className = 'verdict-box '+(verd.includes('PROTEZIONE')?'verdict-green':
+                                    verd.includes('ZAVORRA')?'verdict-red':'verdict-yellow');
+    const perLiv = ph.per_livello||{};
+    $('ph-levels').innerHTML = Object.entries(perLiv).map(([k,s])=>{
+      const net = (s.pnl_saved||0)-(s.pnl_missed||0);
+      return `<div style="font-size:9px;padding:2px 0;border-bottom:1px solid var(--border)">
+        <b style="color:var(--yellow)">${k}</b>:
+        blk=${s.blocked||0}
+        <span style="color:var(--green)">+$${(s.pnl_saved||0).toFixed(1)}</span>
+        <span style="color:var(--red)">-$${(s.pnl_missed||0).toFixed(1)}</span>
+        <span style="color:${net>=0?'var(--green)':'var(--red)'}"> net=${net>=0?'+':''}\$${net.toFixed(1)}</span>
+      </div>`;
+    }).join('');
+    renderLog(ph.log,'ph-log');
+
+    // LIVE LOG
+    renderLog(hb.live_log,'live-log');
+
+    // TRADES
+    const trades = d.trades||[];
+    if(trades.length>0){
+      $('trades-body').innerHTML = trades.map(t=>{
+        const pnlCls = t.pnl>0?'pnl-pos':'pnl-neg';
+        const pnlTxt = (t.pnl>=0?'+':'')+t.pnl.toFixed(2);
+        const ts2 = new Date(t.timestamp).toLocaleTimeString();
+        const dirTxt = (t.direction||'').includes('SHORT')?
+          '<span style="color:var(--red)">SHORT</span>':
+          '<span style="color:var(--green)">LONG</span>';
+        const typeTxt = t.type==='M2_ENTRY'?'<span style="color:var(--blue)">ENTRY</span>':
+                        t.type==='M2_EXIT'?'<span style="color:var(--text)">EXIT</span>':t.type;
+        return `<tr>
+          <td style="color:var(--dim)">${ts2}</td>
+          <td>${typeTxt}</td>
+          <td>${dirTxt}</td>
+          <td style="color:var(--text)">\$${t.price.toFixed(1)}</td>
+          <td class="${pnlCls}">${pnlTxt}</td>
+          <td style="color:var(--dim)">${t.size.toFixed(2)}x</td>
+          <td style="color:var(--dim);font-size:9px">${(t.reason||'').substring(0,22)}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // SUGGESTIONS
+    $('suggestions-box').innerHTML = (d.suggestions||[]).map(s=>`<span style="margin-right:16px">${s}</span>`).join('');
+
+  }).catch(()=>{
+    $('status-dot').className='status-dot dot-off';
+    $('status-txt').textContent='OFFLINE';
+    $('status-txt').style.color='var(--red)';
+  });
+}
+
+function sendCmd(cmd){
+  fetch('/trading/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd})})
+  .then(r=>r.json()).then(()=>{ const ab=$('alert-bar'); ab.style.display='block'; ab.innerHTML='✅ Comando inviato: '+cmd; setTimeout(()=>{ab.style.display='none'},3000); });
+}
+
+update();
+setInterval(update, 2000);
 </script>
 </body>
 </html>
@@ -738,5 +1123,5 @@ def dashboard():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    log(f"[MAIN] 🚀 MISSION CONTROL V5.9 + AI BRIDGE — porta {port}")
+    log(f"[MAIN] 🚀 MISSION CONTROL V6.0 + AI BRIDGE — porta {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
