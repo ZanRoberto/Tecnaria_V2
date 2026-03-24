@@ -336,12 +336,73 @@ threading.Thread(target=brain_analysis_thread, daemon=True, name='brain').start(
 # BOT LAUNCHER THREAD + AI BRIDGE
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _auto_inject_brain():
+    """
+    Se il DB ha meno di 10 trade reali nell'Oracolo → inietta memoria storica.
+    Eseguito UNA SOLA VOLTA al boot. Il flag 'brain_injected' nel DB evita
+    re-iniezioni ai restart successivi.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = dict(conn.execute("SELECT key, value FROM bot_state").fetchall())
+        conn.close()
+
+        # Già iniettato in precedenza → skip
+        if rows.get('brain_injected') == '1':
+            log("[BRAIN_INJECT] ✅ Brain già iniettato — skip")
+            return
+
+        # Conta i trade reali nell'Oracolo
+        real_samples = 0
+        if 'oracolo' in rows:
+            try:
+                oracolo_data = json.loads(rows['oracolo'])
+                real_samples = sum(
+                    v.get('real_samples', 0)
+                    for k, v in oracolo_data.items()
+                    if not k.startswith('_')
+                )
+            except Exception:
+                pass
+
+        if real_samples >= 10:
+            log(f"[BRAIN_INJECT] ✅ {real_samples} trade reali trovati — skip iniezione")
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('brain_injected', '1')")
+            conn.commit()
+            conn.close()
+            return
+
+        log(f"[BRAIN_INJECT] 🧠 Solo {real_samples} trade reali — avvio iniezione dati storici...")
+
+        # Importa e esegui inject_brain
+        try:
+            import inject_brain
+            inject_brain.inject(DB_PATH, dry_run=False)
+            # Marca come iniettato
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('brain_injected', '1')")
+            conn.commit()
+            conn.close()
+            log("[BRAIN_INJECT] ✅ Brain iniettato con successo — 22 fingerprint storici caricati")
+        except ImportError:
+            log("[BRAIN_INJECT] ⚠️ inject_brain.py non trovato — il bot parte da zero")
+        except Exception as e:
+            log(f"[BRAIN_INJECT] ❌ Errore iniezione: {e}")
+
+    except Exception as e:
+        log(f"[BRAIN_INJECT] ❌ Errore generale: {e}")
+
+
 def bot_thread_launcher():
     global bridge
     retry_count = 0
     max_retries = 5
     while retry_count < max_retries:
         try:
+            # ── AUTO-INJECT BRAIN — prima del bot ───────────────────────
+            _auto_inject_brain()
+
             log("[BOT_LAUNCHER] 🚀 Avvio OvertopBassanoV14Production...")
             bot = OvertopBassanoV14Production(
                 heartbeat_data=heartbeat_data,
