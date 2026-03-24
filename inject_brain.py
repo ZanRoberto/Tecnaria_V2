@@ -68,10 +68,18 @@ FINGERPRINT_DATA = {
     "LONG|MEDIO|ALTA|SIDEWAYS":  {"wr": 0.28, "pnl_win": 3.0,  "pnl_loss": -7.0,  "dur_win": 35, "dur_loss": 22, "n": 150},
     "LONG|DEBOLE|ALTA|SIDEWAYS": {"wr": 0.12, "pnl_win": 2.0,  "pnl_loss": -6.0,  "dur_win": 20, "dur_loss": 18, "n": 120},
 
-    # ── SHORT (dati limitati ma velenosi) ────────────────────────────────
-    "SHORT|MEDIO|ALTA|SIDEWAYS": {"wr": 0.08, "pnl_win": 5.0,  "pnl_loss": -8.0,  "dur_win": 20, "dur_loss": 20, "n": 25},
-    "SHORT|FORTE|ALTA|DOWN":     {"wr": 0.35, "pnl_win": 15.0, "pnl_loss": -12.0, "dur_win": 18, "dur_loss": 10, "n": 20},
-    "SHORT|DEBOLE|ALTA|DOWN":    {"wr": 0.40, "pnl_win": 12.0, "pnl_loss": -10.0, "dur_win": 15, "dur_loss": 8,  "n": 15},
+    # ── SHORT RANGING — veleno puro ──────────────────────────────────────
+    # In RANGING il SHORT non ha edge. Il mercato laterale non scende mai
+    # abbastanza da coprire le fee. Questi pattern devono scattare FANTASMA.
+    "SHORT|MEDIO|ALTA|SIDEWAYS":  {"wr": 0.08, "pnl_win": 3.0, "pnl_loss": -8.0,  "dur_win": 15, "dur_loss": 18, "n": 100},
+    "SHORT|FORTE|ALTA|SIDEWAYS":  {"wr": 0.12, "pnl_win": 4.0, "pnl_loss": -9.0,  "dur_win": 18, "dur_loss": 20, "n": 100},
+    "SHORT|DEBOLE|ALTA|SIDEWAYS": {"wr": 0.10, "pnl_win": 3.0, "pnl_loss": -7.0,  "dur_win": 12, "dur_loss": 15, "n": 80},
+    "SHORT|MEDIO|MEDIA|SIDEWAYS": {"wr": 0.20, "pnl_win": 5.0, "pnl_loss": -7.0,  "dur_win": 20, "dur_loss": 22, "n": 60},
+    "SHORT|FORTE|MEDIA|SIDEWAYS": {"wr": 0.25, "pnl_win": 6.0, "pnl_loss": -8.0,  "dur_win": 22, "dur_loss": 25, "n": 50},
+    # ── SHORT TRENDING confermato — unici SHORT con edge ─────────────────
+    "SHORT|FORTE|ALTA|DOWN":      {"wr": 0.55, "pnl_win": 18.0,"pnl_loss": -10.0, "dur_win": 25, "dur_loss": 12, "n": 40},
+    "SHORT|MEDIO|ALTA|DOWN":      {"wr": 0.48, "pnl_win": 14.0,"pnl_loss": -9.0,  "dur_win": 20, "dur_loss": 10, "n": 35},
+    "SHORT|DEBOLE|ALTA|DOWN":     {"wr": 0.40, "pnl_win": 12.0,"pnl_loss": -10.0, "dur_win": 15, "dur_loss": 8,  "n": 25},
 }
 
 # Matrimoni con WR/trust storici
