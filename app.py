@@ -871,6 +871,24 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
+  <!-- GRAFICO LIVE — PREZZO + SEGNALI -->
+  <div class="panel" style="margin-bottom:10px; border-color:var(--green); border-width:2px;">
+    <div class="panel-head green">📈 GRAFICO LIVE — BTC/USDC
+      <span id="chart-info" style="font-size:9px; color:var(--dim)">ultimi 120 tick · 30s window</span>
+    </div>
+    <div class="panel-body" style="padding:8px;">
+      <canvas id="priceChart" style="width:100%; height:220px; display:block;"></canvas>
+      <div style="display:flex; gap:16px; margin-top:6px; font-size:9px; color:var(--dim); flex-wrap:wrap;">
+        <span><span style="color:var(--green)">━</span> Prezzo</span>
+        <span><span style="color:var(--yellow); font-size:11px">◆</span> Segnale (score≥soglia)</span>
+        <span><span style="color:var(--green); font-size:12px">▲</span> Entry LONG</span>
+        <span><span style="color:var(--red); font-size:12px">▼</span> Entry SHORT</span>
+        <span><span style="color:#888; font-size:11px">✕</span> Exit</span>
+        <span id="chart-score-live" style="margin-left:auto; color:var(--text)"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- SIGNAL TRACKER — MOTORE PREVISIONALE -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--blue); border-width:2px;">
     <div class="panel-head blue">🔭 MOTORE PREVISIONALE — Signal Tracker
@@ -961,6 +979,190 @@ canvas.spark { width:100%; height:40px; }
 
 <script>
 const $ = id => document.getElementById(id);
+
+// ============================================================
+// GRAFICO LIVE — Canvas nativo, zero librerie, zero peso
+// ============================================================
+const LiveChart = (() => {
+  const MAX_PTS = 180;
+  let prices    = [];   // {ts, v}
+  let events    = [];   // {ts, type:'entry'|'exit'|'signal', dir:'LONG'|'SHORT', score}
+  let lastPrice = null;
+  let shadowOpen = false;
+  let shadowDir  = 'LONG';
+
+  function addPrice(price, ts) {
+    prices.push({ts: ts || Date.now(), v: price});
+    if (prices.length > MAX_PTS) prices.shift();
+  }
+
+  function addEvent(type, dir, score, ts) {
+    events.push({ts: ts || Date.now(), type, dir, score});
+    // Mantieni solo eventi degli ultimi 5 minuti
+    const cutoff = Date.now() - 300000;
+    events = events.filter(e => e.ts > cutoff);
+  }
+
+  function draw() {
+    const canvas = document.getElementById('priceChart');
+    if (!canvas || prices.length < 2) return;
+    const ctx  = canvas.getContext('2d');
+    const W    = canvas.offsetWidth;
+    const H    = canvas.offsetHeight || 220;
+    canvas.width  = W;
+    canvas.height = H;
+
+    const PAD = {top:20, right:60, bottom:28, left:12};
+    const w   = W - PAD.left - PAD.right;
+    const h   = H - PAD.top  - PAD.bottom;
+
+    // Sfondo
+    ctx.fillStyle = '#0c1020';
+    ctx.fillRect(0, 0, W, H);
+
+    // Range prezzi
+    const vals = prices.map(p => p.v);
+    let mn = Math.min(...vals), mx = Math.max(...vals);
+    const spread = mx - mn;
+    if (spread < 20) { mn -= 10; mx += 10; }
+    else { mn -= spread * 0.05; mx += spread * 0.05; }
+
+    const xOf = i => PAD.left + (i / (prices.length - 1)) * w;
+    const yOf = v => PAD.top  + h - ((v - mn) / (mx - mn)) * h;
+
+    // Griglia orizzontale
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = PAD.top + (h / 4) * i;
+      ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + w, y); ctx.stroke();
+      const val = mx - ((mx - mn) / 4) * i;
+      ctx.fillStyle = '#445566'; ctx.font = '9px Share Tech Mono';
+      ctx.textAlign = 'left';
+      ctx.fillText('$' + val.toFixed(0), PAD.left + w + 4, y + 3);
+    }
+
+    // Linea prezzo — gradiente verde/rosso in base alla direzione
+    const first = prices[0].v, last = prices[prices.length-1].v;
+    const lineColor = last >= first ? '#00ff88' : '#ff3355';
+    ctx.beginPath();
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = lineColor;
+    ctx.shadowBlur = 6;
+    prices.forEach((p, i) => {
+      i === 0 ? ctx.moveTo(xOf(i), yOf(p.v)) : ctx.lineTo(xOf(i), yOf(p.v));
+    });
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Area sotto la linea
+    ctx.beginPath();
+    prices.forEach((p, i) => {
+      i === 0 ? ctx.moveTo(xOf(i), yOf(p.v)) : ctx.lineTo(xOf(i), yOf(p.v));
+    });
+    ctx.lineTo(xOf(prices.length-1), PAD.top + h);
+    ctx.lineTo(PAD.left, PAD.top + h);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, PAD.top, 0, PAD.top + h);
+    grad.addColorStop(0, last >= first ? 'rgba(0,255,136,0.12)' : 'rgba(255,51,85,0.12)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Punto corrente
+    if (prices.length > 0) {
+      const lp = prices[prices.length-1];
+      const lx = xOf(prices.length-1), ly = yOf(lp.v);
+      ctx.beginPath();
+      ctx.arc(lx, ly, 4, 0, Math.PI*2);
+      ctx.fillStyle = lineColor;
+      ctx.shadowColor = lineColor; ctx.shadowBlur = 10;
+      ctx.fill(); ctx.shadowBlur = 0;
+    }
+
+    // Soglia score visuale — linea tratteggiata orizzontale al prezzo corrente
+    if (shadowOpen) {
+      const entryEv = [...events].reverse().find(e => e.type === 'entry');
+      if (entryEv) {
+        const entryPriceApprox = prices.find(p => Math.abs(p.ts - entryEv.ts) < 5000);
+        if (entryPriceApprox) {
+          const ey = yOf(entryPriceApprox.v);
+          ctx.setLineDash([4, 4]);
+          ctx.strokeStyle = shadowDir === 'LONG' ? 'rgba(0,255,136,0.4)' : 'rgba(255,51,85,0.4)';
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(PAD.left, ey); ctx.lineTo(PAD.left + w, ey); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.fillStyle = shadowDir === 'LONG' ? 'rgba(0,255,136,0.7)' : 'rgba(255,51,85,0.7)';
+          ctx.font = '9px Share Tech Mono';
+          ctx.textAlign = 'left';
+          ctx.fillText('ENTRY ' + shadowDir, PAD.left + 4, ey - 3);
+        }
+      }
+    }
+
+    // Marker eventi
+    const tMin = prices[0].ts, tMax = prices[prices.length-1].ts;
+    const tRange = tMax - tMin || 1;
+    events.forEach(ev => {
+      if (ev.ts < tMin || ev.ts > tMax) return;
+      const xPos = PAD.left + ((ev.ts - tMin) / tRange) * w;
+      // Trova prezzo più vicino
+      let closest = prices[0];
+      prices.forEach(p => { if (Math.abs(p.ts - ev.ts) < Math.abs(closest.ts - ev.ts)) closest = p; });
+      const yPos = yOf(closest.v);
+
+      if (ev.type === 'signal') {
+        // Rombo giallo = segnale in avvicinamento
+        ctx.fillStyle = '#ffd700';
+        ctx.shadowColor = '#ffd700'; ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.moveTo(xPos, yPos-6); ctx.lineTo(xPos+5, yPos);
+        ctx.lineTo(xPos, yPos+6); ctx.lineTo(xPos-5, yPos);
+        ctx.closePath(); ctx.fill();
+        ctx.shadowBlur = 0;
+      } else if (ev.type === 'entry') {
+        const col = ev.dir === 'LONG' ? '#00ff88' : '#ff3355';
+        ctx.fillStyle = col; ctx.strokeStyle = col;
+        ctx.shadowColor = col; ctx.shadowBlur = 12;
+        ctx.font = 'bold 14px Share Tech Mono';
+        ctx.textAlign = 'center';
+        ctx.fillText(ev.dir === 'LONG' ? '▲' : '▼', xPos, ev.dir === 'LONG' ? yPos+16 : yPos-6);
+        ctx.shadowBlur = 0;
+        // Etichetta score
+        ctx.font = '8px Share Tech Mono';
+        ctx.fillStyle = col;
+        ctx.fillText(ev.score ? ev.score.toFixed(0) : '', xPos, ev.dir === 'LONG' ? yPos+26 : yPos-16);
+      } else if (ev.type === 'exit') {
+        ctx.fillStyle = '#888';
+        ctx.font = 'bold 12px Share Tech Mono';
+        ctx.textAlign = 'center';
+        ctx.fillText('✕', xPos, yPos - 8);
+      }
+    });
+
+    // Label prezzo corrente
+    if (prices.length > 0) {
+      const lp = prices[prices.length-1];
+      ctx.fillStyle = lineColor;
+      ctx.font = 'bold 11px Share Tech Mono';
+      ctx.textAlign = 'left';
+      ctx.fillText('$' + lp.v.toLocaleString('en-US', {minimumFractionDigits:2}), PAD.left + w + 4, yOf(lp.v) + 4);
+    }
+
+    // Timestamp asse X (inizio e fine)
+    if (prices.length >= 2) {
+      ctx.fillStyle = '#445566'; ctx.font = '8px Share Tech Mono';
+      ctx.textAlign = 'left';
+      ctx.fillText(new Date(prices[0].ts).toLocaleTimeString(), PAD.left, H - 6);
+      ctx.textAlign = 'right';
+      ctx.fillText(new Date(prices[prices.length-1].ts).toLocaleTimeString(), PAD.left + w, H - 6);
+    }
+  }
+
+  return { addPrice, addEvent, draw,
+           setShadow: (open, dir) => { shadowOpen=open; shadowDir=dir; } };
+})();
 const fmt = (n,d=2) => (n>=0?'+':'')+n.toFixed(d);
 const fmtUSD = n => (n>=0?'+$':'-$')+Math.abs(n).toFixed(2);
 
@@ -1241,6 +1443,43 @@ function update() {
         </tr>`;
       }).join('');
     }
+
+    // GRAFICO LIVE — feed dati e disegno
+    const nowTs = Date.now();
+    if (hb.last_price) {
+      LiveChart.addPrice(hb.last_price, nowTs);
+    }
+    // Shadow aperto/chiuso + direzione
+    LiveChart.setShadow(hb.m2_shadow_open || false, hb.m2_direction || 'LONG');
+
+    // Rileva nuovi eventi dal log M2
+    const m2log = hb.m2_log || [];
+    m2log.forEach(line => {
+      const tsMatch = line.match(/^(\\d{2}:\\d{2}:\\d{2})/);
+      if (!tsMatch) return;
+      const lineTs = new Date().toDateString() + ' ' + tsMatch[1];
+      const ts = new Date(lineTs).getTime();
+      if (line.includes('ENTRY')) {
+        const dir = line.includes('SHORT') ? 'SHORT' : 'LONG';
+        const scoreM = line.match(/score=([\\d.]+)/);
+        const score = scoreM ? parseFloat(scoreM[1]) : 0;
+        LiveChart.addEvent('entry', dir, score, ts);
+      } else if (line.includes('EXIT') && (line.includes('WIN') || line.includes('LOSS'))) {
+        const dir = line.includes('SHORT') ? 'SHORT' : 'LONG';
+        LiveChart.addEvent('exit', dir, 0, ts);
+      }
+    });
+
+    // Aggiorna info chart
+    $('chart-info').textContent = `ultimi 180 tick · aggiornato ${new Date().toLocaleTimeString()}`;
+    const m2cs = hb.m2_campo_stats || {};
+    const scoreNow = m2cs.last_score || 0;
+    const soglNow  = hb.m2_soglia_base || 60;
+    $('chart-score-live').textContent = scoreNow > 0 ?
+      `score: ${scoreNow.toFixed(1)} / soglia: ${soglNow}` : '';
+
+    // Disegna
+    LiveChart.draw();
 
     // AI BRIDGE PANEL
     const ba = hb.bridge_active;
