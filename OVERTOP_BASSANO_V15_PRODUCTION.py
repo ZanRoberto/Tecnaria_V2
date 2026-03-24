@@ -1627,6 +1627,202 @@ class OracoloDinamico:
         return result
 
 # ===========================================================================
+# PRE-TRADE SIGNAL TRACKER
+# ===========================================================================
+# Il tracker speculare al phantom.
+#
+# Il phantom misura cosa succede quando il sistema NON entra.
+# Il PreTradeSignalTracker misura cosa succede quando il sistema VUOLE entrare.
+#
+# Ogni segnale (score ≥ soglia) viene registrato con:
+#   - prezzo, direzione, regime, score, momentum, rsi, macd
+#   - poi segue il prezzo per 30s / 60s / 120s
+#   - misura delta_30, delta_60, delta_120 nella direzione prevista
+#
+# Dopo 50 segnali emerge la distribuzione reale:
+#   "LONG score 65+ in RANGING → prezzo sale $8 in 60s nel 68% dei casi"
+#
+# Questo è il MOTORE PREVISIONALE. Non "entro o non entro" —
+# "il mercato si muoverà di X in Y secondi con probabilità Z".
+# ===========================================================================
+
+class PreTradeSignalTracker:
+    """
+    Traccia ogni segnale di entry (score ≥ soglia) e misura
+    il movimento reale del prezzo nelle successive 30/60/120 secondi.
+
+    Costruisce la distribuzione previsionale del sistema:
+    per ogni contesto (regime, direction, score_band) → P(movimento > X in T secondi)
+    """
+
+    WINDOWS = [30, 60, 120]  # secondi di osservazione post-segnale
+    MAX_OPEN  = 10            # max segnali aperti simultanei
+    MAX_CLOSED = 500          # ultimi N segnali chiusi in memoria
+
+    def __init__(self):
+        self._open:   list         = []                    # segnali aperti
+        self._closed: deque        = deque(maxlen=self.MAX_CLOSED)
+        self._stats:  dict         = defaultdict(lambda: {
+            'n': 0,
+            'delta_30':  [], 'delta_60':  [], 'delta_120': [],
+            'hit_30':    [], 'hit_60':    [], 'hit_120':   [],  # True = prezzo andato nella dir giusta
+            'pnl_sim':   [],  # PnL simulato con fee
+        })
+
+    def record_signal(self, price: float, direction: str, score: float,
+                      soglia: float, regime: str, momentum: str,
+                      volatility: str, trend: str, rsi: float,
+                      macd_hist: float, drift: float):
+        """
+        Registra un nuovo segnale di entry.
+        Chiamato ogni volta che score ≥ soglia — prima ancora di entrare.
+        """
+        if len(self._open) >= self.MAX_OPEN:
+            return  # non sovraccaricare
+
+        # Score band: categorizza lo score per analisi statistica
+        if score >= 75:
+            score_band = "FORTE_75+"
+        elif score >= 65:
+            score_band = "BUONO_65-75"
+        elif score >= 58:
+            score_band = "BASE_58-65"
+        else:
+            score_band = "DEBOLE_<58"
+
+        signal = {
+            'price':      price,
+            'direction':  direction,
+            'score':      score,
+            'soglia':     soglia,
+            'score_band': score_band,
+            'regime':     regime,
+            'momentum':   momentum,
+            'volatility': volatility,
+            'trend':      trend,
+            'rsi':        rsi,
+            'macd_hist':  macd_hist,
+            'drift':      drift,
+            'ts':         time.time(),
+            'prices':     [],           # prezzi raccolti
+            'closed':     False,
+            'results':    {},           # delta_30, delta_60, delta_120
+        }
+        self._open.append(signal)
+
+    def update(self, current_price: float):
+        """Chiamato ogni tick. Aggiorna i segnali aperti."""
+        now     = time.time()
+        to_close = []
+
+        for i, sig in enumerate(self._open):
+            elapsed = now - sig['ts']
+            sig['prices'].append(current_price)
+
+            # Calcola risultati alle finestre temporali
+            for w in self.WINDOWS:
+                key = f'delta_{w}'
+                if key not in sig['results'] and elapsed >= w:
+                    if sig['direction'] == 'LONG':
+                        delta = current_price - sig['price']
+                    else:
+                        delta = sig['price'] - current_price
+                    # Fee simulata: $5000 esposti × 0.02% × 2 = $2
+                    pnl_sim = delta * (5000 / sig['price']) - 2.0
+                    sig['results'][key]          = round(delta, 2)
+                    sig['results'][f'pnl_{w}']   = round(pnl_sim, 2)
+                    sig['results'][f'hit_{w}']    = delta > 0
+
+            # Chiudi dopo la finestra massima
+            if elapsed >= max(self.WINDOWS):
+                to_close.append(i)
+
+        for i in reversed(to_close):
+            sig = self._open.pop(i)
+            sig['closed'] = True
+            self._closed.append(sig)
+            self._update_stats(sig)
+
+    def _update_stats(self, sig: dict):
+        """Aggiorna la distribuzione statistica dopo ogni segnale chiuso."""
+        # Chiave per la distribuzione: regime + direction + score_band
+        key = f"{sig['regime']}|{sig['direction']}|{sig['score_band']}"
+        s   = self._stats[key]
+        s['n'] += 1
+
+        for w in self.WINDOWS:
+            d   = sig['results'].get(f'delta_{w}')
+            h   = sig['results'].get(f'hit_{w}')
+            pnl = sig['results'].get(f'pnl_{w}')
+            if d is not None:
+                s[f'delta_{w}'].append(d)
+                s[f'hit_{w}'].append(h)
+            if pnl is not None:
+                s['pnl_sim'].append(pnl)
+
+        # Mantieni solo ultimi 100 per ogni chiave
+        for field in [f'delta_{w}' for w in self.WINDOWS] +                      [f'hit_{w}'   for w in self.WINDOWS] + ['pnl_sim']:
+            if len(s[field]) > 100:
+                s[field] = s[field][-100:]
+
+    def get_prediction(self, direction: str, score: float,
+                       regime: str) -> dict:
+        """
+        Ritorna la predizione per questo contesto.
+        "Se il sistema dice LONG con score 65 in RANGING, quanto si muove?"
+        """
+        if score >= 75:   band = "FORTE_75+"
+        elif score >= 65: band = "BUONO_65-75"
+        elif score >= 58: band = "BASE_58-65"
+        else:             band = "DEBOLE_<58"
+
+        key = f"{regime}|{direction}|{band}"
+        s   = self._stats.get(key)
+
+        if not s or s['n'] < 5:
+            return {'confidence': 0, 'data_insufficienti': True, 'n': s['n'] if s else 0}
+
+        result = {'n': s['n'], 'context': key}
+        for w in self.WINDOWS:
+            deltas = s.get(f'delta_{w}', [])
+            hits   = s.get(f'hit_{w}',   [])
+            if deltas:
+                result[f'avg_delta_{w}s']  = round(sum(deltas)/len(deltas), 2)
+                result[f'hit_rate_{w}s']   = round(sum(hits)/len(hits), 3) if hits else 0
+                result[f'max_delta_{w}s']  = round(max(deltas), 2)
+
+        pnls = s.get('pnl_sim', [])
+        if pnls:
+            result['avg_pnl_sim']  = round(sum(pnls)/len(pnls), 2)
+            result['pnl_positive'] = round(sum(1 for p in pnls if p > 0)/len(pnls), 3)
+
+        # Confidence: cresce con n campioni, max 1.0 a 50 campioni
+        result['confidence'] = min(1.0, s['n'] / 50)
+        return result
+
+    def dump_top(self, n: int = 10) -> list:
+        """Top N contesti per numero di segnali — per la dashboard."""
+        rows = []
+        for key, s in self._stats.items():
+            if s['n'] < 3:
+                continue
+            hits_60 = s.get('hit_60', [])
+            deltas_60 = s.get('delta_60', [])
+            rows.append({
+                'context':    key,
+                'n':          s['n'],
+                'hit_60s':    round(sum(hits_60)/len(hits_60), 3) if hits_60 else 0,
+                'avg_delta_60s': round(sum(deltas_60)/len(deltas_60), 2) if deltas_60 else 0,
+                'pnl_sim_avg': round(sum(s['pnl_sim'])/len(s['pnl_sim']), 2) if s['pnl_sim'] else 0,
+            })
+        rows.sort(key=lambda x: x['n'], reverse=True)
+        return rows[:n]
+
+    def get_open_count(self) -> int:
+        return len(self._open)
+
+
+# ===========================================================================
 # 5 CAPSULE INTELLIGENTI
 # ===========================================================================
 
@@ -3173,6 +3369,7 @@ class OvertopBassanoV14Production:
         self.decelero        = MomentumDecelerometer()
         self.position_sizer  = PositionSizer()
         self.telemetry       = StabilityTelemetry()
+        self.signal_tracker  = PreTradeSignalTracker()
 
         # -- Ripristina intelligenza accumulata ----------------------------
         self._persist.load_brain(self.oracolo, self.memoria, self.calibratore)
@@ -3437,6 +3634,10 @@ class OvertopBassanoV14Production:
         # -- POST-TRADE TRACKER: monitora cosa succede dopo exit ----------
         if self.oracolo._post_trade_queue:
             self.oracolo.update_post_trade(price)
+
+        # -- PRE-TRADE SIGNAL TRACKER: misura il movimento post-segnale ----
+        if self.signal_tracker.get_open_count() > 0:
+            self.signal_tracker.update(price)
 
         # -- HEARTBEAT M2 - ogni 60s conferma che M2 è vivo ---------------
         if now - self._last_m2_heartbeat > 60:
@@ -4218,6 +4419,24 @@ class OvertopBassanoV14Production:
             if result['score'] < result['soglia']:
                 self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
                 return
+
+            # -- PRE-TRADE SIGNAL: score ≥ soglia → registra il segnale ----
+            # Il sistema VUOLE entrare. Registriamo PRIMA di qualsiasi altro filtro.
+            # Così misuriamo il valore previsionale PURO del score/soglia,
+            # indipendentemente da energy filter, OC, CTX match.
+            self.signal_tracker.record_signal(
+                price=price,
+                direction=self.campo._direction,
+                score=result['score'],
+                soglia=result['soglia'],
+                regime=self._regime_current,
+                momentum=momentum,
+                volatility=volatility,
+                trend=trend,
+                rsi=self.campo._last_rsi,
+                macd_hist=self.campo.macd_hist if hasattr(self.campo, 'macd_hist') else 0.0,
+                drift=getattr(self.campo, '_last_drift', 0.0),
+            )
 
             # ===============================================================
             # ENERGY FILTER - la volpe caccia solo prede che valgono
@@ -5271,6 +5490,12 @@ class OvertopBassanoV14Production:
                     "phantom":            self._get_phantom_summary(),
                     # -- INTELLIGENZA AUTONOMA - capsule vive -----------
                     "ia_stats":           self.realtime_engine.get_stats(),
+                    # -- PRE-TRADE SIGNAL TRACKER ---------------------------
+                    "signal_tracker": {
+                        "open":      self.signal_tracker.get_open_count(),
+                        "closed":    len(self.signal_tracker._closed),
+                        "top":       self.signal_tracker.dump_top(8),
+                    },
                     # -- SOGLIA DINAMICA MONITOR -----------------------
                     "m2_soglia_min":      self.campo.SOGLIA_MIN,
                     "m2_soglia_base":     self.campo.SOGLIA_BASE,
