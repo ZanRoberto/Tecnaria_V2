@@ -1770,8 +1770,10 @@ class PreTradeSignalTracker:
                 s['pnl_sim'].append(pnl)
 
         # Mantieni solo ultimi 100 per ogni chiave
-        for field in [f'delta_{w}' for w in self.WINDOWS] +                      [f'hit_{w}'   for w in self.WINDOWS] + ['pnl_sim']:
-            if len(s[field]) > 100:
+        all_fields = ([f'delta_{w}' for w in self.WINDOWS] +
+                      [f'hit_{w}'   for w in self.WINDOWS] + ['pnl_sim'])
+        for field in all_fields:
+            if field in s and len(s[field]) > 100:
                 s[field] = s[field][-100:]
 
     def get_prediction(self, direction: str, score: float,
@@ -1813,7 +1815,7 @@ class PreTradeSignalTracker:
         """Top N contesti per numero di segnali — per la dashboard."""
         rows = []
         for key, s in self._stats.items():
-            if s['n'] < 3:
+            if s['n'] < 1:
                 continue
             hits_60 = s.get('hit_60', [])
             deltas_60 = s.get('delta_60', [])
@@ -5509,6 +5511,8 @@ class OvertopBassanoV14Production:
                         "open":      self.signal_tracker.get_open_count(),
                         "closed":    len(self.signal_tracker._closed),
                         "top":       self.signal_tracker.dump_top(8),
+                        "stats_keys": list(self.signal_tracker._stats.keys()),
+                        "stats_n":   {k: v['n'] for k,v in self.signal_tracker._stats.items()},
                     },
                     # -- SOGLIA DINAMICA MONITOR -----------------------
                     "m2_soglia_min":      self.campo.SOGLIA_MIN,
