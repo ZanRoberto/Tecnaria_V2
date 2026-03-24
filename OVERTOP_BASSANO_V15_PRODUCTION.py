@@ -3873,7 +3873,7 @@ class OvertopBassanoV14Production:
         # -- PRE-TRADE SIGNAL TRACKER: osservazione continua ogni tick ------
         # score_now() calcola senza decidere — pura mappa del segnale nel tempo.
         # Registra tutto ciò che supera 25, prima di qualsiasi filtro.
-        if self._tick_count > 200 and momentum:
+        if self.campo._tick_count > 200 and momentum:
             _seed_q = self.seed_scorer.score()
             _seed_v = _seed_q.get('score', 0.0) if _seed_q.get('reason') != 'insufficient_data' else 0.0
             _fp_wr  = self.oracolo.get_wr(momentum, volatility, trend, self.campo._direction)
