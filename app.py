@@ -993,7 +993,7 @@ function update() {
             <td><span style="color:${wrCol};font-weight:700">${wr100.toFixed(0)}%</span>
                 <div class="wr-bar" style="width:${Math.round(wr100/2)}px;background:${wrCol}"></div></td>
             <td style="color:var(--dim)">${v.samples?.toFixed(1)||'0'}</td>
-            <td style="color:${colorPnL(pnlA)}">${pnlA>=0?'+':''}\$${Math.abs(pnlA).toFixed(2)}</td>
+            <td style="color:${colorPnL(pnlA)}">${pnlA>=0?'+':''}$${Math.abs(pnlA).toFixed(2)}</td>
             <td style="color:var(--dim)">${earlyPct}</td>
             <td>${status}</td>
           </tr>`;
@@ -1059,7 +1059,7 @@ function update() {
         blk=${s.blocked||0}
         <span style="color:var(--green)">+$${(s.pnl_saved||0).toFixed(1)}</span>
         <span style="color:var(--red)">-$${(s.pnl_missed||0).toFixed(1)}</span>
-        <span style="color:${net>=0?'var(--green)':'var(--red)'}"> net=${net>=0?'+':''}\$${net.toFixed(1)}</span>
+        <span style="color:${net>=0?'var(--green)':'var(--red)'}"> net=${net>=0?'+':''}$${net.toFixed(1)}</span>
       </div>`;
     }).join('');
     renderLog(ph.log,'ph-log');
@@ -1083,7 +1083,7 @@ function update() {
           <td style="color:var(--dim)">${ts2}</td>
           <td>${typeTxt}</td>
           <td>${dirTxt}</td>
-          <td style="color:var(--text)">\$${t.price.toFixed(1)}</td>
+          <td style="color:var(--text)">$${t.price.toFixed(1)}</td>
           <td class="${pnlCls}">${pnlTxt}</td>
           <td style="color:var(--dim)">${t.size.toFixed(2)}x</td>
           <td style="color:var(--dim);font-size:9px">${(t.reason||'').substring(0,22)}</td>
