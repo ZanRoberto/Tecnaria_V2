@@ -342,13 +342,17 @@ class CapsuleRuntime:
         return False
 
     def valuta(self, contesto: dict) -> dict:
-        """Valuta tutte le capsule attive. Ritorna: {blocca, size_mult, reason}"""
-        risultato = {'blocca': False, 'size_mult': 1.0, 'reason': ''}
+        """Valuta tutte le capsule attive. Ritorna: {blocca, size_mult, soglia_boost, reason}"""
+        ora = time.time()
+        risultato = {'blocca': False, 'size_mult': 1.0, 'soglia_boost': 0.0, 'reason': ''}
         for capsule in sorted(self.capsules, key=lambda c: c.get('priority', 5)):
             if not capsule.get('enabled', True):
                 continue
+            # Capsule scadute: salta (verranno pulite da IntelligenzaAutonoma)
+            if capsule.get('scade_ts') and capsule['scade_ts'] < ora:
+                continue
             triggers = capsule.get('trigger', [])
-            if not all(self._check_trigger(t, contesto) for t in triggers):
+            if triggers and not all(self._check_trigger(t, contesto) for t in triggers):
                 continue
             azione = capsule.get('azione', {})
             if azione.get('type') == 'blocca_entry':
@@ -357,6 +361,8 @@ class CapsuleRuntime:
                 break
             elif azione.get('type') == 'modifica_size':
                 risultato['size_mult'] *= azione.get('params', {}).get('mult', 1.0)
+            elif azione.get('type') == 'boost_soglia':
+                risultato['soglia_boost'] += azione.get('params', {}).get('delta', 0.0)
         return risultato
 
     def _check_trigger(self, trigger: dict, contesto: dict) -> bool:
@@ -395,64 +401,546 @@ class ConfigHotReloader:
 # REAL-TIME LEARNING ENGINE
 # ===========================================================================
 
-class RealtimeLearningEngine:
+class IntelligenzaAutonoma:
     """
-    Osserva gli ultimi N trade. Se un matrimonio scende sotto WR 40%
-    su almeno 3 campioni, genera automaticamente una capsula di blocco
-    e la scrive in capsule_attive.json.
+    MOTORE DI INTELLIGENZA AUTONOMA - Sostituisce RealtimeLearningEngine.
+
+    Non alza/abbassa manopole. OSSERVA → MISURA la gravità/opportunità →
+    GENERA capsule con vita propria → le TESTA → le ELIMINA se non servono.
+
+    TRE LIVELLI:
+      L1 - Capsule Strutturali: le 5 hardcoded. Non toccate mai.
+      L2 - Capsule di Esperienza: nate da pattern statistici reali.
+           Vita: 50-500 trade. Muoiono se WR si normalizza.
+      L3 - Capsule di Evento: nate da anomalie ADESSO.
+           Vita: minuti/ore. Auto-scadono senza intervento umano.
+
+    PAVIMENTI NON SUPERABILI (hardcoded, non delegati):
+      - Score minimo assoluto: 48
+      - Stop loss PnL: 1% margine ($10)
+      - TRAP/PANIC: veti assoluti
+      - FANTASMA WR < 30% su 20+ campioni reali
+
+    TUTTO IL RESTO è output del motore, non input fisso.
     """
 
-    def __init__(self, max_trades: int = 10, capsule_file: str = "capsule_attive.json"):
-        self.recent_trades = deque(maxlen=max_trades)
-        self.capsule_file  = capsule_file
+    # -- PAVIMENTI FISICI - non delegabili --------------------------------
+    SCORE_FLOOR       = 48     # sotto questo = rumore puro
+    STOP_LOSS_PCT     = 0.01   # 1% margine max loss per trade
+    MIN_SAMPLES_L2    = 8      # campioni minimi per capsule L2
+    MIN_SAMPLES_L3    = 3      # campioni minimi per capsule L3 (evento immediato)
+    MAX_CAPSULE_AGE   = 86400  # 24h max vita capsule L2 senza conferma
+    MAX_CAPSULE_EVENT = 3600   # 1h max vita capsule L3
+
+    def __init__(self, capsule_file: str = "capsule_attive.json", db_path: str = None):
+        self.capsule_file = capsule_file
+        self.db_path      = db_path
+        self._trade_buffer = deque(maxlen=200)   # memoria rolling per analisi
+        self._capsule_meta = {}                   # {capsule_id: {nato_ts, trade_count, wr_al_nato, ...}}
+        self._last_analisi = 0
+        self._analisi_interval = 30               # analizza ogni 30 trade
+        self._trade_count = 0
+
+    # =====================================================================
+    # INTERFACCIA PUBBLICA
+    # =====================================================================
 
     def registra_trade(self, trade: dict):
-        self.recent_trades.append(trade)
+        """Ogni trade chiuso passa da qui. Arricchisce con timestamp."""
+        trade['_ts'] = time.time()
+        self._trade_buffer.append(trade)
+        self._trade_count += 1
+        # Analisi ogni N trade O se evento critico
+        is_critico = (not trade.get('is_win') and abs(trade.get('pnl', 0)) > 5)
+        if self._trade_count % self._analisi_interval == 0 or is_critico:
+            self.analizza_e_genera()
+        # Pulizia capsule scadute - ogni trade è un'occasione
+        if self._trade_count % 10 == 0:
+            self._pulisci_scadute()
 
     def analizza_e_genera(self) -> list:
-        if len(self.recent_trades) < 3:
-            return []
-        stats = defaultdict(lambda: {'wins': 0, 'total': 0})
-        for t in self.recent_trades:
-            m = t.get('matrimonio', 'unknown')
-            stats[m]['total'] += 1
-            if t.get('pnl', 0) > 0:
-                stats[m]['wins'] += 1
+        """Cuore del motore. Osserva, misura, genera. Ritorna le capsule create."""
         nuove = []
-        for matrimonio, s in stats.items():
-            if s['total'] >= 3:
-                wr = s['wins'] / s['total'] * 100
-                if wr < 40:
-                    cap = {
-                        'capsule_id':  f"RT_BLOCCO_{matrimonio}_{int(time.time())}",
-                        'version':     1,
-                        'descrizione': f"Auto-RT: {matrimonio} WR {wr:.0f}% sotto soglia",
-                        'trigger':     [{'param': 'matrimonio', 'op': '==', 'value': matrimonio}],
-                        'azione':      {'type': 'blocca_entry', 'params': {'reason': 'matrimonio_wr_basso'}},
-                        'priority':    1,
-                        'enabled':     True,
-                    }
-                    nuove.append(cap)
-                    log.info(f"[REALTIME] 🧠 Capsula auto generata: BLOCCO {matrimonio} (WR={wr:.0f}%)")
-        # Persiste le nuove capsule nel file
+        trades = list(self._trade_buffer)
+        if len(trades) < self.MIN_SAMPLES_L3:
+            return nuove
+
+        # -- LIVELLO 2: pattern statistici ---------------------------------
+        nuove += self._analisi_l2_matrimoni(trades)
+        nuove += self._analisi_l2_contesto(trades)
+        nuove += self._analisi_l2_drift_regime(trades)
+
+        # -- LIVELLO 3: eventi anomali adesso ------------------------------
+        nuove += self._analisi_l3_loss_streak(trades)
+        nuove += self._analisi_l3_regime_tossico(trades)
+        nuove += self._analisi_l3_opportunita(trades)
+
         if nuove:
-            self._persist(nuove)
+            self._persisti(nuove)
         return nuove
 
-    def _persist(self, nuove: list):
+    # =====================================================================
+    # LIVELLO 2 — CAPSULE DI ESPERIENZA
+    # =====================================================================
+
+    def _analisi_l2_matrimoni(self, trades: list) -> list:
+        """
+        Ogni combinazione (matrimonio, regime, volatilità) ha una sua firma.
+        Se la firma mostra WR < soglia_gravita su N campioni → BLOCCA.
+        Se mostra WR > soglia_opportunita → BOOST size.
+        La soglia non è fissa: scala con la gravità del danno.
+        """
+        nuove = []
+        # Raggruppa per (matrimonio, regime, volatility)
+        pattern: dict = defaultdict(lambda: {'wins': 0, 'total': 0, 'pnl': 0.0, 'trades': []})
+        for t in trades:
+            key = (
+                t.get('matrimonio', 'UNKNOWN'),
+                t.get('regime', 'RANGING'),
+                t.get('volatility', 'MEDIA'),
+            )
+            pattern[key]['total'] += 1
+            pattern[key]['pnl']   += t.get('pnl', 0)
+            if t.get('is_win'):
+                pattern[key]['wins'] += 1
+            pattern[key]['trades'].append(t)
+
+        for (mat, reg, vol), s in pattern.items():
+            if s['total'] < self.MIN_SAMPLES_L2:
+                continue
+
+            wr       = s['wins'] / s['total']
+            pnl_avg  = s['pnl'] / s['total']
+            cap_id   = f"L2_MAT_{mat}_{reg}_{vol}"
+
+            # -- GRAVITÀ: WR basso E PnL negativo → blocca -----------------
+            # Soglia non fissa: più campioni → più fiducia → soglia meno severa
+            fiducia = min(1.0, s['total'] / 30)  # 0 → 1 con 30 campioni
+            soglia_blocco = 0.42 - (0.07 * fiducia)  # da 0.42 → 0.35 con più dati
+
+            if wr < soglia_blocco and pnl_avg < -0.5:
+                vita = self._calcola_vita_l2(wr, pnl_avg, s['total'])
+                cap = self._crea_capsule_blocco(
+                    cap_id, mat, reg, vol, wr, pnl_avg, s['total'], vita,
+                    f"L2_MAT: WR={wr:.0%} pnl={pnl_avg:+.2f} su {s['total']} trade (fiducia={fiducia:.0%})"
+                )
+                if cap:
+                    nuove.append(cap)
+                    log.info(f"[IA] 🔴 L2_BLOCCO {mat}/{reg}/{vol} WR={wr:.0%} pnl={pnl_avg:+.2f} vita={vita}s")
+
+            # -- OPPORTUNITÀ: WR alto E PnL positivo → boost size ----------
+            elif wr > 0.68 and pnl_avg > 1.0 and s['total'] >= 10:
+                boost = min(1.4, 1.0 + (wr - 0.65) * 2.0)  # max +40% size
+                cap = self._crea_capsule_boost(
+                    cap_id, mat, reg, vol, wr, pnl_avg, s['total'], boost,
+                    f"L2_OPP: WR={wr:.0%} pnl={pnl_avg:+.2f} boost={boost:.2f}x"
+                )
+                if cap:
+                    nuove.append(cap)
+                    log.info(f"[IA] 🟢 L2_BOOST {mat}/{reg}/{vol} WR={wr:.0%} boost={boost:.2f}x")
+
+        return nuove
+
+    def _analisi_l2_contesto(self, trades: list) -> list:
+        """
+        Analizza (regime, volatility, trend, direction) come firma di contesto.
+        Genera capsule su contesti sistematicamente negativi/positivi.
+        """
+        nuove = []
+        pattern: dict = defaultdict(lambda: {'wins': 0, 'total': 0, 'pnl': 0.0})
+        for t in trades:
+            key = (
+                t.get('regime', 'RANGING'),
+                t.get('volatility', 'MEDIA'),
+                t.get('trend', 'SIDEWAYS'),
+                t.get('direction', 'LONG'),
+            )
+            pattern[key]['total'] += 1
+            pattern[key]['pnl']   += t.get('pnl', 0)
+            if t.get('is_win'):
+                pattern[key]['wins'] += 1
+
+        for (reg, vol, trend, direction), s in pattern.items():
+            if s['total'] < self.MIN_SAMPLES_L2:
+                continue
+            wr      = s['wins'] / s['total']
+            pnl_avg = s['pnl'] / s['total']
+            cap_id  = f"L2_CTX_{reg}_{vol}_{trend}_{direction}"
+
+            if wr < 0.38 and pnl_avg < -1.0:
+                vita = self._calcola_vita_l2(wr, pnl_avg, s['total'])
+                # Genera trigger per il contesto JSON
+                trigger = [
+                    {'param': 'regime',    'op': '==', 'value': reg},
+                    {'param': 'volatility','op': '==', 'value': vol},
+                    {'param': 'trend_dir', 'op': '==', 'value': trend},
+                ]
+                cap = {
+                    'capsule_id':   cap_id,
+                    'livello':      'L2',
+                    'tipo':         'CONTESTO_TOSSICO',
+                    'version':      1,
+                    'descrizione':  f"L2_CTX: {reg}/{vol}/{trend}/{direction} WR={wr:.0%} pnl={pnl_avg:+.2f}",
+                    'trigger':      trigger,
+                    'azione':       {'type': 'blocca_entry', 'params': {'reason': f'CTX_TOSSICO_{reg}_{vol}_{trend}'}},
+                    'priority':     2,
+                    'enabled':      True,
+                    'scade_ts':     time.time() + vita,
+                    'nato_ts':      time.time(),
+                    'wr_al_nato':   round(wr, 3),
+                    'samples':      s['total'],
+                }
+                if self._è_nuova(cap_id):
+                    nuove.append(cap)
+                    log.info(f"[IA] 🔴 L2_CTX {reg}/{vol}/{trend}/{direction} WR={wr:.0%}")
+
+        return nuove
+
+    def _analisi_l2_drift_regime(self, trades: list) -> list:
+        """
+        Il drift al momento dell'entry è la firma più potente.
+        Se drift < -X% in LONG → pattern sistematicamente negativo.
+        Soglia non fissa: calcolata dalla distribuzione dei drift nei LOSS.
+        """
+        nuove = []
+        long_trades  = [t for t in trades if t.get('direction') == 'LONG' and 'drift' in t]
+        short_trades = [t for t in trades if t.get('direction') == 'SHORT' and 'drift' in t]
+
+        for direction, pool in [('LONG', long_trades), ('SHORT', short_trades)]:
+            if len(pool) < self.MIN_SAMPLES_L2:
+                continue
+
+            wins  = [t for t in pool if t.get('is_win')]
+            losses = [t for t in pool if not t.get('is_win')]
+
+            if len(losses) < 3:
+                continue
+
+            # Calcola il drift medio dei loss
+            drift_loss_avg = sum(t['drift'] for t in losses) / len(losses)
+            drift_win_avg  = sum(t['drift'] for t in wins) / max(1, len(wins))
+
+            # Se i loss hanno drift sistematicamente contro la direzione
+            if direction == 'LONG' and drift_loss_avg < -0.05:
+                # Soglia di veto = media drift loss - 1 deviazione standard
+                drifts_loss = [t['drift'] for t in losses]
+                std = (sum((d - drift_loss_avg)**2 for d in drifts_loss) / len(drifts_loss)) ** 0.5
+                soglia_veto = drift_loss_avg + std  # più permissivo della media loss
+                soglia_veto = min(-0.05, soglia_veto)  # mai sopra -0.05% (pavimento)
+
+                cap_id = f"L2_DRIFT_LONG_VETO"
+                if self._è_nuova(cap_id):
+                    cap = {
+                        'capsule_id': cap_id,
+                        'livello':    'L2',
+                        'tipo':       'DRIFT_VETO_ADATTIVO',
+                        'version':    1,
+                        'descrizione': f"L2_DRIFT: LONG con drift<{soglia_veto:+.3f}% → loss sistematici (avg={drift_loss_avg:+.3f}% vs win_avg={drift_win_avg:+.3f}%)",
+                        'trigger':    [
+                            {'param': 'drift_pct',  'op': '<',  'value': round(soglia_veto, 4)},
+                            {'param': 'direction',  'op': '==', 'value': 'LONG'},
+                        ],
+                        'azione':     {'type': 'blocca_entry', 'params': {'reason': f'DRIFT_VETO_ADATTIVO_{soglia_veto:+.3f}'}},
+                        'priority':   1,
+                        'enabled':    True,
+                        'scade_ts':   time.time() + 7200,  # 2 ore
+                        'nato_ts':    time.time(),
+                        'soglia_calcolata': round(soglia_veto, 4),
+                        'samples':    len(pool),
+                    }
+                    nuove.append(cap)
+                    log.info(f"[IA] 🧭 L2_DRIFT_VETO LONG: soglia adattiva={soglia_veto:+.3f}% (media loss={drift_loss_avg:+.3f}%)")
+
+        return nuove
+
+    # =====================================================================
+    # LIVELLO 3 — CAPSULE DI EVENTO
+    # =====================================================================
+
+    def _analisi_l3_loss_streak(self, trades: list) -> list:
+        """
+        Loss streak → capsule evento che alza la soglia proporzionalmente.
+        Non blocca. Non fissa un numero. Misura la GRAVITÀ dei loss.
+        """
+        nuove = []
+        recenti = list(trades)[-10:]
+        if len(recenti) < 3:
+            return nuove
+
+        streak = 0
+        danno_totale = 0.0
+        for t in reversed(recenti):
+            if not t.get('is_win'):
+                streak += 1
+                danno_totale += abs(t.get('pnl', 0))
+            else:
+                break
+
+        if streak < 2:
+            return nuove
+
+        # Gravità proporzionale al danno reale, non al numero di loss
+        danno_per_loss = danno_totale / streak
+        if danno_per_loss < 1.0:
+            return nuove  # loss minuscoli, non reagire
+
+        # Boost soglia proporzionale alla gravità
+        gravita = min(1.0, danno_totale / 20.0)  # 0→1 con $20 di danno
+        boost_soglia = round(3.0 + gravita * 7.0, 1)  # +3 → +10 punti soglia
+        vita = int(60 + gravita * 240)  # 1min → 5min di vita
+
+        cap_id = f"L3_STREAK_{streak}"
+        if self._è_nuova(cap_id):
+            cap = {
+                'capsule_id': cap_id,
+                'livello':    'L3',
+                'tipo':       'LOSS_STREAK_EVENTO',
+                'version':    1,
+                'descrizione': f"L3_STREAK: {streak} loss consecutivi ${danno_totale:.1f} danno → soglia +{boost_soglia:.0f}pt per {vita}s",
+                'trigger':    [],  # sempre attiva mentre esiste
+                'azione':     {'type': 'boost_soglia', 'params': {'delta': boost_soglia, 'reason': f'STREAK_{streak}_${danno_totale:.0f}'}},
+                'priority':   1,
+                'enabled':    True,
+                'scade_ts':   time.time() + vita,
+                'nato_ts':    time.time(),
+                'streak':     streak,
+                'danno':      round(danno_totale, 2),
+            }
+            nuove.append(cap)
+            log.info(f"[IA] ⚡ L3_STREAK {streak}x ${danno_totale:.1f} → soglia+{boost_soglia:.0f} per {vita}s")
+
+        return nuove
+
+    def _analisi_l3_regime_tossico(self, trades: list) -> list:
+        """
+        Se il regime corrente sta sistematicamente perdendo ADESSO
+        (ultimi 5 trade nello stesso regime) → capsule evento.
+        """
+        nuove = []
+        recenti = list(trades)[-8:]
+        if len(recenti) < 3:
+            return nuove
+
+        # Raggruppa per regime
+        per_regime: dict = defaultdict(list)
+        for t in recenti:
+            per_regime[t.get('regime', 'RANGING')].append(t)
+
+        for regime, pool in per_regime.items():
+            if len(pool) < self.MIN_SAMPLES_L3:
+                continue
+            wins   = sum(1 for t in pool if t.get('is_win'))
+            wr     = wins / len(pool)
+            pnl    = sum(t.get('pnl', 0) for t in pool)
+
+            if wr <= 0.25 and pnl < -2.0:
+                gravita = min(1.0, abs(pnl) / 10.0)
+                vita    = int(120 + gravita * 360)  # 2min → 8min
+                cap_id  = f"L3_REGIME_{regime}_TOSSICO"
+                if self._è_nuova(cap_id):
+                    cap = {
+                        'capsule_id': cap_id,
+                        'livello':    'L3',
+                        'tipo':       'REGIME_TOSSICO_EVENTO',
+                        'version':    1,
+                        'descrizione': f"L3_REGIME: {regime} WR={wr:.0%} pnl={pnl:+.2f} su {len(pool)} trade recenti",
+                        'trigger':    [{'param': 'regime', 'op': '==', 'value': regime}],
+                        'azione':     {'type': 'blocca_entry', 'params': {'reason': f'REGIME_TOSSICO_{regime}_WR{wr:.0%}'}},
+                        'priority':   2,
+                        'enabled':    True,
+                        'scade_ts':   time.time() + vita,
+                        'nato_ts':    time.time(),
+                        'wr_snapshot': round(wr, 3),
+                    }
+                    nuove.append(cap)
+                    log.info(f"[IA] 🔴 L3_REGIME {regime} tossico WR={wr:.0%} pnl={pnl:+.2f} vita={vita}s")
+
+        return nuove
+
+    def _analisi_l3_opportunita(self, trades: list) -> list:
+        """
+        Se gli ultimi trade in un contesto stanno vincendo forte
+        → capsule evento di boost temporaneo.
+        """
+        nuove = []
+        recenti = list(trades)[-8:]
+        if len(recenti) < 3:
+            return nuove
+
+        per_regime: dict = defaultdict(list)
+        for t in recenti:
+            per_regime[t.get('regime', 'RANGING')].append(t)
+
+        for regime, pool in per_regime.items():
+            if len(pool) < self.MIN_SAMPLES_L3:
+                continue
+            wins   = sum(1 for t in pool if t.get('is_win'))
+            wr     = wins / len(pool)
+            pnl    = sum(t.get('pnl', 0) for t in pool)
+            pnl_avg = pnl / len(pool)
+
+            if wr >= 0.75 and pnl_avg > 2.0:
+                boost = min(1.3, 1.0 + (wr - 0.70) * 1.5)
+                vita  = int(90 + (wr - 0.70) * 600)  # 90s → 4min
+                cap_id = f"L3_OPP_{regime}_BOOST"
+                if self._è_nuova(cap_id):
+                    cap = {
+                        'capsule_id': cap_id,
+                        'livello':    'L3',
+                        'tipo':       'OPPORTUNITA_EVENTO',
+                        'version':    1,
+                        'descrizione': f"L3_OPP: {regime} WR={wr:.0%} pnl_avg={pnl_avg:+.2f} → boost {boost:.2f}x",
+                        'trigger':    [{'param': 'regime', 'op': '==', 'value': regime}],
+                        'azione':     {'type': 'modifica_size', 'params': {'mult': boost, 'reason': f'OPP_{regime}'}},
+                        'priority':   3,
+                        'enabled':    True,
+                        'scade_ts':   time.time() + vita,
+                        'nato_ts':    time.time(),
+                        'wr_snapshot': round(wr, 3),
+                    }
+                    nuove.append(cap)
+                    log.info(f"[IA] 🟢 L3_OPP {regime} WR={wr:.0%} → boost {boost:.2f}x vita={vita}s")
+
+        return nuove
+
+    # =====================================================================
+    # SUPPORTO
+    # =====================================================================
+
+    def _calcola_vita_l2(self, wr: float, pnl_avg: float, samples: int) -> int:
+        """
+        La vita di una capsule L2 scala con la gravità del problema.
+        Più è grave → più dura. Non è un parametro fisso.
+        """
+        gravita_wr  = max(0.0, 0.45 - wr) / 0.45       # 0→1
+        gravita_pnl = min(1.0, abs(pnl_avg) / 5.0)     # 0→1 con $5 avg loss
+        gravita_n   = min(1.0, samples / 30.0)          # 0→1 con 30 campioni
+        gravita     = (gravita_wr * 0.4 + gravita_pnl * 0.4 + gravita_n * 0.2)
+        # Vita: da 30 min (bassa gravità) a 12 ore (altissima)
+        return int(1800 + gravita * 41400)
+
+    def _è_nuova(self, cap_id: str) -> bool:
+        """Evita di ricreare capsule già attive nel file."""
+        try:
+            if not os.path.exists(self.capsule_file):
+                return True
+            with open(self.capsule_file) as f:
+                existing = json.load(f)
+            # Controlla se esiste già una capsule attiva con stesso id
+            for c in existing:
+                if c.get('capsule_id') == cap_id and c.get('enabled'):
+                    # Aggiorna scade_ts se è più vecchia
+                    return False
+            return True
+        except Exception:
+            return True
+
+    def _crea_capsule_blocco(self, cap_id, mat, reg, vol, wr, pnl_avg, samples, vita, desc) -> dict | None:
+        if not self._è_nuova(cap_id):
+            return None
+        return {
+            'capsule_id':  cap_id,
+            'livello':     'L2',
+            'tipo':        'MATRIMONIO_TOSSICO',
+            'version':     1,
+            'descrizione': desc,
+            'trigger':     [
+                {'param': 'matrimonio', 'op': '==', 'value': mat},
+                {'param': 'regime',     'op': '==', 'value': reg},
+                {'param': 'volatility', 'op': '==', 'value': vol},
+            ],
+            'azione':      {'type': 'blocca_entry', 'params': {'reason': f'L2_TOSSICO_{mat}_{reg}_{vol}'}},
+            'priority':    2,
+            'enabled':     True,
+            'scade_ts':    time.time() + vita,
+            'nato_ts':     time.time(),
+            'wr_al_nato':  round(wr, 3),
+            'pnl_avg':     round(pnl_avg, 2),
+            'samples':     samples,
+        }
+
+    def _crea_capsule_boost(self, cap_id, mat, reg, vol, wr, pnl_avg, samples, boost, desc) -> dict | None:
+        if not self._è_nuova(cap_id):
+            return None
+        return {
+            'capsule_id':  cap_id,
+            'livello':     'L2',
+            'tipo':        'MATRIMONIO_OPPORTUNITA',
+            'version':     1,
+            'descrizione': desc,
+            'trigger':     [
+                {'param': 'matrimonio', 'op': '==', 'value': mat},
+                {'param': 'regime',     'op': '==', 'value': reg},
+                {'param': 'volatility', 'op': '==', 'value': vol},
+            ],
+            'azione':      {'type': 'modifica_size', 'params': {'mult': boost, 'reason': f'L2_OPP_{mat}'}},
+            'priority':    3,
+            'enabled':     True,
+            'scade_ts':    time.time() + 14400,  # 4 ore
+            'nato_ts':     time.time(),
+            'wr_al_nato':  round(wr, 3),
+            'pnl_avg':     round(pnl_avg, 2),
+            'samples':     samples,
+        }
+
+    def _pulisci_scadute(self):
+        """Rimuove capsule scadute dal file. Zero intervento umano."""
+        try:
+            if not os.path.exists(self.capsule_file):
+                return
+            with open(self.capsule_file) as f:
+                existing = json.load(f)
+            ora = time.time()
+            # Tieni: strutturali (no scade_ts) + non scadute
+            attive    = [c for c in existing if 'scade_ts' not in c or c['scade_ts'] > ora]
+            scadute   = [c for c in existing if 'scade_ts' in c and c['scade_ts'] <= ora]
+            if scadute:
+                with open(self.capsule_file, 'w') as f:
+                    json.dump(attive, f, indent=2)
+                for c in scadute:
+                    log.info(f"[IA] 🗑️ Capsule scaduta rimossa: {c['capsule_id']} (era {c.get('tipo','?')})")
+        except Exception as e:
+            log.error(f"[IA] Errore pulizia capsule: {e}")
+
+    def _persisti(self, nuove: list):
+        """Scrive nuove capsule nel file. Hot-reload le carica automaticamente."""
         try:
             existing = []
             if os.path.exists(self.capsule_file):
                 with open(self.capsule_file) as f:
                     existing = json.load(f)
-            # Evita duplicati per stesso matrimonio
             existing_ids = {c.get('capsule_id') for c in existing}
             da_aggiungere = [c for c in nuove if c['capsule_id'] not in existing_ids]
             existing.extend(da_aggiungere)
             with open(self.capsule_file, 'w') as f:
                 json.dump(existing, f, indent=2)
         except Exception as e:
-            log.error(f"[REALTIME] Errore persistenza capsule: {e}")
+            log.error(f"[IA] Errore persistenza: {e}")
+
+    def get_stats(self) -> dict:
+        """Esposto al heartbeat per monitoraggio dashboard."""
+        try:
+            if not os.path.exists(self.capsule_file):
+                return {'attive': 0, 'l2': 0, 'l3': 0, 'scadono_presto': 0}
+            with open(self.capsule_file) as f:
+                caps = json.load(f)
+            ora  = time.time()
+            l2   = [c for c in caps if c.get('livello') == 'L2' and c.get('enabled')]
+            l3   = [c for c in caps if c.get('livello') == 'L3' and c.get('enabled')]
+            presto = [c for c in caps if 'scade_ts' in c and 0 < c['scade_ts'] - ora < 300]
+            return {
+                'attive':        len([c for c in caps if c.get('enabled')]),
+                'l2':            len(l2),
+                'l3':            len(l3),
+                'scadono_presto': len(presto),
+                'trade_osservati': self._trade_count,
+            }
+        except Exception:
+            return {'attive': 0, 'l2': 0, 'l3': 0, 'scadono_presto': 0}
+
+
+# Alias per compatibilità con il codice esistente
+RealtimeLearningEngine = IntelligenzaAutonoma
 
 # ===========================================================================
 # LOG ANALYZER
@@ -893,11 +1381,16 @@ class OracoloDinamico:
         if direction == "SHORT" and rsi < 25:
             return True, f"OC2_RSI_LOW_{rsi:.0f}"
 
-        # OC3 - DRIFT_DIRECTION: non andare contro la corrente
-        if direction == "LONG" and drift < -0.10:
-            return True, f"OC3_DRIFT_CONTRO_{drift:+.3f}"
-        if direction == "SHORT" and drift > 0.10:
-            return True, f"OC3_DRIFT_CONTRO_{drift:+.3f}"
+        # OC3 - DRIFT_DIRECTION: soglia CONTESTUALE per regime
+        # RANGING: drift oscilla per natura → soglia larga
+        # TRENDING_*: drift è segnale vero → soglia stretta
+        # EXPLOSIVE: movimento rapido → soglia media
+        _oc3_thr = {"RANGING":-0.25,"TRENDING_BULL":-0.08,
+                    "TRENDING_BEAR":-0.08,"EXPLOSIVE":-0.15}.get(regime,-0.15)
+        if direction == "LONG" and drift < _oc3_thr:
+            return True, f"OC3_DRIFT_{regime}_{drift:+.3f}(thr={_oc3_thr})"
+        if direction == "SHORT" and drift > abs(_oc3_thr):
+            return True, f"OC3_DRIFT_{regime}_{drift:+.3f}(thr={_oc3_thr})"
 
         # OC4 - MOMENTUM_RANGING: in RANGING FORTE senza drift = falso
         if regime == "RANGING" and momentum == "FORTE" and abs(drift) < 0.05:
@@ -2064,7 +2557,7 @@ class CampoGravitazionale:
 
     def evaluate(self, seed_score, fingerprint_wr, momentum, volatility,
                  trend, regime, matrimonio_name, divorzio_set,
-                 fantasma_info, loss_consecutivi, direction="LONG") -> dict:
+                 fantasma_info, loss_consecutivi, direction="LONG", **kwargs) -> dict:
         """
         Ritorna:
           enter:     bool
@@ -2113,17 +2606,21 @@ class CampoGravitazionale:
         if warmup_checks:
             return self._veto(f"WARMUP_{'|'.join(warmup_checks)}")
 
-        # -- DRIFT VETO: direzione sbagliata → NON ENTRARE ----------------
-        # LONG: mercato scende → VETO. SHORT: mercato sale → VETO.
+        # -- DRIFT VETO CONTESTUALE: dipende dal regime, non fisso --------
+        # RANGING: oscillazione normale, soglia larga (-0.30%)
+        # TRENDING_BULL/BEAR: segnale vero, soglia stretta (-0.10%)
+        # EXPLOSIVE: movimento rapido, soglia media (-0.18%)
         if len(self._prices_long) >= 100:
             _prices = list(self._prices_long)
             _avg_old = sum(_prices[:50]) / 50
             _avg_new = sum(_prices[-50:]) / 50
             _drift = (_avg_new - _avg_old) / _avg_old * 100
-            if self._direction == "LONG" and _drift < self.DRIFT_VETO_THRESHOLD:
-                return self._veto(f"DRIFT_VETO_LONG_{_drift:+.3f}%")
-            elif self._direction == "SHORT" and _drift > abs(self.DRIFT_VETO_THRESHOLD):
-                return self._veto(f"DRIFT_VETO_SHORT_{_drift:+.3f}%")
+            _drift_thr = {"RANGING":-0.30,"TRENDING_BULL":-0.10,
+                          "TRENDING_BEAR":-0.10,"EXPLOSIVE":-0.18}.get(regime,-0.20)
+            if self._direction == "LONG" and _drift < _drift_thr:
+                return self._veto(f"DRIFT_VETO_LONG_{_drift:+.3f}%(thr={_drift_thr})")
+            elif self._direction == "SHORT" and _drift > abs(_drift_thr):
+                return self._veto(f"DRIFT_VETO_SHORT_{_drift:+.3f}%(thr={_drift_thr})")
 
         # -- CALCOLO PUNTEGGIO CAMPO ---------------------------------------
         # Seed: normalizza [0.3, 1.0] → [0, 1]
@@ -2191,6 +2688,13 @@ class CampoGravitazionale:
         # SOGLIA_MAX ADATTIVA PER REGIME - non più fissa
         dynamic_max = self._get_dynamic_soglia_max(regime, volatility)
         soglia = max(soglia_min_ctx, min(dynamic_max, soglia_raw))
+
+        # -- BOOST SOGLIA DA CAPSULE L3 (IntelligenzaAutonoma) -------------
+        # Le capsule L3 possono alzare la soglia proporzionalmente alla gravità.
+        # Il pavimento SOGLIA_FLOOR_ASSOLUTO=48 rimane inviolabile.
+        soglia_boost = kwargs.get('soglia_boost', 0.0)
+        if soglia_boost > 0:
+            soglia = max(soglia_min_ctx, min(dynamic_max, soglia + soglia_boost))
 
         # -- DECISIONE -----------------------------------------------------
         enter = score >= soglia
@@ -2629,7 +3133,7 @@ class OvertopBassanoV14Production:
         self.memoria         = MemoriaMatrimoni()
         self.capsule_runtime = CapsuleRuntime(capsule_file="capsule_attive.json")
         self.config_reloader = ConfigHotReloader(capsule_path="capsule_attive.json")
-        self.realtime_engine = RealtimeLearningEngine(max_trades=10, capsule_file="capsule_attive.json")
+        self.realtime_engine = IntelligenzaAutonoma(capsule_file="capsule_attive.json", db_path=DB_PATH)
         self.log_analyzer    = LogAnalyzer()
         self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
         self.calibratore     = AutoCalibratore()
@@ -3073,6 +3577,22 @@ class OvertopBassanoV14Production:
     def _evaluate_exit(self, price, momentum, volatility, trend):
         if price > self.max_price:
             self.max_price = price
+
+        # -- HARD STOP LOSS SUL PNL REALE - PRIORITÀ ASSOLUTA -------------
+        # Stop sul PnL della posizione, NON sul prezzo BTC.
+        # $1000 margine × 5x leva = $5000 esposti.
+        # 1% del margine = $10 max loss per trade.
+        # Il T3 drawdown 3% sul prezzo BTC è inutile: 3% BTC = ~$2100 movimento.
+        # Questo stop ferma il danno PRIMA che arrivi al T3.
+        exposure_m1 = self.TRADE_SIZE_USD * self.LEVERAGE
+        btc_qty_m1  = exposure_m1 / self.trade_open["price_entry"]
+        current_pnl_m1 = (price - self.trade_open["price_entry"]) * btc_qty_m1
+        HARD_STOP_M1 = self.TRADE_SIZE_USD * 0.01  # 1% margine = $10
+        if current_pnl_m1 < -HARD_STOP_M1:
+            self._log("🛑", f"HARD_STOP M1 PnL=${current_pnl_m1:.1f} max=-${HARD_STOP_M1:.0f}")
+            self._close_trade(price, momentum, volatility, trend,
+                              reason=f"HARD_STOP_${abs(current_pnl_m1):.1f}")
+            return
 
         # -- MOMENTUM DECELEROMETER - exit anticipata ----------------------
         # Controlla prima dei divorce triggers: se il momentum sta decelerando
@@ -3645,6 +4165,7 @@ class OvertopBassanoV14Production:
                 divorzio_set=self.memoria.divorzio,
                 fantasma_info=fantasma_info,
                 loss_consecutivi=self._m2_loss_consecutivi(),
+                soglia_boost=self._get_ia_soglia_boost(momentum, volatility, trend),
             )
 
             if result['veto']:
@@ -3861,7 +4382,7 @@ class OvertopBassanoV14Production:
             else:
                 current_pnl_real = (price - self._shadow["price_entry"]) * btc_qty_sl
             
-            HARD_STOP_USD = self.TRADE_SIZE_USD * 0.02  # 2% del margine = $20
+            HARD_STOP_USD = self.TRADE_SIZE_USD * 0.01  # 1% del margine = $10 max loss per trade
             if current_pnl_real < -HARD_STOP_USD:
                 self._close_shadow_trade(price, f"HARD_STOP_${abs(current_pnl_real):.1f}_max${HARD_STOP_USD:.0f}")
                 return
@@ -4100,11 +4621,25 @@ class OvertopBassanoV14Production:
                                        if self._shadow_max_price and self._shadow.get("price_entry") else 0.0
             )
 
-            # -- REALTIME LEARNING - M2 genera capsule auto -------------------
+            # -- INTELLIGENZA AUTONOMA - M2 registra con contesto completo ----
+            # Calcola drift corrente per le capsule L2_DRIFT
+            _ia_drift = 0.0
+            if len(self.campo._prices_long) >= 100:
+                _p = list(self.campo._prices_long)
+                _ia_drift = (sum(_p[-50:])/50 - sum(_p[:50])/50) / (sum(_p[:50])/50) * 100
+
             self.realtime_engine.registra_trade({
-                'matrimonio': self._shadow_matrimonio, 'pnl': pnl, 'is_win': is_win
+                'matrimonio': self._shadow_matrimonio,
+                'pnl':        pnl,
+                'is_win':     is_win,
+                'regime':     self._regime_current,
+                'volatility': self._shadow_entry_volatility or 'MEDIA',
+                'trend':      self._shadow_entry_trend or 'SIDEWAYS',
+                'direction':  entry_direction,
+                'drift':      round(_ia_drift, 4),
+                'score':      self._shadow.get('score', 0) if self._shadow else 0,
+                'exit_reason': reason,
             })
-            self.realtime_engine.analizza_e_genera()
 
             # -- LOG ANALYZER - stats per matrimonio includono M2 -------------
             self.log_analyzer.registra({
@@ -4188,6 +4723,33 @@ class OvertopBassanoV14Production:
             self._shadow_max_price         = None
             self._shadow_min_price         = None
             self._shadow_matrimonio        = None
+
+    def _get_ia_soglia_boost(self, momentum: str, volatility: str, trend: str) -> float:
+        """
+        Legge le capsule L3 attive di tipo boost_soglia e ritorna il delta totale.
+        Il campo.evaluate lo applica sopra la soglia calcolata (con floor=48 invariato).
+        """
+        try:
+            caps = self.capsule_runtime.capsules
+            ora  = time.time()
+            boost = 0.0
+            for c in caps:
+                if not c.get('enabled'):
+                    continue
+                if c.get('scade_ts') and c['scade_ts'] < ora:
+                    continue
+                azione = c.get('azione', {})
+                if azione.get('type') != 'boost_soglia':
+                    continue
+                # Verifica trigger (può essere vuoto = sempre attivo)
+                triggers = c.get('trigger', [])
+                ctx = {'momentum': momentum, 'volatility': volatility, 'trend': trend}
+                if triggers and not all(self.capsule_runtime._check_trigger(t, ctx) for t in triggers):
+                    continue
+                boost += azione.get('params', {}).get('delta', 0.0)
+            return boost
+        except Exception:
+            return 0.0
 
     def _m2_loss_consecutivi(self) -> int:
         """Loss consecutivi del Motore 2."""
@@ -4615,6 +5177,11 @@ class OvertopBassanoV14Production:
                     "m2_campo_stats":     self.campo.get_stats(),
                     # -- PHANTOM TRACKER - zavorra o protezione? -------
                     "phantom":            self._get_phantom_summary(),
+                    # -- INTELLIGENZA AUTONOMA - capsule vive -----------
+                    "ia_stats":           self.realtime_engine.get_stats(),
+                    # -- SOGLIA DINAMICA MONITOR -----------------------
+                    "m2_soglia_min":      self.campo.SOGLIA_MIN,
+                    "m2_soglia_base":     self.campo.SOGLIA_BASE,
                     # -- SHORT EVITATI IN RANGING ----------------------
                     "shadow_short_ranging": self._get_shadow_short_report(),
                     # -- STABILITY TELEMETRY ------------------------
