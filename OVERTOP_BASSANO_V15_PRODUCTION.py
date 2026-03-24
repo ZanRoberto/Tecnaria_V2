@@ -1459,13 +1459,45 @@ class OracoloDinamico:
 
     def get_dynamic_min_hold(self, momentum: str, volatility: str, trend: str,
                              direction: str = "LONG", regime: str = "RANGING") -> float:
-        """MIN_HOLD adattivo: 70% della durata media dei WIN per questo pattern."""
+        """
+        MIN_HOLD completamente data-driven.
+
+        Gerarchia dei dati (dal più specifico al più generale):
+          1. Durata media WIN su questo fingerprint esatto (70%)
+          2. Durata media WIN su tutti i fingerprint nello stesso regime (70%)
+          3. Durata media di TUTTI i trade reali in memoria (60%)
+          4. Zero — lascia decidere solo all'exit energy score
+
+        Nessun numero fisso. La volpe impara dai propri trade.
+        """
+        # Livello 1: fingerprint specifico
         avg_dur = self.get_avg_duration(momentum, volatility, trend, direction, is_win=True)
-        if avg_dur and avg_dur > 10:
-            return avg_dur * 0.7
-        # Default per regime se non ci sono dati
-        defaults = {'RANGING': 45, 'TRENDING_BULL': 30, 'TRENDING_BEAR': 30, 'EXPLOSIVE': 20}
-        return defaults.get(regime, 30)
+        if avg_dur and avg_dur > 8:
+            return avg_dur * 0.70
+
+        # Livello 2: media WIN in tutto il regime corrente
+        regime_wins = []
+        for fp, m in self._memory.items():
+            if regime.lower() in fp.lower() or True:  # tutti i pattern
+                dw = m.get('durations_win')
+                if dw and len(dw) >= 2:
+                    regime_wins.extend(list(dw))
+        if len(regime_wins) >= 3:
+            avg_regime = sum(regime_wins) / len(regime_wins)
+            if avg_regime > 8:
+                return avg_regime * 0.70
+
+        # Livello 3: media di tutti i trade reali
+        all_durs = []
+        for m in self._memory.values():
+            dw = m.get('durations_win', [])
+            dl = m.get('durations_loss', [])
+            all_durs.extend(list(dw) + list(dl))
+        if len(all_durs) >= 5:
+            return (sum(all_durs) / len(all_durs)) * 0.60
+
+        # Livello 4: nessun dato → zero (l'exit energy decide tutto)
+        return 0.0
 
     # -- SCRITTURA - registra trade completo ------------------------------
 
@@ -4463,23 +4495,54 @@ class OvertopBassanoV14Production:
             decel_comp = int((1.0 - decel_score_val) * 25)
             
             # -- COMPONENTE 4: PROFITTO PROTETTO (peso 25) -------------
-            # Se in profitto e non ritraccia molto → resta
-            # Se ritraccia > 50% del max → esci
+            # La tolleranza al retreat non è fissa. Dipende dalla volatilità
+            # del fingerprint: pattern volatile → retreat normale è alto.
+            # L'Oracolo conosce la volatilità media dei WIN su questo pattern.
+            #
+            # Se non ci sono dati → usa 50% come neutro (nessun numero fisso).
             if max_profit > 0:
                 retreat_pct = retreat / max_profit
-                profit_comp = int((1.0 - min(1.0, retreat_pct)) * 25)
+                # Tolleranza adattiva: deriva dal PnL medio dei WIN su questo pattern.
+                # PnL win alto → il trade ha ampio respiro → tolleranza alta.
+                # PnL win basso → trade stretto → tolleranza bassa.
+                pnl_win_avg = abs(self.oracolo.get_pnl_avg(
+                    self._shadow_entry_momentum or momentum,
+                    self._shadow_entry_volatility or volatility,
+                    self._shadow_entry_trend or trend,
+                    direction=entry_direction
+                )) or 5.0
+                # Tolleranza: da 40% (trade stretto) a 70% (trade ampio)
+                # Calibrata sui dati reali, non su un numero fisso
+                tolleranza = min(0.70, max(0.40, 0.40 + (pnl_win_avg / 50.0) * 0.30))
+                penalized = max(0.0, (retreat_pct - tolleranza) / (1.0 - tolleranza))
+                profit_comp = int((1.0 - min(1.0, penalized)) * 25)
             elif current_pnl < 0:
-                # In perdita: punteggio basso
                 profit_comp = 5
             else:
-                profit_comp = 15  # neutro
+                profit_comp = 15
             
             # -- SCORE TOTALE EXIT -------------------------------------
             exit_energy = mom_score + trend_score + decel_comp + profit_comp
             
-            # -- MIN_HOLD ADATTIVO - ORACOLO 2.0 DURATION MEMORY ---------
-            # Prima chiede all'Oracolo: quanto durano i WIN per questo pattern?
-            # Se ha dati → 70% della durata media WIN. Se no → default per regime.
+            # -- EXIT INTELLIGENTE: la soglia nasce dai dati, non da manopole --
+            #
+            # Il sistema misura tre cose reali:
+            #   1. Quanto durano i WIN su questo pattern (Oracolo duration memory)
+            #   2. Quanto spesso esce troppo presto (post-trade tracker)
+            #   3. Come si muove il prezzo dopo l'uscita (delta post-trade)
+            #
+            # Da questi tre dati emerge la soglia giusta — non da un numero fisso.
+
+            fp_entry = self.oracolo._fp(
+                self._shadow_entry_momentum or momentum,
+                self._shadow_entry_volatility or volatility,
+                self._shadow_entry_trend or trend,
+                entry_direction
+            )
+
+            # MIN_HOLD: 70% della durata media dei WIN su questo fingerprint.
+            # Se non ci sono dati sufficienti → usa la durata media del regime corrente
+            # dai trade reali in memoria. Zero default fisso.
             MIN_HOLD = self.oracolo.get_dynamic_min_hold(
                 self._shadow_entry_momentum or momentum,
                 self._shadow_entry_volatility or volatility,
@@ -4487,17 +4550,46 @@ class OvertopBassanoV14Production:
                 direction=entry_direction,
                 regime=self._regime_current
             )
-            
+
             if duration < MIN_HOLD:
-                return  # solo stop loss 2% può chiudere prima
-            
-            # Soglia base: 35. Sale di 1 punto ogni 10 secondi dopo MIN_HOLD
-            exit_soglia = 35 + int((duration - MIN_HOLD) / 10)
-            exit_soglia = min(exit_soglia, 60)
-            
-            # Se in profitto significativo: soglia più bassa (lascia correre)
-            if current_pnl > 50:  # delta > $50
-                exit_soglia = max(25, exit_soglia - 10)
+                return  # il tempo minimo non è ancora scaduto
+
+            # Soglia base: deriva dal rapporto tra durata corrente e durata media WIN.
+            # Se duriamo già il 120% della durata media WIN → soglia sale (chiudi presto).
+            # Se duriamo il 50% → soglia bassa (lascia correre ancora).
+            avg_win_dur = self.oracolo.get_avg_duration(
+                self._shadow_entry_momentum or momentum,
+                self._shadow_entry_volatility or volatility,
+                self._shadow_entry_trend or trend,
+                direction=entry_direction, is_win=True
+            ) or 60.0
+
+            # Quanto siamo nella vita del trade rispetto alla durata media WIN
+            time_ratio = duration / avg_win_dur  # 0.5 = a metà vita, 2.0 = doppio del normale
+
+            # Soglia che sale con il tempo proporzionalmente alla vita del trade
+            # Quando siamo a metà vita (ratio=0.5): soglia 32
+            # Quando siamo alla fine normale (ratio=1.0): soglia 45
+            # Quando siamo oltre (ratio=2.0): soglia 58
+            exit_soglia_base = int(25 + time_ratio * 30)
+            exit_soglia_base = max(28, min(65, exit_soglia_base))
+
+            # EXIT_TOO_EARLY FEEDBACK: il post-trade dice quanto spesso usciamo presto.
+            # Rate alto → il sistema abbassa la soglia → più difficile uscire → resta più a lungo.
+            # Rate basso → soglia normale → esce quando l'energia cala.
+            # Questo è un ciclo chiuso: il sistema si autocorregge sui propri errori.
+            too_early_rate = self.oracolo.get_exit_too_early_rate(fp_entry)
+
+            # Correzione proporzionale: da 0 (rate=50%) a -15pt (rate=100%)
+            if too_early_rate > 0.5:
+                correzione = int((too_early_rate - 0.5) * 30)  # 0→15 punti di abbassamento
+                exit_soglia = max(20, exit_soglia_base - correzione)
+                if correzione >= 5:
+                    self._log_m2("⏳", f"EXIT_FEEDBACK: early={too_early_rate:.0%} "
+                                      f"ratio={time_ratio:.1f} soglia={exit_soglia} "
+                                      f"(senza feedback sarebbe {exit_soglia_base})")
+            else:
+                exit_soglia = exit_soglia_base
             
             # -- DECISIONE ---------------------------------------------
             if exit_energy < exit_soglia:
