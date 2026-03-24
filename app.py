@@ -810,6 +810,44 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
+  <!-- AI BRIDGE — IL GENERALE -->
+  <div class="panel" style="margin-bottom:10px; border-color:var(--purple); border-width:2px;">
+    <div class="panel-head purple" style="font-size:11px;">🌉 IL GENERALE — AI BRIDGE
+      <span id="bridge-ts" style="font-size:9px; color:var(--dim)">—</span>
+    </div>
+    <div class="panel-body">
+      <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
+        <div id="bridge-mercato-badge" style="font-family:'Orbitron',monospace; font-size:12px; font-weight:700;
+             padding:5px 14px; border-radius:2px; letter-spacing:2px; border:1px solid var(--dim); color:var(--dim)">
+          — MERCATO —
+        </div>
+        <div id="bridge-alert-badge" style="font-size:10px; padding:3px 10px; border-radius:2px;
+             border:1px solid var(--dim); color:var(--dim)">● ATTESA</div>
+        <div style="font-size:9px; color:var(--dim)">ultima analisi: <span id="bridge-last-ts">—</span></div>
+        <div style="margin-left:auto; font-size:9px; color:var(--dim)">
+          <span id="bridge-active-dot">⚫</span> <span id="bridge-active-txt">offline</span>
+          &nbsp;|&nbsp; err: <span id="bridge-errors">0</span>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px;">
+        <div style="background:var(--bg3); border-left:3px solid var(--purple); padding:8px 12px; border-radius:1px;">
+          <div style="font-size:9px; color:var(--purple); margin-bottom:3px; letter-spacing:1px">ANALISI</div>
+          <div id="bridge-analisi" style="font-size:11px; color:var(--text); line-height:1.5">In attesa...</div>
+        </div>
+        <div style="background:rgba(0,255,136,0.04); border-left:3px solid var(--green); padding:8px 12px; border-radius:1px;">
+          <div style="font-size:9px; color:var(--green); margin-bottom:3px; letter-spacing:1px">🎯 PROSSIMO SETUP</div>
+          <div id="bridge-prossimo" style="font-size:11px; color:var(--text); line-height:1.5">—</div>
+        </div>
+      </div>
+      <div id="bridge-note-box" style="background:rgba(255,215,0,0.04); border-left:3px solid var(--yellow);
+           padding:6px 12px; margin-bottom:8px; border-radius:1px; display:none;">
+        <div style="font-size:9px; color:var(--yellow); margin-bottom:2px;">📝 NOTA PER TE</div>
+        <div id="bridge-note" style="font-size:11px; color:var(--text)">—</div>
+      </div>
+      <div class="log-feed" id="bridge-log" style="max-height:100px; font-size:10px;">Bridge non ancora attivo...</div>
+    </div>
+  </div>
+
   <!-- ROW 3: LOG DECISIONI + LIVE LOG M2 -->
   <div class="two-col">
     <div class="panel">
@@ -1151,6 +1189,67 @@ function update() {
         </tr>`;
       }).join('');
     }
+
+    // AI BRIDGE PANEL
+    const ba = hb.bridge_active;
+    $('bridge-active-dot').textContent = ba ? '🟢' : '⚫';
+    $('bridge-active-txt').textContent = ba ? 'attivo' : 'offline';
+    $('bridge-active-txt').style.color = ba ? 'var(--green)' : 'var(--dim)';
+    $('bridge-errors').textContent = hb.bridge_errors || 0;
+    $('bridge-errors').style.color = (hb.bridge_errors||0) > 0 ? 'var(--red)' : 'var(--dim)';
+
+    const bts = hb.bridge_last_ts || hb.bridge_last_call;
+    $('bridge-last-ts').textContent = bts ? (bts.length > 8 ? new Date(bts).toLocaleTimeString() : bts) : '—';
+
+    // Analisi testuale
+    const analisi = hb.bridge_analisi || '';
+    $('bridge-analisi').textContent = analisi || 'In attesa prima analisi...';
+    $('bridge-analisi').style.color = analisi ? 'var(--text)' : 'var(--dim)';
+
+    // Prossimo setup
+    const setup = hb.bridge_prossimo || '';
+    $('bridge-prossimo').textContent = setup || '—';
+    $('bridge-prossimo').style.color = setup ? 'var(--green)' : 'var(--dim)';
+
+    // Nota per Roberto
+    const nota = hb.bridge_note || '';
+    if (nota) {
+      $('bridge-note').textContent = nota;
+      $('bridge-note-box').style.display = 'block';
+    } else {
+      $('bridge-note-box').style.display = 'none';
+    }
+
+    // Mercato ora badge
+    const mercato = hb.bridge_mercato_ora || '';
+    const mbadge = $('bridge-mercato-badge');
+    const mercatoStyles = {
+      'FAVOREVOLE':  {bg:'rgba(0,255,136,0.12)', border:'var(--green)',  color:'var(--green)'},
+      'PERICOLOSO':  {bg:'rgba(255,51,85,0.12)',  border:'var(--red)',    color:'var(--red)'},
+      'IN_ATTESA':   {bg:'rgba(255,215,0,0.08)',  border:'var(--yellow)', color:'var(--yellow)'},
+      'NEUTRO':      {bg:'rgba(0,170,255,0.08)',  border:'var(--blue)',   color:'var(--blue)'},
+    };
+    const ms = mercatoStyles[mercato] || {bg:'transparent',border:'var(--dim)',color:'var(--dim)'};
+    mbadge.textContent = mercato || '— MERCATO —';
+    mbadge.style.background = ms.bg;
+    mbadge.style.borderColor = ms.border;
+    mbadge.style.color = ms.color;
+
+    // Alert badge
+    const alert = hb.bridge_alert || '';
+    const abadge = $('bridge-alert-badge');
+    const alertStyles = {
+      'green':  {border:'var(--green)',  color:'var(--green)',  txt:'● OK'},
+      'yellow': {border:'var(--yellow)', color:'var(--yellow)', txt:'⚠ ATTENZIONE'},
+      'red':    {border:'var(--red)',    color:'var(--red)',    txt:'🔴 ALERT'},
+    };
+    const as = alertStyles[alert] || {border:'var(--dim)', color:'var(--dim)', txt:'● —'};
+    abadge.textContent = as.txt;
+    abadge.style.borderColor = as.border;
+    abadge.style.color = as.color;
+
+    // Bridge log
+    renderLog(hb.bridge_log || [], 'bridge-log');
 
     // SUGGESTIONS
     $('suggestions-box').innerHTML = (d.suggestions||[]).map(s=>`<span style="margin-right:16px">${s}</span>`).join('');
