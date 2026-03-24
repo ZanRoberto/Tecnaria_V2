@@ -2225,6 +2225,12 @@ class PersistenzaStato:
                     bot._m2_recent_trades.append(t)
                 restored.append(f"m2_trades:{len(data['m2_recent_trades'])}")
 
+            # Reset soglia se troppo alta — evita auto-blocco
+            if hasattr(bot, 'm2_soglia_base') and bot.m2_soglia_base > 58:
+                log.info(f"[RUNTIME_LOAD] ⚠️ Soglia {bot.m2_soglia_base} troppo alta → reset a 52")
+                bot.m2_soglia_base = 52
+                bot.m2_soglia_min  = 48
+
             if restored:
                 log.info(f"[RUNTIME_LOAD] 💾 Stato runtime ripristinato → {' | '.join(restored)}")
 
@@ -2880,7 +2886,7 @@ class CampoGravitazionale:
     VOL_SCORE       = {"BASSA": 1.0,  "MEDIA": 0.60, "ALTA": 0.20}
 
     # -- SOGLIA DINAMICA ---------------------------------------------------
-    SOGLIA_BASE = 60
+    SOGLIA_BASE = 52
     REGIME_FACTOR = {"TRENDING_BULL": 0.80, "EXPLOSIVE": 0.85,
                      "RANGING": 1.00, "TRENDING_BEAR": 1.10}
     # RANGING: era 1.10, ora 1.00 - soglia formula 75.9 irraggiungibile, score max realistico 64
@@ -4400,6 +4406,10 @@ class OvertopBassanoV14Production:
         elif delta_wr < 0.40:
             new_min = min(65, old_min + step)
             new_base = min(70, old_base + step)
+            # Cap: senza trade reali la soglia non può salire oltre 55/52
+            if self._m2_trades < 3:
+                new_min  = min(new_min,  52)
+                new_base = min(new_base, 55)
             action = "ALZA"
         elif bilancio < -100:
             # WR nella zona morta (40-60%) MA bilancio molto negativo
