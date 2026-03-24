@@ -365,6 +365,7 @@ def _auto_inject_brain():
 
         # Conta i trade reali nell'Oracolo
         real_samples = 0
+        short_tossici_ok = False
         if 'oracolo' in rows:
             try:
                 oracolo_data = json.loads(rows['oracolo'])
@@ -373,16 +374,27 @@ def _auto_inject_brain():
                     for k, v in oracolo_data.items()
                     if not k.startswith('_')
                 )
+                # Verifica che i SHORT tossici siano iniettati con campioni sufficienti
+                fp_short = oracolo_data.get('SHORT|MEDIO|ALTA|SIDEWAYS', {})
+                short_tossici_ok = fp_short.get('samples', 0) >= 5
             except Exception:
                 pass
 
-        if real_samples >= 10:
-            log(f"[BRAIN_INJECT] ✅ {real_samples} trade reali trovati — skip iniezione")
+        if real_samples >= 10 and short_tossici_ok:
+            log(f"[BRAIN_INJECT] ✅ {real_samples} trade reali + SHORT tossici OK — skip")
             conn = sqlite3.connect(DB_PATH)
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('brain_injected', '1')")
             conn.commit()
             conn.close()
             return
+        
+        if real_samples >= 10 and not short_tossici_ok:
+            log(f"[BRAIN_INJECT] ⚠️ SHORT tossici mancanti — re-iniezione brain")
+            # Rimuove flag per forzare re-iniezione
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("DELETE FROM bot_state WHERE key='brain_injected'")
+            conn.commit()
+            conn.close()
 
         log(f"[BRAIN_INJECT] 🧠 Solo {real_samples} trade reali — avvio iniezione dati storici...")
 
