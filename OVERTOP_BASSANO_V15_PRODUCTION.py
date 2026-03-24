@@ -2934,6 +2934,9 @@ class CampoGravitazionale:
             soglia = max(soglia_min_ctx, min(dynamic_max, soglia + soglia_boost))
 
         # -- DECISIONE -----------------------------------------------------
+        # Salva score e soglia per heartbeat/grafico
+        self._last_score  = score
+        self._last_soglia = soglia
         enter = score >= soglia
 
         # -- SIZE CONTINUA -------------------------------------------------
@@ -5495,6 +5498,8 @@ class OvertopBassanoV14Production:
                     "m2_cooldown":        max(0, self._m2_cooldown_until - time.time()),
                     "m2_log":             list(self._m2_log),
                     "m2_campo_stats":     self.campo.get_stats(),
+                    "m2_last_score":      round(getattr(self.campo, '_last_score', 0), 1),
+                    "m2_last_soglia":     round(getattr(self.campo, '_last_soglia', 60), 1),
                     # -- PHANTOM TRACKER - zavorra o protezione? -------
                     "phantom":            self._get_phantom_summary(),
                     # -- INTELLIGENZA AUTONOMA - capsule vive -----------
