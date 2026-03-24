@@ -305,6 +305,17 @@ def debug_db():
 
 bridge = None  # inizializzato dopo il bot
 
+@app.route('/signal_tracker')
+def signal_tracker_view():
+    """Distribuzione previsionale del sistema — quanto si muove il prezzo post-segnale."""
+    try:
+        with heartbeat_lock:
+            hb = dict(heartbeat_data)
+        st = hb.get("signal_tracker", {})
+        return json.dumps(st, indent=2), 200, {'Content-Type': 'application/json'}
+    except Exception as e:
+        return json.dumps({"error": str(e)}), 500
+
 @app.route('/bridge/status')
 def bridge_status():
     if bridge:
@@ -848,6 +859,35 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
+  <!-- SIGNAL TRACKER — MOTORE PREVISIONALE -->
+  <div class="panel" style="margin-bottom:10px; border-color:var(--blue); border-width:2px;">
+    <div class="panel-head blue">🔭 MOTORE PREVISIONALE — Signal Tracker
+      <span id="st-counts" style="font-size:9px; color:var(--dim)">open:0 / chiusi:0</span>
+    </div>
+    <div class="panel-body">
+      <div style="font-size:9px; color:var(--dim); margin-bottom:8px;">
+        Ogni volta che score ≥ soglia il sistema registra il segnale e misura il movimento reale
+        nei successivi 30s/60s/120s. Dopo 50 segnali emerge la distribuzione previsionale.
+      </div>
+      <table style="width:100%; border-collapse:collapse; font-size:10px;" id="st-table">
+        <thead>
+          <tr>
+            <th style="color:var(--dim);padding:4px 6px;text-align:left;border-bottom:1px solid var(--border);font-size:9px;letter-spacing:1px">CONTESTO</th>
+            <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px">N</th>
+            <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px">HIT 60s</th>
+            <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px">Δ avg 60s</th>
+            <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px">PnL sim</th>
+          </tr>
+        </thead>
+        <tbody id="st-body">
+          <tr><td colspan="5" style="color:var(--dim);text-align:center;padding:16px">
+            In attesa segnali... (serve score ≥ soglia)
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- ROW 3: LOG DECISIONI + LIVE LOG M2 -->
   <div class="two-col">
     <div class="panel">
@@ -1250,6 +1290,34 @@ function update() {
 
     // Bridge log
     renderLog(hb.bridge_log || [], 'bridge-log');
+
+    // SIGNAL TRACKER
+    const st = hb.signal_tracker || {};
+    $('st-counts').textContent = `open:${st.open||0} / chiusi:${st.closed||0}`;
+    const stTop = st.top || [];
+    if (stTop.length > 0) {
+      $('st-body').innerHTML = stTop.map(r => {
+        const hit = r.hit_60s || 0;
+        const hitCol = hit >= 0.65 ? 'var(--green)' : hit >= 0.50 ? 'var(--yellow)' : 'var(--red)';
+        const pnl = r.pnl_sim_avg || 0;
+        const pnlCol = pnl > 0 ? 'var(--green)' : 'var(--red)';
+        const delta = r.avg_delta_60s || 0;
+        const parts = r.context.split('|');
+        const regime = parts[0] || '?';
+        const dir    = parts[1] || '?';
+        const band   = parts[2] || '?';
+        return `<tr>
+          <td style="padding:4px 6px;color:var(--dim);font-size:9px">
+            <span style="color:${dir==='LONG'?'var(--green)':'var(--red)'}">${dir}</span>
+            ${regime} ${band}
+          </td>
+          <td style="padding:4px 6px;text-align:center;color:var(--text)">${r.n}</td>
+          <td style="padding:4px 6px;text-align:center;color:${hitCol};font-weight:700">${(hit*100).toFixed(0)}%</td>
+          <td style="padding:4px 6px;text-align:center;color:${delta>=0?'var(--green)':'var(--red)'}">${delta>=0?'+':''}${delta.toFixed(1)}</td>
+          <td style="padding:4px 6px;text-align:center;color:${pnlCol};font-weight:700">${pnl>=0?'+':''}$${Math.abs(pnl).toFixed(2)}</td>
+        </tr>`;
+      }).join('');
+    }
 
     // SUGGESTIONS
     $('suggestions-box').innerHTML = (d.suggestions||[]).map(s=>`<span style="margin-right:16px">${s}</span>`).join('');
