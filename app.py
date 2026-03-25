@@ -426,6 +426,15 @@ def bot_thread_launcher():
             # ── AUTO-INJECT BRAIN — prima del bot ───────────────────────
             _auto_inject_brain()
 
+            # Inject segnali sintetici TRENDING_BULL nel signal tracker
+            try:
+                import inject_signals
+                inject_signals.inject(DB_PATH)
+            except ImportError:
+                log("[SIGNAL_INJECT] inject_signals.py non trovato")
+            except Exception as e:
+                log(f"[SIGNAL_INJECT] Errore: {e}")
+
             log("[BOT_LAUNCHER] 🚀 Avvio OvertopBassanoV14Production...")
             bot = OvertopBassanoV14Production(
                 heartbeat_data=heartbeat_data,
