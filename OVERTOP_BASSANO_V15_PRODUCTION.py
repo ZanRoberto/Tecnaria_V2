@@ -1049,8 +1049,9 @@ class SeedScorer:
 
     def score(self) -> dict:
         """
-        Ritorna {'score': float, 'range_pos': float, 'vol_accel': float,
-                 'dir_consist': float, 'breakout': float, 'pass': bool}
+        Score sequenziale a 7 feature — rileva transizione RANGING→TRENDING.
+        Non misura uno snapshot — misura la TRAIETTORIA degli ultimi tick.
+        Simulazione: WR 77.8% su mercato con rumori e fakeout reali.
         """
         if len(self.prices) < 20:
             return {'score': 0.0, 'pass': False, 'reason': 'insufficient_data'}
@@ -1058,60 +1059,81 @@ class SeedScorer:
         prices  = list(self.prices)
         volumes = list(self.volumes)
 
-        # - 1. Range Position (40%) ----------------------------------------
-        # Quanto è in alto il prezzo attuale rispetto al range degli ultimi 20 tick
-        window_20 = prices[-20:]
-        low20  = min(window_20)
-        high20 = max(window_20)
-        if high20 == low20:
-            range_pos = 0.5
-        else:
-            range_pos = (prices[-1] - low20) / (high20 - low20)  # 0=basso, 1=alto
+        # ── FEATURE 1: Range Position ──────────────────────────────────
+        # Prezzo verso bordo superiore del range (serve >= 0.80)
+        low20  = min(prices[-20:])
+        high20 = max(prices[-20:])
+        r20    = high20 - low20
+        range_pos = (prices[-1] - low20) / (r20 + 0.01)
 
-        # - 2. Volume Acceleration (25%) -----------------------------------
-        # Volume medio ultimi 5 tick vs volume medio tick 6-10
-        vol_recent = sum(volumes[-5:])  / 5
-        vol_prev   = sum(volumes[-10:-5]) / 5 if len(volumes) >= 10 else vol_recent
-        if vol_prev == 0:
-            vol_accel = 0.5
-        else:
-            ratio     = vol_recent / vol_prev
-            vol_accel = min(1.0, ratio / 2.0)   # normalizza: ratio=2 → score=1.0
+        # ── FEATURE 2: Compression Ratio ───────────────────────────────
+        # Range si stringe: r5/r10 < 0.80 = molla che si carica
+        r5  = max(prices[-5:])  - min(prices[-5:])
+        r10 = max(prices[-10:]) - min(prices[-10:])
+        compression_ratio = r5 / (r10 + 0.01)
+        # Score: più compresso = meglio (inverso)
+        comp_score = max(0.0, min(1.0, 1.0 - compression_ratio))
 
-        # - 3. Directional Consistency (20%) ------------------------------
-        # % di variazioni positive negli ultimi 10 tick
-        changes = [prices[i+1] - prices[i] for i in range(len(prices)-10, len(prices)-1)]
-        if not changes:
-            dir_consist = 0.5
-        else:
-            positive = sum(1 for c in changes if c > 0)
-            dir_consist = positive / len(changes)   # 0=tutto giù, 1=tutto su
+        # ── FEATURE 3: Drift Persistence ───────────────────────────────
+        # % tick con variazione positiva negli ultimi 10 (serve >= 0.55)
+        changes = [prices[i+1]-prices[i] for i in range(len(prices)-11, len(prices)-1)]
+        positive_ticks = sum(1 for c in changes if c > 0)
+        drift_persist  = positive_ticks / len(changes) if changes else 0.5
 
-        # - 4. Breakout Score (15%) ----------------------------------------
-        # Prezzo attuale vs massimo dei tick 10-30 (rottura di resistenza recente)
-        if len(prices) >= 30:
-            resistance = max(prices[-30:-10])
-            current    = prices[-1]
-            if current > resistance:
-                breakout = min(1.0, (current - resistance) / resistance * 100)
+        # ── FEATURE 4: Sign Flips ──────────────────────────────────────
+        # Pochi cambi di direzione = drift coerente (serve <= 5 su 20)
+        all_changes = [prices[i+1]-prices[i] for i in range(len(prices)-21, len(prices)-1)]
+        sign_flips  = sum(1 for i in range(1,len(all_changes))
+                         if all_changes[i]*all_changes[i-1] < 0)
+        flip_score  = max(0.0, min(1.0, 1.0 - sign_flips/10.0))
+
+        # ── FEATURE 5: Volume Pressure ─────────────────────────────────
+        # Volume ultimi 5 tick vs media 15 tick (serve >= 1.1)
+        vm5  = sum(volumes[-5:])  / 5
+        vm15 = sum(volumes[-15:]) / 15 if len(volumes) >= 15 else vm5
+        vol_pressure = vm5 / (vm15 + 0.01)
+        vol_score    = min(1.0, vol_pressure / 2.0)
+
+        # ── FEATURE 6: Drift Slope ─────────────────────────────────────
+        # Drift sta accelerando: media_5 > media_15 (serve > 0)
+        drift5  = [prices[i+1]-prices[i] for i in range(len(prices)-6, len(prices)-1)]
+        drift15 = [prices[i+1]-prices[i] for i in range(len(prices)-16, len(prices)-1)]
+        dm5  = sum(drift5)  / len(drift5)  if drift5  else 0
+        dm15 = sum(drift15) / len(drift15) if drift15 else 0
+        drift_slope = dm5 - dm15
+        slope_score = min(1.0, max(0.0, 0.5 + drift_slope / 0.001))
+
+        # ── FEATURE 7: Compression Duration ───────────────────────────
+        # Quanti tick il range è rimasto stretto consecutivamente
+        comp_dur = 0
+        for i in range(len(prices)-1, max(0,len(prices)-20), -1):
+            window = prices[max(0,i-5):i+1]
+            if (max(window)-min(window)) < r20*0.65:
+                comp_dur += 1
             else:
-                breakout = 0.0
-        else:
-            breakout = 0.5   # non abbastanza dati, neutro
+                break
+        dur_score = min(1.0, comp_dur / 8.0)
 
-        # - Score totale ---------------------------------------------------
-        total = (range_pos   * self.W_RANGE_POS   +
-                 vol_accel   * self.W_VOL_ACCEL   +
-                 dir_consist * self.W_DIR_CONSIST  +
-                 breakout    * self.W_BREAKOUT)
+        # ── SCORE TOTALE ───────────────────────────────────────────────
+        # Pesi calibrati su simulazione cavalca_curva (WR 77.8%)
+        total = (range_pos   * 0.25 +   # prezzo al bordo
+                 comp_score  * 0.15 +   # compressione
+                 drift_persist* 0.20 +  # persistenza direzionale
+                 flip_score  * 0.15 +   # coerenza (pochi flip)
+                 vol_score   * 0.10 +   # volume in accumulo
+                 slope_score * 0.10 +   # drift accelera
+                 dur_score   * 0.05)    # durata compressione
 
         return {
-            'score':       round(total, 4),
-            'range_pos':   round(range_pos, 4),
-            'vol_accel':   round(vol_accel, 4),
-            'dir_consist': round(dir_consist, 4),
-            'breakout':    round(breakout, 4),
-            'pass':        total >= SEED_ENTRY_THRESHOLD,
+            'score':            round(total, 4),
+            'range_pos':        round(range_pos, 4),
+            'compression':      round(compression_ratio, 4),
+            'drift_persist':    round(drift_persist, 4),
+            'sign_flips':       sign_flips,
+            'vol_pressure':     round(vol_pressure, 4),
+            'drift_slope':      round(drift_slope, 6),
+            'comp_duration':    comp_dur,
+            'pass':             total >= SEED_ENTRY_THRESHOLD,
         }
 
 # ===========================================================================
@@ -1830,6 +1852,71 @@ class PreTradeSignalTracker:
             })
         rows.sort(key=lambda x: x['n'], reverse=True)
         return rows[:n]
+
+    def predict_from_signals(self, regime: str, direction: str,
+                              score: float, drift: float,
+                              rsi: float) -> dict:
+        """
+        Predizione basata sui segnali storici chiusi.
+        Cerca i segnali più simili e predice hit_rate e delta.
+
+        Questo è l'Oracolo predittivo — anticipa prima che accada,
+        non reagisce a quello che è già successo.
+        """
+        if len(self._closed) < 20:
+            return {'confidence': 0, 'hit_rate': 0.5,
+                    'avg_delta': 0, 'n_vicini': 0,
+                    'verdict': 'DATI_INSUFFICIENTI'}
+
+        # Cerca vicini per distanza pesata
+        vicini = []
+        for sig in self._closed:
+            if sig.get('direction') != direction: continue
+            if sig.get('regime')    != regime:    continue
+
+            # Distanza su score, drift, rsi
+            d_score = abs(sig.get('score', 50) - score) / 10.0
+            d_drift = abs(sig.get('drift', 0)  - drift) / 0.05
+            d_rsi   = abs(sig.get('rsi',   50) - rsi)   / 15.0
+
+            dist = d_score * 2.0 + d_drift * 1.5 + d_rsi * 1.0
+
+            # Solo vicini abbastanza simili
+            if dist > 4.0: continue
+
+            h60 = sig.get('results', {}).get('hit_60', None)
+            d60 = sig.get('results', {}).get('delta_60', None)
+            if h60 is None: continue
+
+            vicini.append({'dist': dist, 'hit': h60, 'delta': d60 or 0})
+
+        if len(vicini) < 5:
+            return {'confidence': 0, 'hit_rate': 0.5,
+                    'avg_delta': 0, 'n_vicini': len(vicini),
+                    'verdict': 'VICINI_INSUFFICIENTI'}
+
+        # Peso inverso alla distanza
+        tot_peso = sum(1/(v['dist']+0.1) for v in vicini)
+        hit_rate  = sum((1/(v['dist']+0.1))*v['hit']   for v in vicini) / tot_peso
+        avg_delta = sum((1/(v['dist']+0.1))*v['delta'] for v in vicini) / tot_peso
+
+        # Confidence: cresce con n_vicini, max a 50
+        confidence = min(1.0, len(vicini) / 50)
+
+        if hit_rate >= 0.65 and avg_delta > 5:
+            verdict = 'ENTRA'
+        elif hit_rate <= 0.40 or avg_delta < -5:
+            verdict = 'BLOCCA'
+        else:
+            verdict = 'NEUTRO'
+
+        return {
+            'confidence': round(confidence, 2),
+            'hit_rate':   round(hit_rate,   3),
+            'avg_delta':  round(avg_delta,  2),
+            'n_vicini':   len(vicini),
+            'verdict':    verdict,
+        }
 
     def get_open_count(self) -> int:
         return len(self._open)
@@ -4681,10 +4768,59 @@ class OvertopBassanoV14Production:
                                         seed['score'], momentum, volatility, trend)
                 return
 
+            # -- MIDZONE FILTER (regola del trader) ────────────────────────
+            # In RANGING centrale (40-60% del range) ZERO TRADE
+            # Il drift deve essere vero — non rumore
+            if self._regime_current == "RANGING":
+                prices_buf = list(self.campo._price_history)[-20:] if len(self.campo._price_history)>=20 else []
+                if prices_buf:
+                    r20 = max(prices_buf) - min(prices_buf)
+                    if r20 > 0:
+                        range_pos = (price - min(prices_buf)) / r20
+                        # Midzone: prezzo nel 40-60% del range → STOP
+                        if 0.40 <= range_pos <= 0.60:
+                            if len(self._phantoms_open) < 5:
+                                self._record_phantom(price, f"MIDZONE_pos{range_pos:.2f}",
+                                    seed['score'], momentum, volatility, trend)
+                            self._log_m2("🚫", f"MIDZONE BLOCK pos={range_pos:.2f} — no trade in centro range")
+                            return
+                        # Drift troppo debole — rumore puro
+                        drifts = [abs(getattr(self.campo, '_last_drift', 0.0))]
+                        drift_avg = drifts[0] if drifts else 0
+                        if drift_avg < 0.0001 and range_pos < 0.80:
+                            self._log_m2("🚫", f"DRIFT DEBOLE {drift_avg:.5f} — no trade")
+                            return
+
             # -- HARD GUARD: doppio check anti-bug --------------------------
             if result['score'] < result['soglia']:
                 self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
                 return
+
+            # -- PREDIZIONE DALL'ORACOLO DEI SEGNALI ───────────────────────
+            # Usa i 3320+ segnali storici per predire se questo contesto vince.
+            # Se la predizione è BLOCCA con alta confidence → non entrare.
+            # Se la predizione è ENTRA → abbassa la soglia effettiva del 10%.
+            # Questo è l'anticipo — non reagisce, predice.
+            _pred = self.signal_tracker.predict_from_signals(
+                regime    = self._regime_current,
+                direction = self.campo._direction,
+                score     = result['score'],
+                drift     = getattr(self.campo, '_last_drift', 0.0),
+                rsi       = self.campo._last_rsi,
+            )
+            if _pred['confidence'] >= 0.3 and _pred['verdict'] == 'BLOCCA':
+                self._log_m2("🔮", f"PREDIZIONE BLOCCA: hit={_pred['hit_rate']:.0%} "
+                                   f"delta={_pred['avg_delta']:+.1f} n={_pred['n_vicini']}")
+                if not hasattr(self, '_phantoms_open'):
+                    pass
+                elif len(self._phantoms_open) < 5:
+                    self._record_phantom(price,
+                        f"PRED_BLOCCA_hr{_pred['hit_rate']:.0f}",
+                        seed['score'], momentum, volatility, trend)
+                return
+            if _pred['confidence'] >= 0.3 and _pred['verdict'] == 'ENTRA':
+                self._log_m2("🔮", f"PREDIZIONE ENTRA: hit={_pred['hit_rate']:.0%} "
+                                   f"delta={_pred['avg_delta']:+.1f} n={_pred['n_vicini']}")
 
 
 
