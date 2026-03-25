@@ -4705,8 +4705,11 @@ class OvertopBassanoV14Production:
             #   score >= 58: delta medio $60+, pnl POSITIVO
             # ===============================================================
             
-            MIN_SCORE_ECONOMICO = 58
-            
+            # MIN_SCORE_ECONOMICO calibrato dinamicamente su SOGLIA_MIN
+            # Non fisso — segue la calibrazione del mercato reale.
+            # Storico: 58 su mercato trending. Oggi: 48 su RANGING (Signal Tracker 3320 campioni)
+            MIN_SCORE_ECONOMICO = self.campo.SOGLIA_MIN
+
             # Valuta ENTRAMBE le condizioni prima di decidere
             score_ok = result['score'] >= MIN_SCORE_ECONOMICO
             
