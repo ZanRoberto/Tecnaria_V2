@@ -2226,7 +2226,7 @@ class PersistenzaStato:
                 restored.append(f"m2_trades:{len(data['m2_recent_trades'])}")
 
             # Reset soglia se troppo alta — evita auto-blocco
-            if hasattr(bot, 'm2_soglia_base') and bot.m2_soglia_base > 58:
+            if hasattr(bot, 'm2_soglia_base') and bot.m2_soglia_base > 55:
                 log.info(f"[RUNTIME_LOAD] ⚠️ Soglia {bot.m2_soglia_base} troppo alta → reset a 52")
                 bot.m2_soglia_base = 52
                 bot.m2_soglia_min  = 48
@@ -2894,7 +2894,7 @@ class CampoGravitazionale:
     VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.00}
     # ALTA: era 1.05, ora 1.00 - phantom SCORE_INSUFF WR 65% R/R 2.04, profittevoli
     # Soglia RANGING+ALTA: 60 × 1.00 × 1.00 = 60.0 (trade score 58-63 passano)
-    SOGLIA_MIN    = 58    # PAVIMENTO ASSOLUTO - nessun fattore scende sotto questo
+    SOGLIA_MIN    = 48    # PAVIMENTO calibrato su dati reali Signal Tracker
     SOGLIA_MAX    = 80    # era 90 - phantom SCORE_INSUFFICIENTE dice -$3871, troppo alto in RANGING
 
     # -- SIZE CONTINUA -----------------------------------------------------
