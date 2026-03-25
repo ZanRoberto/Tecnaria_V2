@@ -4772,7 +4772,7 @@ class OvertopBassanoV14Production:
             # In RANGING centrale (40-60% del range) ZERO TRADE
             # Il drift deve essere vero — non rumore
             if self._regime_current == "RANGING":
-                prices_buf = list(self.campo._price_history)[-20:] if len(self.campo._price_history)>=20 else []
+                prices_buf = list(self.campo._prices_short)[-20:] if len(self.campo._prices_short)>=20 else []
                 if prices_buf:
                     r20 = max(prices_buf) - min(prices_buf)
                     if r20 > 0:
