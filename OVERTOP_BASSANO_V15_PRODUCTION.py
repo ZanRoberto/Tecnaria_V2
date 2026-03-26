@@ -2325,6 +2325,12 @@ class PersistenzaStato:
                 'm2_pnl':    bot._m2_pnl,
                 'm2_trades': bot._m2_trades,
                 # NOTA: soglia NON salvata — viene calcolata dinamicamente dal Signal Tracker
+                # Veritas — salva segnali chiusi e statistiche
+                'veritas_closed': [
+                    {k:v for k,v in s.items() if k != 'deltas'}
+                    for s in list(bot.veritas._closed)[-200:]
+                ] if hasattr(bot, 'veritas') else [],
+                'veritas_stats': bot.veritas._stats if hasattr(bot, 'veritas') else {},
             }
             conn = sqlite3.connect(self.db_path)
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('runtime_state', ?)",
@@ -2379,6 +2385,17 @@ class PersistenzaStato:
                 for t in data['m2_recent_trades']:
                     bot._m2_recent_trades.append(t)
                 restored.append(f"m2_trades:{len(data['m2_recent_trades'])}")
+
+            # Ripristina Veritas
+            if 'veritas_closed' in data and hasattr(bot, 'veritas'):
+                for s in data['veritas_closed']:
+                    bot.veritas._closed.append(s)
+                    bot.veritas._aggiorna_stats(s)
+                log.info(f"[RUNTIME_LOAD] ⚖️ Veritas ripristinato: {len(data['veritas_closed'])} segnali")
+            if 'veritas_stats' in data and hasattr(bot, 'veritas'):
+                for k,v in data['veritas_stats'].items():
+                    if k not in bot.veritas._stats:
+                        bot.veritas._stats[k] = v
 
             # Soglia calcolata dinamicamente dal Signal Tracker — mai dal DB
             # Il DB non salva la soglia: viene ricalcolata ad ogni boot
