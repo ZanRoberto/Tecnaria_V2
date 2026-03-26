@@ -956,6 +956,42 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
+  <!-- VERITAS TRACKER — CHI AVEVA RAGIONE -->
+  <div class="panel" style="margin-bottom:10px; border-color:#ff8800; border-width:2px;">
+    <div class="panel-head" style="color:#ff8800;">⚖️ VERITAS — Chi aveva ragione?
+      <span id="vt-counts" style="font-size:9px; color:var(--dim)">in attesa segnali...</span>
+    </div>
+    <div class="panel-body">
+      <div style="font-size:9px; color:var(--dim); margin-bottom:8px;">
+        Ogni decisione SC viene verificata 60s dopo. La verità emerge dai dati reali.
+      </div>
+
+      <!-- Conflitto principale -->
+      <div id="vt-conflitto" style="display:none; margin-bottom:10px; padding:8px;
+           border:1px solid #ff8800; border-radius:4px; font-size:10px;">
+      </div>
+
+      <!-- Tabella risultati -->
+      <table style="width:100%; border-collapse:collapse; font-size:10px;">
+        <thead>
+          <tr>
+            <th style="color:var(--dim);padding:4px 6px;text-align:left;border-bottom:1px solid var(--border);font-size:9px;">ORACOLO</th>
+            <th style="color:var(--dim);padding:4px 6px;text-align:left;border-bottom:1px solid var(--border);font-size:9px;">SC</th>
+            <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px;">N</th>
+            <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px;">HIT 60s</th>
+            <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px;">PnL avg</th>
+            <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px;">VERDETTO</th>
+          </tr>
+        </thead>
+        <tbody id="vt-body">
+          <tr><td colspan="6" style="color:var(--dim);text-align:center;padding:16px">
+            In attesa... (serve score ≥ soglia con decisione SC)
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- SIGNAL TRACKER — MOTORE PREVISIONALE -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--blue); border-width:2px;">
     <div class="panel-head blue">🔭 MOTORE PREVISIONALE — Signal Tracker
@@ -1224,6 +1260,50 @@ const SCPanel = (() => {
     });
   }
 
+  return { update };
+})();
+
+const VeritatisPanel = (() => {
+  function update(hb) {
+    const vt = hb.veritas;
+    if (!vt) return;
+
+    // Contatori
+    const cnt = document.getElementById('vt-counts');
+    if (cnt) cnt.textContent = `segnali: ${vt.n_closed} chiusi / ${vt.n_open} aperti`;
+
+    // Conflitto
+    const conf = vt.conflitto || {};
+    const confEl = document.getElementById('vt-conflitto');
+    if (confEl && conf.chi_aveva_ragione) {
+      confEl.style.display = 'block';
+      const chi = conf.chi_aveva_ragione;
+      const col = chi === 'ORACOLO' ? '#00ff88' : '#ff8800';
+      const pnl = conf.pnl_perso_bloccando || conf.pnl_salvato_bloccando || 0;
+      const msg = chi === 'ORACOLO'
+        ? `🔥 ORACOLO aveva ragione — SC ha bloccato $${Math.abs(pnl).toFixed(0)} di guadagni`
+        : `🛡️ SC aveva ragione — ha salvato $${Math.abs(pnl).toFixed(0)} bloccando perdite`;
+      confEl.innerHTML = `<span style="color:${col};font-weight:500">${msg}</span>`;
+    }
+
+    // Tabella
+    const body = document.getElementById('vt-body');
+    if (!body || !vt.rows || vt.rows.length === 0) return;
+    body.innerHTML = vt.rows.map(r => {
+      const hitCol = r.hit_rate >= 0.6 ? 'var(--green)' : r.hit_rate >= 0.45 ? 'var(--yellow)' : 'var(--red)';
+      const pnlCol = r.pnl_avg > 0 ? 'var(--green)' : 'var(--red)';
+      const verdCol = r.verdetto === 'GIUSTO' ? 'var(--green)' : 'var(--red)';
+      const scStyle = r.sc === 'BLOCCA' ? 'color:var(--red)' : 'color:var(--green)';
+      return `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:5px 6px;color:var(--yellow)">${r.oi}</td>
+        <td style="padding:5px 6px;${scStyle}">${r.sc}</td>
+        <td style="padding:5px 6px;text-align:center">${r.n}</td>
+        <td style="padding:5px 6px;text-align:center;color:${hitCol}">${(r.hit_rate*100).toFixed(0)}%</td>
+        <td style="padding:5px 6px;text-align:center;color:${pnlCol}">${r.pnl_avg > 0 ? '+' : ''}$${r.pnl_avg.toFixed(2)}</td>
+        <td style="padding:5px 6px;text-align:center;color:${verdCol};font-weight:500">${r.verdetto}</td>
+      </tr>`;
+    }).join('');
+  }
   return { update };
 })();
 
@@ -1775,6 +1855,7 @@ function update() {
 
     // SUPERCERVELLO PANEL
     SCPanel.update(hb);
+    VeritatisPanel.update(hb);
 
     // AI BRIDGE PANEL
     const ba = hb.bridge_active;
