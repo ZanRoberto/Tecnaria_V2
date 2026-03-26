@@ -3708,6 +3708,105 @@ class CampoGravitazionale:
 # ★★★ BOT PRINCIPALE - OVERTOP BASSANO V14 PRODUCTION ★★★
 # ===========================================================================
 
+class SuperCervello:
+    """
+    Supercervello — legge tutti gli organi simultaneamente ogni tick.
+    Produce una decisione unica: ENTRA / ATTENDI / BLOCCA
+    con size_mult e soglia_adj calcolati dai voti pesati.
+    I pesi si adattano autonomamente dopo ogni trade.
+    """
+    PESI_DEFAULT = {
+        'oracolo_fp':    0.25,
+        'signal_tracker':0.25,
+        'campo_carica':  0.20,
+        'matrimonio':    0.15,
+        'phantom_ratio': 0.15,
+    }
+
+    def __init__(self):
+        self._pesi = dict(self.PESI_DEFAULT)
+        self._storia = []
+        self._n = 0
+
+    def decide(self, fp_wr, fp_samples, st_hit_rate, st_n, st_pnl,
+               oi_carica, oi_stato, score, soglia,
+               matrimonio_wr, matrimonio_trust,
+               ph_protezione, ph_zavorra,
+               regime, midzone, loss_streak) -> dict:
+
+        self._n += 1
+
+        # Blocchi assoluti
+        if midzone:
+            return self._out("BLOCCA", 0.5, 0, "midzone", 0.95)
+        if loss_streak >= 4:
+            return self._out("BLOCCA", 0.5, 0, f"streak_{loss_streak}", 0.90)
+
+        # Voti organi
+        v = {}
+        # Fingerprint
+        v['oracolo_fp'] = (1.0 if fp_wr>=0.70 and fp_samples>=10 else
+                           0.6 if fp_wr>=0.55 and fp_samples>=10 else
+                           0.0 if fp_wr<=0.35 and fp_samples>=10 else 0.5)
+        # Signal Tracker
+        v['signal_tracker'] = (1.0 if st_hit_rate>=0.65 and st_pnl>0 and st_n>=10 else
+                                0.6 if st_hit_rate>=0.55 and st_n>=10 else
+                                0.0 if (st_hit_rate<=0.40 or st_pnl<-1) and st_n>=10 else 0.5)
+        # Carica
+        v['campo_carica'] = (1.0 if oi_stato=="FUOCO" else
+                              0.6 if oi_stato=="CARICA" else 0.1)
+        # Matrimonio
+        v['matrimonio'] = (1.0 if matrimonio_trust>=0.7 and matrimonio_wr>=0.65 else
+                           0.6 if matrimonio_wr>=0.55 else
+                           0.0 if matrimonio_wr<=0.40 else 0.5)
+        # Phantom
+        if ph_protezione + ph_zavorra > 0:
+            r = ph_protezione / (ph_protezione + ph_zavorra + 0.01)
+            v['phantom_ratio'] = 1.0 if r>=0.80 else 0.7 if r>=0.60 else 0.2 if r<=0.40 else 0.5
+        else:
+            v['phantom_ratio'] = 0.5
+
+        # Score pesato
+        st = sum(v[k] * self._pesi[k] for k in v)
+
+        if st >= 0.68:
+            azione = "ENTRA"
+            sm = round(min(2.0, max(0.7, 0.7 + (st-0.68)/0.32*1.3)), 2)
+            sa = -3 if st >= 0.80 else 0
+        elif st >= 0.50:
+            azione = "ATTENDI"; sm = 1.0; sa = 0
+        else:
+            azione = "BLOCCA";  sm = 0.5; sa = +3
+
+        pro    = sum(1 for x in v.values() if x >= 0.6)
+        contro = sum(1 for x in v.values() if x <= 0.3)
+        motivo = f"sc={st:.2f} pro={pro}/5 contro={contro}/5"
+
+        return self._out(azione, sm, sa, motivo, st, v)
+
+    def registra_esito(self, dec: dict, win: bool):
+        """Dopo ogni trade adatta i pesi — gli organi precisi pesano di più."""
+        self._storia.append({'voti': dec.get('voti',{}),'win': win})
+        if len(self._storia) < 10: return
+        ultimi = self._storia[-30:]
+        for organo in self._pesi:
+            vw = [t['voti'].get(organo,0.5) for t in ultimi if t['win']]
+            vl = [t['voti'].get(organo,0.5) for t in ultimi if not t['win']]
+            if not vw or not vl: continue
+            disc = sum(vw)/len(vw) - sum(vl)/len(vl)
+            if disc >= 0.15:
+                self._pesi[organo] = min(0.45, self._pesi[organo]*1.05)
+            elif disc <= -0.10:
+                self._pesi[organo] = max(0.05, self._pesi[organo]*0.95)
+        tot = sum(self._pesi.values())
+        for k in self._pesi: self._pesi[k] = round(self._pesi[k]/tot, 4)
+
+    def _out(self, azione, size_mult, soglia_adj, motivo, confidenza, voti={}):
+        return {'azione':azione,'size_mult':size_mult,'soglia_adj':soglia_adj,
+                'motivo':motivo,'confidenza':round(confidenza,3),
+                'voti':voti,'pesi':dict(self._pesi)}
+
+
 class OvertopBassanoV14Production:
     """
     Bot BTC/USDC su Binance WebSocket.
@@ -3848,6 +3947,10 @@ class OvertopBassanoV14Production:
         self._m2_log     = deque(maxlen=20)   # log dedicato M2
         self._last_volume = 1.0               # ultimo volume dal WebSocket
         self._last_m2_heartbeat = time.time() # heartbeat M2 - monitora se il thread è vivo
+
+        # -- SUPERCERVELLO: decisore unificato ───────────────────────────
+        self.supercervello  = SuperCervello()
+        self._last_sc_dec   = None  # ultima decisione SC per registra_esito
 
         # -- ORACOLO INTERNO: sensore predittivo che vive ogni tick -------
         self._oi_carica     = 0.0        # energia accumulata 0→1
@@ -4339,6 +4442,10 @@ class OvertopBassanoV14Production:
         # -- Aggiorna tutti i sistemi di apprendimento ---------------------
         self.oracolo.record(self.entry_momentum, self.entry_volatility, self.entry_trend, is_win)
         self.memoria.record_trade(matrimonio_name, is_win, wr_expected)
+        # SuperCervello impara dall'esito — pesi si adattano
+        if hasattr(self, '_last_sc_dec') and self._last_sc_dec:
+            self.supercervello.registra_esito(self._last_sc_dec, is_win)
+            self._last_sc_dec = None
         self.realtime_engine.registra_trade({'matrimonio': matrimonio_name, 'pnl': pnl, 'is_win': is_win})
         self.log_analyzer.registra({'matrimonio': matrimonio_name, 'pnl': pnl, 'is_win': is_win})
         self.realtime_engine.analizza_e_genera()
@@ -4805,6 +4912,23 @@ class OvertopBassanoV14Production:
                 drift=drift, macd=macd_hist, trend=trend,
                 volatility=getattr(self, '_last_volatility', 'UNKNOWN'))
 
+    def _get_signal_tracker_context(self, regime: str, score: float) -> dict:
+        """Legge il contesto rilevante dal Signal Tracker per il SuperCervello."""
+        if score >= 75:   band = "FORTE_75+"
+        elif score >= 65: band = "BUONO_65-75"
+        elif score >= 58: band = "BASE_58-65"
+        else:             band = "DEBOLE_<58"
+        key = f"{regime}|LONG|{band}"
+        stats = getattr(self.signal_tracker, '_stats', {}).get(key, {})
+        hits = stats.get('hit_60', [])
+        pnls = stats.get('pnl_sim', [])
+        n = len(hits)
+        return {
+            'hit_rate': sum(hits)/n if n>0 else 0.5,
+            'pnl_sim':  sum(pnls)/len(pnls) if pnls else 0.0,
+            'n': n,
+        }
+
     def _oracolo_interno_tick(self, price: float, momentum: str,
                               volatility: str, trend: str):
         """
@@ -5030,6 +5154,48 @@ class OvertopBassanoV14Production:
             if result['score'] < result['soglia']:
                 self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
                 return
+
+            # -- SUPERCERVELLO: decisione unificata da tutti gli organi ────
+            # Legge simultaneamente tutti i sistemi e decide una volta sola.
+            _mat_wr    = self.memoria.get_wr(matrimonio_name) if hasattr(self.memoria,'get_wr') else 0.55
+            _mat_trust = self.memoria.get_trust(matrimonio_name) if hasattr(self.memoria,'get_trust') else 0.6
+            _ph_prot   = self._phantom_stats.get('total_saved', 0.0)
+            _ph_zav    = self._phantom_stats.get('total_missed', 0.0)
+            _st_data   = self._get_signal_tracker_context(self._regime_current, result['score'])
+
+            _sc_dec = self.supercervello.decide(
+                fp_wr=fingerprint_wr, fp_samples=int(self.oracolo._data.get(
+                    f"{momentum}|{volatility}|{trend}|{self.campo._direction}",{}).get('samples',0)),
+                st_hit_rate=_st_data.get('hit_rate', 0.5),
+                st_n=_st_data.get('n', 0),
+                st_pnl=_st_data.get('pnl_sim', 0.0),
+                oi_carica=self._oi_carica,
+                oi_stato=self._oi_stato,
+                score=result['score'], soglia=result['soglia'],
+                matrimonio_wr=_mat_wr, matrimonio_trust=_mat_trust,
+                ph_protezione=_ph_prot, ph_zavorra=_ph_zav,
+                regime=self._regime_current,
+                midzone=False,  # midzone già gestito sopra
+                loss_streak=self._m2_loss_streak,
+            )
+
+            # Applica decisione supercervello
+            if _sc_dec['azione'] == 'BLOCCA':
+                self._log_m2("🧠", f"SC BLOCCA — {_sc_dec['motivo']}")
+                if len(self._phantoms_open) < 5:
+                    self._record_phantom(price, f"SC_BLOCCA_c{_sc_dec['confidenza']:.2f}",
+                        seed['score'], momentum, volatility, trend)
+                return
+
+            # Aggiusta size e soglia in base alla confidenza
+            if _sc_dec['azione'] == 'ENTRA':
+                result['size'] = round(result['size'] * _sc_dec['size_mult'], 3)
+                # soglia_adj negativo = abbassa soglia = più facile entrare
+                if _sc_dec['soglia_adj'] != 0:
+                    result['soglia'] = max(self.campo.SOGLIA_MIN,
+                                          result['soglia'] + _sc_dec['soglia_adj'])
+                self._log_m2("🧠", f"SC ENTRA — {_sc_dec['motivo']} size×{_sc_dec['size_mult']}")
+                self._last_sc_dec = _sc_dec  # salva per apprendimento post-exit
 
             # -- PREDIZIONE DALL'ORACOLO DEI SEGNALI ───────────────────────
             # Usa i 3320+ segnali storici per predire se questo contesto vince.
