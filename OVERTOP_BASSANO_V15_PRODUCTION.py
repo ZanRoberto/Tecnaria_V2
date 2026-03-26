@@ -3708,6 +3708,153 @@ class CampoGravitazionale:
 # ★★★ BOT PRINCIPALE - OVERTOP BASSANO V14 PRODUCTION ★★★
 # ===========================================================================
 
+class VeritatisTracker:
+    """
+    Tracker della Verità — confronta in tempo reale chi aveva ragione.
+    
+    Ogni volta che l'Oracolo dice FUOCO registra il momento.
+    Dopo 30/60 secondi misura dove è andato il prezzo.
+    Confronta con cosa diceva il SuperCervello nello stesso istante.
+    
+    Non aspetta trade confermati — usa delta_30/60s come verità.
+    Dopo 50 segnali sa chi aveva ragione e di quanto.
+    """
+    
+    def __init__(self):
+        self._open   = []   # segnali aperti in attesa di conferma
+        self._closed = []   # segnali chiusi con verità nota
+        self._stats  = {    # statistiche per combinazione
+            # chiave: f"{oi_stato}|{sc_decisione}"
+            # es: "FUOCO|BLOCCA" o "FUOCO|ENTRA" o "CARICA|BLOCCA"
+        }
+    
+    def registra(self, price: float, oi_stato: str, oi_carica: float,
+                 sc_decisione: str, sc_confidenza: float,
+                 regime: str, ts: float):
+        """Registra un segnale al momento della decisione."""
+        self._open.append({
+            'price':        price,
+            'oi_stato':     oi_stato,
+            'oi_carica':    round(oi_carica, 3),
+            'sc_decisione': sc_decisione,
+            'sc_conf':      round(sc_confidenza, 3),
+            'regime':       regime,
+            'ts':           ts,
+            'chiave':       f"{oi_stato}|{sc_decisione}",
+        })
+    
+    def aggiorna(self, price_now: float, ts_now: float):
+        """
+        Ogni tick aggiorna i segnali aperti.
+        Chiude quelli con 30/60/120 secondi trascorsi.
+        """
+        ancora_aperti = []
+        for sig in self._open:
+            elapsed = ts_now - sig['ts']
+            delta   = price_now - sig['price']
+            hit     = delta > 0  # prezzo salito = segnale LONG corretto
+            pnl_sim = delta / sig['price'] * 5000 * 0.7 - 2.0
+            
+            if elapsed >= 60:
+                # Chiudi con verità a 60 secondi
+                sig['delta_60'] = round(delta, 2)
+                sig['hit_60']   = hit
+                sig['pnl_60']   = round(pnl_sim, 2)
+                sig['elapsed']  = round(elapsed, 1)
+                self._closed.append(sig)
+                if len(self._closed) > 500:
+                    self._closed.pop(0)
+                # Aggiorna statistiche
+                self._aggiorna_stats(sig)
+            else:
+                ancora_aperti.append(sig)
+        
+        self._open = ancora_aperti
+    
+    def _aggiorna_stats(self, sig: dict):
+        """Aggiorna statistiche per chiave oi_stato|sc_decisione."""
+        k = sig['chiave']
+        if k not in self._stats:
+            self._stats[k] = {
+                'n': 0, 'hits': 0, 'pnl': 0.0,
+                'deltas': [], 'oi_carica_avg': 0.0,
+            }
+        s = self._stats[k]
+        s['n']    += 1
+        s['hits'] += sig['hit_60']
+        s['pnl']  += sig['pnl_60']
+        s['deltas'].append(sig['delta_60'])
+        if len(s['deltas']) > 100: s['deltas'].pop(0)
+        # Media carica
+        s['oi_carica_avg'] = round(
+            (s['oi_carica_avg'] * (s['n']-1) + sig['oi_carica']) / s['n'], 3)
+    
+    def verdetto(self) -> dict:
+        """
+        Calcola il verdetto finale:
+        - Chi aveva ragione: Oracolo o SuperCervello?
+        - Quanto valore ha bloccato il SC?
+        - Quanto ha protetto?
+        """
+        risultati = {}
+        for k, s in self._stats.items():
+            if s['n'] < 3:
+                continue
+            hit_rate = s['hits'] / s['n']
+            pnl_avg  = s['pnl'] / s['n']
+            risultati[k] = {
+                'n':         s['n'],
+                'hit_rate':  round(hit_rate, 3),
+                'pnl_avg':   round(pnl_avg, 2),
+                'pnl_tot':   round(s['pnl'], 2),
+                'carica_avg':s['oi_carica_avg'],
+                'verdetto':  'GIUSTO' if pnl_avg > 0 else 'SBAGLIATO',
+            }
+        
+        # Calcola chi aveva ragione nei conflitti
+        fuoco_entra = risultati.get('FUOCO|ENTRA', {})
+        fuoco_blocca = risultati.get('FUOCO|BLOCCA', {})
+        
+        conflitto = {}
+        if fuoco_entra and fuoco_blocca:
+            pnl_entra  = fuoco_entra.get('pnl_avg', 0)
+            pnl_blocca = fuoco_blocca.get('pnl_avg', 0)
+            # Se bloccare aveva PnL positivo → SC aveva ragione
+            # Se bloccare aveva PnL negativo → Oracolo aveva ragione
+            if pnl_blocca > 0:
+                conflitto['chi_aveva_ragione'] = 'SC'
+                conflitto['pnl_perso_bloccando'] = fuoco_blocca.get('pnl_tot', 0)
+            else:
+                conflitto['chi_aveva_ragione'] = 'ORACOLO'
+                conflitto['pnl_salvato_bloccando'] = abs(fuoco_blocca.get('pnl_tot', 0))
+        
+        return {'stats': risultati, 'conflitto': conflitto, 'n_closed': len(self._closed)}
+    
+    def dump_dashboard(self) -> dict:
+        """Dati per la dashboard."""
+        v = self.verdetto()
+        rows = []
+        for k, s in v['stats'].items():
+            oi, sc = k.split('|')
+            rows.append({
+                'chiave':   k,
+                'oi':       oi,
+                'sc':       sc,
+                'n':        s['n'],
+                'hit_rate': s['hit_rate'],
+                'pnl_avg':  s['pnl_avg'],
+                'pnl_tot':  s['pnl_tot'],
+                'verdetto': s['verdetto'],
+            })
+        rows.sort(key=lambda x: -x['n'])
+        return {
+            'rows':      rows,
+            'conflitto': v['conflitto'],
+            'n_closed':  v['n_closed'],
+            'n_open':    len(self._open),
+        }
+
+
 class SuperCervello:
     """
     Supercervello — legge tutti gli organi simultaneamente ogni tick.
@@ -3950,7 +4097,9 @@ class OvertopBassanoV14Production:
 
         # -- SUPERCERVELLO: decisore unificato ───────────────────────────
         self.supercervello  = SuperCervello()
-        self._last_sc_dec   = None  # ultima decisione SC per registra_esito
+        self._last_sc_dec   = None
+        # -- VERITAS TRACKER: chi aveva ragione ───────────────────────────
+        self.veritas        = VeritatisTracker()  # ultima decisione SC per registra_esito
 
         # -- ORACOLO INTERNO: sensore predittivo che vive ogni tick -------
         self._oi_carica     = 0.0        # energia accumulata 0→1
@@ -4126,9 +4275,10 @@ class OvertopBassanoV14Production:
         self.campo.feed_tick(price, self._last_volume, _seed_val)
 
         # -- ORACOLO INTERNO: vive ogni tick, accumula carica, decide ------
-        # Non è il Bridge esterno. È il sensore fisico dentro al motore.
-        # Calcola le feature sequenziali sul tick grezzo e aggiorna la carica.
         self._oracolo_interno_tick(price, momentum, volatility, trend)
+
+        # -- VERITAS TRACKER: aggiorna delta reali ogni tick ──────────────
+        self.veritas.aggiorna(price, time.time())
 
         # -- MOTORE 2: Shadow trade evaluation (parallelo) -----------------
         if self._shadow:
@@ -5045,6 +5195,8 @@ class OvertopBassanoV14Production:
                 # Pesi SuperCervello
                 if hasattr(self,'supercervello'):
                     self.heartbeat_data["sc_pesi"] = self.supercervello._pesi
+                # Veritas dashboard
+                self.heartbeat_data["veritas"] = self.veritas.dump_dashboard()
         except Exception:
             pass
         finally:
@@ -5192,6 +5344,9 @@ class OvertopBassanoV14Production:
             # Applica decisione supercervello
             if _sc_dec['azione'] == 'BLOCCA':
                 self._log_m2("🧠", f"SC BLOCCA — {_sc_dec['motivo']}")
+                # Veritas: registra FUOCO|BLOCCA o CARICA|BLOCCA — la verità arriverà a 60s
+                self.veritas.registra(price, self._oi_stato, self._oi_carica,
+                    "BLOCCA", _sc_dec['confidenza'], self._regime_current, time.time())
                 if len(self._phantoms_open) < 5:
                     self._record_phantom(price, f"SC_BLOCCA_c{_sc_dec['confidenza']:.2f}",
                         seed['score'], momentum, volatility, trend)
@@ -5205,7 +5360,10 @@ class OvertopBassanoV14Production:
                     result['soglia'] = max(self.campo.SOGLIA_MIN,
                                           result['soglia'] + _sc_dec['soglia_adj'])
                 self._log_m2("🧠", f"SC ENTRA — {_sc_dec['motivo']} size×{_sc_dec['size_mult']}")
-                self._last_sc_dec = _sc_dec  # salva per apprendimento post-exit
+                self._last_sc_dec = _sc_dec
+                # Veritas: registra FUOCO|ENTRA
+                self.veritas.registra(price, self._oi_stato, self._oi_carica,
+                    "ENTRA", _sc_dec['confidenza'], self._regime_current, time.time())
 
             # -- PREDIZIONE DALL'ORACOLO DEI SEGNALI ───────────────────────
             # Usa i 3320+ segnali storici per predire se questo contesto vince.
