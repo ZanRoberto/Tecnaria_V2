@@ -426,15 +426,6 @@ def bot_thread_launcher():
             # ── AUTO-INJECT BRAIN — prima del bot ───────────────────────
             _auto_inject_brain()
 
-            # Inject segnali sintetici TRENDING_BULL nel signal tracker
-            try:
-                import inject_signals
-                inject_signals.inject(DB_PATH)
-            except ImportError:
-                log("[SIGNAL_INJECT] inject_signals.py non trovato")
-            except Exception as e:
-                log(f"[SIGNAL_INJECT] Errore: {e}")
-
             log("[BOT_LAUNCHER] 🚀 Avvio OvertopBassanoV14Production...")
             bot = OvertopBassanoV14Production(
                 heartbeat_data=heartbeat_data,
@@ -898,6 +889,69 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
+  <!-- SUPERCERVELLO — DUE LINEE: MERCATO vs PREDIZIONE -->
+  <div class="panel" style="margin-bottom:10px; border-color:#aa44ff; border-width:2px;">
+    <div class="panel-head" style="color:#aa44ff;">🧠 SUPERCERVELLO — Mercato vs Predizione
+      <span id="sc-updated" style="font-size:9px; color:var(--dim)">in attesa dati...</span>
+    </div>
+    <div class="panel-body" style="padding:8px;">
+
+      <!-- Metriche -->
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-bottom:8px;">
+        <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;color:var(--dim)">STATO SC</div>
+          <div id="sc-stato" style="font-size:14px;font-weight:500;color:var(--yellow)">ATTESA</div>
+        </div>
+        <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;color:var(--dim)">CARICA</div>
+          <div id="sc-carica" style="font-size:14px;font-weight:500;">0.00</div>
+        </div>
+        <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;color:var(--dim)">WR REALE</div>
+          <div id="sc-wr" style="font-size:14px;font-weight:500;color:var(--green)">—</div>
+        </div>
+        <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;color:var(--dim)">P&L</div>
+          <div id="sc-pnl" style="font-size:14px;font-weight:500;">$0</div>
+        </div>
+      </div>
+
+      <!-- Grafico due linee -->
+      <canvas id="scChart" style="width:100%;height:180px;display:block;"></canvas>
+
+      <!-- Legenda -->
+      <div style="display:flex;gap:12px;margin-top:6px;font-size:9px;color:var(--dim);flex-wrap:wrap;">
+        <span><span style="color:#378ADD">━</span> Mercato reale</span>
+        <span><span style="color:#639922">╌</span> Predizione SC</span>
+        <span><span style="color:#639922;font-size:11px">▲</span> BUY</span>
+        <span><span style="color:#E24B4A;font-size:11px">▼</span> SELL loss</span>
+        <span><span style="color:#639922;font-size:11px">✓</span> SELL win</span>
+        <span><span style="color:#EF9F27;font-size:11px">◆</span> BLOCCA</span>
+      </div>
+
+      <!-- Carica bar -->
+      <div style="margin-top:8px;">
+        <div style="font-size:9px;color:var(--dim);margin-bottom:2px;">Carica SC (0→1)</div>
+        <canvas id="scCaricaChart" style="width:100%;height:50px;display:block;"></canvas>
+      </div>
+
+      <!-- Narrativa oracolo interno -->
+      <div style="margin-top:8px;">
+        <div style="font-size:9px;color:var(--dim);margin-bottom:2px;">Narrativa Oracolo Interno</div>
+        <div id="sc-narrativa" style="font-size:9px;color:var(--text);font-family:monospace;line-height:1.8;min-height:40px;">
+          In attesa tick...
+        </div>
+      </div>
+
+      <!-- Pesi organi -->
+      <div style="margin-top:8px;">
+        <div style="font-size:9px;color:var(--dim);margin-bottom:4px;">Pesi organi (adattativi)</div>
+        <div id="sc-pesi" style="display:flex;gap:6px;flex-wrap:wrap;font-size:9px;"></div>
+      </div>
+
+    </div>
+  </div>
+
   <!-- SIGNAL TRACKER — MOTORE PREVISIONALE -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--blue); border-width:2px;">
     <div class="panel-head blue">🔭 MOTORE PREVISIONALE — Signal Tracker
@@ -992,6 +1046,169 @@ const $ = id => document.getElementById(id);
 // ============================================================
 // GRAFICO LIVE — Mostra la TENSIONE, non la storia
 // ============================================================
+
+const SCPanel = (() => {
+  // Buffer dati reali
+  const MAX = 120;
+  const prices  = [];
+  const preds   = [];
+  const cariche = [];
+  const labels  = [];
+  const buyMkrs = [];
+  const sellMkrs= [];
+  let scChart = null, scCarica = null;
+  let wins = 0, losses = 0, pnlTot = 0;
+  let lastTrades = [];
+
+  function update(hb) {
+    const price = hb.last_price || 0;
+    if (!price) return;
+
+    // Buffer prezzi reali
+    prices.push(price);
+    labels.push(labels.length);
+    if (prices.length > MAX) { prices.shift(); labels.shift(); }
+
+    // Carica dal oracolo interno
+    const carica = hb.oi_carica || 0;
+    const stato  = hb.oi_stato  || 'ATTESA';
+    preds.push(Math.round((price + (carica - 0.5) * 150) * 100) / 100);
+    cariche.push(Math.round(carica * 1000) / 1000);
+    if (preds.length   > MAX) preds.shift();
+    if (cariche.length > MAX) cariche.shift();
+
+    // Stato e carica
+    const statoEl = document.getElementById('sc-stato');
+    if (statoEl) {
+      statoEl.textContent = stato;
+      statoEl.style.color = stato==='FUOCO' ? '#00ff88' : stato==='CARICA' ? '#ffd700' : '#888';
+    }
+    const caricaEl = document.getElementById('sc-carica');
+    if (caricaEl) {
+      caricaEl.textContent = carica.toFixed(3);
+      caricaEl.style.color = carica >= 0.65 ? '#00ff88' : carica >= 0.4 ? '#ffd700' : '#888';
+    }
+
+    // Trades — calcola WR e PnL dai trade reali
+    const trades = hb.trades || [];
+    if (trades.length !== lastTrades.length) {
+      lastTrades = trades;
+      wins = 0; losses = 0; pnlTot = 0;
+      const exits = trades.filter(t => t.type === 'M2_EXIT');
+      exits.forEach(t => {
+        const p = t.pnl || 0;
+        pnlTot += p;
+        if (p > 0) wins++; else losses++;
+        // Marker sul grafico
+        const idx = Math.min(prices.length - 1, Math.max(0, prices.length - 10));
+        if (p > 0) sellMkrs.push({x: labels[idx]||0, y: t.price||price});
+        else       sellMkrs.push({x: labels[idx]||0, y: t.price||price, loss: true});
+      });
+      trades.filter(t => t.type === 'M2_ENTRY').forEach(t => {
+        const idx = Math.min(prices.length - 1, Math.max(0, prices.length - 15));
+        buyMkrs.push({x: labels[idx]||0, y: t.price||price});
+      });
+    }
+
+    const nTrades = wins + losses;
+    const wr = nTrades > 0 ? Math.round(wins/nTrades*100) : 0;
+    const wrEl = document.getElementById('sc-wr');
+    if (wrEl) { wrEl.textContent = nTrades > 0 ? wr + '%' : '—';
+               wrEl.style.color = wr >= 60 ? '#00ff88' : wr >= 45 ? '#ffd700' : '#ff3355'; }
+    const pnlEl = document.getElementById('sc-pnl');
+    if (pnlEl) { pnlEl.textContent = (pnlTot>=0?'+':'') + '$' + Math.round(pnlTot);
+               pnlEl.style.color = pnlTot >= 0 ? '#00ff88' : '#ff3355'; }
+
+    // Narrativa oracolo interno
+    const narr = hb.oi_narrativa || [];
+    const narrEl = document.getElementById('sc-narrativa');
+    if (narrEl && narr.length > 0) {
+      narrEl.innerHTML = narr.slice(-5).map(n => `<div>${n}</div>`).join('');
+    }
+
+    // Pesi organi
+    const pesiEl = document.getElementById('sc-pesi');
+    if (pesiEl && hb.sc_pesi) {
+      pesiEl.innerHTML = Object.entries(hb.sc_pesi)
+        .sort((a,b) => b[1]-a[1])
+        .map(([k,v]) => {
+          const pct = Math.round(v*100);
+          const col = pct >= 30 ? '#00ff88' : pct >= 20 ? '#ffd700' : '#888';
+          return `<span style="color:${col}">${k.replace('_',' ')} ${pct}%</span>`;
+        }).join(' · ');
+    }
+
+    // Updated
+    const upd = document.getElementById('sc-updated');
+    if (upd) upd.textContent = 'aggiornato ' + new Date().toLocaleTimeString();
+
+    // Disegna grafici
+    drawCharts();
+  }
+
+  function drawCharts() {
+    const labSlice = labels.slice();
+    const ctx1 = document.getElementById('scChart');
+    const ctx2 = document.getElementById('scCaricaChart');
+    if (!ctx1 || !ctx2) return;
+
+    if (scChart) scChart.destroy();
+    scChart = new Chart(ctx1, {
+      type: 'line',
+      data: {
+        labels: labSlice,
+        datasets: [
+          { label: 'Mercato', data: prices.slice(), borderColor: '#378ADD',
+            borderWidth: 1.5, pointRadius: 0, tension: 0.2, fill: false },
+          { label: 'Predizione', data: preds.slice(), borderColor: '#639922',
+            borderWidth: 1, borderDash: [4,3], pointRadius: 0, tension: 0.3, fill: false },
+          { label: 'BUY', data: buyMkrs.slice(), type: 'scatter',
+            backgroundColor: '#639922', pointRadius: 5, pointStyle: 'triangle', showLine: false },
+          { label: 'SELL', data: sellMkrs.filter(m=>!m.loss).map(m=>({x:m.x,y:m.y})),
+            type: 'scatter', backgroundColor: '#639922', pointRadius: 4, pointStyle: 'rectRot', showLine: false },
+          { label: 'SELL-', data: sellMkrs.filter(m=>m.loss).map(m=>({x:m.x,y:m.y})),
+            type: 'scatter', backgroundColor: '#E24B4A', pointRadius: 4, pointStyle: 'rectRot', showLine: false },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { display: false }, grid: { display: false } },
+          y: { ticks: { font: {size:9}, color:'#888',
+                callback: v => '$'+Math.round(v/100)*100 },
+               grid: { color: 'rgba(128,128,128,0.1)' } }
+        }
+      }
+    });
+
+    if (scCarica) scCarica.destroy();
+    scCarica = new Chart(ctx2, {
+      type: 'line',
+      data: {
+        labels: labSlice,
+        datasets: [{
+          data: cariche.slice(), borderColor: '#EF9F27', borderWidth: 1.5,
+          pointRadius: 0, fill: { target: 'origin', above: 'rgba(239,159,39,0.12)' },
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { display: false }, grid: { display: false } },
+          y: { min: 0, max: 1, ticks: { font:{size:9}, color:'#888', stepSize: 0.5 },
+               grid: { color: 'rgba(128,128,128,0.1)' } }
+        }
+      }
+    });
+  }
+
+  return { update };
+})();
+
 const LiveChart = (() => {
   const MAX_PTS = 150;
   let prices   = [];   // {ts, v}
@@ -1537,6 +1754,9 @@ function update() {
 
     // Disegna
     LiveChart.draw();
+
+    // SUPERCERVELLO PANEL
+    SCPanel.update(hb);
 
     // AI BRIDGE PANEL
     const ba = hb.bridge_active;
