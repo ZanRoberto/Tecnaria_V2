@@ -4254,7 +4254,11 @@ class OvertopBassanoV14Production:
             _drift_for_classify = (_avg_new - _avg_old) / _avg_old * 100
 
         contesto = self.analyzer.analyze(regime=self._regime_current, drift=_drift_for_classify)
+
         if not contesto[0]:
+            # Anche senza contesto: Oracolo e Veritas lavorano
+            self._oracolo_interno_tick(price, "MEDIO", "MEDIA", "SIDEWAYS")
+            self.veritas.aggiorna(price, time.time())
             return
         momentum, volatility, trend = contesto
         self._last_trend = trend
@@ -4274,10 +4278,8 @@ class OvertopBassanoV14Production:
         _seed_val = _seed_quick.get('score', 0.0) if _seed_quick.get('reason') != 'insufficient_data' else 0.0
         self.campo.feed_tick(price, self._last_volume, _seed_val)
 
-        # -- ORACOLO INTERNO: vive ogni tick, accumula carica, decide ------
+        # -- ORACOLO INTERNO + VERITAS: ogni tick con contesto pieno ────────
         self._oracolo_interno_tick(price, momentum, volatility, trend)
-
-        # -- VERITAS TRACKER: aggiorna delta reali ogni tick ──────────────
         self.veritas.aggiorna(price, time.time())
 
         # -- MOTORE 2: Shadow trade evaluation (parallelo) -----------------
