@@ -903,8 +903,12 @@ canvas.spark { width:100%; height:40px; }
           <div id="sc-stato" style="font-size:14px;font-weight:500;color:var(--yellow)">ATTESA</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
-          <div style="font-size:9px;color:var(--dim)">CARICA</div>
+          <div style="font-size:9px;color:var(--dim)">⬆ LONG</div>
           <div id="sc-carica" style="font-size:14px;font-weight:500;">0.00</div>
+        </div>
+        <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;color:var(--dim)">⬇ SHORT</div>
+          <div id="sc-carica-short" style="font-size:14px;font-weight:500;">0.00</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">WR REALE</div>
@@ -1139,6 +1143,12 @@ const SCPanel = (() => {
     if (caricaEl) {
       caricaEl.textContent = carica.toFixed(3);
       caricaEl.style.color = carica >= 0.65 ? '#00ff88' : carica >= 0.4 ? '#ffd700' : '#888';
+    }
+    const caricaShortEl = document.getElementById('sc-carica-short');
+    if (caricaShortEl) {
+      const cs = hb.oi_carica_short || 0;
+      caricaShortEl.textContent = cs.toFixed(3);
+      caricaShortEl.style.color = cs >= 0.65 ? '#ff3355' : cs >= 0.4 ? '#ff8800' : '#888';
     }
 
     // Trades — calcola WR e PnL dai trade reali
