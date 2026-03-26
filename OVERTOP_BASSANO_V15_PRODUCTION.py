@@ -5379,7 +5379,7 @@ class OvertopBassanoV14Production:
             _st_data   = self._get_signal_tracker_context(self._regime_current, result['score'])
 
             _sc_dec = self.supercervello.decide(
-                fp_wr=fingerprint_wr, fp_samples=int(self.oracolo._data.get(
+                fp_wr=fingerprint_wr, fp_samples=int(self.oracolo._memory.get(
                     f"{momentum}|{volatility}|{trend}|{self.campo._direction}",{}).get('samples',0)),
                 st_hit_rate=_st_data.get('hit_rate', 0.5),
                 st_n=_st_data.get('n', 0),
