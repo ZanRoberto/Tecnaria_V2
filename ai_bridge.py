@@ -715,6 +715,25 @@ class AIBridge:
                 self.heartbeat_data["bridge_log"]      = self._bridge_log[-10:]
                 self.heartbeat_data["bridge_errors"]   = self._consecutive_errors
                 self.heartbeat_data["bridge_last_ts"]  = datetime.utcnow().strftime("%H:%M:%S")
+                # Campi compatibilità con dashboard esistente
+                self.heartbeat_data["bridge_analisi"]  = (
+                    f"SC {self._stato} carica={self._carica:.2f} | "
+                    f"Memoria: {len(self._signal_memory)} contesti | "
+                    f"Ultimo: {self._last_comando or 'nessuno'}"
+                )
+                self.heartbeat_data["bridge_note"]     = (
+                    f"Bridge predittivo attivo — ogni 5s | "
+                    f"Carica={self._carica:.3f} soglia={self._soglia_fuoco:.2f}"
+                )
+                self.heartbeat_data["bridge_prossimo"] = (
+                    "FUOCO — confirma movimento" if self._stato=="CARICA" else
+                    "Accumulo carica..." if self._stato=="ATTESA" else
+                    "ENTRA — carica confermata"
+                )
+                self.heartbeat_data["bridge_mercato_ora"] = (
+                    "FUOCO" if self._stato=="FUOCO" else
+                    "CARICA" if self._stato=="CARICA" else "NEUTRO"
+                )
         finally:
             if self.heartbeat_lock:
                 self.heartbeat_lock.release()
