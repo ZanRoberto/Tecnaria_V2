@@ -4263,14 +4263,17 @@ class OvertopBassanoV14Production:
 
         contesto = self.analyzer.analyze(regime=self._regime_current, drift=_drift_for_classify)
 
-        # Oracolo e Veritas girano sempre — contesto o no
-        _mom = contesto[1] if contesto[0] else "MEDIO"
-        _vol = contesto[2] if contesto[0] else "MEDIA"
-        _trd = contesto[3] if contesto[0] else "SIDEWAYS"
+        # analyzer ritorna (momentum, volatility, trend) oppure (None, None, None)
+        _contesto_ok = contesto[0] is not None
+        _mom = contesto[0] if _contesto_ok else "MEDIO"
+        _vol = contesto[1] if _contesto_ok else "MEDIA"
+        _trd = contesto[2] if _contesto_ok else "SIDEWAYS"
+
+        # Oracolo e Veritas girano sempre
         self._oracolo_interno_tick(price, _mom, _vol, _trd)
         self.veritas.aggiorna(price, time.time())
 
-        if not contesto[0]:
+        if not _contesto_ok:
             return
         momentum, volatility, trend = contesto
         self._last_trend = trend
