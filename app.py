@@ -1324,8 +1324,9 @@ const LiveChart = (() => {
 
   function addEvent(type, dir, score, soglia, ts) {
     events.push({ts:ts||Date.now(), type, dir, score, soglia});
-    const cut = Date.now() - 600000;
+    const cut = Date.now() - 300000;  // solo ultimi 5 minuti
     events = events.filter(e => e.ts > cut);
+    if (events.length > 30) events = events.slice(-30);  // max 30
     if (type === 'entry') entryPrice = prices.length ? prices[prices.length-1].v : null;
     if (type === 'exit')  entryPrice = null;
   }
@@ -1346,6 +1347,8 @@ const LiveChart = (() => {
     const w = W-PAD.left-PAD.right;
     const h = H-PAD.top-PAD.bottom;
 
+    // Pulisci canvas completamente
+    ctx.clearRect(0, 0, W, H);
     // Sfondo
     ctx.fillStyle='#060810'; ctx.fillRect(0,0,W,H);
 
@@ -1500,12 +1503,15 @@ const LiveChart = (() => {
         ctx.shadowColor=col; ctx.shadowBlur=10;
         ctx.fillText(ev.dir==='LONG'?'▲':'▼', xp, ev.dir==='LONG'?yp+18:yp-8);
         ctx.shadowBlur=0;
-        // Score badge
-        ctx.font='bold 9px Share Tech Mono';
-        ctx.fillStyle='#000';
-        ctx.fillRect(xp-14, ev.dir==='LONG'?yp+20:yp-28, 28, 12);
-        ctx.fillStyle=col;
-        ctx.fillText(ev.score.toFixed(0)+'/'+ev.soglia.toFixed(0), xp, ev.dir==='LONG'?yp+30:yp-18);
+        // Score badge — solo se non sovrapposto
+        const others = events.filter(e => e !== ev && Math.abs((e.ts-tMin)/(tRng||1)*w - (xp-PAD.left)) < 20);
+        if (others.length === 0) {
+          ctx.font='bold 9px Share Tech Mono';
+          ctx.fillStyle='#000';
+          ctx.fillRect(xp-14, ev.dir==='LONG'?yp+20:yp-28, 28, 12);
+          ctx.fillStyle=col;
+          ctx.fillText(ev.score.toFixed(0)+'/'+ev.soglia.toFixed(0), xp, ev.dir==='LONG'?yp+30:yp-18);
+        }
       } else if(ev.type==='exit'){
         ctx.strokeStyle='#55667788'; ctx.lineWidth=1; ctx.setLineDash([2,4]);
         ctx.beginPath(); ctx.moveTo(xp,PAD.top); ctx.lineTo(xp,PAD.top+h); ctx.stroke();
