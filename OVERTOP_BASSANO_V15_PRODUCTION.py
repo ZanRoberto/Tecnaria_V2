@@ -5170,6 +5170,42 @@ class OvertopBassanoV14Production:
             self._oi_stato      = "ATTESA"
             self._oi_tick_pronto = 0
 
+        # VERITAS: registra ogni transizione a FUOCO o ogni CARICA >= 0.60
+        # Non aspetta lo score — registra il segnale fisico e misura la verità a 60s
+        if hasattr(self, 'veritas'):
+            if self._oi_stato == "FUOCO" and vecchio_stato != "FUOCO":
+                # Nuova transizione a FUOCO — registra immediatamente
+                sc_dec = "SCONOSCIUTO"
+                sc_conf = 0.0
+                if hasattr(self, 'supercervello'):
+                    # Stima decisione SC con dati correnti
+                    sc_conf = self.supercervello._pesi.get('campo_carica', 0.2)
+                    sc_dec = "PREVISTO_ENTRA" if self._oi_carica >= 0.70 else "PREVISTO_CARICA"
+                self.veritas.registra(
+                    price=price,
+                    oi_stato=self._oi_stato,
+                    oi_carica=self._oi_carica,
+                    sc_decisione=sc_dec,
+                    sc_confidenza=sc_conf,
+                    regime=self._regime_current,
+                    ts=time.time()
+                )
+            elif self._oi_stato == "CARICA" and self._oi_carica >= 0.55:
+                # Carica alta — registra anche senza FUOCO completo
+                if not hasattr(self, '_veritas_last_carica_ts'):
+                    self._veritas_last_carica_ts = 0
+                if time.time() - self._veritas_last_carica_ts >= 30:
+                    self._veritas_last_carica_ts = time.time()
+                    self.veritas.registra(
+                        price=price,
+                        oi_stato="CARICA",
+                        oi_carica=self._oi_carica,
+                        sc_decisione="ATTESA_SC",
+                        sc_confidenza=0.0,
+                        regime=self._regime_current,
+                        ts=time.time()
+                    )
+
         # Narrativa — aggiorna ogni 2 secondi max
         if now - self._oi_ultimo_log >= 2.0:
             self._oi_ultimo_log = now
@@ -5179,6 +5215,23 @@ class OvertopBassanoV14Production:
                 self._oi_narrativa.append(f"{datetime.utcnow().strftime('%H:%M:%S')} {msg}")
                 if len(self._oi_narrativa) > 20:
                     self._oi_narrativa.pop(0)
+
+        # Registra nel Veritas ogni volta che l'Oracolo scatta FUOCO
+        if self._oi_stato == "FUOCO" and vecchio_stato != "FUOCO":
+            # Nuovo FUOCO — registra per verifica 60s
+            sc_dec = getattr(self, '_last_sc_dec', None)
+            sc_decisione = "ENTRA" if sc_dec and sc_dec.get('azione')=="ENTRA" else "BLOCCA"
+            sc_conf = sc_dec.get('confidenza', 0.5) if sc_dec else 0.5
+            if hasattr(self, 'veritas'):
+                self.veritas.registra(
+                    price=list(self.campo._prices_short)[-1] if self.campo._prices_short else 0,
+                    oi_stato="FUOCO",
+                    oi_carica=self._oi_carica,
+                    sc_decisione=sc_decisione,
+                    sc_confidenza=sc_conf,
+                    regime=self._regime_current,
+                    ts=time.time()
+                )
 
         # Esponi nel heartbeat
         if self.heartbeat_lock:
