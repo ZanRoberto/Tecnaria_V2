@@ -3737,9 +3737,10 @@ class VeritatisTracker:
     Dopo 50 segnali sa chi aveva ragione e di quanto.
     """
     
-    def __init__(self):
+    def __init__(self, sc_ref=None):
         self._open   = []   # segnali aperti in attesa di conferma
         self._closed = []   # segnali chiusi con verità nota
+        self._sc_ref = sc_ref  # SuperCervello per calibrazione automatica
         self._stats  = {    # statistiche per combinazione
             # chiave: f"{oi_stato}|{sc_decisione}"
             # es: "FUOCO|BLOCCA" o "FUOCO|ENTRA" o "CARICA|BLOCCA"
@@ -3805,6 +3806,61 @@ class VeritatisTracker:
         # Media carica
         s['oi_carica_avg'] = round(
             (s['oi_carica_avg'] * (s['n']-1) + sig['oi_carica']) / s['n'], 3)
+        # Calibra SC automaticamente dal verdetto
+        if self._sc_ref and s['n'] >= 10:
+            self._calibra_sc(sig, s)
+
+    def _calibra_sc(self, sig: dict, stats: dict):
+        """
+        Ogni volta che il Veritas chiude un segnale con n>=10,
+        aggiusta i pesi del SuperCervello in base al verdetto reale.
+        
+        Logica:
+        - Oracolo FUOCO con SC BLOCCA e hit_rate >= 0.60 → SC era sbagliato
+          → aumenta peso campo_carica (organo dell'Oracolo)
+          → riduci peso signal_tracker (troppo conservativo)
+        - Oracolo FUOCO con SC BLOCCA e hit_rate <= 0.40 → SC aveva ragione
+          → aumenta peso signal_tracker
+          → riduci peso campo_carica
+        - FUOCO_SHORT con BLOCCA e hit_rate >= 0.60 → SHORT bloccato era giusto
+          → aumenta campo_carica per SHORT
+        """
+        if not self._sc_ref:
+            return
+            
+        hit_rate = stats['hits'] / stats['n']
+        chiave   = sig['chiave']
+        pesi     = self._sc_ref._pesi
+        STEP     = 0.008  # step piccolo — cambiamento graduale
+        
+        try:
+            if 'FUOCO' in chiave and 'BLOCCA' in chiave:
+                if hit_rate >= 0.60:
+                    # Oracolo aveva ragione — SC bloccava troppo
+                    pesi['campo_carica']   = min(0.45, pesi['campo_carica']   + STEP)
+                    pesi['signal_tracker'] = max(0.05, pesi['signal_tracker'] - STEP/2)
+                    pesi['oracolo_fp']     = max(0.05, pesi['oracolo_fp']     - STEP/2)
+                elif hit_rate <= 0.40:
+                    # SC aveva ragione a bloccare
+                    pesi['signal_tracker'] = min(0.45, pesi['signal_tracker'] + STEP)
+                    pesi['campo_carica']   = max(0.05, pesi['campo_carica']   - STEP)
+                    
+            elif 'FUOCO' in chiave and 'ENTRA' in chiave:
+                if hit_rate >= 0.65:
+                    # SC entrava e aveva ragione
+                    pesi['oracolo_fp']   = min(0.45, pesi['oracolo_fp']   + STEP)
+                    pesi['campo_carica'] = min(0.45, pesi['campo_carica'] + STEP/2)
+                elif hit_rate <= 0.40:
+                    # SC entrava ma sbagliava
+                    pesi['oracolo_fp']   = max(0.05, pesi['oracolo_fp']   - STEP)
+
+            # Rinormalizza sempre a somma 1.0
+            tot = sum(pesi.values())
+            for k in pesi:
+                pesi[k] = round(pesi[k] / tot, 4)
+                
+        except Exception:
+            pass  # mai crashare per calibrazione
     
     def verdetto(self) -> dict:
         """
@@ -4116,7 +4172,7 @@ class OvertopBassanoV14Production:
         self.supercervello  = SuperCervello()
         self._last_sc_dec   = None
         # -- VERITAS TRACKER: chi aveva ragione ───────────────────────────
-        self.veritas        = VeritatisTracker()  # ultima decisione SC per registra_esito
+        self.veritas        = VeritatisTracker(sc_ref=self.supercervello)
 
         # -- ORACOLO INTERNO: sensore predittivo che vive ogni tick -------
         self._oi_carica     = 0.0        # energia accumulata 0→1
