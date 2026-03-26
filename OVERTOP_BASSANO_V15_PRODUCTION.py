@@ -4108,6 +4108,9 @@ class OvertopBassanoV14Production:
         self._oi_ultimo_log  = 0.0       # timestamp ultimo log narrativo
         self._oi_narrativa   = []        # ultimi 20 messaggi narrativi
         self._oi_carica_history = []   # storia carica per grafico
+        self._oi_carica_short   = 0.0  # carica ribassista speculare
+        self._oi_stato_short    = "ATTESA"
+        self._oi_tick_pronto_short = 0
 
         # -- BRIDGE COMMANDS READER ---------------------------------------
         self._bridge_cmd_file = "bridge_commands.json"
@@ -4989,9 +4992,20 @@ class OvertopBassanoV14Production:
         old_direction = campo._direction
         
         # -- RANGING GATE: in laterale NON flippare a SHORT --------------
-        # Il flip SHORT in RANGING è rumore (18 flip in 53 min, WR 0%).
-        # Resta LONG, logga lo SHORT come shadow per misurare se c'è edge.
-        if self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
+        # ECCEZIONE VERITAS: se il Veritas vede movimento ribassista reale
+        # con delta_60s < -20 su almeno 5 segnali → lo SHORT è legittimo
+        _veritas_short_ok = False
+        if hasattr(self, 'veritas') and self.veritas._stats:
+            for k, s in self.veritas._stats.items():
+                if 'FUOCO' in k or 'CARICA' in k:
+                    deltas = s.get('deltas', [])
+                    if len(deltas) >= 5:
+                        avg_delta = sum(deltas) / len(deltas)
+                        if avg_delta < -20:  # prezzo scende consistentemente
+                            _veritas_short_ok = True
+                            break
+
+        if self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok and not _veritas_short_ok:
             # NON flippare - logga come SHORT evitato
             if not hasattr(self, '_shadow_short_log'):
                 self._shadow_short_log = []
@@ -5157,7 +5171,7 @@ class OvertopBassanoV14Production:
         self._oi_carica_history.append(round(self._oi_carica, 3))
         if len(self._oi_carica_history) > 200: self._oi_carica_history.pop(0)
 
-        # Stato macchina
+        # Stato macchina LONG
         vecchio_stato = self._oi_stato
         if midzone:
             self._oi_stato      = "ATTESA"
@@ -5171,6 +5185,54 @@ class OvertopBassanoV14Production:
         else:
             self._oi_stato      = "ATTESA"
             self._oi_tick_pronto = 0
+
+        # ── CARICA SHORT speculare ────────────────────────────────────
+        # Stessa logica ma invertita: bordo inferiore, drift negativo
+        if len(pp) >= 20:
+            pos_short  = 1.0 - pos            # bordo inferiore
+            dp_short   = 1.0 - dp             # drift persistente negativo
+            ds_short   = -ds if ds < 0 else 0 # drift accelera verso il basso
+            bordo_short = pos_short >= 0.80
+
+            nc_short = 0.0
+            if not midzone:
+                if cr       < 0.80:   nc_short += 0.20
+                if bordo_short:       nc_short += 0.25
+                if dp_short >= 0.60:  nc_short += 0.20
+                if sf       <= 4:     nc_short += 0.15
+                if vp       >= 1.1:   nc_short += 0.15
+                if ds_short > 0:      nc_short += 0.05
+
+            self._oi_carica_short = self._oi_carica_short * 0.75 + nc_short * 0.25
+
+            # Stato SHORT
+            vecchio_short = self._oi_stato_short
+            if midzone:
+                self._oi_stato_short = "ATTESA"
+                self._oi_tick_pronto_short = 0
+            elif self._oi_carica_short >= 0.65:
+                self._oi_tick_pronto_short += 1
+                self._oi_stato_short = "FUOCO" if self._oi_tick_pronto_short >= 2 else "CARICA"
+            elif self._oi_carica_short >= 0.40:
+                self._oi_stato_short = "CARICA"
+                self._oi_tick_pronto_short = 0
+            else:
+                self._oi_stato_short = "ATTESA"
+                self._oi_tick_pronto_short = 0
+
+            # Registra FUOCO SHORT nel Veritas
+            if self._oi_stato_short == "FUOCO" and vecchio_short != "FUOCO":
+                if hasattr(self, 'veritas'):
+                    _p = list(self.campo._prices_short)[-1] if self.campo._prices_short else 0
+                    self.veritas.registra(
+                        price=_p,
+                        oi_stato="FUOCO_SHORT",
+                        oi_carica=self._oi_carica_short,
+                        sc_decisione="BLOCCA",  # default blocca fino a verifica
+                        sc_confidenza=0.5,
+                        regime=self._regime_current,
+                        ts=time.time()
+                    )
 
         # VERITAS: registra ogni transizione a FUOCO o ogni CARICA >= 0.60
         # Non aspetta lo score — registra il segnale fisico e misura la verità a 60s
@@ -5240,8 +5302,10 @@ class OvertopBassanoV14Production:
             self.heartbeat_lock.acquire()
         try:
             if self.heartbeat_data is not None:
-                self.heartbeat_data["oi_stato"]   = self._oi_stato
-                self.heartbeat_data["oi_carica"]  = round(self._oi_carica, 3)
+                self.heartbeat_data["oi_stato"]       = self._oi_stato
+                self.heartbeat_data["oi_carica"]      = round(self._oi_carica, 3)
+                self.heartbeat_data["oi_stato_short"] = self._oi_stato_short
+                self.heartbeat_data["oi_carica_short"]= round(self._oi_carica_short, 3)
                 self.heartbeat_data["oi_narrativa"] = self._oi_narrativa[-5:]
                 # Storia prezzi e carica per grafico SC — ultimi 120 tick
                 _ph = list(self.campo._prices_short)[-120:]
