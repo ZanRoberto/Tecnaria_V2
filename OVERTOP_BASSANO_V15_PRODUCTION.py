@@ -3958,6 +3958,7 @@ class OvertopBassanoV14Production:
         self._oi_tick_pronto = 0         # tick consecutivi sopra soglia
         self._oi_ultimo_log  = 0.0       # timestamp ultimo log narrativo
         self._oi_narrativa   = []        # ultimi 20 messaggi narrativi
+        self._oi_carica_history = []   # storia carica per grafico
 
         # -- BRIDGE COMMANDS READER ---------------------------------------
         self._bridge_cmd_file = "bridge_commands.json"
@@ -5001,6 +5002,8 @@ class OvertopBassanoV14Production:
             nc = 0.0  # midzone: carica si azzera
 
         self._oi_carica = self._oi_carica * 0.75 + nc * 0.25
+        self._oi_carica_history.append(round(self._oi_carica, 3))
+        if len(self._oi_carica_history) > 200: self._oi_carica_history.pop(0)
 
         # Stato macchina
         vecchio_stato = self._oi_stato
@@ -5035,6 +5038,13 @@ class OvertopBassanoV14Production:
                 self.heartbeat_data["oi_stato"]   = self._oi_stato
                 self.heartbeat_data["oi_carica"]  = round(self._oi_carica, 3)
                 self.heartbeat_data["oi_narrativa"] = self._oi_narrativa[-5:]
+                # Storia prezzi e carica per grafico SC — ultimi 120 tick
+                _ph = list(self.campo._prices_short)[-120:]
+                self.heartbeat_data["sc_price_history"] = [round(p,2) for p in _ph]
+                self.heartbeat_data["sc_carica_history"] = list(self._oi_carica_history)[-120:] if hasattr(self,'_oi_carica_history') else []
+                # Pesi SuperCervello
+                if hasattr(self,'supercervello'):
+                    self.heartbeat_data["sc_pesi"] = self.supercervello._pesi
         except Exception:
             pass
         finally:
