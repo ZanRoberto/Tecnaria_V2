@@ -1064,18 +1064,30 @@ const SCPanel = (() => {
     const price = hb.last_price || 0;
     if (!price) return;
 
-    // Buffer prezzi reali
-    prices.push(price);
-    labels.push(labels.length);
-    if (prices.length > MAX) { prices.shift(); labels.shift(); }
-
-    // Carica dal oracolo interno
+    // Usa storia completa dal bot — non accumula tick per tick
     const carica = hb.oi_carica || 0;
     const stato  = hb.oi_stato  || 'ATTESA';
-    preds.push(Math.round((price + (carica - 0.5) * 150) * 100) / 100);
-    cariche.push(Math.round(carica * 1000) / 1000);
-    if (preds.length   > MAX) preds.shift();
-    if (cariche.length > MAX) cariche.shift();
+
+    if (hb.sc_price_history && hb.sc_price_history.length > 2) {
+      const ph = hb.sc_price_history;
+      const ch = hb.sc_carica_history || [];
+      prices.length = 0; preds.length = 0; cariche.length = 0; labels.length = 0;
+      ph.forEach((p, i) => {
+        prices.push(p);
+        labels.push(i);
+        const c = ch[i] !== undefined ? ch[i] : carica;
+        preds.push(Math.round((p + (c - 0.5) * 150) * 100) / 100);
+        cariche.push(Math.round(c * 1000) / 1000);
+      });
+    } else {
+      prices.push(price);
+      labels.push(labels.length);
+      if (prices.length > MAX) { prices.shift(); labels.shift(); }
+      preds.push(Math.round((price + (carica - 0.5) * 150) * 100) / 100);
+      cariche.push(Math.round(carica * 1000) / 1000);
+      if (preds.length   > MAX) preds.shift();
+      if (cariche.length > MAX) cariche.shift();
+    }
 
     // Stato e carica
     const statoEl = document.getElementById('sc-stato');
