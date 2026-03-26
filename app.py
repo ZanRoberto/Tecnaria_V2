@@ -920,10 +920,8 @@ canvas.spark { width:100%; height:40px; }
         </div>
       </div>
 
-      <!-- Grafico due linee -->
-      <div style="position:relative;width:100%;height:180px;">
-        <canvas id="scChart"></canvas>
-      </div>
+      <!-- Grafico due linee — canvas puro -->
+      <canvas id="scChart" style="width:100%;height:180px;display:block;"></canvas>
 
       <!-- Legenda -->
       <div style="display:flex;gap:12px;margin-top:6px;font-size:9px;color:var(--dim);flex-wrap:wrap;">
@@ -938,9 +936,7 @@ canvas.spark { width:100%; height:40px; }
       <!-- Carica bar -->
       <div style="margin-top:8px;">
         <div style="font-size:9px;color:var(--dim);margin-bottom:2px;">Carica SC (0→1)</div>
-        <div style="position:relative;width:100%;height:50px;">
-          <canvas id="scCaricaChart"></canvas>
-        </div>
+        <canvas id="scCaricaChart" style="width:100%;height:50px;display:block;"></canvas>
       </div>
 
       <!-- Narrativa oracolo interno -->
@@ -1209,65 +1205,98 @@ const SCPanel = (() => {
   }
 
   function drawCharts() {
-    const labSlice = labels.slice();
-    const ctx1 = document.getElementById('scChart');
-    const ctx2 = document.getElementById('scCaricaChart');
-    if (!ctx1 || !ctx2) return;
+    // Canvas puro — zero dipendenze Chart.js
+    const c1 = document.getElementById('scChart');
+    const c2 = document.getElementById('scCaricaChart');
+    if (!c1 || !c2 || prices.length < 2) return;
 
-    if (scChart) scChart.destroy();
-    scChart = new Chart(ctx1, {
-      type: 'line',
-      data: {
-        labels: labSlice,
-        datasets: [
-          { label: 'Mercato', data: prices.slice(), borderColor: '#378ADD',
-            borderWidth: 1.5, pointRadius: 0, tension: 0.2, fill: false },
-          { label: 'Predizione', data: preds.slice(), borderColor: '#639922',
-            borderWidth: 1, borderDash: [4,3], pointRadius: 0, tension: 0.3, fill: false },
-          { label: 'BUY', data: buyMkrs.map(m=>({x:m.x,y:m.y})),
-            type: 'scatter', parsing: {xAxisKey:'x',yAxisKey:'y'},
-            backgroundColor: '#639922', pointRadius: 6, pointStyle: 'triangle', showLine: false },
-          { label: 'SELL+', data: sellMkrs.filter(m=>!m.loss).map(m=>({x:m.x,y:m.y})),
-            type: 'scatter', parsing: {xAxisKey:'x',yAxisKey:'y'},
-            backgroundColor: '#639922', pointRadius: 5, pointStyle: 'rectRot', showLine: false },
-          { label: 'SELL-', data: sellMkrs.filter(m=>m.loss).map(m=>({x:m.x,y:m.y})),
-            type: 'scatter', parsing: {xAxisKey:'x',yAxisKey:'y'},
-            backgroundColor: '#E24B4A', pointRadius: 5, pointStyle: 'rectRot', showLine: false },
-        ]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { ticks: { display: false }, grid: { display: false } },
-          y: { ticks: { font: {size:9}, color:'#888',
-                callback: v => '$'+Math.round(v/100)*100 },
-               grid: { color: 'rgba(128,128,128,0.1)' } }
-        }
-      }
+    const W1 = c1.offsetWidth||600, H1 = 180;
+    c1.width = W1; c1.height = H1;
+    const ctx1 = c1.getContext('2d');
+    ctx1.clearRect(0,0,W1,H1);
+    ctx1.fillStyle='#060810'; ctx1.fillRect(0,0,W1,H1);
+
+    const PAD = {top:10,right:56,bottom:20,left:8};
+    const w1 = W1-PAD.left-PAD.right;
+    const h1 = H1-PAD.top-PAD.bottom;
+
+    const allPrices = prices.concat(preds).filter(v=>v>0);
+    const minP = Math.min(...allPrices)*0.9999;
+    const maxP = Math.max(...allPrices)*1.0001;
+    const rngP = maxP-minP||1;
+
+    const xOf = i => PAD.left + (i/(prices.length-1||1))*w1;
+    const yOf = v => PAD.top + (1-(v-minP)/rngP)*h1;
+
+    // Griglia Y
+    ctx1.strokeStyle='rgba(255,255,255,0.05)'; ctx1.lineWidth=1;
+    for(let i=0;i<=4;i++){
+      const y=PAD.top+i*h1/4;
+      ctx1.beginPath(); ctx1.moveTo(PAD.left,y); ctx1.lineTo(PAD.left+w1,y); ctx1.stroke();
+    }
+
+    // Linea Mercato
+    ctx1.beginPath(); ctx1.strokeStyle='#378ADD'; ctx1.lineWidth=1.5; ctx1.setLineDash([]);
+    prices.forEach((p,i)=>i===0?ctx1.moveTo(xOf(i),yOf(p)):ctx1.lineTo(xOf(i),yOf(p)));
+    ctx1.stroke();
+
+    // Linea Predizione
+    ctx1.beginPath(); ctx1.strokeStyle='#639922'; ctx1.lineWidth=1; ctx1.setLineDash([4,3]);
+    preds.forEach((p,i)=>{ if(p>0) i===0?ctx1.moveTo(xOf(i),yOf(p)):ctx1.lineTo(xOf(i),yOf(p)); });
+    ctx1.stroke(); ctx1.setLineDash([]);
+
+    // BUY markers
+    buyMkrs.forEach(m=>{
+      const xi=Math.min(prices.length-1,Math.max(0,m.x));
+      const xp=xOf(xi), yp=yOf(m.y||prices[xi]||minP);
+      ctx1.fillStyle='#00ff88'; ctx1.font='12px sans-serif'; ctx1.textAlign='center';
+      ctx1.fillText('▲',xp,yp+14);
     });
 
-    if (scCarica) scCarica.destroy();
-    scCarica = new Chart(ctx2, {
-      type: 'line',
-      data: {
-        labels: labSlice,
-        datasets: [{
-          data: cariche.slice(), borderColor: '#EF9F27', borderWidth: 1.5,
-          pointRadius: 0, fill: { target: 'origin', above: 'rgba(239,159,39,0.12)' },
-          tension: 0.3
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { ticks: { display: false }, grid: { display: false } },
-          y: { min: 0, max: 1, ticks: { font:{size:9}, color:'#888', stepSize: 0.5 },
-               grid: { color: 'rgba(128,128,128,0.1)' } }
-        }
-      }
+    // SELL markers
+    sellMkrs.forEach(m=>{
+      const xi=Math.min(prices.length-1,Math.max(0,m.x));
+      const xp=xOf(xi), yp=yOf(m.y||prices[xi]||minP);
+      ctx1.fillStyle=m.loss?'#ff3355':'#00ff88';
+      ctx1.font='12px sans-serif'; ctx1.textAlign='center';
+      ctx1.fillText('▼',xp,yp-4);
     });
+
+    // Label prezzo live
+    const lp=prices[prices.length-1];
+    ctx1.font='bold 10px Share Tech Mono'; ctx1.textAlign='left';
+    ctx1.fillStyle='#378ADD';
+    ctx1.fillText('$'+Math.round(lp),PAD.left+w1+2,yOf(lp)+4);
+
+    // ── Grafico carica ────────────────────────────────────────
+    const W2=c2.offsetWidth||600, H2=50;
+    c2.width=W2; c2.height=H2;
+    const ctx2=c2.getContext('2d');
+    ctx2.clearRect(0,0,W2,H2);
+    ctx2.fillStyle='#060810'; ctx2.fillRect(0,0,W2,H2);
+
+    const w2=W2-PAD.left-PAD.right;
+    const xOf2=i=>PAD.left+(i/(cariche.length-1||1))*w2;
+    const yOf2=v=>2+(1-Math.min(1,Math.max(0,v)))*(H2-4);
+
+    // Area carica LONG
+    if(cariche.length>=2){
+      ctx2.beginPath();
+      cariche.forEach((c,i)=>i===0?ctx2.moveTo(xOf2(i),yOf2(c)):ctx2.lineTo(xOf2(i),yOf2(c)));
+      ctx2.lineTo(xOf2(cariche.length-1),H2); ctx2.lineTo(PAD.left,H2); ctx2.closePath();
+      ctx2.fillStyle='rgba(239,159,39,0.15)'; ctx2.fill();
+      ctx2.beginPath();
+      cariche.forEach((c,i)=>i===0?ctx2.moveTo(xOf2(i),yOf2(c)):ctx2.lineTo(xOf2(i),yOf2(c)));
+      ctx2.strokeStyle='#EF9F27'; ctx2.lineWidth=1.5; ctx2.stroke();
+    }
+
+    // Linea soglia 0.65
+    const ySoglia=yOf2(0.65);
+    ctx2.strokeStyle='rgba(255,255,255,0.2)'; ctx2.lineWidth=1; ctx2.setLineDash([2,4]);
+    ctx2.beginPath(); ctx2.moveTo(PAD.left,ySoglia); ctx2.lineTo(PAD.left+w2,ySoglia); ctx2.stroke();
+    ctx2.setLineDash([]);
+    ctx2.font='8px Share Tech Mono'; ctx2.fillStyle='rgba(255,255,255,0.3)'; ctx2.textAlign='left';
+    ctx2.fillText('0.65',PAD.left+w2+2,ySoglia+3);
   }
 
   return { update };
