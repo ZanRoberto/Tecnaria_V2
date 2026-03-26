@@ -917,7 +917,9 @@ canvas.spark { width:100%; height:40px; }
       </div>
 
       <!-- Grafico due linee -->
-      <canvas id="scChart" style="width:100%;height:180px;display:block;"></canvas>
+      <div style="position:relative;width:100%;height:180px;">
+        <canvas id="scChart"></canvas>
+      </div>
 
       <!-- Legenda -->
       <div style="display:flex;gap:12px;margin-top:6px;font-size:9px;color:var(--dim);flex-wrap:wrap;">
@@ -932,7 +934,9 @@ canvas.spark { width:100%; height:40px; }
       <!-- Carica bar -->
       <div style="margin-top:8px;">
         <div style="font-size:9px;color:var(--dim);margin-bottom:2px;">Carica SC (0→1)</div>
-        <canvas id="scCaricaChart" style="width:100%;height:50px;display:block;"></canvas>
+        <div style="position:relative;width:100%;height:50px;">
+          <canvas id="scCaricaChart"></canvas>
+        </div>
       </div>
 
       <!-- Narrativa oracolo interno -->
