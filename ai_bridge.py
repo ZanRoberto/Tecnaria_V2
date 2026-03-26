@@ -340,8 +340,14 @@ RISPOSTA COMPLETA:
 
 class AIBridge:
     """
-    Thread background che connette il bot a Claude API.
-    Legge, analizza, comanda — senza fermare niente.
+    Bridge PREDITTIVO — vive ogni tick, anticipa, comanda.
+    Non narra. Non aspetta. Non racconta il passato.
+    
+    4 LAYER:
+    L1 — GEOMETRIA:  posizione nel range, compressione
+    L2 — SEQUENZA:   drift persistence, volume pressure, sign flips
+    L3 — MEMORIA:    Signal Tracker — il dopo diventa il prima
+    L4 — DECISIONE:  carica → conferma → ENTRA o BLOCCA
     """
 
     def __init__(self, heartbeat_data, heartbeat_lock,
@@ -350,559 +356,375 @@ class AIBridge:
         self.heartbeat_lock = heartbeat_lock
         self.capsule_file   = capsule_file
 
-        # Config da env vars
-        self.api_key    = os.environ.get("DEEPSEEK_API_KEY", "")
-        self.interval   = int(os.environ.get("AI_BRIDGE_INTERVAL", "300"))  # 5 min default
-        self.enabled    = os.environ.get("AI_BRIDGE_ENABLED", "true").lower() == "true"
-        self.model      = os.environ.get("AI_BRIDGE_MODEL", "deepseek-chat")
+        self.api_key  = os.environ.get("DEEPSEEK_API_KEY", "")
+        self.interval = 5  # ogni 5 secondi — vive il tick
+        self.enabled  = os.environ.get("AI_BRIDGE_ENABLED", "true").lower() == "true"
 
         # Stato interno
-        self._thread         = None
-        self._running        = False
-        self._last_snapshot  = {}
-        self._last_m2_trades = 0
-        self._last_regime    = ""
-        self._history        = []     # ultimi 10 scambi con Claude
-        self._commands_log   = []     # ultimi 20 comandi eseguiti
+        self._thread    = None
+        self._running   = False
+        self._history   = []
+        self._commands_log = []
         self._consecutive_errors = 0
-
-        # Log bridge dedicato
         self._bridge_log = []
 
+        # L1+L2 — buffer tick per calcolo feature sequenziali
+        self._buf_price  = []   # ultimi 50 prezzi
+        self._buf_drift  = []   # ultimi 50 drift
+        self._buf_volume = []   # ultimi 50 volumi
+        self._last_price = 0.0
+
+        # L3 — memoria pattern dal Signal Tracker
+        self._signal_memory = {}  # contesto → {hit_rate, avg_delta, n}
+
+        # L4 — carica e stato
+        self._carica     = 0.0
+        self._stato      = "ATTESA"   # ATTESA / CARICA / FUOCO
+        self._tick_pronto = 0
+        self._soglia_fuoco = 0.65
+        self._loss_streak  = 0
+
+        # Ultimo comando eseguito
+        self._last_comando = None
+        self._last_regime  = ""
+        self._last_m2_trades = 0
+
     def start(self):
-        """Avvia il bridge come daemon thread."""
         if not self.enabled:
-            log.info("[AI_BRIDGE] ⚠️ Disabilitato (AI_BRIDGE_ENABLED=false)")
+            log.info("[AI_BRIDGE] ⚠️ Disabilitato")
             return
-
-        if not self.api_key:
-            log.warning("[AI_BRIDGE] ❌ DEEPSEEK_API_KEY non impostata — bridge inattivo")
-            return
-
         self._running = True
-        self._thread = threading.Thread(
-            target=self._loop,
-            daemon=True,
-            name="ai_bridge_thread"
-        )
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="ai_bridge_thread")
         self._thread.start()
-        log.info(f"[AI_BRIDGE] 🌉 Avviato — intervallo {self.interval}s, modello {self.model}")
+        log.info("[AI_BRIDGE] 🧠 Bridge PREDITTIVO attivo — vive ogni tick")
 
     def stop(self):
-        """Ferma il bridge."""
         self._running = False
         log.info("[AI_BRIDGE] 🛑 Fermato")
 
     def _loop(self):
-        """Loop principale del bridge."""
-        # Aspetta 60s all'avvio per dare tempo al bot di scaldare i dati
-        time.sleep(60)
-        self._log("🌉", "Bridge attivo — primo ciclo in corso")
+        time.sleep(30)  # warmup iniziale ridotto
+        self._log("🧠", "Bridge predittivo online")
 
         while self._running:
             try:
                 snapshot = self._read_snapshot()
-
-                if self._should_call(snapshot):
-                    response = self._call_claude(snapshot)
-
-                    if response:
-                        self._execute_commands(response)
-                        self._history.append({
-                            "ts": datetime.utcnow().isoformat(),
-                            "snapshot_summary": self._summarize(snapshot),
-                            "response": response,
-                        })
-                        if len(self._history) > 10:
-                            self._history.pop(0)
-                        self._consecutive_errors = 0
-                    else:
-                        self._consecutive_errors += 1
-
-                # Esponi stato bridge nel heartbeat
+                if snapshot:
+                    self._processa_tick(snapshot)
                 self._update_heartbeat_bridge()
-
             except Exception as e:
-                log.error(f"[AI_BRIDGE] Errore nel loop: {e}")
+                log.error(f"[AI_BRIDGE] Errore: {e}")
                 self._consecutive_errors += 1
-
-            # Backoff se troppi errori consecutivi
-            wait = self.interval
-            if self._consecutive_errors > 3:
-                wait = min(self.interval * 4, 1800)  # max 30 min
-                self._log("⚠️", f"Backoff: {self._consecutive_errors} errori, aspetto {wait}s")
-
-            time.sleep(wait)
+            time.sleep(self.interval)
 
     def _read_snapshot(self) -> dict:
-        """Legge lo stato corrente dal heartbeat_data."""
         if self.heartbeat_lock:
             self.heartbeat_lock.acquire()
         try:
-            snapshot = dict(self.heartbeat_data) if self.heartbeat_data else {}
+            return dict(self.heartbeat_data) if self.heartbeat_data else {}
         finally:
             if self.heartbeat_lock:
                 self.heartbeat_lock.release()
-        return snapshot
 
-    def _should_call(self, snapshot: dict) -> bool:
+    def _processa_tick(self, snap: dict):
         """
-        Decide se vale la pena chiamare Claude.
-        Non sprecare API calls se non è cambiato niente di significativo.
+        Cuore del Bridge predittivo.
+        Ogni 5 secondi legge lo stato e decide.
         """
-        if not snapshot:
-            return False
+        price    = snap.get("last_price", 0.0)
+        regime   = snap.get("regime", "RANGING")
+        drift    = snap.get("m2_campo_stats", {}).get("drift", 0.0)
+        rsi      = snap.get("m2_campo_stats", {}).get("rsi", 50.0)
+        macd     = snap.get("m2_campo_stats", {}).get("macd_hist", 0.0)
+        score    = snap.get("m2_last_score", 0.0)
+        shadow   = snap.get("m2_shadow_open", False)
+        m2_trades= snap.get("m2_trades", 0)
+        loss_str = snap.get("m2_loss_streak", 0)
 
-        # Sempre chiama se è la prima volta
-        if not self._last_snapshot:
-            self._last_snapshot = snapshot
-            return True
+        if price == 0 or price == self._last_price:
+            return
+        self._last_price = price
 
-        # Chiama se M2 ha fatto nuovi trade
-        m2_trades = snapshot.get("m2_trades", 0)
+        # Aggiorna buffer
+        self._buf_price.append(price)
+        self._buf_drift.append(drift)
+        self._buf_volume.append(1.0)  # volume normalizzato
+        if len(self._buf_price) > 50:
+            self._buf_price.pop(0)
+            self._buf_drift.pop(0)
+            self._buf_volume.pop(0)
+
+        if len(self._buf_price) < 20:
+            return
+
+        # Aggiorna memoria dal Signal Tracker
+        self._aggiorna_memoria(snap)
+
+        # L1 + L2: calcola feature
+        f = self._calcola_features()
+        if not f:
+            return
+
+        # L3: consulta memoria
+        pred = self._consulta_memoria(regime, score)
+
+        # L4: aggiorna carica e decide
+        comando = self._aggiorna_carica_e_decidi(f, regime, pred, shadow, loss_str)
+
+        # Esegui comando se cambiato
+        if comando and comando != self._last_comando:
+            self._esegui_comando(comando, f, pred, regime, score, rsi, macd)
+            self._last_comando = comando
+
+        # Aggiorna loss streak
         if m2_trades > self._last_m2_trades:
             self._last_m2_trades = m2_trades
-            self._last_snapshot = snapshot
-            return True
 
-        # Chiama se il regime è cambiato
-        regime = snapshot.get("regime", "")
-        if regime != self._last_regime and regime:
-            self._last_regime = regime
-            self._last_snapshot = snapshot
-            return True
+    def _calcola_features(self) -> dict:
+        """L1+L2 — geometria e sequenza."""
+        pp = self._buf_price[-20:]
+        dd = self._buf_drift[-20:]
+        vv = self._buf_volume[-20:]
 
-        # Chiama comunque ogni intervallo (per check routine)
-        self._last_snapshot = snapshot
-        return True
+        r5  = max(pp[-5:])  - min(pp[-5:])
+        r10 = max(pp[-10:]) - min(pp[-10:])
+        r20 = max(pp)       - min(pp)
 
-    def _call_claude(self, snapshot: dict) -> dict:
-        """Chiama DeepSeek API con lo snapshot e ritorna la risposta parsed."""
-        import urllib.request
-        import urllib.error
+        if r20 == 0:
+            return None
 
-        # Costruisci il messaggio user
-        user_msg = self._build_user_message(snapshot)
+        pos     = (pp[-1] - min(pp)) / r20
+        cr      = r5 / (r10 + 0.01)
+        midzone = 0.40 <= pos <= 0.60
+        bordo   = pos >= 0.80
 
-        payload = json.dumps({
-            "model": self.model,
-            "max_tokens": 1000,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg}
-            ],
-            "temperature": 0.3,
-        }).encode('utf-8')
+        dp = sum(1 for d in dd[-10:] if d > 0) / 10
+        sf = sum(1 for i in range(1, len(dd)) if dd[i]*dd[i-1] < 0)
 
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
+        vm5  = sum(vv[-5:])  / 5
+        vm15 = sum(vv[-15:]) / 15
+        vp   = vm5 / (vm15 + 0.01)
+        ds   = sum(dd[-5:])/5 - sum(dd[-15:])/15
+
+        cd = sum(1 for i in range(len(pp)-1, max(0, len(pp)-15), -1)
+                 if (max(pp[max(0,i-5):i+1]) - min(pp[max(0,i-5):i+1])) < r20*0.65)
+
+        return {
+            'pos': pos, 'cr': cr, 'midzone': midzone, 'bordo': bordo,
+            'dp': dp, 'sf': sf, 'vp': vp, 'ds': ds, 'cd': cd
         }
 
-        try:
-            req = urllib.request.Request(
-                "https://api.deepseek.com/chat/completions",
-                data=payload,
-                headers=headers,
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
+    def _aggiorna_memoria(self, snap: dict):
+        """L3 — aggiorna memoria dal Signal Tracker."""
+        tracker = snap.get("signal_tracker", {})
+        top     = tracker.get("top", [])
+        for entry in top:
+            ctx     = entry.get("context", "")
+            hit     = entry.get("hit_60s", 0.5)
+            delta   = entry.get("avg_delta_60s", 0)
+            pnl     = entry.get("pnl_sim_avg", 0)
+            n       = entry.get("n", 0)
+            self._signal_memory[ctx] = {
+                'hit_rate':  hit,
+                'avg_delta': delta,
+                'pnl_sim':   pnl,
+                'n':         n,
+            }
 
-            # Estrai il testo dalla risposta DeepSeek
-            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    def _consulta_memoria(self, regime: str, score: float) -> dict:
+        """L3 — consulta il Signal Tracker per questo contesto."""
+        if score >= 75:   band = "FORTE_75+"
+        elif score >= 65: band = "BUONO_65-75"
+        elif score >= 58: band = "BASE_58-65"
+        else:             band = "DEBOLE_<58"
 
-            # Parse JSON dalla risposta
-            text = text.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
+        key = f"LONG {regime} {band}"
+        mem = self._signal_memory.get(key, {})
 
-            response = json.loads(text)
-            self._log("📡", f"AI risponde: {response.get('analisi', '?')[:80]} "
-                           f"[{response.get('alert_level', '?')}] "
-                           f"comandi={len(response.get('comandi', []))}")
-            return response
+        if not mem or mem.get('n', 0) < 5:
+            return {'verdict': 'NO_DATA', 'hit_rate': 0.5, 'avg_delta': 0}
 
-        except urllib.error.HTTPError as e:
-            body = e.read().decode('utf-8') if e.fp else ""
-            log.error(f"[AI_BRIDGE] API HTTP {e.code}: {body[:200]}")
-            self._log("❌", f"API errore HTTP {e.code}")
+        hit  = mem['hit_rate']
+        pnl  = mem['pnl_sim']
+        delta= mem['avg_delta']
+
+        if hit >= 0.65 and pnl > 0:
+            verdict = "ENTRA"
+        elif hit <= 0.40 or pnl < -1:
+            verdict = "BLOCCA"
+        else:
+            verdict = "NEUTRO"
+
+        return {'verdict': verdict, 'hit_rate': hit, 'avg_delta': delta, 'pnl_sim': pnl}
+
+    def _aggiorna_carica_e_decidi(self, f: dict, regime: str,
+                                   pred: dict, shadow: bool,
+                                   loss_streak: int) -> str:
+        """L4 — accumula carica e decide il comando."""
+
+        # BLOCCO TOTALE: posizione già aperta
+        if shadow:
+            self._carica = self._carica * 0.8
+            self._stato  = "TIENI"
             return None
-        except json.JSONDecodeError as e:
-            log.error(f"[AI_BRIDGE] JSON parse error: {e} | raw: {text[:200]}")
-            self._log("❌", f"Risposta non parsabile")
+
+        # BLOCCO: loss streak alta
+        if loss_streak >= 3:
+            self._stato = "ATTESA"
+            return "BLOCCA"
+
+        # BLOCCO: midzone
+        if f['midzone']:
+            self._carica     = self._carica * 0.5
+            self._tick_pronto = 0
+            self._stato      = "ATTESA"
+            return "BLOCCA"
+
+        # BLOCCO: memoria dice BLOCCA con alta affidabilità
+        if pred['verdict'] == "BLOCCA" and pred.get('hit_rate', 0.5) < 0.40:
+            self._carica = self._carica * 0.6
+            self._stato  = "ATTESA"
+            return "BLOCCA"
+
+        # Calcola carica
+        nc = 0.0
+        if f['cr']  < 0.80: nc += 0.20
+        if f['bordo']:       nc += 0.25
+        if f['dp'] >= 0.60: nc += 0.20
+        if f['sf'] <= 4:    nc += 0.15
+        if f['vp'] >= 1.1:  nc += 0.15
+        if f['ds'] >  0:    nc += 0.05
+
+        # Boost da memoria
+        if pred['verdict'] == "ENTRA":
+            nc = min(1.0, nc * 1.20)
+
+        self._carica = self._carica * 0.7 + nc * 0.3
+
+        # Stato macchina
+        if self._carica >= self._soglia_fuoco:
+            self._tick_pronto += 1
+        else:
+            self._tick_pronto = 0
+
+        if self._tick_pronto >= 2:
+            # Conferma: drift positivo e prezzo in espansione
+            drift_ok  = len(self._buf_drift)>=2 and self._buf_drift[-1] > 0.0001
+            price_ok  = len(self._buf_price)>=2 and self._buf_price[-1] > self._buf_price[-2]
+            if drift_ok and price_ok:
+                self._stato = "FUOCO"
+                return "ENTRA"
+            else:
+                self._stato = "CARICA"
+                return None
+        elif self._carica >= 0.40:
+            self._stato = "CARICA"
             return None
-        except Exception as e:
-            log.error(f"[AI_BRIDGE] Call error: {e}")
-            self._log("❌", f"Errore chiamata: {str(e)[:60]}")
+        else:
+            self._stato = "ATTESA"
             return None
 
-    def _build_user_message(self, snapshot: dict) -> str:
-        """Costruisce il messaggio per Claude con tutti i dati rilevanti."""
-        # M1 stats
-        m1_trades = snapshot.get("trades", 0)
-        m1_wins   = snapshot.get("wins", 0)
-        m1_losses = snapshot.get("losses", 0)
-        m1_wr     = snapshot.get("wr", 0)
-        capital   = snapshot.get("capital", 10000)
+    def _esegui_comando(self, comando: str, f: dict, pred: dict,
+                         regime: str, score: float, rsi: float, macd: float):
+        """Scrive il comando nel heartbeat per il bot."""
+        ts = datetime.utcnow().isoformat()
 
-        # M2 stats
-        m2_trades = snapshot.get("m2_trades", 0)
-        m2_wins   = snapshot.get("m2_wins", 0)
-        m2_losses = snapshot.get("m2_losses", 0)
-        m2_wr     = snapshot.get("m2_wr", 0)
-        m2_pnl    = snapshot.get("m2_pnl", 0)
+        if comando == "ENTRA":
+            motivo = (f"CARICA {self._carica:.2f} | "
+                     f"pos={f['pos']:.2f} cr={f['cr']:.2f} dp={f['dp']:.2f} | "
+                     f"mem={pred['verdict']} hit={pred['hit_rate']:.0%}")
+            self._write_bridge_command("entry_signal", {
+                "carica":  round(self._carica, 3),
+                "regime":  regime,
+                "score":   score,
+                "motivo":  motivo,
+            })
+            self._log("🚀", f"FUOCO — {motivo}")
 
-        # Regime
-        regime      = snapshot.get("regime", "UNKNOWN")
-        regime_conf = snapshot.get("regime_conf", 0)
+        elif comando == "BLOCCA":
+            motivo = ("MIDZONE" if f['midzone'] else
+                     f"MEM_BLOCCA hit={pred.get('hit_rate',0):.0%}" if pred['verdict']=="BLOCCA" else
+                     "LOSS_STREAK")
+            self._log("🚫", f"BLOCCA — {motivo}")
 
-        # Log recenti
-        live_log = snapshot.get("live_log", [])[-10:]
-        m2_log   = snapshot.get("m2_log", [])[-10:]
-
-        # Calibratore
-        calibra = snapshot.get("calibra_params", {})
-
-        # Oracolo (top 5 fingerprint)
-        oracolo = snapshot.get("oracolo_snapshot", {})
-        top_fp  = sorted(
-            [(k,v) for k,v in oracolo.items() if isinstance(v, dict)],
-            key=lambda x: x[1].get("samples", 0), reverse=True
-        )[:5]
-
-        # Campo stats
-        campo = snapshot.get("m2_campo_stats", {})
-
-        # IA stats V15
-        ia_stats = snapshot.get("ia_stats", {})
-
-        # Phantom tracker — la mappa dei depositi e delle tane vuote
-        phantom = snapshot.get("phantom", {})
-        phantom_per_livello = json.dumps(phantom.get('per_livello', {}))
-        phantom_total = phantom.get('total', 0)
-        phantom_protezione = phantom.get('protezione', 0)
-        phantom_zavorra = phantom.get('zavorra', 0)
-        phantom_saved = phantom.get('pnl_saved', 0)
-        phantom_missed = phantom.get('pnl_missed', 0)
-        phantom_bilancio = phantom.get('bilancio', 0)
-        phantom_verdetto = phantom.get('verdetto', 'N/A')
-
-        msg = f"""SNAPSHOT BOT — {datetime.utcnow().isoformat()}
-
-═══ STATO GENERALE ═══
-Capitale: ${capital:.2f}
-Regime: {regime} (conf={regime_conf:.0%})
-Posizione M1 aperta: {snapshot.get('posizione_aperta', False)}
-Shadow M2 aperta: {snapshot.get('m2_shadow_open', False)}
-Direzione M2: {snapshot.get('m2_direction', 'LONG')}
-
-═══ MOTORE 1 (Catena Filtri) ═══
-Trade: {m1_trades} | Win: {m1_wins} | Loss: {m1_losses} | WR: {m1_wr:.1%}
-
-═══ MOTORE 2 (Campo Gravitazionale) ═══
-Trade: {m2_trades} | Win: {m2_wins} | Loss: {m2_losses} | WR: {m2_wr:.1%}
-PnL shadow: ${m2_pnl:.4f}
-Stato: {snapshot.get("m2_state","?")} | Loss streak: {snapshot.get("m2_loss_streak",0)} | Cooldown: {snapshot.get("m2_cooldown",0):.0f}s
-RSI: {campo.get("rsi",50):.1f} | MACD hist: {campo.get("macd_hist",0):.3f} | Soglia base: {snapshot.get("m2_soglia_base",60)} | Soglia min: {snapshot.get("m2_soglia_min",58)}
-Campo stats: {json.dumps(campo)}
-
-═══ INTELLIGENZA AUTONOMA V15 ═══
-Capsule attive: {ia_stats.get("attive",0)} (L2={ia_stats.get("l2",0)} L3={ia_stats.get("l3",0)})
-Trade osservati: {ia_stats.get("trade_osservati",0)} | Scadono presto: {ia_stats.get("scadono_presto",0)}
-
-═══ PHANTOM TRACKER — MAPPA OPPORTUNITÀ E PROTEZIONI ═══
-Trade bloccati: {phantom_total} | Protezione: {phantom_protezione} | Zavorra: {phantom_zavorra}
-PnL risparmiati: ${phantom_saved:.1f} | PnL mancati: ${phantom_missed:.1f}
-BILANCIO: ${phantom_bilancio:.1f}
-VERDETTO: {phantom_verdetto}
-Per livello: {phantom_per_livello}
-
-═══ CALIBRATORE ATTUALE ═══
-{json.dumps(calibra, indent=2)}
-
-═══ TOP FINGERPRINT ORACOLO ═══
-{chr(10).join(f"  {fp}: WR={d.get('wr',0):.2f} samples={d.get('samples',0):.0f}" for fp, d in top_fp)}
-
-═══ LOG M1 RECENTI ═══
-{chr(10).join(live_log[-5:]) if live_log else "(vuoto)"}
-
-═══ LOG M2 RECENTI ═══
-{chr(10).join(m2_log[-5:]) if m2_log else "(vuoto)"}
-
-═══ DIVORZI ATTIVI ═══
-{json.dumps(snapshot.get('matrimoni_divorzio', []))}
-
-Analizza e rispondi con comandi JSON."""
-
-        return msg
-
-    def _execute_commands(self, response: dict):
-        """Esegue i comandi ricevuti da Claude."""
-        comandi        = response.get("comandi", [])
-        alert          = response.get("alert_level", "green")
-        analisi        = response.get("analisi", "")
-        note           = response.get("note_per_roberto", "")
-        prossimo_setup = response.get("prossimo_setup", "")
-        mercato_ora    = response.get("mercato_ora", "NEUTRO")
-
-        # Esponi immediatamente nel heartbeat per la dashboard
+        # Aggiorna heartbeat con stato Bridge
         if self.heartbeat_lock:
             self.heartbeat_lock.acquire()
         try:
             if self.heartbeat_data is not None:
-                self.heartbeat_data["bridge_analisi"]       = analisi
-                self.heartbeat_data["bridge_alert"]         = alert
-                self.heartbeat_data["bridge_prossimo"]      = prossimo_setup
-                self.heartbeat_data["bridge_mercato_ora"]   = mercato_ora
-                self.heartbeat_data["bridge_note"]          = note
-                self.heartbeat_data["bridge_last_ts"]       = datetime.utcnow().strftime('%H:%M:%S')
-        except Exception:
-            pass
+                self.heartbeat_data["bridge_stato"]   = self._stato
+                self.heartbeat_data["bridge_carica"]  = round(self._carica, 3)
+                self.heartbeat_data["bridge_comando"] = comando
+                self.heartbeat_data["bridge_analisi"] = (
+                    f"Carica={self._carica:.2f} Stato={self._stato} "
+                    f"Regime={regime} Score={score:.1f} "
+                    f"Mem={pred['verdict']} Hit={pred['hit_rate']:.0%}"
+                )
         finally:
             if self.heartbeat_lock:
                 self.heartbeat_lock.release()
 
-        if alert == "red":
-            self._log("🔴", f"ALERT RED: {analisi}")
-        elif alert == "yellow":
-            self._log("🟡", f"ALERT: {analisi}")
-        else:
-            self._log("🟢", f"{analisi[:80]}")
-
-        if prossimo_setup:
-            self._log("🎯", f"Setup: {prossimo_setup[:80]}")
-
-        if note:
-            self._log("📝", f"Per Roberto: {note[:120]}")
-
-        for cmd in comandi:
-            tipo    = cmd.get("tipo", "noop")
-            payload = cmd.get("payload", {})
-
-            try:
-                if tipo == "add_capsule":
-                    self._cmd_add_capsule(payload)
-                elif tipo == "disable_capsule":
-                    self._cmd_disable_capsule(payload)
-                elif tipo == "modify_weight":
-                    self._cmd_modify_weight(payload)
-                elif tipo == "adjust_soglia":
-                    self._cmd_adjust_soglia(payload)
-                elif tipo == "noop":
-                    reason = payload.get("reason", "nessun motivo")
-                    self._log("💤", f"Noop: {reason[:60]}")
-                else:
-                    self._log("❓", f"Comando sconosciuto: {tipo}")
-
-                self._commands_log.append({
-                    "ts": datetime.utcnow().isoformat(),
-                    "tipo": tipo,
-                    "payload": payload,
-                    "alert": alert,
-                })
-                if len(self._commands_log) > 20:
-                    self._commands_log.pop(0)
-
-            except Exception as e:
-                log.error(f"[AI_BRIDGE] Errore esecuzione {tipo}: {e}")
-                self._log("❌", f"Errore cmd {tipo}: {str(e)[:50]}")
-
-    # ── COMANDI ───────────────────────────────────────────────────────────
-
-    def _cmd_add_capsule(self, payload: dict):
-        """Aggiunge una capsula a capsule_attive.json."""
-        capsule_id = payload.get("capsule_id", f"AI_BRIDGE_{int(time.time())}")
-        payload["capsule_id"] = capsule_id
-        payload.setdefault("enabled", True)
-        payload.setdefault("priority", 3)
-        payload.setdefault("source", "ai_bridge")
-        payload.setdefault("created_at", time.time())
-
-        try:
-            existing = []
-            if os.path.exists(self.capsule_file):
-                with open(self.capsule_file) as f:
-                    existing = json.load(f)
-
-            # Evita duplicati
-            existing_ids = {c.get("capsule_id") for c in existing}
-            if capsule_id in existing_ids:
-                self._log("⚠️", f"Capsula {capsule_id} già esiste — skip")
-                return
-
-            existing.append(payload)
-            with open(self.capsule_file, 'w') as f:
-                json.dump(existing, f, indent=2)
-
-            self._log("💊", f"Capsula aggiunta: {capsule_id} — {payload.get('descrizione','')[:50]}")
-
-        except Exception as e:
-            log.error(f"[AI_BRIDGE] Add capsule error: {e}")
-
-    def _cmd_disable_capsule(self, payload: dict):
-        """Disabilita una capsula esistente."""
-        target_id = payload.get("capsule_id", "")
-        if not target_id:
-            return
-
-        try:
-            if not os.path.exists(self.capsule_file):
-                return
-            with open(self.capsule_file) as f:
-                capsules = json.load(f)
-
-            found = False
-            for cap in capsules:
-                if cap.get("capsule_id") == target_id:
-                    cap["enabled"] = False
-                    found = True
-                    break
-
-            if found:
-                with open(self.capsule_file, 'w') as f:
-                    json.dump(capsules, f, indent=2)
-                self._log("🔕", f"Capsula disabilitata: {target_id}")
-            else:
-                self._log("❓", f"Capsula {target_id} non trovata")
-
-        except Exception as e:
-            log.error(f"[AI_BRIDGE] Disable capsule error: {e}")
-
-    def _cmd_modify_weight(self, payload: dict):
-        """
-        Modifica un peso del CampoGravitazionale.
-        Scrive in un file bridge_commands.json che il bot legge.
-        """
-        param     = payload.get("param", "")
-        new_value = payload.get("value", payload.get("new_value", None))
-
-        valid_params = {"W_SEED", "W_FINGERPRINT", "W_MOMENTUM",
-                        "W_TREND", "W_VOLATILITY", "W_REGIME",
-                        "W_RSI", "W_MACD",
-                        "SOGLIA_MAX", "SOGLIA_MIN", "DRIFT_VETO_THRESHOLD"}
-
-        if param not in valid_params:
-            self._log("❌", f"Parametro peso non valido: {param}")
-            return
-
-        # Range diversi per tipo di parametro
-        if param.startswith("W_"):
-            if new_value is None or not (1 <= new_value <= 40):
-                self._log("❌", f"Valore peso fuori range: {new_value} (deve essere 1-40)")
-                return
-        elif param == "SOGLIA_MAX":
-            if new_value is None or not (65 <= new_value <= 95):
-                self._log("❌", f"SOGLIA_MAX fuori range: {new_value} (deve essere 65-95)")
-                return
-        elif param == "SOGLIA_MIN":
-            if new_value is None or not (45 <= new_value <= 65):
-                self._log("❌", f"SOGLIA_MIN fuori range: {new_value} (deve essere 45-65)")
-                return
-        elif param == "DRIFT_VETO_THRESHOLD":
-            if new_value is None or not (-0.30 <= new_value <= -0.03):
-                self._log("❌", f"DRIFT_VETO fuori range: {new_value} (deve essere -0.30 a -0.03)")
-                return
-
-        self._write_bridge_command("modify_weight", {"param": param, "value": new_value})
-        self._log("⚖️", f"Peso M2 {param} → {new_value}")
-
-    def _cmd_adjust_soglia(self, payload: dict):
-        """Modifica la soglia del CampoGravitazionale."""
-        param     = payload.get("param", "")
-        new_value = payload.get("value", payload.get("new_value", None))
-
-        valid_params = {"SOGLIA_BASE": (45, 75), "SOGLIA_MIN": (25, 50), "SOGLIA_MAX": (70, 95)}
-
-        if param not in valid_params:
-            self._log("❌", f"Parametro soglia non valido: {param}")
-            return
-
-        lo, hi = valid_params[param]
-        if new_value is None or not (lo <= new_value <= hi):
-            self._log("❌", f"Valore soglia fuori range: {new_value} (deve essere {lo}-{hi})")
-            return
-
-        self._write_bridge_command("adjust_soglia", {"param": param, "value": new_value})
-        self._log("📐", f"Soglia M2 {param} → {new_value}")
+        cmd_entry = {
+            "tipo":    comando,
+            "alert":   "green" if comando == "ENTRA" else "yellow",
+            "payload": {"carica": round(self._carica, 3), "motivo": motivo if 'motivo' in dir() else ""},
+            "ts":      ts,
+        }
+        self._commands_log.append(cmd_entry)
+        if len(self._commands_log) > 20:
+            self._commands_log.pop(0)
+        self._bridge_log.append(f"{ts[11:19]} {'🚀' if comando=='ENTRA' else '🚫'} [{comando}] {regime} carica={self._carica:.2f}")
+        if len(self._bridge_log) > 20:
+            self._bridge_log.pop(0)
 
     def _write_bridge_command(self, cmd_type: str, data: dict):
-        """
-        Scrive comandi in bridge_commands.json.
-        Il bot li legge nel prossimo ciclo di hot-reload.
-        """
-        cmd_file = "bridge_commands.json"
+        """Scrive comando nel DB per il bot."""
         try:
-            existing = []
-            if os.path.exists(cmd_file):
-                with open(cmd_file) as f:
-                    existing = json.load(f)
-
-            existing.append({
-                "type":      cmd_type,
-                "data":      data,
-                "timestamp": time.time(),
-                "executed":  False,
-            })
-
-            with open(cmd_file, 'w') as f:
-                json.dump(existing, f, indent=2)
-
+            import sqlite3
+            db_path = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                "INSERT OR REPLACE INTO bot_state VALUES ('bridge_cmd', ?)",
+                (json.dumps({"type": cmd_type, "data": data, "ts": datetime.utcnow().isoformat()}),)
+            )
+            conn.commit()
+            conn.close()
         except Exception as e:
-            log.error(f"[AI_BRIDGE] Write command error: {e}")
-
-    # ── UTILITIES ─────────────────────────────────────────────────────────
+            log.error(f"[AI_BRIDGE] Errore scrittura cmd: {e}")
 
     def _log(self, emoji: str, msg: str):
-        """Log del bridge."""
-        ts = datetime.utcnow().strftime('%H:%M:%S')
-        entry = f"{ts} {emoji} [BRIDGE] {msg}"
-        self._bridge_log.append(entry)
-        if len(self._bridge_log) > 30:
-            self._bridge_log.pop(0)
+        entry = f"{datetime.utcnow().strftime('%H:%M:%S')} {emoji} [BRIDGE] {msg}"
         log.info(entry)
-
-    def _summarize(self, snapshot: dict) -> str:
-        """Riassunto snapshot per history."""
-        return (f"M1:{snapshot.get('trades',0)}t M2:{snapshot.get('m2_trades',0)}t "
-                f"regime={snapshot.get('regime','?')} cap=${snapshot.get('capital',0):.0f}")
+        self._bridge_log.append(entry)
+        if len(self._bridge_log) > 20:
+            self._bridge_log.pop(0)
 
     def _update_heartbeat_bridge(self):
-        """Esponi stato bridge nel heartbeat per la dashboard."""
         if self.heartbeat_lock:
             self.heartbeat_lock.acquire()
         try:
             if self.heartbeat_data is not None:
-                self.heartbeat_data["bridge_active"]  = self._running
-                self.heartbeat_data["bridge_errors"]   = self._consecutive_errors
-                self.heartbeat_data["bridge_log"]      = list(self._bridge_log[-10:])
-                self.heartbeat_data["bridge_commands"]  = list(self._commands_log[-5:])
-                self.heartbeat_data["bridge_history"]   = len(self._history)
-                self.heartbeat_data["bridge_last_call"] = (
-                    self._history[-1]["ts"] if self._history else None
+                self.heartbeat_data["bridge_active"]   = True
+                self.heartbeat_data["bridge_alert"]    = (
+                    "green" if self._stato == "FUOCO" else
+                    "yellow" if self._stato == "CARICA" else "grey"
                 )
-        except Exception:
-            pass
+                self.heartbeat_data["bridge_stato"]    = self._stato
+                self.heartbeat_data["bridge_carica"]   = round(self._carica, 3)
+                self.heartbeat_data["bridge_commands"] = self._commands_log[-5:]
+                self.heartbeat_data["bridge_log"]      = self._bridge_log[-10:]
+                self.heartbeat_data["bridge_errors"]   = self._consecutive_errors
+                self.heartbeat_data["bridge_last_ts"]  = datetime.utcnow().strftime("%H:%M:%S")
         finally:
             if self.heartbeat_lock:
                 self.heartbeat_lock.release()
 
     def get_status(self) -> dict:
-        """Stato del bridge per endpoint dedicato."""
         return {
-            "active":            self._running,
-            "enabled":           self.enabled,
-            "has_api_key":       bool(self.api_key),
-            "interval":          self.interval,
-            "model":             self.model,
-            "consecutive_errors":self._consecutive_errors,
-            "total_calls":       len(self._history),
-            "total_commands":    len(self._commands_log),
-            "last_call":         self._history[-1]["ts"] if self._history else None,
-            "last_response":     self._history[-1]["response"] if self._history else None,
-            "log":               list(self._bridge_log[-15:]),
-            "recent_commands":   list(self._commands_log[-10:]),
+            "active":   self._running,
+            "stato":    self._stato,
+            "carica":   round(self._carica, 3),
+            "comando":  self._last_comando,
+            "memoria":  len(self._signal_memory),
+            "log":      self._bridge_log[-5:],
         }
