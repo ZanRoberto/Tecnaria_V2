@@ -4256,34 +4256,26 @@ class OvertopBassanoV14Production:
             _avg_new = sum(_pl[-50:]) / 50
             _drift_for_classify = (_avg_new - _avg_old) / _avg_old * 100
 
+        # -- MOTORE 2: Feed SEMPRE — buffer prezzi deve crescere ogni tick --
+        _seed_quick = self.seed_scorer.score()
+        _seed_val = _seed_quick.get('score', 0.0) if _seed_quick.get('reason') != 'insufficient_data' else 0.0
+        self.campo.feed_tick(price, self._last_volume, _seed_val)
+
         contesto = self.analyzer.analyze(regime=self._regime_current, drift=_drift_for_classify)
 
+        # Oracolo e Veritas girano sempre — contesto o no
+        _mom = contesto[1] if contesto[0] else "MEDIO"
+        _vol = contesto[2] if contesto[0] else "MEDIA"
+        _trd = contesto[3] if contesto[0] else "SIDEWAYS"
+        self._oracolo_interno_tick(price, _mom, _vol, _trd)
+        self.veritas.aggiorna(price, time.time())
+
         if not contesto[0]:
-            # Anche senza contesto: Oracolo e Veritas lavorano
-            self._oracolo_interno_tick(price, "MEDIO", "MEDIA", "SIDEWAYS")
-            self.veritas.aggiorna(price, time.time())
             return
         momentum, volatility, trend = contesto
         self._last_trend = trend
         self._last_volatility = volatility
         self._last_momentum = momentum
-
-        # -- M1 DISABILITATO - 0 trade in 2 giorni, sistema paralizzato ----
-        # M2 (Campo Gravitazionale) è l'unico motore operativo.
-        # M1 resta nel codice per riferimento ma non valuta più.
-        # if self.trade_open:
-        #     self._evaluate_exit(price, momentum, volatility, trend)
-        # else:
-        #     self._evaluate_entry(price, momentum, volatility, trend)
-
-        # -- MOTORE 2: Feed pre-breakout detector (OGNI tick) -------------
-        _seed_quick = self.seed_scorer.score()
-        _seed_val = _seed_quick.get('score', 0.0) if _seed_quick.get('reason') != 'insufficient_data' else 0.0
-        self.campo.feed_tick(price, self._last_volume, _seed_val)
-
-        # -- ORACOLO INTERNO + VERITAS: ogni tick con contesto pieno ────────
-        self._oracolo_interno_tick(price, momentum, volatility, trend)
-        self.veritas.aggiorna(price, time.time())
 
         # -- MOTORE 2: Shadow trade evaluation (parallelo) -----------------
         if self._shadow:
