@@ -2320,6 +2320,9 @@ class PersistenzaStato:
                 'm2_losses': bot._m2_losses,
                 'm2_pnl':    bot._m2_pnl,
                 'm2_trades': bot._m2_trades,
+                # Pesi SC — sopravvivono ai restart
+                'sc_pesi': bot.supercervello._pesi if hasattr(bot,'supercervello') else {},
+                'sc_storia_n': len(bot.supercervello._storia) if hasattr(bot,'supercervello') else 0,
                 # NOTA: soglia NON salvata — viene calcolata dinamicamente dal Signal Tracker
                 # Veritas — salva segnali chiusi e statistiche
                 'veritas_closed': [
@@ -2381,6 +2384,11 @@ class PersistenzaStato:
                 for t in data['m2_recent_trades']:
                     bot._m2_recent_trades.append(t)
                 restored.append(f"m2_trades:{len(data['m2_recent_trades'])}")
+
+            # Ripristina pesi SC
+            if 'sc_pesi' in data and hasattr(bot, 'supercervello') and data['sc_pesi']:
+                bot.supercervello._pesi = data['sc_pesi']
+                log.info(f"[RUNTIME_LOAD] 🧠 Pesi SC ripristinati: {data['sc_pesi']}")
 
             # Ripristina Veritas
             if 'veritas_closed' in data and hasattr(bot, 'veritas'):
