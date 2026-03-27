@@ -4178,6 +4178,8 @@ class OvertopBassanoV14Production:
         self._oi_narrativa   = []        # ultimi 20 messaggi narrativi
         self._oi_carica_history = []   # storia carica per grafico
         self._oi_carica_short   = 0.0  # carica ribassista speculare
+        self._pred_trade_n      = 0    # predizioni confermate → trade
+        self._pred_trade_pnl    = 0.0  # PnL cumulativo di quei trade
         self._oi_stato_short    = "ATTESA"
         self._oi_tick_pronto_short = 0
 
@@ -4676,6 +4678,12 @@ class OvertopBassanoV14Production:
         # -- Aggiorna tutti i sistemi di apprendimento ---------------------
         self.oracolo.record(self.entry_momentum, self.entry_volatility, self.entry_trend, is_win)
         self.memoria.record_trade(matrimonio_name, is_win, wr_expected)
+        # Tracking predizione → trade
+        # Se al momento dell'entry l'Oracolo era in FUOCO/CARICA con carica > 0.5
+        # il trade era guidato dalla predizione
+        if self._oi_carica >= 0.5 or self._oi_stato in ("FUOCO", "CARICA"):
+            self._pred_trade_n   += 1
+            self._pred_trade_pnl += pnl
         # SuperCervello impara dall'esito — pesi si adattano
         if hasattr(self, '_last_sc_dec') and self._last_sc_dec:
             self.supercervello.registra_esito(self._last_sc_dec, is_win)
@@ -5388,7 +5396,63 @@ class OvertopBassanoV14Production:
                 # Storia prezzi e carica per grafico SC — ultimi 120 tick
                 _ph = list(self.campo._prices_short)[-120:]
                 self.heartbeat_data["sc_price_history"] = [round(p,2) for p in _ph]
-                self.heartbeat_data["sc_carica_history"] = list(self._oi_carica_history)[-120:] if hasattr(self,'_oi_carica_history') else []
+                _ch = list(self._oi_carica_history)[-120:] if hasattr(self,'_oi_carica_history') else []
+                self.heartbeat_data["sc_carica_history"] = _ch
+
+                # Metriche predizione vs mercato reale
+                if len(_ph) >= 10 and len(_ch) >= 10:
+                    # Predizione = prezzo + (carica - 0.5) * 150
+                    preds = [round(_ph[i] + (_ch[i] - 0.5) * 150, 2)
+                             for i in range(min(len(_ph), len(_ch)))]
+                    # Scostamento medio assoluto
+                    scost = [abs(preds[i] - _ph[i]) for i in range(len(preds))]
+                    scost_avg = round(sum(scost) / len(scost), 2)
+                    # Conferme: predizione indicava direzione giusta?
+                    conferme = 0
+                    totale = 0
+                    for i in range(1, len(preds)):
+                        dir_pred   = preds[i] - preds[i-1]   # predizione sale o scende
+                        dir_reale  = _ph[i]   - _ph[i-1]     # mercato sale o scende
+                        if abs(dir_pred) > 0.5:               # solo segnali significativi
+                            totale += 1
+                            if (dir_pred > 0) == (dir_reale > 0):
+                                conferme += 1
+                    conf_pct = round(conferme / totale * 100, 1) if totale > 0 else 0
+                    self.heartbeat_data["pred_scostamento"] = scost_avg
+                    self.heartbeat_data["pred_conferme"]    = conferme
+                    self.heartbeat_data["pred_totale"]      = totale
+                    self.heartbeat_data["pred_score"]       = conf_pct
+                    self.heartbeat_data["pred_trade_n"]     = self._pred_trade_n
+                    self.heartbeat_data["pred_trade_pnl"]   = round(self._pred_trade_pnl, 2)
+
+                    # Ratio magnitudine: predizione vs movimento reale
+                    # Misura quanto la predizione sovra/sottostima il mercato
+                    movimenti_pred  = []
+                    movimenti_reali = []
+                    for i in range(1, min(len(preds), len(_ph))):
+                        dp = preds[i] - preds[i-1]
+                        dr = _ph[i]   - _ph[i-1]
+                        if abs(dp) > 1.0 and abs(dr) > 0.1:
+                            movimenti_pred.append(abs(dp))
+                            movimenti_reali.append(abs(dr))
+
+                    if movimenti_pred and movimenti_reali:
+                        avg_pred  = sum(movimenti_pred)  / len(movimenti_pred)
+                        avg_reale = sum(movimenti_reali) / len(movimenti_reali)
+                        ratio = round(avg_reale / avg_pred * 100, 1) if avg_pred > 0 else 100.0
+                        # Fattore di correzione — usato per calibrare la magnitudine
+                        # < 100% = predizione troppo aggressiva
+                        # > 100% = predizione troppo conservativa
+                        # 100% = perfettamente calibrata
+                        if not hasattr(self, '_pred_ratio_history'):
+                            self._pred_ratio_history = []
+                        self._pred_ratio_history.append(ratio)
+                        if len(self._pred_ratio_history) > 50:
+                            self._pred_ratio_history.pop(0)
+                        ratio_smooth = round(
+                            sum(self._pred_ratio_history) / len(self._pred_ratio_history), 1)
+                        self.heartbeat_data["pred_ratio"]     = ratio_smooth
+                        self.heartbeat_data["pred_ratio_raw"] = ratio
                 # Pesi SuperCervello
                 if hasattr(self,'supercervello'):
                     self.heartbeat_data["sc_pesi"] = self.supercervello._pesi
