@@ -2133,66 +2133,62 @@ class ContestoAnalyzer:
 
 def _calcola_soglia_da_signal_tracker(bot) -> dict:
     """
-    Calcola la soglia ottimale dinamicamente dal Signal Tracker.
-    
-    Logica:
-    - Se il Signal Tracker ha dati TRENDING_BULL con hit_rate >= 65% → soglia permissiva (48/44)
-    - Se ha solo dati RANGING con hit_rate <= 55% → soglia standard (52/48)
-    - Se non ha dati → soglia default (52/48)
-    
-    La soglia emerge dai dati reali — non è mai un numero fisso nel DB.
+    Calcola la soglia ottimale dai dati reali del Signal Tracker.
+    Usa hit_rate e PnL reale — non regime fisso.
+    La soglia emerge dai dati — non è mai un numero scritto a mano.
     """
     try:
-        tracker_stats = {}
-        
-        # Leggi stats dal Signal Tracker del bot
-        if hasattr(bot, 'signal_tracker') and hasattr(bot.signal_tracker, '_stats'):
-            tracker_stats = bot.signal_tracker._stats
-        
-        # Cerca contesti TRENDING_BULL vincenti
-        trending_hits = []
-        ranging_hits  = []
-        
-        for ctx, stats in tracker_stats.items():
-            hits   = stats.get('hit_60', [])
-            n      = len(hits)
-            if n < 5:
+        if not hasattr(bot, 'signal_tracker'):
+            return {'base': 52, 'min': 48, 'motivo': 'NO_TRACKER'}
+
+        stats = getattr(bot.signal_tracker, '_stats', {})
+        if not stats:
+            return {'base': 52, 'min': 48, 'motivo': 'NO_DATA'}
+
+        # Raccoglie tutti i contesti con abbastanza campioni
+        contesti = []
+        for ctx, s in stats.items():
+            hits = s.get('hit_60', [])
+            pnls = s.get('pnl_sim', [])
+            n = len(hits)
+            if n < 20:  # minimo 20 campioni
                 continue
             hit_rate = sum(hits) / n
-            
-            if 'TRENDING_BULL' in ctx and 'LONG' in ctx:
-                trending_hits.append(hit_rate)
-            elif 'RANGING' in ctx and 'LONG' in ctx:
-                ranging_hits.append(hit_rate)
-        
-        # Calcola soglia basata sui dati
-        if trending_hits and sum(trending_hits)/len(trending_hits) >= 0.65:
-            # TRENDING_BULL attivo e vincente → soglia permissiva
-            avg_hit = sum(trending_hits)/len(trending_hits)
-            base = 48
-            min_s = 44
-            motivo = f"TRENDING_BULL hit={avg_hit:.0%} n_ctx={len(trending_hits)}"
-            
-        elif ranging_hits:
-            avg_ranging = sum(ranging_hits)/len(ranging_hits)
-            if avg_ranging >= 0.60:
-                # RANGING insolitamente buono
-                base = 50
-                min_s = 46
-                motivo = f"RANGING_BUONO hit={avg_ranging:.0%}"
-            else:
-                # RANGING standard — soglia normale
-                base = 52
-                min_s = 48
-                motivo = f"RANGING_STANDARD hit={avg_ranging:.0%}"
+            pnl_avg  = sum(pnls) / len(pnls) if pnls else 0
+            contesti.append({
+                'ctx': ctx, 'n': n,
+                'hit_rate': hit_rate,
+                'pnl_avg': pnl_avg
+            })
+
+        if not contesti:
+            return {'base': 52, 'min': 48, 'motivo': 'POCHI_DATI'}
+
+        # Media pesata per n campioni
+        tot_n    = sum(c['n'] for c in contesti)
+        avg_hit  = sum(c['hit_rate'] * c['n'] for c in contesti) / tot_n
+        avg_pnl  = sum(c['pnl_avg']  * c['n'] for c in contesti) / tot_n
+
+        # Soglia proporzionale all'hit rate reale
+        # hit 65%+ → soglia 46/42  (mercato favorevole)
+        # hit 60%+  → soglia 48/44
+        # hit 55%+  → soglia 50/46
+        # hit <55%  → soglia 52/48 (conservativo)
+        if avg_hit >= 0.65 and avg_pnl > 0:
+            base, min_s = 46, 42
+            motivo = f"OTTIMO hit={avg_hit:.0%} pnl={avg_pnl:+.2f} n={tot_n}"
+        elif avg_hit >= 0.60 and avg_pnl > 0:
+            base, min_s = 48, 44
+            motivo = f"BUONO hit={avg_hit:.0%} pnl={avg_pnl:+.2f} n={tot_n}"
+        elif avg_hit >= 0.55:
+            base, min_s = 50, 46
+            motivo = f"DISCRETO hit={avg_hit:.0%} n={tot_n}"
         else:
-            # Nessun dato — default conservativo ma raggiungibile
-            base = 52
-            min_s = 48
-            motivo = "NO_DATA default"
-        
+            base, min_s = 52, 48
+            motivo = f"STANDARD hit={avg_hit:.0%} n={tot_n}"
+
         return {'base': base, 'min': min_s, 'motivo': motivo}
-        
+
     except Exception as e:
         log.error(f"[SOGLIA_DINAMICA] Errore: {e}")
         return {'base': 52, 'min': 48, 'motivo': 'ERRORE fallback'}
@@ -4545,11 +4541,14 @@ class OvertopBassanoV14Production:
         if not self.paper_trade:
             self._place_order("BUY", price, size_factor)
 
+        _size_usdt_entry = round(self.capital * size_factor * 0.05, 2)  # 5% capitale × size_mult
         self.trade_open = {
             "price_entry":    price,
             "matrimonio":     matrimonio_name,
             "duration_avg":   matrimonio["duration_avg"],
             "size_mult":      size_factor,
+            "size_usdt":      _size_usdt_entry,
+            "direction":      self.campo._direction,
         }
         self.entry_time        = time.time()
         self.entry_momentum    = momentum
@@ -4614,10 +4613,21 @@ class OvertopBassanoV14Production:
         if self.entry_trend == "UP" and trend == "DOWN":
             triggers_attivi.append("T2_TREND_INVERTITO")
 
-        # Trigger 3: drawdown > 3% dal massimo
-        drawdown_pct = ((self.max_price - price) / self.trade_open["price_entry"]) * 100
-        if drawdown_pct > DIVORCE_DRAWDOWN_PCT:
-            triggers_attivi.append(f"T3_DRAWDOWN_{drawdown_pct:.1f}%")
+        # Trigger 3: stop loss 2% sul PnL della posizione
+        # Size tipica $500 × 2% = -$10 max per trade
+        # NON sul prezzo BTC (3% di BTC = $2050 di movimento — inutile)
+        _entry_price  = self.trade_open["price_entry"]
+        _size_usdt    = self.trade_open.get("size_usdt", 500.0)
+        _direction    = self.trade_open.get("direction", "LONG")
+        if _direction == "LONG":
+            _pnl_posizione = (price - _entry_price) / _entry_price * _size_usdt
+        else:
+            _pnl_posizione = (_entry_price - price) / _entry_price * _size_usdt
+        _stop_loss_usdt = _size_usdt * 0.02  # 2% della size
+        if _pnl_posizione < -_stop_loss_usdt:
+            triggers_attivi.append(f"T3_STOPLOSS_PNL_{_pnl_posizione:.2f}$")
+        # Mantieni anche il drawdown % come riferimento (più largo)
+        drawdown_pct = ((self.max_price - price) / _entry_price) * 100
 
         # Trigger 4: fingerprint diverge > 50% dal valore di entry
         current_fp = self.oracolo.get_wr(momentum, volatility, trend)
