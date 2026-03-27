@@ -5402,7 +5402,11 @@ class OvertopBassanoV14Production:
                 # Metriche predizione vs mercato reale
                 if len(_ph) >= 10 and len(_ch) >= 10:
                     # Predizione = prezzo + (carica - 0.5) * 150
-                    preds = [round(_ph[i] + (_ch[i] - 0.5) * 150, 2)
+                    # Fattore calibrato dal ratio — si adatta automaticamente
+                    _ratio = getattr(self, '_pred_ratio_history', [100.0])
+                    _ratio_avg = sum(_ratio)/len(_ratio) if _ratio else 100.0
+                    _fattore = 150 * (_ratio_avg / 100)
+                    preds = [round(_ph[i] + (_ch[i] - 0.5) * _fattore, 2)
                              for i in range(min(len(_ph), len(_ch)))]
                     # Scostamento medio assoluto
                     scost = [abs(preds[i] - _ph[i]) for i in range(len(preds))]
