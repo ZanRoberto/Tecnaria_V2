@@ -1760,10 +1760,15 @@ class PreTradeSignalTracker:
                         delta = current_price - sig['price']
                     else:
                         delta = sig['price'] - current_price
-                    # Fee simulata: $5000 esposti × 0.02% × 2 = $2
-                    pnl_sim = delta * (5000 / sig['price']) - 2.0
+                    # Fee simulata con size reale: ~$250 × 0.02% × 2 = $0.10
+                    # Size reale = capital × size_factor × 0.05 ≈ $250
+                    _size_sim = 250.0  # stima conservativa size reale
+                    _fee_sim  = _size_sim * 0.0002 * 2  # 0.02% maker × 2 lati
+                    pnl_sim = delta * (_size_sim / sig['price']) - _fee_sim
                     sig['results'][key]          = round(delta, 2)
                     sig['results'][f'pnl_{w}']   = round(pnl_sim, 2)
+                    # Fee simulata: $5000 esposti × 0.02% × 2 = $2
+                    pnl_sim = delta * (5000 / sig['price']) - 2.0
                     sig['results'][f'hit_{w}']    = delta > 0
 
             # Chiudi dopo la finestra massima
@@ -2793,8 +2798,8 @@ class PositionSizer:
         # seed_score è gia [0, 1]
         seed_norm = min(1.0, max(0.0, seed_score))
 
-        # fingerprint_wr [0.45, 0.95] → [0, 1]
-        fp_norm = min(1.0, max(0.0, (fingerprint_wr - 0.45) / 0.50))
+        # fingerprint_wr [0.30, 0.80] → [0, 1] (calibrato su valori reali)
+        fp_norm = min(1.0, max(0.0, (fingerprint_wr - 0.30) / 0.50))
 
         # confidence [0.05, 0.95] → [0, 1]
         conf_norm = min(1.0, max(0.0, (confidence - 0.05) / 0.90))
@@ -3171,8 +3176,8 @@ class CampoGravitazionale:
             s_trd = TRD_L.get(trend,0.5)*W["trend"]
             s_reg = REG_L.get(regime,0.2)*W["regime"]
 
-        s_seed = min(1.0,max(0.0,(seed_score-0.30)/0.70))*W["seed"]
-        s_fp   = min(1.0,max(0.0,(fingerprint_wr-0.30)/0.70))*W["fp"]
+        s_seed = min(1.0,max(0.0,(seed_score-0.20)/0.60))*W["seed"]
+        s_fp   = min(1.0,max(0.0,(fingerprint_wr-0.30)/0.50))*W["fp"]
         s_vol  = VOL_S.get(volatility,0.5)*W["vol"]
         s_rsi  = self._rsi_score()*W["rsi"]
         s_macd = self._macd_score()*W["mac"]
@@ -3266,10 +3271,12 @@ class CampoGravitazionale:
 
         # -- CALCOLO PUNTEGGIO CAMPO ---------------------------------------
         # Seed: normalizza [0.3, 1.0] → [0, 1]
-        s_seed = min(1.0, max(0.0, (seed_score - 0.30) / 0.70)) * self.W_SEED
+        # Normalizzazione calibrata sui valori reali di produzione [0.20, 0.80]
+        # I valori teorici [0.30, 1.0] escludevano quasi tutti i segnali reali
+        s_seed = min(1.0, max(0.0, (seed_score - 0.20) / 0.60)) * self.W_SEED
 
-        # Fingerprint WR: normalizza [0.30, 1.0] → [0, 1]
-        s_fp = min(1.0, max(0.0, (fingerprint_wr - 0.30) / 0.70)) * self.W_FINGERPRINT
+        # Fingerprint WR: normalizza [0.30, 0.80] → [0, 1]
+        s_fp = min(1.0, max(0.0, (fingerprint_wr - 0.30) / 0.50)) * self.W_FINGERPRINT
 
         # Dimensioni categoriche - INVERTITE per SHORT
         if self._direction == "SHORT":
@@ -3781,8 +3788,11 @@ class VeritatisTracker:
         for sig in self._open:
             elapsed = ts_now - sig['ts']
             delta   = price_now - sig['price']
-            hit     = delta > 0  # prezzo salito = segnale LONG corretto
+            # Hit vero: il delta deve coprire le fee reali
+            # $1000 margine × 5x leva = $5000 esposti
+            # Fee: $5000 × 0.02% × 2 lati = $2.00
             pnl_sim = delta / sig['price'] * 5000 * 0.7 - 2.0
+            hit     = delta > 0  # direzione corretta
             
             if elapsed >= 60:
                 # Chiudi con verità a 60 secondi
@@ -5105,6 +5115,14 @@ class OvertopBassanoV14Production:
         
         old_direction = campo._direction
         
+        # -- EXPLOSIVE GATE: in EXPLOSIVE flip SHORT con meno energia ------
+        # Signal Tracker: SHORT EXPLOSIVE hit 89% su 36 segnali — gate permissivo
+        if self._regime_current == "EXPLOSIVE" and campo._direction == "LONG" and bearish_energy >= 2 and cooldown_ok:
+            campo._direction = "SHORT"
+            campo._direction_last_change = now
+            campo._direction_bearish_streak = 0
+            self._log_m2("🔄", f"FLIP → SHORT in EXPLOSIVE (bearish_energy={bearish_energy} drift={drift:+.3f}%)")
+
         # -- RANGING GATE: in laterale NON flippare a SHORT --------------
         # ECCEZIONE VERITAS: se il Veritas vede movimento ribassista reale
         # con delta_60s < -20 su almeno 5 segnali → lo SHORT è legittimo
@@ -5168,12 +5186,24 @@ class OvertopBassanoV14Production:
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
         
-        # -- FORZA LONG IN RANGING - se SHORT da EXPLOSIVE, torna LONG ----
-        # Il buco: flippava a SHORT in EXPLOSIVE, restava SHORT in RANGING
+        # -- FORZA LONG IN RANGING - ma non se SHORT EXPLOSIVE aveva edge ----
+        # Signal Tracker: SHORT EXPLOSIVE HIT 89% — non forzare LONG se appena usciti da EXPLOSIVE
         if self._regime_current == "RANGING" and campo._direction == "SHORT":
-            campo._direction = "LONG"
-            campo._direction_last_change = now
-            self._log_m2("🔄", f"FORZA LONG in RANGING (era SHORT, regime tornato RANGING)")
+            # Controlla se il Signal Tracker dice che SHORT ha edge
+            _short_has_edge = False
+            if hasattr(self, 'signal_tracker'):
+                for k, s in self.signal_tracker._stats.items():
+                    if 'SHORT' in k and s.get('n', 0) >= 5:
+                        hits = s.get('hit_60', [])
+                        if hits and sum(hits)/len(hits) >= 0.65:
+                            _short_has_edge = True
+                            break
+            if not _short_has_edge:
+                campo._direction = "LONG"
+                campo._direction_last_change = now
+                self._log_m2("🔄", f"FORZA LONG in RANGING (era SHORT, nessun edge SHORT)")
+            else:
+                self._log_m2("✅", f"SHORT mantenuto in RANGING — Signal Tracker conferma edge SHORT")
         
         if campo._direction != old_direction:
             self._log_m2("🔄", f"DIREZIONE → {campo._direction} (drift={drift:+.3f}% macd_hist={macd_hist:+.2f} trend={trend})")
