@@ -1145,7 +1145,10 @@ const SCPanel = (() => {
         prices.push(p);
         labels.push(i);
         const c = ch[i] !== undefined ? ch[i] : carica;
-        preds.push(Math.round((p + (c - 0.5) * 150) * 100) / 100);
+        // Fattore calibrato dal ratio magnitudine — si adatta ai dati reali
+        const ratioVal = hb.pred_ratio || 25.0;
+        const fattore = 150 * (ratioVal / 100);
+        preds.push(Math.round((p + (c - 0.5) * fattore) * 100) / 100);
         cariche.push(Math.round(c * 1000) / 1000);
       });
     } else {
