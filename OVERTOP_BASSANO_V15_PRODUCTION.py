@@ -5402,12 +5402,35 @@ class OvertopBassanoV14Production:
                 # Metriche predizione vs mercato reale
                 if len(_ph) >= 10 and len(_ch) >= 10:
                     # Predizione = prezzo + (carica - 0.5) * 150
-                    # Fattore calibrato dal ratio — si adatta automaticamente
-                    _ratio = getattr(self, '_pred_ratio_history', [100.0])
-                    _ratio_avg = sum(_ratio)/len(_ratio) if _ratio else 100.0
-                    _fattore = 150 * (_ratio_avg / 100)
-                    preds = [round(_ph[i] + (_ch[i] - 0.5) * _fattore, 2)
-                             for i in range(min(len(_ph), len(_ch)))]
+                    # Predizione dai delta reali del Veritas — non fattore inventato
+                    # Usa il delta medio misurato per ogni livello di carica
+                    _vt_stats = self.veritas._stats if hasattr(self.veritas, '_stats') else {}
+                    _delta_fuoco  = 0.0
+                    _delta_carica = 0.0
+                    _n_fuoco = 0
+                    for k, s in _vt_stats.items():
+                        if 'FUOCO' in k and s.get('n', 0) >= 5:
+                            deltas = s.get('deltas', [])
+                            if deltas:
+                                _delta_fuoco += sum(deltas) / len(deltas)
+                                _n_fuoco += 1
+                        elif 'CARICA' in k and s.get('n', 0) >= 5:
+                            deltas = s.get('deltas', [])
+                            if deltas:
+                                _delta_carica += sum(deltas) / len(deltas)
+                    if _n_fuoco > 0:
+                        _delta_fuoco /= _n_fuoco
+                    # Predizione: prezzo + delta atteso in base alla carica
+                    preds = []
+                    for i in range(min(len(_ph), len(_ch))):
+                        c = _ch[i]
+                        if c >= 0.65:
+                            delta = _delta_fuoco if _delta_fuoco != 0 else 5.0
+                        elif c >= 0.40:
+                            delta = _delta_carica if _delta_carica != 0 else 2.0
+                        else:
+                            delta = 0.0
+                        preds.append(round(_ph[i] + delta, 2))
                     # Scostamento medio assoluto
                     scost = [abs(preds[i] - _ph[i]) for i in range(len(preds))]
                     scost_avg = round(sum(scost) / len(scost), 2)
