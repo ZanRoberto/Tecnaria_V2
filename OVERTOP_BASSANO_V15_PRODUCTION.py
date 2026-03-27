@@ -2058,6 +2058,13 @@ class MemoriaMatrimoni:
             return False, f"TRUST_BASSO ({self.trust[name]})"
         return True, "OK"
 
+    def get_wr(self, name: str) -> float:
+        total = self.wins.get(name, 0) + self.losses.get(name, 0)
+        return self.wins.get(name, 0) / total if total > 0 else 0.5
+
+    def get_trust(self, name: str) -> float:
+        return self.trust.get(name, 50) / 100.0
+
     def record_trade(self, name: str, is_win: bool, wr_expected: float):
         if is_win:
             self.wins[name]  += 1
@@ -4179,6 +4186,7 @@ class OvertopBassanoV14Production:
             pass
         self._m2_log     = deque(maxlen=20)   # log dedicato M2
         self._last_volume = 1.0               # ultimo volume dal WebSocket
+        self._last_price  = 0.0               # ultimo prezzo dal WebSocket
         self._last_m2_heartbeat = time.time() # heartbeat M2 - monitora se il thread è vivo
 
         # -- SUPERCERVELLO: decisore unificato ───────────────────────────
@@ -4288,6 +4296,9 @@ class OvertopBassanoV14Production:
         if now - self.last_heartbeat > 30:
             self._update_heartbeat()
             self.last_heartbeat = now
+
+        # Aggiorna prezzo live ad ogni tick
+        self._last_price = price
 
         # Aggiorna prezzo live ad ogni tick (per dashboard)
         if self.heartbeat_lock:
