@@ -3832,23 +3832,24 @@ class VeritatisTracker:
         try:
             if 'FUOCO' in chiave and 'BLOCCA' in chiave:
                 if hit_rate >= 0.60:
-                    # Oracolo aveva ragione — SC bloccava troppo
-                    pesi['campo_carica']   = min(0.45, pesi['campo_carica']   + STEP)
-                    pesi['signal_tracker'] = max(0.05, pesi['signal_tracker'] - STEP/2)
+                    # Oracolo aveva ragione — SC bloccava
+                    # campo_carica sale più velocemente fino a max 0.60
+                    pesi['campo_carica']   = min(0.60, pesi['campo_carica']   + STEP * 2)
+                    pesi['signal_tracker'] = max(0.05, pesi['signal_tracker'] - STEP)
                     pesi['oracolo_fp']     = max(0.05, pesi['oracolo_fp']     - STEP/2)
+                    pesi['matrimonio']     = max(0.05, pesi['matrimonio']     - STEP/2)
                 elif hit_rate <= 0.40:
                     # SC aveva ragione a bloccare
                     pesi['signal_tracker'] = min(0.45, pesi['signal_tracker'] + STEP)
                     pesi['campo_carica']   = max(0.05, pesi['campo_carica']   - STEP)
-                    
+
             elif 'FUOCO' in chiave and 'ENTRA' in chiave:
-                if hit_rate >= 0.65:
-                    # SC entrava e aveva ragione
-                    pesi['oracolo_fp']   = min(0.45, pesi['oracolo_fp']   + STEP)
-                    pesi['campo_carica'] = min(0.45, pesi['campo_carica'] + STEP/2)
+                if hit_rate >= 0.60:
+                    # Oracolo + SC concordavano e avevano ragione
+                    pesi['campo_carica'] = min(0.60, pesi['campo_carica'] + STEP)
+                    pesi['oracolo_fp']   = min(0.40, pesi['oracolo_fp']   + STEP/2)
                 elif hit_rate <= 0.40:
-                    # SC entrava ma sbagliava
-                    pesi['oracolo_fp']   = max(0.05, pesi['oracolo_fp']   - STEP)
+                    pesi['campo_carica'] = max(0.05, pesi['campo_carica'] - STEP)
 
             # Rinormalizza sempre a somma 1.0
             tot = sum(pesi.values())
@@ -3957,6 +3958,14 @@ class SuperCervello:
             return self._out("BLOCCA", 0.5, 0, "midzone", 0.95)
         if loss_streak >= 4:
             return self._out("BLOCCA", 0.5, 0, f"streak_{loss_streak}", 0.90)
+
+        # BOOST PREDIZIONE: se score >85% e calibrazione >85% e Oracolo FUOCO → entra
+        # La predizione è dimostrata dal Veritas — l'Oracolo ha ragione
+        _ps = getattr(self, '_pred_score_ref', 0)
+        _pc = getattr(self, '_pred_calib_ref', 0)
+        if _ps >= 85 and _pc >= 85 and oi_stato == "FUOCO" and not midzone:
+            return self._out("ENTRA", 1.2, -5,
+                f"pred_boost score={_ps:.0f}% calib={_pc:.0f}%", 0.85)
 
         # Voti organi
         v = {}
@@ -5480,6 +5489,10 @@ class OvertopBassanoV14Production:
                             sum(self._pred_ratio_history) / len(self._pred_ratio_history), 1)
                         self.heartbeat_data["pred_ratio"]     = ratio_smooth
                         self.heartbeat_data["pred_ratio_raw"] = ratio
+                        # Aggiorna SC per boost predizione
+                        if hasattr(self, 'supercervello'):
+                            self.supercervello._pred_score_ref = conf_pct
+                            self.supercervello._pred_calib_ref = ratio_smooth
                 # Pesi SuperCervello
                 if hasattr(self,'supercervello'):
                     self.heartbeat_data["sc_pesi"] = self.supercervello._pesi
