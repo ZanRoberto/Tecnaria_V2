@@ -939,6 +939,35 @@ canvas.spark { width:100%; height:40px; }
         <canvas id="scCaricaChart" style="width:100%;height:50px;display:block;"></canvas>
       </div>
 
+      <!-- Metriche predizione vs mercato -->
+      <div style="margin-top:8px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;">
+        <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;color:var(--dim)">SCOSTAMENTO</div>
+          <div id="pred-scost" style="font-size:14px;font-weight:500;color:var(--yellow)">—</div>
+          <div style="font-size:8px;color:var(--dim)">$ medio</div>
+        </div>
+        <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;color:var(--dim)">CONFERMATE</div>
+          <div id="pred-conf" style="font-size:14px;font-weight:500;color:var(--green)">—</div>
+          <div style="font-size:8px;color:var(--dim)">su totale</div>
+        </div>
+        <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;color:var(--dim)">SCORE PRED.</div>
+          <div id="pred-score" style="font-size:14px;font-weight:500;">—</div>
+          <div style="font-size:8px;color:var(--dim)">% corrette</div>
+        </div>
+        <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;grid-column:span 3;">
+          <div style="font-size:9px;color:var(--dim)">PRED → TRADE → PnL</div>
+          <div id="pred-trade" style="font-size:14px;font-weight:500;">—</div>
+          <div style="font-size:8px;color:var(--dim)">trade da predizione / PnL cumulativo</div>
+        </div>
+        <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;grid-column:span 3;border:1px solid rgba(100,200,100,0.2);">
+          <div style="font-size:9px;color:var(--dim)">CALIBRAZIONE MAGNITUDINE</div>
+          <div id="pred-ratio" style="font-size:18px;font-weight:500;">—</div>
+          <div style="font-size:8px;color:var(--dim)">100% = perfetto · &lt;100% troppo aggressiva · &gt;100% troppo conservativa</div>
+        </div>
+      </div>
+
       <!-- Narrativa oracolo interno -->
       <div style="margin-top:8px;">
         <div style="font-size:9px;color:var(--dim);margin-bottom:2px;">Narrativa Oracolo Interno</div>
@@ -1199,6 +1228,37 @@ const SCPanel = (() => {
     // Updated
     const upd = document.getElementById('sc-updated');
     if (upd) upd.textContent = 'aggiornato ' + new Date().toLocaleTimeString();
+
+    // Metriche predizione
+    const scost = hb.pred_scostamento;
+    const conf  = hb.pred_conferme;
+    const tot   = hb.pred_totale;
+    const score = hb.pred_score;
+    if (scost !== undefined) {
+      const scostEl = document.getElementById('pred-scost');
+      if (scostEl) { scostEl.textContent = '$' + scost.toFixed(1);
+        scostEl.style.color = scost < 50 ? 'var(--green)' : scost < 150 ? 'var(--yellow)' : 'var(--red)'; }
+      const confEl = document.getElementById('pred-conf');
+      if (confEl) confEl.textContent = (conf||0) + '/' + (tot||0);
+      const scoreEl = document.getElementById('pred-score');
+      if (scoreEl) { scoreEl.textContent = (score||0).toFixed(1) + '%';
+        scoreEl.style.color = score >= 60 ? 'var(--green)' : score >= 50 ? 'var(--yellow)' : 'var(--red)'; }
+      const tradeEl = document.getElementById('pred-trade');
+      if (tradeEl) {
+        const tn  = hb.pred_trade_n   || 0;
+        const tpnl= hb.pred_trade_pnl || 0;
+        tradeEl.textContent = tn + ' trade / ' + (tpnl >= 0 ? '+' : '') + '$' + tpnl.toFixed(2);
+        tradeEl.style.color = tpnl > 0 ? 'var(--green)' : tpnl < 0 ? 'var(--red)' : 'var(--dim)';
+      }
+      const ratioEl = document.getElementById('pred-ratio');
+      if (ratioEl && hb.pred_ratio !== undefined) {
+        const r = hb.pred_ratio;
+        ratioEl.textContent = r.toFixed(1) + '%';
+        // Verde vicino a 100%, giallo se distante, rosso se molto distante
+        const dist = Math.abs(r - 100);
+        ratioEl.style.color = dist < 20 ? 'var(--green)' : dist < 50 ? 'var(--yellow)' : 'var(--red)';
+      }
+    }
 
     // Disegna grafici
     drawCharts();
