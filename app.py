@@ -1145,10 +1145,13 @@ const SCPanel = (() => {
         prices.push(p);
         labels.push(i);
         const c = ch[i] !== undefined ? ch[i] : carica;
-        // Fattore calibrato dal ratio magnitudine — si adatta ai dati reali
-        const ratioVal = hb.pred_ratio || 25.0;
-        const fattore = 150 * (ratioVal / 100);
-        preds.push(Math.round((p + (c - 0.5) * fattore) * 100) / 100);
+        // Delta reali dal Veritas — non fattore inventato
+        const deltaFuoco  = hb.pred_delta_fuoco  || 5.0;
+        const deltaCarica = hb.pred_delta_carica || 2.0;
+        let delta = 0;
+        if (c >= 0.65)      delta = deltaFuoco;
+        else if (c >= 0.40) delta = deltaCarica;
+        preds.push(Math.round((p + delta) * 100) / 100);
         cariche.push(Math.round(c * 1000) / 1000);
       });
     } else {
