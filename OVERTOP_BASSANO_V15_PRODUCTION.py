@@ -475,9 +475,86 @@ class IntelligenzaAutonoma:
         nuove += self._analisi_l3_regime_tossico(trades)
         nuove += self._analisi_l3_opportunita(trades)
 
+        # -- AUTO-CORRETTIVE: capsule dai dati live -------------------------
+        nuove += self._analisi_auto_correttive()
+
         if nuove:
             self._persisti(nuove)
         return nuove
+
+    def _analisi_auto_correttive(self) -> list:
+        """
+        Capsule auto-correttive dai dati live.
+        Osserva SC pesi, Oracolo, drift, regime e genera capsule correttive.
+        Trasparente: ogni capsula ha motivo leggibile nel log.
+        """
+        capsule = []
+        ts = time.time()
+
+        # Leggi contesto live dal bot (passato tramite _ctx)
+        ctx = getattr(self, '_ctx', {})
+        sc_pesi    = ctx.get('sc_pesi', {})
+        oi_carica  = ctx.get('oi_carica', 0.0)
+        oi_stato   = ctx.get('oi_stato', '')
+        drift      = ctx.get('drift', 0.0)
+        macd_hist  = ctx.get('macd_hist', 0.0)
+        regime     = ctx.get('regime', '')
+        st_stats   = ctx.get('signal_tracker_stats', {})
+        vt_stats   = ctx.get('veritas_stats', {})
+
+        # CAPSULA 1: Pesi SC degradati
+        if sc_pesi.get('campo_carica', 0.30) < 0.25:
+            if self._e_nuova('AUTO_SC_PESI_FIX'):
+                capsule.append({
+                    'id': 'AUTO_SC_PESI_FIX',
+                    'tipo': 'L2',
+                    'motivo': f"campo_carica={sc_pesi.get('campo_carica',0):.2f} degradato",
+                    'azione': {'type': 'ripristina_pesi_sc', 'params': {
+                        'campo_carica': 0.35, 'signal_tracker': 0.20,
+                        'oracolo_fp': 0.25, 'matrimonio': 0.10, 'phantom_ratio': 0.10
+                    }},
+                    'scade_ts': ts + 3600, 'vita_ore': 1
+                })
+                log.info(f"[IA_AUTO] 🔧 Capsula AUTO_SC_PESI_FIX generata")
+
+        # CAPSULA 2: SHORT bloccato con mercato che scende
+        if (drift < -0.03 and macd_hist < -1.0 and
+                oi_stato in ("FUOCO", "CARICA") and oi_carica >= 0.70):
+            if self._e_nuova('AUTO_SHORT_UNLOCK'):
+                capsule.append({
+                    'id': 'AUTO_SHORT_UNLOCK',
+                    'tipo': 'L3',
+                    'motivo': f"drift={drift:+.3f}% macd={macd_hist:.1f} oracolo={oi_carica:.2f}",
+                    'azione': {'type': 'sblocca_short_ranging', 'params': {}},
+                    'scade_ts': ts + 300, 'vita_ore': 0.08
+                })
+                log.info(f"[IA_AUTO] 🔧 Capsula AUTO_SHORT_UNLOCK generata")
+
+        # CAPSULA 3: Oracolo forte bloccato da DIFENSIVO
+        if oi_stato == "FUOCO" and oi_carica >= 0.85:
+            if self._e_nuova('AUTO_ORACOLO_OVERRIDE'):
+                capsule.append({
+                    'id': 'AUTO_ORACOLO_OVERRIDE',
+                    'tipo': 'L3',
+                    'motivo': f"Oracolo FUOCO carica={oi_carica:.2f}",
+                    'azione': {'type': 'oracolo_override', 'params': {}},
+                    'scade_ts': ts + 120, 'vita_ore': 0.03
+                })
+                log.info(f"[IA_AUTO] 🔥 Capsula AUTO_ORACOLO_OVERRIDE generata")
+
+        # CAPSULA 4: LONG in mercato che scende persistentemente
+        if drift < -0.05 and macd_hist < -2.0:
+            if self._e_nuova('AUTO_STOP_LONG'):
+                capsule.append({
+                    'id': 'AUTO_STOP_LONG',
+                    'tipo': 'L2',
+                    'motivo': f"drift={drift:+.3f}% macd={macd_hist:.1f} — stop LONG",
+                    'azione': {'type': 'blocca_long', 'params': {'durata': 300}},
+                    'scade_ts': ts + 300, 'vita_ore': 0.08
+                })
+                log.info(f"[IA_AUTO] 🚫 Capsula AUTO_STOP_LONG generata")
+
+        return capsule
 
     # =====================================================================
     # LIVELLO 2 — CAPSULE DI ESPERIENZA
@@ -2399,8 +2476,16 @@ class PersistenzaStato:
 
             # Ripristina pesi SC
             if 'sc_pesi' in data and hasattr(bot, 'supercervello') and data['sc_pesi']:
-                bot.supercervello._pesi = data['sc_pesi']
-                log.info(f"[RUNTIME_LOAD] 🧠 Pesi SC ripristinati: {data['sc_pesi']}")
+                pesi_caricati = data['sc_pesi']
+                # Applica pavimento — campo_carica non può essere sotto 30%
+                if pesi_caricati.get('campo_carica', 0) < 0.30:
+                    log.warning("[RUNTIME_LOAD] ⚠️ Pesi SC degradati — ripristino valori sicuri")
+                    pesi_caricati = {
+                        'oracolo_fp': 0.25, 'signal_tracker': 0.20,
+                        'campo_carica': 0.30, 'matrimonio': 0.13, 'phantom_ratio': 0.12
+                    }
+                bot.supercervello._pesi = pesi_caricati
+                log.info(f"[RUNTIME_LOAD] 🧠 Pesi SC ripristinati: {pesi_caricati}")
 
             # Ripristina Veritas
             if 'veritas_closed' in data and hasattr(bot, 'veritas'):
@@ -3876,6 +3961,11 @@ class VeritatisTracker:
                 elif hit_rate <= 0.40:
                     pesi['campo_carica'] = max(0.05, pesi['campo_carica'] - STEP)
 
+            # Pavimento/soffitto pesi — campo_carica non scende mai sotto 30%
+            # signal_tracker non sale mai sopra 25% — non deve dominare
+            pesi['campo_carica']   = max(0.30, pesi['campo_carica'])
+            pesi['signal_tracker'] = min(0.25, pesi['signal_tracker'])
+            pesi['oracolo_fp']     = max(0.15, pesi['oracolo_fp'])
             # Rinormalizza sempre a somma 1.0
             tot = sum(pesi.values())
             for k in pesi:
@@ -4002,16 +4092,18 @@ class SuperCervello:
         v['signal_tracker'] = (1.0 if st_hit_rate>=0.65 and st_pnl>0 and st_n>=10 else
                                 0.6 if st_hit_rate>=0.55 and st_n>=10 else
                                 0.0 if (st_hit_rate<=0.40 or st_pnl<-1) and st_n>=10 else 0.5)
-        # Carica — se CARICA|BLOCCA ha hit>=65% dal Veritas, tratta come FUOCO
-        _carica_boost = False
-        _vt_stats = getattr(self, '_veritas_stats_ref', {})
-        if 'CARICA|BLOCCA' in _vt_stats:
-            _s = _vt_stats['CARICA|BLOCCA']
-            if _s.get('n',0) >= 20 and _s.get('hits',0)/max(_s['n'],1) >= 0.65:
-                _carica_boost = True
-        v['campo_carica'] = (1.0 if oi_stato=="FUOCO" else
-                              1.0 if oi_stato=="CARICA" and _carica_boost else
-                              0.6 if oi_stato=="CARICA" else 0.1)
+        # Carica — peso dinamico basato sulla carica reale dell'Oracolo
+        # Più alta la carica → più peso all'organo che la esprime
+        if oi_stato == "FUOCO":
+            if oi_carica >= 0.80:   v['campo_carica'] = 1.0   # massima fiducia
+            elif oi_carica >= 0.65: v['campo_carica'] = 0.85
+            else:                   v['campo_carica'] = 0.70
+        elif oi_stato == "CARICA":
+            if oi_carica >= 0.80:   v['campo_carica'] = 0.75
+            elif oi_carica >= 0.65: v['campo_carica'] = 0.60
+            else:                   v['campo_carica'] = 0.45
+        else:
+            v['campo_carica'] = 0.1
         # Matrimonio
         v['matrimonio'] = (1.0 if matrimonio_trust>=0.7 and matrimonio_wr>=0.65 else
                            0.6 if matrimonio_wr>=0.55 else
@@ -4874,6 +4966,8 @@ class OvertopBassanoV14Production:
         # MA: deadlock protection - max 5 minuti in DIFENSIVO
         if self._state == "DIFENSIVO":
             time_in_defensive = now - self._state_since
+            # Oracolo FUOCO con carica alta supera il blocco difensivo
+            _oracolo_override = (self._oi_stato == "FUOCO" and self._oi_carica >= 0.80)
             if time_in_defensive > 300:  # 5 minuti
                 self._state = "NEUTRO"
                 self._state_since = now
@@ -4881,6 +4975,8 @@ class OvertopBassanoV14Production:
                 self._log_m2("[CFG]️", f"STATO → NEUTRO (auto-reset dopo {time_in_defensive/60:.1f} min in DIFENSIVO)")
                 self.telemetry.log_state_change("DIFENSIVO", "NEUTRO", 0,
                     self._regime_current, self.campo._direction, self._shadow is not None)
+            elif _oracolo_override:
+                self._log_m2("🔥", f"ORACOLO OVERRIDE difensivo — carica={self._oi_carica:.2f}")
             else:
                 return False, f"DIFENSIVO_{300-time_in_defensive:.0f}s (loss_streak={self._m2_loss_streak})"
 
@@ -5147,7 +5243,9 @@ class OvertopBassanoV14Production:
                             _veritas_short_ok = True
                             break
 
-        if self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok and not _veritas_short_ok:
+        # Sblocca SHORT in RANGING se drift negativo persistente + macd negativo
+        _drift_short_ok = drift < -0.03 and macd_hist < -1.0 and bearish_energy >= 3
+        if self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok and not _veritas_short_ok and not _drift_short_ok:
             # NON flippare - logga come SHORT evitato
             if not hasattr(self, '_shadow_short_log'):
                 self._shadow_short_log = []
@@ -5548,11 +5646,23 @@ class OvertopBassanoV14Production:
                             sum(self._pred_ratio_history) / len(self._pred_ratio_history), 1)
                         self.heartbeat_data["pred_ratio"]     = ratio_smooth
                         self.heartbeat_data["pred_ratio_raw"] = ratio
-                        # Aggiorna SC per boost predizione e Veritas stats
+                                # Aggiorna SC per boost predizione e Veritas stats
                         if hasattr(self, 'supercervello'):
                             self.supercervello._pred_score_ref = conf_pct
                             self.supercervello._pred_calib_ref = ratio_smooth
                             self.supercervello._veritas_stats_ref = self.veritas._stats
+                        # Passa contesto live all'IA per capsule auto-correttive
+                        if hasattr(self, 'ia'):
+                            self.ia._ctx = {
+                                'sc_pesi': self.supercervello._pesi.copy(),
+                                'oi_carica': self._oi_carica,
+                                'oi_stato': self._oi_stato,
+                                'drift': getattr(self.campo, '_last_drift', 0.0),
+                                'macd_hist': getattr(self.campo, '_macd_hist', 0.0),
+                                'regime': self._regime_current,
+                                'signal_tracker_stats': self.signal_tracker._stats,
+                                'veritas_stats': self.veritas._stats,
+                            }
                 # Pesi SuperCervello
                 if hasattr(self,'supercervello'):
                     self.heartbeat_data["sc_pesi"] = self.supercervello._pesi
