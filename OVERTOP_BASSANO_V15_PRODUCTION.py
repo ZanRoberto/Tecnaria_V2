@@ -5816,9 +5816,12 @@ class OvertopBassanoV14Production:
                             self._log_m2("🚫", f"MIDZONE BLOCK pos={range_pos:.2f} — no trade in centro range")
                             return
                         # Drift troppo debole — rumore puro
+                        # MA: se Oracolo è in FUOCO/CARICA con carica alta → ignora drift debole
                         drifts = [abs(getattr(self.campo, '_last_drift', 0.0))]
                         drift_avg = drifts[0] if drifts else 0
-                        if drift_avg < 0.0001 and range_pos < 0.80:
+                        _oracolo_forte = (self._oi_stato in ("FUOCO","CARICA") 
+                                         and self._oi_carica >= 0.70)
+                        if drift_avg < 0.0001 and range_pos < 0.80 and not _oracolo_forte:
                             self._log_m2("🚫", f"DRIFT DEBOLE {drift_avg:.5f} — no trade")
                             return
 
