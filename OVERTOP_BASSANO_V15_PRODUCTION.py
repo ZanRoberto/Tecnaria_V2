@@ -4130,6 +4130,12 @@ class SuperCervello:
         if loss_streak >= 4:
             return self._out("BLOCCA", 0.5, 0, f"streak_{loss_streak}", 0.90)
 
+        # VETO ASSOLUTO FINGERPRINT TOSSICO
+        # Se il fingerprint ha 20+ campioni con WR < 45% — blocca sempre
+        # La memoria storica dell'Oracolo è il giudice più affidabile
+        if fp_samples >= 20 and fp_wr < 0.45:
+            return self._out("BLOCCA", 0.5, 0, f"FP_TOSSICO_wr={fp_wr:.0%}_n={fp_samples}", 0.95)
+
         # BOOST PREDIZIONE: se score >85% e calibrazione >85% e Oracolo FUOCO → entra
         # La predizione è dimostrata dal Veritas — l'Oracolo ha ragione
         _ps = getattr(self, '_pred_score_ref', 0)
