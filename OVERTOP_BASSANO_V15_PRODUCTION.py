@@ -554,6 +554,44 @@ class IntelligenzaAutonoma:
                 })
                 log.info(f"[IA_AUTO] 🚫 Capsula AUTO_STOP_LONG generata")
 
+        # CAPSULA 5: soglia RANGING ottimale dai dati reali
+        # Calcola soglia ottimale quando Signal Tracker ha 50+ segnali
+        _ranging_stats = {k:v for k,v in st_stats.items() 
+                         if 'LONG' in k and 'RANGING' in k}
+        for k, s in _ranging_stats.items():
+            hits = s.get('hit_60', [])
+            if len(hits) >= 50:
+                # Calcola hit rate — se sotto 55% alza la soglia
+                hit_rate = sum(hits) / len(hits)
+                if hit_rate < 0.55:
+                    soglia_suggerita = 54
+                elif hit_rate >= 0.65:
+                    soglia_suggerita = 48
+                else:
+                    soglia_suggerita = 51
+                if self._e_nuova(f'AUTO_SOGLIA_RANGING_{soglia_suggerita}'):
+                    capsule.append({
+                        'id': f'AUTO_SOGLIA_RANGING_{soglia_suggerita}',
+                        'tipo': 'L2',
+                        'motivo': f"RANGING hit_rate={hit_rate:.0%} n={len(hits)} → soglia={soglia_suggerita}",
+                        'azione': {'type': 'set_soglia_ranging', 
+                                  'params': {'soglia': soglia_suggerita}},
+                        'scade_ts': ts + 7200, 'vita_ore': 2
+                    })
+                    log.info(f"[IA_AUTO] 📊 Soglia RANGING ottimale={soglia_suggerita} da {len(hits)} campioni")
+                break
+
+        # CAPSULA 4 originale
+            if self._e_nuova('AUTO_STOP_LONG'):
+                capsule.append({
+                    'id': 'AUTO_STOP_LONG',
+                    'tipo': 'L2',
+                    'motivo': f"drift={drift:+.3f}% macd={macd_hist:.1f} — stop LONG",
+                    'azione': {'type': 'blocca_long', 'params': {'durata': 300}},
+                    'scade_ts': ts + 300, 'vita_ore': 0.08
+                })
+                log.info(f"[IA_AUTO] 🚫 Capsula AUTO_STOP_LONG generata")
+
         return capsule
 
     # =====================================================================
@@ -5769,6 +5807,7 @@ class OvertopBassanoV14Production:
                     r20 = max(prices_buf) - min(prices_buf)
                     if r20 > 0:
                         range_pos = (price - min(prices_buf)) / r20
+
                         # Midzone: prezzo nel 40-60% del range → STOP
                         if 0.40 <= range_pos <= 0.60:
                             if len(self._phantoms_open) < 5:
