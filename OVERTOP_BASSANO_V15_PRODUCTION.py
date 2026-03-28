@@ -363,6 +363,24 @@ class CapsuleRuntime:
                 risultato['size_mult'] *= azione.get('params', {}).get('mult', 1.0)
             elif azione.get('type') == 'boost_soglia':
                 risultato['soglia_boost'] += azione.get('params', {}).get('delta', 0.0)
+            # NUOVE AZIONI AUTO-CORRETTIVE
+            elif azione.get('type') == 'ripristina_pesi_sc':
+                # Segnala al bot di ripristinare i pesi SC
+                risultato['ripristina_pesi_sc'] = azione.get('params', {})
+            elif azione.get('type') == 'sblocca_short_ranging':
+                # Sblocca SHORT in RANGING per questa capsula
+                risultato['sblocca_short_ranging'] = True
+            elif azione.get('type') == 'oracolo_override':
+                # Oracolo supera i blocchi difensivi
+                risultato['oracolo_override'] = True
+            elif azione.get('type') == 'blocca_long':
+                # Blocca LONG per N secondi
+                risultato['blocca_long'] = True
+                risultato['blocca'] = True
+                risultato['reason'] = 'AUTO_STOP_LONG'
+            elif azione.get('type') == 'set_soglia_ranging':
+                # Imposta soglia ottimale per RANGING
+                risultato['soglia_ranging'] = azione.get('params', {}).get('soglia', 48)
         return risultato
 
     def _check_trigger(self, trigger: dict, contesto: dict) -> bool:
@@ -5853,6 +5871,25 @@ class OvertopBassanoV14Production:
                 midzone=False,  # midzone già gestito sopra
                 loss_streak=self._m2_loss_streak,
             )
+
+            # Applica azioni capsule auto-correttive prima della decisione SC
+            _m2_caps = self.capsule_runtime.valuta({
+                'regime': self._regime_current,
+                'direction': self.campo._direction,
+                'oi_carica': self._oi_carica,
+                'oi_stato': self._oi_stato,
+                'drift': getattr(self.campo, '_last_drift', 0.0),
+                'loss_streak': self._m2_loss_streak,
+            })
+            if _m2_caps.get('ripristina_pesi_sc'):
+                pesi = _m2_caps['ripristina_pesi_sc']
+                if pesi:
+                    self.supercervello._pesi.update(pesi)
+                    self._log_m2("🔧", f"[CAPSULA] Pesi SC ripristinati")
+            if _m2_caps.get('sblocca_short_ranging'):
+                if getattr(self.campo, '_last_drift', 0) < -0.02:
+                    self.campo._direction = "SHORT"
+                    self._log_m2("🔧", f"[CAPSULA] SHORT sbloccato in RANGING")
 
             # Applica decisione supercervello
             if _sc_dec['azione'] == 'BLOCCA':
