@@ -4002,8 +4002,15 @@ class SuperCervello:
         v['signal_tracker'] = (1.0 if st_hit_rate>=0.65 and st_pnl>0 and st_n>=10 else
                                 0.6 if st_hit_rate>=0.55 and st_n>=10 else
                                 0.0 if (st_hit_rate<=0.40 or st_pnl<-1) and st_n>=10 else 0.5)
-        # Carica
+        # Carica — se CARICA|BLOCCA ha hit>=65% dal Veritas, tratta come FUOCO
+        _carica_boost = False
+        _vt_stats = getattr(self, '_veritas_stats_ref', {})
+        if 'CARICA|BLOCCA' in _vt_stats:
+            _s = _vt_stats['CARICA|BLOCCA']
+            if _s.get('n',0) >= 20 and _s.get('hits',0)/max(_s['n'],1) >= 0.65:
+                _carica_boost = True
         v['campo_carica'] = (1.0 if oi_stato=="FUOCO" else
+                              1.0 if oi_stato=="CARICA" and _carica_boost else
                               0.6 if oi_stato=="CARICA" else 0.1)
         # Matrimonio
         v['matrimonio'] = (1.0 if matrimonio_trust>=0.7 and matrimonio_wr>=0.65 else
@@ -4683,7 +4690,10 @@ class OvertopBassanoV14Production:
         # -- SMORZ - impulso finito ----------------------------------------
         duration     = time.time() - self.entry_time
         duration_avg = self.trade_open["duration_avg"]
-        if duration > duration_avg * 0.5 and momentum == "DEBOLE":
+        # Non uscire per SMORZ se l'Oracolo vede ancora energia
+        # L'Oracolo ha dimostrato di avere ragione — rispettalo fino alla fine
+        _oracolo_vivo = self._oi_carica >= 0.55 or self._oi_stato in ("FUOCO", "CARICA")
+        if duration > duration_avg * 0.5 and momentum == "DEBOLE" and not _oracolo_vivo:
             self._log("🌙", f"SMORZ impulso finito - {self.current_matrimonio} dopo {duration:.0f}s")
             self._close_trade(price, momentum, volatility, trend, reason="SMORZ")
             return
@@ -5538,10 +5548,11 @@ class OvertopBassanoV14Production:
                             sum(self._pred_ratio_history) / len(self._pred_ratio_history), 1)
                         self.heartbeat_data["pred_ratio"]     = ratio_smooth
                         self.heartbeat_data["pred_ratio_raw"] = ratio
-                        # Aggiorna SC per boost predizione
+                        # Aggiorna SC per boost predizione e Veritas stats
                         if hasattr(self, 'supercervello'):
                             self.supercervello._pred_score_ref = conf_pct
                             self.supercervello._pred_calib_ref = ratio_smooth
+                            self.supercervello._veritas_stats_ref = self.veritas._stats
                 # Pesi SuperCervello
                 if hasattr(self,'supercervello'):
                     self.heartbeat_data["sc_pesi"] = self.supercervello._pesi
