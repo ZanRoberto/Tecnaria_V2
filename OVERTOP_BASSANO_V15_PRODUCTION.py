@@ -5028,8 +5028,6 @@ class OvertopBassanoV14Production:
         # MA: deadlock protection - max 5 minuti in DIFENSIVO
         if self._state == "DIFENSIVO":
             time_in_defensive = now - self._state_since
-            # Oracolo FUOCO con carica alta supera il blocco difensivo
-            _oracolo_override = (self._oi_stato == "FUOCO" and self._oi_carica >= 0.80)
             if time_in_defensive > 300:  # 5 minuti
                 self._state = "NEUTRO"
                 self._state_since = now
@@ -5037,8 +5035,6 @@ class OvertopBassanoV14Production:
                 self._log_m2("[CFG]️", f"STATO → NEUTRO (auto-reset dopo {time_in_defensive/60:.1f} min in DIFENSIVO)")
                 self.telemetry.log_state_change("DIFENSIVO", "NEUTRO", 0,
                     self._regime_current, self.campo._direction, self._shadow is not None)
-            elif _oracolo_override:
-                self._log_m2("🔥", f"ORACOLO OVERRIDE difensivo — carica={self._oi_carica:.2f}")
             else:
                 return False, f"DIFENSIVO_{300-time_in_defensive:.0f}s (loss_streak={self._m2_loss_streak})"
 
