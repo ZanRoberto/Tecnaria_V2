@@ -5764,6 +5764,18 @@ class OvertopBassanoV14Production:
             if seed.get('reason') == 'insufficient_data':
                 return
 
+            # -- FASE ENERGETICA: impulso vivo o morto? ---------------------
+            # Stesso prezzo può essere impulso NASCENTE o ESAURITO.
+            # Se il Decelerometro vede decel_score > 0.75 → impulso già morto.
+            # Non è una manopola — è la derivata seconda del movimento reale.
+            _decel_entry = self.decelero.analyze()
+            if _decel_entry.get('decel_score', 0) > 0.75:
+                self._log_m2("⚡", f"IMPULSO MORTO decel={_decel_entry['decel_score']:.2f} — no entry")
+                if len(self._phantoms_open) < 5:
+                    self._record_phantom(price, f"IMPULSO_MORTO_{_decel_entry['decel_score']:.2f}",
+                        seed['score'], momentum, volatility, trend)
+                return
+
             # -- DECIDI DIREZIONE: LONG o SHORT -----------------------------
             # Il mercato decide, non noi. Drift + MACD + Trend = verdetto.
             self._auto_detect_direction(trend)
