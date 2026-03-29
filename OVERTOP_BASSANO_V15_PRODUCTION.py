@@ -5776,12 +5776,6 @@ class OvertopBassanoV14Production:
                 # Non logga phantom per cooldown - è silenzio voluto, non opportunita
                 return
 
-            # -- RANGING STOP: in RANGING non si entra mai ------------------
-            # Dati reali: LONG RANGING HIT 48% = perdita sistematica
-            # Il sistema aspetta EXPLOSIVE o TRENDING dove ha edge reale
-            if self._regime_current == "RANGING":
-                self._log_m2("⏸️", f"RANGING — aspetto EXPLOSIVE/TRENDING")
-                return
 
             seed = self.seed_scorer.score()
             if seed.get('reason') == 'insufficient_data':
