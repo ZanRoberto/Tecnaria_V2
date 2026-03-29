@@ -5352,24 +5352,8 @@ class OvertopBassanoV14Production:
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
         
-        # -- FORZA LONG IN RANGING - ma non se SHORT EXPLOSIVE aveva edge ----
-        # Signal Tracker: SHORT EXPLOSIVE HIT 89% — non forzare LONG se appena usciti da EXPLOSIVE
-        if self._regime_current == "RANGING" and campo._direction == "SHORT":
-            # Controlla se il Signal Tracker dice che SHORT ha edge
-            _short_has_edge = False
-            if hasattr(self, 'signal_tracker'):
-                for k, s in self.signal_tracker._stats.items():
-                    if 'SHORT' in k and s.get('n', 0) >= 5:
-                        hits = s.get('hit_60', [])
-                        if hits and sum(hits)/len(hits) >= 0.65:
-                            _short_has_edge = True
-                            break
-            if not _short_has_edge:
-                campo._direction = "LONG"
-                campo._direction_last_change = now
-                self._log_m2("🔄", f"FORZA LONG in RANGING (era SHORT, nessun edge SHORT)")
-            else:
-                self._log_m2("✅", f"SHORT mantenuto in RANGING — Signal Tracker conferma edge SHORT")
+        # SHORT in RANGING: mantenuto se il drift è negativo
+        # Non forzare LONG quando il mercato scende
         
         if campo._direction != old_direction:
             self._log_m2("🔄", f"DIREZIONE → {campo._direction} (drift={drift:+.3f}% macd_hist={macd_hist:+.2f} trend={trend})")
