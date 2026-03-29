@@ -38,11 +38,11 @@ DIVORCE_FP_DIVERGE_PCT = 0.50 # divergenza fingerprint > 50% → trigger 4
 DIVORCE_MIN_TRIGGERS   = 2    # quanti trigger devono scattare per uscita immediata
 
 # --- DATABASE ----------------------------------------------------------------
-DB_PATH        = os.environ.get("DB_PATH", "/home/app/data/trading_data_sol.db")
+DB_PATH        = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
 NARRATIVES_DB  = os.environ.get("NARRATIVES_DB", "/home/app/data/narratives.db")
 
 # --- BINANCE -----------------------------------------------------------------
-SYMBOL         = "SOLUSDC"
+SYMBOL         = "BTCUSDC"
 BINANCE_WS_URL = f"wss://stream.binance.com:9443/ws/{SYMBOL.lower()}@aggTrade"
 
 # ===========================================================================
