@@ -5776,19 +5776,6 @@ class OvertopBassanoV14Production:
                         seed['score'], momentum, volatility, trend)
                 return
 
-            # -- FASE ENERGETICA: impulso nascente o esaurito? --------------
-            # drift_slope = mom_fast - mom_slow (derivata seconda del prezzo)
-            # Positivo = impulso che accelera = energia nascente → entra
-            # Negativo = impulso che decelera = energia esaurita → aspetta
-            # Questo è il punto: stesso prezzo può essere nascita o morte.
-            _drift_slope = seed.get('drift_slope', 0.0)
-            if _drift_slope < 0.0001:
-                self._log_m2("💀", f"ENERGIA CALANTE slope={_drift_slope:.5f} — impulso esaurito")
-                if len(self._phantoms_open) < 5:
-                    self._record_phantom(price, f"ENERGIA_CALANTE_{_drift_slope:.5f}",
-                        seed['score'], momentum, volatility, trend)
-                return
-
             # -- DECIDI DIREZIONE: LONG o SHORT -----------------------------
             # Il mercato decide, non noi. Drift + MACD + Trend = verdetto.
             self._auto_detect_direction(trend)
