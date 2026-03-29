@@ -5693,17 +5693,17 @@ class OvertopBassanoV14Production:
                             self.supercervello._pred_calib_ref = ratio_smooth
                             self.supercervello._veritas_stats_ref = self.veritas._stats
                         # Passa contesto live all'IA per capsule auto-correttive
-                        if hasattr(self, 'ia'):
-                            self.ia._ctx = {
-                                'sc_pesi': self.supercervello._pesi.copy(),
-                                'oi_carica': self._oi_carica,
-                                'oi_stato': self._oi_stato,
-                                'drift': getattr(self.campo, '_last_drift', 0.0),
-                                'macd_hist': getattr(self.campo, '_macd_hist', 0.0),
-                                'regime': self._regime_current,
-                                'signal_tracker_stats': self.signal_tracker._stats,
-                                'veritas_stats': self.veritas._stats,
-                            }
+                        # IA contesto — usa realtime_engine (nome corretto)
+                        self.realtime_engine._ctx = {
+                            'sc_pesi': self.supercervello._pesi.copy(),
+                            'oi_carica': self._oi_carica,
+                            'oi_stato': self._oi_stato,
+                            'drift': getattr(self.campo, '_last_drift', 0.0),
+                            'macd_hist': self.campo._last_macd_hist,
+                            'regime': self._regime_current,
+                            'signal_tracker_stats': self.signal_tracker._stats,
+                            'veritas_stats': self.veritas._stats,
+                        }
                 # Pesi SuperCervello
                 if hasattr(self,'supercervello'):
                     self.heartbeat_data["sc_pesi"] = self.supercervello._pesi
@@ -5764,13 +5764,25 @@ class OvertopBassanoV14Production:
             if seed.get('reason') == 'insufficient_data':
                 return
 
+            # -- CAPSULE 1-5: stessa protezione del Motore 1 --------------
+            # M2 usa le stesse capsule di M1 per non entrare in matrimoni tossici.
+            # Capsule2 blocca confidence < 0.50 → RANGE_DEAD (conf=0.30) bloccato.
+            _mat_m2   = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
+            _conf_m2  = _mat_m2.get('confidence', 0.5)
+            _allow2, _reason2 = self.capsule2.riconosci(_conf_m2)
+            if not _allow2:
+                if len(self._phantoms_open) < 5:
+                    self._record_phantom(price, f"CAP2_M2_{_mat_m2['name']}_conf{_conf_m2:.2f}",
+                        seed['score'], momentum, volatility, trend)
+                return
+
             # -- FASE ENERGETICA: impulso nascente o esaurito? --------------
             # drift_slope = mom_fast - mom_slow (derivata seconda del prezzo)
             # Positivo = impulso che accelera = energia nascente → entra
             # Negativo = impulso che decelera = energia esaurita → aspetta
             # Questo è il punto: stesso prezzo può essere nascita o morte.
             _drift_slope = seed.get('drift_slope', 0.0)
-            if _drift_slope < -0.0005:
+            if _drift_slope < 0.0001:
                 self._log_m2("💀", f"ENERGIA CALANTE slope={_drift_slope:.5f} — impulso esaurito")
                 if len(self._phantoms_open) < 5:
                     self._record_phantom(price, f"ENERGIA_CALANTE_{_drift_slope:.5f}",
