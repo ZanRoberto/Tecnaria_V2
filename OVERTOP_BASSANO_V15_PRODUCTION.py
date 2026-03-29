@@ -522,7 +522,7 @@ class IntelligenzaAutonoma:
 
         # CAPSULA 1: Pesi SC degradati
         if sc_pesi.get('campo_carica', 0.30) < 0.25:
-            if self._e_nuova('AUTO_SC_PESI_FIX'):
+            if self._è_nuova('AUTO_SC_PESI_FIX'):
                 capsule.append({
                     'id': 'AUTO_SC_PESI_FIX',
                     'tipo': 'L2',
@@ -538,7 +538,7 @@ class IntelligenzaAutonoma:
         # CAPSULA 2: SHORT bloccato con mercato che scende
         if (drift < -0.03 and macd_hist < -1.0 and
                 oi_stato in ("FUOCO", "CARICA") and oi_carica >= 0.70):
-            if self._e_nuova('AUTO_SHORT_UNLOCK'):
+            if self._è_nuova('AUTO_SHORT_UNLOCK'):
                 capsule.append({
                     'id': 'AUTO_SHORT_UNLOCK',
                     'tipo': 'L3',
@@ -550,7 +550,7 @@ class IntelligenzaAutonoma:
 
         # CAPSULA 3: Oracolo forte bloccato da DIFENSIVO
         if oi_stato == "FUOCO" and oi_carica >= 0.85:
-            if self._e_nuova('AUTO_ORACOLO_OVERRIDE'):
+            if self._è_nuova('AUTO_ORACOLO_OVERRIDE'):
                 capsule.append({
                     'id': 'AUTO_ORACOLO_OVERRIDE',
                     'tipo': 'L3',
@@ -562,7 +562,7 @@ class IntelligenzaAutonoma:
 
         # CAPSULA 4: LONG in mercato che scende persistentemente
         if drift < -0.05 and macd_hist < -2.0:
-            if self._e_nuova('AUTO_STOP_LONG'):
+            if self._è_nuova('AUTO_STOP_LONG'):
                 capsule.append({
                     'id': 'AUTO_STOP_LONG',
                     'tipo': 'L2',
@@ -587,7 +587,7 @@ class IntelligenzaAutonoma:
                     soglia_suggerita = 48
                 else:
                     soglia_suggerita = 51
-                if self._e_nuova(f'AUTO_SOGLIA_RANGING_{soglia_suggerita}'):
+                if self._è_nuova(f'AUTO_SOGLIA_RANGING_{soglia_suggerita}'):
                     capsule.append({
                         'id': f'AUTO_SOGLIA_RANGING_{soglia_suggerita}',
                         'tipo': 'L2',
@@ -600,7 +600,7 @@ class IntelligenzaAutonoma:
                 break
 
         # CAPSULA 4 originale
-            if self._e_nuova('AUTO_STOP_LONG'):
+            if self._è_nuova('AUTO_STOP_LONG'):
                 capsule.append({
                     'id': 'AUTO_STOP_LONG',
                     'tipo': 'L2',
@@ -4218,9 +4218,9 @@ class SuperCervello:
                 'voti':voti,'pesi':dict(self._pesi)}
 
 
-class OvertopBassanoV14Production:
+class OvertopBassanoV15Production:
     """
-    Bot SOL/USDC su Binance WebSocket.
+    Bot BTC/USDC su Binance WebSocket.
     Modalita: PAPER_TRADE (simula) o LIVE (ordini reali).
 
     Architettura decisionale entry:
@@ -6855,15 +6855,30 @@ class OvertopBassanoV14Production:
 
     def _read_bridge_commands(self):
         """
-        Legge bridge_commands.json e applica comandi al CampoGravitazionale.
-        Il bridge AI scrive qui, il bot esegue qui. Zero restart.
+        Legge comandi bridge da SQLite (key: bridge_commands) E da bridge_commands.json.
+        Protocollo unificato — bridge nuovo scrive su DB, bridge vecchio su file.
         """
         try:
-            if not os.path.exists(self._bridge_cmd_file):
-                return
-
-            with open(self._bridge_cmd_file) as f:
-                commands = json.load(f)
+            commands = []
+            # -- PROTOCOLLO NUOVO: legge da DB (bridge predittivo V48+) ----
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                rows = conn.execute(
+                    "SELECT value FROM bot_state WHERE key='bridge_commands'"
+                ).fetchall()
+                conn.close()
+                if rows:
+                    db_cmds = json.loads(rows[0][0])
+                    if isinstance(db_cmds, list):
+                        commands.extend(db_cmds)
+            except Exception:
+                pass
+            # -- PROTOCOLLO VECCHIO: legge da file (bridge legacy) ---------
+            if os.path.exists(self._bridge_cmd_file):
+                with open(self._bridge_cmd_file) as f:
+                    file_cmds = json.load(f)
+                    if isinstance(file_cmds, list):
+                        commands.extend(file_cmds)
 
             modified = False
             for cmd in commands:
@@ -6878,19 +6893,11 @@ class OvertopBassanoV14Production:
                     value = data.get("value")
                     # -- PARAMETRI PROTETTI - calibrati sui dati reali ------
                     # Il bridge NON può toccarli. Solo noi dopo analisi phantom.
+                    # Solo i parametri fisici restano protetti
+                    # I pesi SC sono gestiti dal Veritas — il bridge può agire
                     PROTECTED_PARAMS = {
-                        "SOGLIA_BASE",           # calibrata su 37,112 candele
-                        "SOGLIA_MAX",            # gestita dalla soglia proporzionale - il bridge non deve toccarla
-                        "SOGLIA_MIN",            # gestita dall'AUTO-TUNE - il bridge non deve toccarla
-                        "DRIFT_VETO_THRESHOLD",  # settato a -0.20% - phantom WR 81%
-                        "W_RSI",                 # peso RSI - calibrato
-                        "W_MACD",                # peso MACD - calibrato
-                        "W_SEED",                # peso seed - calibrato
-                        "W_FINGERPRINT",         # peso fingerprint - calibrato
-                        "W_MOMENTUM",            # peso momentum - calibrato
-                        "W_TREND",               # peso trend - calibrato
-                        "W_VOLATILITY",          # peso volatilita - calibrato
-                        "W_REGIME",              # peso regime - calibrato
+                        "SOGLIA_BASE",   # auto-tune la gestisce
+                        "SOGLIA_MIN",    # auto-tune la gestisce
                     }
                     if param in PROTECTED_PARAMS:
                         self._log("🌉", f"BRIDGE: RIFIUTATO {param} → {value} (protetto)")
@@ -7092,5 +7099,5 @@ class OvertopBassanoV14Production:
 # ===========================================================================
 
 if __name__ == '__main__':
-    bot = OvertopBassanoV14Production()
+    bot = OvertopBassanoV15Production()
     bot.run()
