@@ -6864,7 +6864,7 @@ class OvertopBassanoV15Production:
             try:
                 conn = sqlite3.connect(DB_PATH)
                 rows = conn.execute(
-                    "SELECT value FROM bot_state WHERE key='bridge_commands'"
+                    "SELECT value FROM bot_state WHERE key='bridge_cmd'"
                 ).fetchall()
                 conn.close()
                 if rows:
