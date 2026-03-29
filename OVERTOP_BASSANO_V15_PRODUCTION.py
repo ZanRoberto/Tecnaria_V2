@@ -5829,16 +5829,6 @@ class OvertopBassanoV14Production:
                     if r20 > 0:
                         range_pos = (price - min(prices_buf)) / r20
 
-                        # RANGE STRETTO: se il range 20 tick è < $30 → fee mangiano tutto
-                        # Con BTC $67k e leva 5x: serve almeno $27 di movimento per coprire fee
-                        _range_min = price * 0.0004  # 0.04% del prezzo = ~$27 su $67k
-                        if r20 < _range_min:
-                            self._log_m2("🚫", f"RANGE STRETTO r20=${r20:.0f} < min=${_range_min:.0f} — fee > profitto")
-                            if len(self._phantoms_open) < 5:
-                                self._record_phantom(price, f"RANGE_STRETTO_{r20:.0f}",
-                                    seed['score'], momentum, volatility, trend)
-                            return
-
                         # Midzone: prezzo nel 40-60% del range → STOP
                         if 0.40 <= range_pos <= 0.60:
                             if len(self._phantoms_open) < 5:
@@ -5850,27 +5840,13 @@ class OvertopBassanoV14Production:
                         # MA: se Oracolo è in FUOCO/CARICA con carica alta → ignora drift debole
                         drifts = [abs(getattr(self.campo, '_last_drift', 0.0))]
                         drift_avg = drifts[0] if drifts else 0
-                        _oracolo_forte = (self._oi_stato in ("FUOCO","CARICA") 
-                                         and self._oi_carica >= 0.70)
-                        if drift_avg < 0.0001 and range_pos < 0.80 and not _oracolo_forte:
+                        if drift_avg < 0.0001 and range_pos < 0.80:
                             self._log_m2("🚫", f"DRIFT DEBOLE {drift_avg:.5f} — no trade")
                             return
 
             # -- HARD GUARD: doppio check anti-bug --------------------------
             if result['score'] < result['soglia']:
                 self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
-                return
-
-            # -- SIGNAL TRACKER VETO: se HIT < 52% su N>=50 → non entrare
-            # Dati reali su 982 segnali: HIT 48% = perdita sistematica
-            _st_veto_data = self._get_signal_tracker_context(self._regime_current, result['score'])
-            _st_veto_n    = _st_veto_data.get('n', 0)
-            _st_veto_hit  = _st_veto_data.get('hit_rate', 0.5)
-            if _st_veto_n >= 50 and _st_veto_hit < 0.52:
-                self._log_m2("🚫", f"ST_VETO: HIT={_st_veto_hit:.0%} n={_st_veto_n} — contesto senza edge")
-                if len(self._phantoms_open) < 5:
-                    self._record_phantom(price, f"ST_VETO_hit{_st_veto_hit:.0%}",
-                        seed['score'], momentum, volatility, trend)
                 return
 
             # -- SUPERCERVELLO: decisione unificata da tutti gli organi ────
