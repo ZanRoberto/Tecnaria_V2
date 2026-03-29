@@ -5291,6 +5291,7 @@ class OvertopBassanoV14Production:
         # ECCEZIONE VERITAS: se il Veritas vede movimento ribassista reale
         # con delta_60s < -20 su almeno 5 segnali → lo SHORT è legittimo
         _veritas_short_ok = False
+        _drift_short_ok = drift < -0.02 and bearish_energy >= 3
         if hasattr(self, 'veritas') and self.veritas._stats:
             for k, s in self.veritas._stats.items():
                 if 'FUOCO' in k or 'CARICA' in k:
@@ -5301,8 +5302,6 @@ class OvertopBassanoV14Production:
                             _veritas_short_ok = True
                             break
 
-        # Sblocca SHORT in RANGING se drift negativo persistente + macd negativo
-        _drift_short_ok = drift < -0.03 and macd_hist < -1.0 and bearish_energy >= 3
         if self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok and not _veritas_short_ok and not _drift_short_ok:
             # NON flippare - logga come SHORT evitato
             if not hasattr(self, '_shadow_short_log'):
