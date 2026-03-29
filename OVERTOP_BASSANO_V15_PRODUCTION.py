@@ -38,12 +38,12 @@ DIVORCE_FP_DIVERGE_PCT = 0.50 # divergenza fingerprint > 50% → trigger 4
 DIVORCE_MIN_TRIGGERS   = 2    # quanti trigger devono scattare per uscita immediata
 
 # --- DATABASE ----------------------------------------------------------------
-DB_PATH        = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
+DB_PATH        = os.environ.get("DB_PATH", "/home/app/data/trading_data_sol.db")
 NARRATIVES_DB  = os.environ.get("NARRATIVES_DB", "/home/app/data/narratives.db")
 
 # --- BINANCE -----------------------------------------------------------------
-BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/btcusdc@aggTrade"
-SYMBOL         = "BTCUSDC"
+SYMBOL         = "SOLUSDC"
+BINANCE_WS_URL = f"wss://stream.binance.com:9443/ws/{SYMBOL.lower()}@aggTrade"
 
 # ===========================================================================
 # LOGGING
@@ -4220,7 +4220,7 @@ class SuperCervello:
 
 class OvertopBassanoV14Production:
     """
-    Bot BTC/USDC su Binance WebSocket.
+    Bot SOL/USDC su Binance WebSocket.
     Modalita: PAPER_TRADE (simula) o LIVE (ordini reali).
 
     Architettura decisionale entry:
@@ -5038,10 +5038,10 @@ class OvertopBassanoV14Production:
             else:
                 return False, f"DIFENSIVO_{300-time_in_defensive:.0f}s (loss_streak={self._m2_loss_streak})"
 
-        # -- VELOCITÀ: non entrare se ultimo trade chiuso < 5 secondi fa -
+        # -- VELOCITÀ: non entrare se ultimo trade chiuso < 30 secondi fa -
         if self._m2_recent_trades:
             last = self._m2_recent_trades[-1]
-            if now - last['ts'] < 5:
+            if now - last['ts'] < 30:
                 return False, f"TROPPO_VELOCE ({now - last['ts']:.1f}s dall'ultimo)"
 
         # -- LOSS PESANTE: se ultimo loss > $50, pausa 30 secondi -----
@@ -5776,6 +5776,13 @@ class OvertopBassanoV14Production:
                 # Non logga phantom per cooldown - è silenzio voluto, non opportunita
                 return
 
+            # -- RANGING STOP: in RANGING non si entra mai ------------------
+            # Dati reali: LONG RANGING HIT 48% = perdita sistematica
+            # Il sistema aspetta EXPLOSIVE o TRENDING dove ha edge reale
+            if self._regime_current == "RANGING":
+                self._log_m2("⏸️", f"RANGING — aspetto EXPLOSIVE/TRENDING")
+                return
+
             seed = self.seed_scorer.score()
             if seed.get('reason') == 'insufficient_data':
                 return
@@ -5828,6 +5835,16 @@ class OvertopBassanoV14Production:
                     if r20 > 0:
                         range_pos = (price - min(prices_buf)) / r20
 
+                        # RANGE STRETTO: se il range 20 tick è < $30 → fee mangiano tutto
+                        # Con BTC $67k e leva 5x: serve almeno $27 di movimento per coprire fee
+                        _range_min = price * 0.0004  # 0.04% del prezzo = ~$27 su $67k
+                        if r20 < _range_min:
+                            self._log_m2("🚫", f"RANGE STRETTO r20=${r20:.0f} < min=${_range_min:.0f} — fee > profitto")
+                            if len(self._phantoms_open) < 5:
+                                self._record_phantom(price, f"RANGE_STRETTO_{r20:.0f}",
+                                    seed['score'], momentum, volatility, trend)
+                            return
+
                         # Midzone: prezzo nel 40-60% del range → STOP
                         if 0.40 <= range_pos <= 0.60:
                             if len(self._phantoms_open) < 5:
@@ -5848,6 +5865,18 @@ class OvertopBassanoV14Production:
             # -- HARD GUARD: doppio check anti-bug --------------------------
             if result['score'] < result['soglia']:
                 self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
+                return
+
+            # -- SIGNAL TRACKER VETO: se HIT < 52% su N>=50 → non entrare
+            # Dati reali su 982 segnali: HIT 48% = perdita sistematica
+            _st_veto_data = self._get_signal_tracker_context(self._regime_current, result['score'])
+            _st_veto_n    = _st_veto_data.get('n', 0)
+            _st_veto_hit  = _st_veto_data.get('hit_rate', 0.5)
+            if _st_veto_n >= 50 and _st_veto_hit < 0.52:
+                self._log_m2("🚫", f"ST_VETO: HIT={_st_veto_hit:.0%} n={_st_veto_n} — contesto senza edge")
+                if len(self._phantoms_open) < 5:
+                    self._record_phantom(price, f"ST_VETO_hit{_st_veto_hit:.0%}",
+                        seed['score'], momentum, volatility, trend)
                 return
 
             # -- SUPERCERVELLO: decisione unificata da tutti gli organi ────
