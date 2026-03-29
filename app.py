@@ -11,7 +11,7 @@ MISSION CONTROL V6.0 — BOT V14 PRODUCTION + AI BRIDGE
 """
 
 from flask import Flask, jsonify, render_template_string, request, send_file, abort
-from OVERTOP_BASSANO_V15_PRODUCTION import OvertopBassanoV14Production
+from OVERTOP_BASSANO_V15_PRODUCTION import OvertopBassanoV15Production
 from ai_bridge import AIBridge
 import sqlite3
 import json
@@ -149,7 +149,7 @@ def trading_log():
             db_execute("""
                 INSERT INTO trades (event_type, asset, price, size, pnl, direction, reason, data_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (event_type, data.get("asset","BTCUSDC"),
+            """, (event_type, data.get("asset","SOLUSDC"),
                   data.get("price",0), data.get("size",0), data.get("pnl",0),
                   data.get("direction","LONG"), data.get("reason",""),
                   json.dumps(data)))
@@ -426,8 +426,8 @@ def bot_thread_launcher():
             # ── AUTO-INJECT BRAIN — prima del bot ───────────────────────
             _auto_inject_brain()
 
-            log("[BOT_LAUNCHER] 🚀 Avvio OvertopBassanoV14Production...")
-            bot = OvertopBassanoV14Production(
+            log("[BOT_LAUNCHER] 🚀 Avvio OvertopBassanoV15Production...")
+            bot = OvertopBassanoV15Production(
                 heartbeat_data=heartbeat_data,
                 heartbeat_lock=heartbeat_lock,
                 db_execute=db_execute,
@@ -661,7 +661,7 @@ canvas.spark { width:100%; height:40px; }
   <!-- TICKER -->
   <div class="ticker">
     <span class="price-big" id="btc-price">--</span>
-    <span style="color:var(--dim)">BTC/USDC</span>
+    <span style="color:var(--dim)">SOL/USDC</span>
     <span>⚡ <span id="tick-n" style="color:var(--yellow)">0</span></span>
     <span>🕐 <span id="last-tick" style="color:var(--dim)">--</span></span>
     <span id="trade-status-txt" style="color:var(--dim)">🔍 Analizzando...</span>
@@ -873,7 +873,7 @@ canvas.spark { width:100%; height:40px; }
 
   <!-- GRAFICO LIVE — PREZZO + SEGNALI -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--green); border-width:2px;">
-    <div class="panel-head green">📈 GRAFICO LIVE — BTC/USDC
+    <div class="panel-head green">📈 GRAFICO LIVE — SOL/USDC
       <span id="chart-info" style="font-size:9px; color:var(--dim)">ultimi 120 tick · 30s window</span>
     </div>
     <div class="panel-body" style="padding:8px;">
