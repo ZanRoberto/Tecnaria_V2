@@ -1,12 +1,12 @@
 """
-MISSION CONTROL V6.0 — BOT V14 PRODUCTION + AI BRIDGE
+MISSION CONTROL V6.0 — BOT V15 PRODUCTION + AI BRIDGE
 =====================================================
 ✅ Bot gira DENTRO app.py come thread daemon
 ✅ Memoria condivisa thread-safe (heartbeat_data + Lock)
 ✅ Database persistente SQLite su /home/app/data
 ✅ ZERO comunicazione HTTP esterna tra bot e app
 ✅ Dashboard PAPER/LIVE indicator
-✅ Nomi classe/file allineati a OVERTOP_BASSANO_V14_PRODUCTION
+✅ Nomi classe/file allineati a OVERTOP_BASSANO_V15_PRODUCTION
 ✅ AI BRIDGE: Claude analizza e comanda in tempo reale
 """
 
@@ -440,7 +440,7 @@ def bot_thread_launcher():
                 heartbeat_data["trades"]  = bot.total_trades
                 heartbeat_data["last_seen"] = datetime.utcnow().isoformat()
 
-            # ── AI BRIDGE — connette il bot a Claude API ─────────────────
+            # ── AI BRIDGE — connette il bot a bridge predittivo locale ─────────────────
             bridge = AIBridge(heartbeat_data, heartbeat_lock)
             bridge.start()
 
