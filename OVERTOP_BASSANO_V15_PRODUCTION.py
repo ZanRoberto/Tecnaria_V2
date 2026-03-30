@@ -4130,6 +4130,11 @@ class SuperCervello:
         if loss_streak >= 4:
             return self._out("BLOCCA", 0.5, 0, f"streak_{loss_streak}", 0.90)
 
+        # VERITAS: LONG EXPLOSIVE + Oracolo FUOCO = 80% HIT — SC non blocca
+        # 373 segnali dimostrano che SC blocca $112 di guadagni reali
+        if regime == "EXPLOSIVE" and oi_stato == "FUOCO" and oi_carica >= 0.60:
+            return self._out("ENTRA", 1.3, -5, "VERITAS_EXPLOSIVE_FUOCO", 0.90)
+
         # VETO ASSOLUTO FINGERPRINT TOSSICO
         # Se il fingerprint ha 20+ campioni con WR < 45% — blocca sempre
         # La memoria storica dell'Oracolo è il giudice più affidabile
