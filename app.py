@@ -1050,6 +1050,25 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
+
+  <!-- ECONOMIC EDGE — QUANDO PRENDO SOLDI -->
+  <div class="panel" style="margin-bottom:10px; border-color:#00ff88; border-width:2px;">
+    <div class="panel-head" style="color:#00ff88;">💰 ECONOMIC EDGE — Quando prendo soldi veri?
+      <span style="font-size:9px; color:var(--dim); margin-left:8px;">hit_economica = % casi che coprono le fee reali</span>
+    </div>
+    <div class="panel-body">
+      <div style="font-size:9px; color:var(--dim); margin-bottom:8px;">
+        🟢 ≥50% = prendi soldi &nbsp;|&nbsp; 🟡 30-50% = vicino &nbsp;|&nbsp; 🔴 &lt;30% = sterile
+        &nbsp;|&nbsp; Fee simulata: $0.10 per trade
+      </div>
+      <div id="edge-body">
+        <div style="color:var(--dim); text-align:center; padding:16px; font-size:10px;">
+          In attesa dati Signal Tracker...
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ROW 3: LOG DECISIONI + LIVE LOG M2 -->
   <div class="two-col">
     <div class="panel">
@@ -2031,6 +2050,72 @@ function update() {
 
     // SIGNAL TRACKER
     const st = hb.signal_tracker || {};
+
+      // ── ECONOMIC EDGE ──────────────────────────────────────────────
+      // Calcola hit_economica per ogni contesto dal Signal Tracker
+      // hit_economica = % segnali chiusi con pnl_sim > FEE_SIM ($0.10)
+      const FEE_SIM = 0.10;
+      const stStats = st.stats_n || {};
+      const stTop   = st.top || [];
+      let edgeRows = '';
+
+      // Ordina per hit_economica
+      const edgeData = stTop.map(row => {
+        const ctx    = row.context || '';
+        const n      = row.n || 0;
+        const hit60  = row.hit_60s || 0;
+        const pnlAvg = row.pnl_sim_avg || 0;
+        const delta  = row.avg_delta_60s || 0;
+
+        // Stima hit_economica dal pnl_sim_avg
+        // Se pnl_sim_avg > FEE_SIM → contesto mediamente profittevole
+        // hit_economica stimata: proporzionale al rapporto pnl/fee
+        // (approssimazione finché non abbiamo distribuzione completa)
+        let hitEcon;
+        if (pnlAvg > FEE_SIM * 3)       hitEcon = 0.75;   // chiaramente profittevole
+        else if (pnlAvg > FEE_SIM)       hitEcon = 0.55;   // sopra fee
+        else if (pnlAvg > 0)             hitEcon = 0.35;   // positivo ma marginale
+        else if (pnlAvg > -FEE_SIM)     hitEcon = 0.25;   // quasi zero
+        else                              hitEcon = 0.10;   // negativo
+
+        return { ctx, n, hit60, pnlAvg, delta, hitEcon };
+      }).sort((a, b) => b.hitEcon - a.hitEcon);
+
+      edgeData.forEach(d => {
+        if (d.n < 5) return;
+        const pct  = Math.round(d.hitEcon * 100);
+        const color = d.hitEcon >= 0.50 ? '#00ff88' :
+                      d.hitEcon >= 0.30 ? '#ffaa00' : '#ff4444';
+        const emoji = d.hitEcon >= 0.50 ? '🟢' :
+                      d.hitEcon >= 0.30 ? '🟡' : '🔴';
+        const barW = Math.round(d.hitEcon * 100);
+        const [dir, reg, band] = d.ctx.split('|');
+        const dirColor = dir === 'LONG' ? 'var(--green)' : 'var(--red)';
+
+        edgeRows += `
+          <div style="margin-bottom:8px; padding:6px 8px; background:rgba(255,255,255,0.03); border-radius:4px; border-left:3px solid ${color}">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <span style="font-size:10px;">
+                ${emoji} <span style="color:${dirColor};font-weight:bold">${dir}</span>
+                <span style="color:var(--dim)"> ${reg} ${band}</span>
+              </span>
+              <span style="font-size:11px; font-weight:bold; color:${color}">${pct}%</span>
+            </div>
+            <div style="background:rgba(255,255,255,0.08); border-radius:2px; height:4px; margin-bottom:4px;">
+              <div style="width:${barW}%; height:100%; background:${color}; border-radius:2px; transition:width 0.5s;"></div>
+            </div>
+            <div style="font-size:9px; color:var(--dim); display:flex; gap:12px;">
+              <span>n=${d.n}</span>
+              <span>hit=${Math.round(d.hit60*100)}%</span>
+              <span>PnL sim <span style="color:${d.pnlAvg>0?'var(--green)':'var(--red)'}">${d.pnlAvg>0?'+':''}${d.pnlAvg.toFixed(2)}$</span></span>
+              <span>Δ ${d.delta>0?'+':''}${d.delta.toFixed(1)}</span>
+            </div>
+          </div>`;
+      });
+
+      document.getElementById('edge-body').innerHTML =
+        edgeRows || '<div style="color:var(--dim);text-align:center;padding:16px;font-size:10px;">In attesa segnali...</div>';
+      // ── END ECONOMIC EDGE ──────────────────────────────────────────
     $('st-counts').textContent = `open:${st.open||0} / chiusi:${st.closed||0}`;
     const stTop = st.top || [];
     if (stTop.length > 0) {
