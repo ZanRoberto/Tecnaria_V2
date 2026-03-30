@@ -5051,7 +5051,9 @@ class OvertopBassanoV15Production:
 
         # Registra trade recente
         self._m2_recent_trades.append({
-            'ts': now, 'pnl': pnl, 'is_win': is_win, 'duration': duration
+            'ts': now, 'pnl': pnl, 'is_win': is_win, 'duration': duration,
+            'soglia': self._shadow.get('soglia', 60) if self._shadow else 60,
+            'regime': self._shadow.get('regime_entry', self._regime_current) if self._shadow else self._regime_current,
         })
 
         if is_win:
@@ -5876,6 +5878,26 @@ class OvertopBassanoV15Production:
             if seed.get('reason') == 'insufficient_data':
                 return
 
+            # -- GATE: cespuglio avvelenato — entry deboli RANGING con loss streak --
+            # Se 2+ loss consecutivi arrivano da soglia<58 in RANGING
+            # → blocca entry deboli fino a segnale forte (score>58)
+            # Dati: 4 loss SHORT RANGING score 49-51 soglia 48 — entry muoiono subito
+            if self._regime_current == "RANGING":
+                _recent = list(self._m2_recent_trades)[-3:]
+                _loss_deboli = sum(1 for t in _recent
+                    if not t.get('is_win')
+                    and t.get('soglia', 60) < 58
+                    and t.get('regime', '') == 'RANGING')
+                if _loss_deboli >= 2:
+                    _score_now = getattr(self.campo, '_last_score', 0)
+                    if _score_now < 58:
+                        self._log_m2("🚫", f"CESPUGLIO_AVVELENATO: {_loss_deboli} loss deboli RANGING "
+                                          f"score={_score_now:.1f}<58 — attendo segnale forte")
+                        if len(self._phantoms_open) < 5:
+                            self._record_phantom(price, f"CESPUGLIO_RANGING_{_loss_deboli}loss",
+                                seed.get('score', 0), momentum, volatility, trend)
+                        return
+
             # -- CAPSULE 1-5: stessa protezione del Motore 1 --------------
             # M2 usa le stesse capsule di M1 per non entrare in matrimoni tossici.
             # Capsule2 blocca confidence < 0.50 → RANGE_DEAD (conf=0.30) bloccato.
@@ -6188,6 +6210,7 @@ class OvertopBassanoV15Production:
                 "soglia":        result['soglia'],
                 "pb_signals":    result.get('pb_signals', 0),
                 "direction":     self.campo._direction,
+                "regime_entry":  self._regime_current,
             }
             self._shadow_entry_time        = time.time()
             self._shadow_entry_momentum    = momentum
