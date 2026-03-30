@@ -7,7 +7,7 @@ Bridge supervisionale locale. Non usa API esterne.
 COSA FA:
   1. Legge lo stato del bot ogni N secondi (heartbeat_data)
   2. Rileva eventi significativi (trade chiuso, regime cambiato, anomalia)
-  3. Manda lo snapshot a Claude API con prompt strutturato
+  3. Analizza lo snapshot e produce decisioni predittive locali
   4. Riceve comandi: nuove capsule, modifiche pesi, alert
   5. Scrive in capsule_attive.json → il bot le raccoglie al prossimo hot-reload
   6. Zero restart, zero interruzione
@@ -559,7 +559,8 @@ class AIBridge:
         elif score >= 58: band = "BASE_58-65"
         else:             band = "DEBOLE_<58"
 
-        key = f"LONG {regime} {band}"
+        direction = snap.get('m2_direction', 'LONG') if hasattr(self, '_last_snap') else 'LONG'
+        key = f"{direction} {regime} {band}"
         mem = self._signal_memory.get(key, {})
 
         if not mem or mem.get('n', 0) < 5:
