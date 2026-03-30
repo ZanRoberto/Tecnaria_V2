@@ -12,10 +12,8 @@ COSA FA:
   5. Scrive in capsule_attive.json → il bot le raccoglie al prossimo hot-reload
   6. Zero restart, zero interruzione
 
-SETUP:
-  - Env var: DEEPSEEK_API_KEY (obbligatoria)
-  - Env var: AI_BRIDGE_INTERVAL (opzionale, default 300 = 5 minuti)
-  - Env var: AI_BRIDGE_ENABLED (opzionale, default "true")
+IDENTITÀ: bridge locale, supervisionale, event-driven + timer fallback.
+Nessuna dipendenza da API esterne.
 
 INTEGRAZIONE in app.py:
   from ai_bridge import AIBridge
@@ -356,7 +354,7 @@ class AIBridge:
         self.heartbeat_lock = heartbeat_lock
         self.capsule_file   = capsule_file
 
-        self.api_key  = os.environ.get("DEEPSEEK_API_KEY", "")
+        self.api_key  = ""  # Bridge locale — non usa API esterne
         self.interval = 5  # ogni 5 secondi — vive il tick
         self.enabled  = os.environ.get("AI_BRIDGE_ENABLED", "true").lower() == "true"
 
@@ -408,10 +406,18 @@ class AIBridge:
 
         while self._running:
             try:
+                # C3: timer come fallback — log BRIDGE_TRIGGER_TIMER
+                log.debug(f"[BRIDGE_TRIGGER_TIMER] ciclo timer interval={self.interval}s")
                 snapshot = self._read_snapshot()
                 if snapshot:
                     self._processa_tick(snapshot)
                 self._update_heartbeat_bridge()
+                # Consuma eventi dal bot se presenti
+                events = snapshot.get('bridge_events', []) if snapshot else []
+                for ev in events:
+                    if ev.get('ts', 0) > getattr(self, '_last_event_ts', 0):
+                        self._last_event_ts = ev.get('ts', 0)
+                        log.info(f"[BRIDGE_TRIGGER_EVENT] {ev.get('name','?')} {ev.get('payload',{})}")
             except Exception as e:
                 log.error(f"[AI_BRIDGE] Errore: {e}")
                 self._consecutive_errors += 1
@@ -421,7 +427,17 @@ class AIBridge:
         if self.heartbeat_lock:
             self.heartbeat_lock.acquire()
         try:
-            return dict(self.heartbeat_data) if self.heartbeat_data else {}
+            snap = dict(self.heartbeat_data) if self.heartbeat_data else {}
+            # C4: incorpora bridge_feed nelle feature del bridge
+            feed = snap.get('bridge_feed', {})
+            if feed:
+                snap['_feed_rsi']       = feed.get('rsi', 50.0)
+                snap['_feed_macd']      = feed.get('macd_hist', 0.0)
+                snap['_feed_oi_carica'] = feed.get('oi_carica', 0.0)
+                snap['_feed_oi_stato']  = feed.get('oi_stato', 'ATTESA')
+                snap['_feed_pb_sigs']   = feed.get('pb_signals', 0)
+                snap['_feed_compress']  = feed.get('compression_now', 1.0)
+            return snap
         finally:
             if self.heartbeat_lock:
                 self.heartbeat_lock.release()
@@ -434,8 +450,12 @@ class AIBridge:
         price    = snap.get("last_price", 0.0)
         regime   = snap.get("regime", "RANGING")
         drift    = snap.get("m2_campo_stats", {}).get("drift", 0.0)
-        rsi      = snap.get("m2_campo_stats", {}).get("rsi", 50.0)
-        macd     = snap.get("m2_campo_stats", {}).get("macd_hist", 0.0)
+        # C4: usa bridge_feed se disponibile (più fresco del m2_campo_stats)
+        rsi      = snap.get('_feed_rsi', snap.get("m2_campo_stats", {}).get("rsi", 50.0))
+        macd     = snap.get('_feed_macd', snap.get("m2_campo_stats", {}).get("macd_hist", 0.0))
+        # Usa oi_carica dal feed diretto
+        if snap.get('_feed_oi_carica', 0) > 0:
+            self._carica = max(self._carica, snap['_feed_oi_carica'] * 0.3)
         score    = snap.get("m2_last_score", 0.0)
         shadow   = snap.get("m2_shadow_open", False)
         m2_trades= snap.get("m2_trades", 0)
@@ -691,6 +711,25 @@ class AIBridge:
             conn.close()
         except Exception as e:
             log.error(f"[AI_BRIDGE] Errore scrittura cmd: {e}")
+
+    def process_event(self, event_name: str, payload: dict):
+        """
+        C2: Attivazione event-driven del bridge.
+        Chiamato dal bot su eventi importanti (pre-breakout, FUOCO, regime change).
+        Non aspetta il timer — processa subito.
+        """
+        self._log("⚡", f"[BRIDGE_TRIGGER_EVENT] event={event_name} payload={payload}")
+        # Aggiorna buffer con dati evento
+        if 'carica' in payload:
+            self._carica = max(self._carica, payload['carica'] * 0.5)
+        # Processa immediatamente
+        snap = self._read_snapshot()
+        if snap:
+            self._processa_tick(snap)
+        # Telemetria
+        self._bridge_log.append(
+            f"{datetime.utcnow().strftime('%H:%M:%S')} 📡 [BRIDGE_TRIGGER_EVENT] {event_name}"
+        )
 
     def _log(self, emoji: str, msg: str):
         entry = f"{datetime.utcnow().strftime('%H:%M:%S')} {emoji} [BRIDGE] {msg}"
