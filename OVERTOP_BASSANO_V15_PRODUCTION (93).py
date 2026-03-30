@@ -3235,11 +3235,13 @@ class CampoGravitazionale:
     VETI_LONG = {
         ("DEBOLE", "ALTA", "DOWN"),    # TRAP - WR 5% per LONG
         ("FORTE",  "ALTA", "DOWN"),    # PANIC - WR 15% per LONG
+        ("DEBOLE", "ALTA", "SIDEWAYS"),# RANGE_VOL_W - WR 19% dimostrato da dati reali
     }
     # SHORT: non entrare in mercato che esplode al rialzo
     VETI_SHORT = {
         ("FORTE",  "BASSA", "UP"),     # STRONG_BULL - WR 5% per SHORT
         ("FORTE",  "MEDIA", "UP"),     # STRONG_MED - pericoloso per SHORT
+        ("DEBOLE", "ALTA", "SIDEWAYS"),# RANGE_VOL_W - WR 19% anche in SHORT
     }
     FANTASMA_VETO_MIN_SAMPLES = 20
     FANTASMA_VETO_MAX_WR      = 0.30
@@ -5956,6 +5958,25 @@ class OvertopBassanoV15Production:
                 self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
                 return
 
+            # -- LEGGE OPERATIVA: predizione forte blocca SC ─────────────
+            # Se la predizione storica dice BLOCCA con confidenza reale
+            # SC non può scavalcare — la memoria locale è sovrana
+            _pred_veto = self.signal_tracker.predict_from_signals(
+                regime=self._regime_current,
+                direction=self.campo._direction,
+                score=result['score'],
+                drift=getattr(self.campo, '_last_drift', 0.0),
+                rsi=self.campo._last_rsi,
+            )
+            if _pred_veto['confidence'] >= 0.3 and _pred_veto['verdict'] == 'BLOCCA':
+                self._log_m2("🔮", f"PRED_VETO SC — hit={_pred_veto['hit_rate']:.0%} "
+                                   f"n={_pred_veto['n_vicini']} — SC non può scavalcare")
+                if len(self._phantoms_open) < 5:
+                    self._record_phantom(price,
+                        f"PRED_VETO_SC_hr{_pred_veto['hit_rate']:.0%}",
+                        seed['score'], momentum, volatility, trend)
+                return
+
             # -- SUPERCERVELLO: decisione unificata da tutti gli organi ────
             # Legge simultaneamente tutti i sistemi e decide una volta sola.
             _mat_wr    = self.memoria.get_wr(matrimonio_name) if hasattr(self.memoria,'get_wr') else 0.55
@@ -6016,41 +6037,26 @@ class OvertopBassanoV15Production:
             # Aggiusta size e soglia in base alla confidenza
             if _sc_dec['azione'] == 'ENTRA':
                 result['size'] = round(result['size'] * _sc_dec['size_mult'], 3)
-                # soglia_adj negativo = abbassa soglia = più facile entrare
                 if _sc_dec['soglia_adj'] != 0:
                     result['soglia'] = max(self.campo.SOGLIA_MIN,
                                           result['soglia'] + _sc_dec['soglia_adj'])
                 self._log_m2("🧠", f"SC ENTRA — {_sc_dec['motivo']} size×{_sc_dec['size_mult']}")
                 self._last_sc_dec = _sc_dec
-                # Veritas: registra FUOCO|ENTRA
                 self.veritas.registra(price, self._oi_stato, self._oi_carica,
                     "ENTRA", _sc_dec['confidenza'], self._regime_current, time.time())
 
-            # -- PREDIZIONE DALL'ORACOLO DEI SEGNALI ───────────────────────
-            # Usa i 3320+ segnali storici per predire se questo contesto vince.
-            # Se la predizione è BLOCCA con alta confidence → non entrare.
-            # Se la predizione è ENTRA → abbassa la soglia effettiva del 10%.
-            # Questo è l'anticipo — non reagisce, predice.
-            _pred = self.signal_tracker.predict_from_signals(
-                regime    = self._regime_current,
-                direction = self.campo._direction,
-                score     = result['score'],
-                drift     = getattr(self.campo, '_last_drift', 0.0),
-                rsi       = self.campo._last_rsi,
-            )
-            if _pred['confidence'] >= 0.3 and _pred['verdict'] == 'BLOCCA':
-                self._log_m2("🔮", f"PREDIZIONE BLOCCA: hit={_pred['hit_rate']:.0%} "
-                                   f"delta={_pred['avg_delta']:+.1f} n={_pred['n_vicini']}")
-                if not hasattr(self, '_phantoms_open'):
-                    pass
-                elif len(self._phantoms_open) < 5:
-                    self._record_phantom(price,
-                        f"PRED_BLOCCA_hr{_pred['hit_rate']:.0f}",
-                        seed['score'], momentum, volatility, trend)
-                return
-            if _pred['confidence'] >= 0.3 and _pred['verdict'] == 'ENTRA':
-                self._log_m2("🔮", f"PREDIZIONE ENTRA: hit={_pred['hit_rate']:.0%} "
-                                   f"delta={_pred['avg_delta']:+.1f} n={_pred['n_vicini']}")
+            # -- LEGGE: predizione forte = entry pilota obbligatoria ──────
+            # Se predizione è fortemente aderente al mercato e SC non ha detto BLOCCA
+            # garantisci almeno size minima — non zero. La predizione diventa esecuzione.
+            if (_pred_veto.get('confidence', 0) >= 0.4
+                    and _pred_veto.get('verdict') == 'ENTRA'
+                    and _pred_veto.get('hit_rate', 0) >= 0.60
+                    and _sc_dec['azione'] != 'BLOCCA'):
+                result['size'] = max(result['size'], 0.5)  # pilota minimo garantito
+                self._log_m2("🔮", f"PRED_PILOT — hit={_pred_veto['hit_rate']:.0%} "
+                                   f"n={_pred_veto['n_vicini']} → size minima garantita {result['size']:.2f}x")
+
+            
 
 
 
