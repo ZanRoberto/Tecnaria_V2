@@ -379,11 +379,16 @@ class CapsuleRuntime:
             if azione.get('type') == 'blocca_entry':
                 risultato['blocca'] = True
                 risultato['reason'] = azione.get('params', {}).get('reason', 'capsule_block')
+                log.info(f"[CAPSULE_APPLY] capsule_id={capsule.get('capsule_id','?')} action=blocca_entry reason={risultato['reason']}")
                 break
             elif azione.get('type') == 'modifica_size':
+                old_mult = risultato['size_mult']
                 risultato['size_mult'] *= azione.get('params', {}).get('mult', 1.0)
+                log.info(f"[CAPSULE_APPLY] capsule_id={capsule.get('capsule_id','?')} action=size_mult old={old_mult:.2f} new={risultato['size_mult']:.2f}")
             elif azione.get('type') == 'boost_soglia':
+                old_boost = risultato['soglia_boost']
                 risultato['soglia_boost'] += azione.get('params', {}).get('delta', 0.0)
+                log.info(f"[CAPSULE_APPLY] capsule_id={capsule.get('capsule_id','?')} action=boost_soglia old={old_boost:.1f} new={risultato['soglia_boost']:.1f}")
             # NUOVE AZIONI AUTO-CORRETTIVE
             elif azione.get('type') == 'ripristina_pesi_sc':
                 # Segnala al bot di ripristinare i pesi SC
@@ -658,16 +663,7 @@ class IntelligenzaAutonoma:
                     log.info(f"[IA_AUTO] 📊 Soglia RANGING ottimale={soglia_suggerita} da {len(hits)} campioni")
                 break
 
-        # CAPSULA 4 originale
-            if self._è_nuova('AUTO_STOP_LONG'):
-                capsule.append({
-                    'id': 'AUTO_STOP_LONG',
-                    'tipo': 'L2',
-                    'motivo': f"drift={drift:+.3f}% macd={macd_hist:.1f} — stop LONG",
-                    'azione': {'type': 'blocca_long', 'params': {'durata': 300}},
-                    'scade_ts': ts + 300, 'vita_ore': 0.08
-                })
-                log.info(f"[IA_AUTO] 🚫 Capsula AUTO_STOP_LONG generata")
+
 
         return capsule
 
@@ -4525,8 +4521,9 @@ class OvertopBassanoV15Production:
             if self.config_reloader.check_reload():
                 if self.capsule_runtime.reload():
                     caps_attive = [c.get('capsule_id','?') for c in self.capsule_runtime.capsules if c.get('enabled')]
-                    log.info(f"[CAPSULE_LOAD] 🔄 {len(caps_attive)} capsule ricaricate: {caps_attive[:5]}")
+                    log.info(f"[CAPSULE_LOAD] {len(caps_attive)} capsule ricaricate: {caps_attive[:5]}")
                     self._log_m2("💊", f"[CAPSULE_LOAD] {len(caps_attive)} capsule attive")
+                    self.telemetry.log_capsule_load(caps_attive)
             self.last_config_check = now
 
         # Bridge commands check ogni 30 s
@@ -4670,15 +4667,13 @@ class OvertopBassanoV15Production:
         if len(self.campo._prices_short) >= 30:
             _pb_f, _pb_d, _pb_sigs = self.campo._pre_breakout_factor()
             if _pb_sigs >= 2:
-                self._emit_bridge_event("EVENT_PREBREAKOUT", {
-                    'signals': _pb_sigs, 'factor': round(_pb_f, 3),
-                    'regime': self._regime_current
-                })
+                _pb_payload = {'signals': _pb_sigs, 'factor': round(_pb_f, 3), 'regime': self._regime_current}
+                self._emit_bridge_event("EVENT_PREBREAKOUT", _pb_payload)
+                self.telemetry.log_event_signal("PREBREAKOUT", _pb_payload)
         if self._oi_stato == "FUOCO" and self._oi_carica >= 0.80:
-            self._emit_bridge_event("EVENT_FUOCO", {
-                'carica': round(self._oi_carica, 3),
-                'regime': self._regime_current
-            })
+            _fuoco_payload = {'carica': round(self._oi_carica, 3), 'regime': self._regime_current}
+            self._emit_bridge_event("EVENT_FUOCO", _fuoco_payload)
+            self.telemetry.log_event_signal("FUOCO", _fuoco_payload)
 
         # -- HEARTBEAT M2 - ogni 60s conferma che M2 è vivo ---------------
         if now - self._last_m2_heartbeat > 60:
@@ -4797,10 +4792,8 @@ class OvertopBassanoV15Production:
         }
         caps_check = self.capsule_runtime.valuta(ctx_caps)
         if caps_check.get('blocca'):
-            self._log("💊", f"[CAPSULE_APPLY] blocca entry: {caps_check['reason']} | {matrimonio_name}")
-            self.telemetry._events.append({'ts': time.time(), 'event_type': 'CAPSULE_APPLY',
-                'capsule_reason': caps_check['reason'], 'action': 'blocca_entry',
-                'regime': self._regime_current, 'direction': self.campo._direction, 'open_position': False})
+            self._log("💊", f"[DECISION_CHANGED_BY_CAPSULE] capsule_id={caps_check.get('reason','?')} action=blocca_entry matrimonio={matrimonio_name}")
+            self.telemetry.log_capsule_load([caps_check.get('reason','?')])
             return
 
         # -- ENTRY CONFERMATA ----------------------------------------------
@@ -7137,6 +7130,9 @@ class OvertopBassanoV15Production:
                     "m2_campo_stats":     self.campo.get_stats(),
                     "m2_last_score":      round(getattr(self.campo, '_last_score', 0), 1),
                     "m2_last_soglia":     round(getattr(self.campo, '_last_soglia', 60), 1),
+                    "oi_stato":           self._oi_stato,
+                    "oi_carica":          round(self._oi_carica, 3),
+                    "veritas":            self.veritas.dump_dashboard(),
                     # -- PHANTOM TRACKER - zavorra o protezione? -------
                     "phantom":            self._get_phantom_summary(),
                     # -- INTELLIGENZA AUTONOMA - capsule vive -----------
@@ -7155,6 +7151,7 @@ class OvertopBassanoV15Production:
                     # -- SHORT EVITATI IN RANGING ----------------------
                     "shadow_short_ranging": self._get_shadow_short_report(),
                     # -- DATI GRANULARI PER BRIDGE (B3) -------------
+                    # -- HEARTBEAT ENRICHED telemetria --------
                     "bridge_feed": {
                         "drift_history":   list(self.campo._prices_long)[-20:] and [
                             round((list(self.campo._prices_long)[-20:][i+1] - list(self.campo._prices_long)[-20:][i]) /
