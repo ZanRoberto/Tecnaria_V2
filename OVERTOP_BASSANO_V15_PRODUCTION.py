@@ -5804,17 +5804,6 @@ class OvertopBassanoV15Production:
             if seed.get('reason') == 'insufficient_data':
                 return
 
-            # -- SHORT VETO: dati Veritas dicono HIT 12-37% su SHORT -------
-            # SHORT RANGING: 37% HIT, SHORT EXPLOSIVE: 12% HIT
-            # Bloccato finché Signal Tracker non dimostra edge reale (>55%)
-            if self.campo._direction == "SHORT":
-                _st_short = self._get_signal_tracker_context(self._regime_current, 50)
-                _st_short_hit = _st_short.get('hit_rate', 0.5)
-                _st_short_n   = _st_short.get('n', 0)
-                if _st_short_n < 20 or _st_short_hit < 0.55:
-                    self._log_m2("🚫", f"SHORT bloccato — HIT={_st_short_hit:.0%} n={_st_short_n} dati insufficienti")
-                    return
-
             # -- CAPSULE 1-5: stessa protezione del Motore 1 --------------
             # M2 usa le stesse capsule di M1 per non entrare in matrimoni tossici.
             # Capsule2 blocca confidence < 0.50 → RANGE_DEAD (conf=0.30) bloccato.
