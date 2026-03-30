@@ -184,6 +184,27 @@ class StabilityTelemetry:
         e['loss_streak'] = loss_streak
         self._events.append(e)
 
+    # B5: eventi telemetrici coesi
+    def log_capsule_load(self, capsule_ids: list):
+        e = self._base("CAPSULE_LOAD", "", "", False)
+        e['capsule_ids'] = capsule_ids
+        e['count'] = len(capsule_ids)
+        self._events.append(e)
+
+    def log_bridge_trigger(self, trigger_type: str, event_name: str = ""):
+        e = self._base("BRIDGE_TRIGGER_" + trigger_type.upper(), "", "", False)
+        e['event_name'] = event_name
+        self._events.append(e)
+
+    def log_heartbeat_enriched(self):
+        e = self._base("HEARTBEAT_ENRICHED", "", "", False)
+        self._events.append(e)
+
+    def log_event_signal(self, signal_type: str, payload: dict):
+        e = self._base("EVENT_SIGNAL_" + signal_type.upper(), "", "", False)
+        e.update(payload)
+        self._events.append(e)
+
     # -- REPORT ------------------------------------------------------------
 
     def generate_report(self) -> dict:
@@ -417,6 +438,11 @@ class ConfigHotReloader:
         except Exception:
             pass
         return False
+
+    def force_reload(self) -> bool:
+        """Forza reload resettando l'hash — usato quando il file viene scritto ex-novo."""
+        self.hash = ""
+        return self.check_reload()
 
 # ===========================================================================
 # REAL-TIME LEARNING ENGINE
@@ -4433,6 +4459,10 @@ class OvertopBassanoV15Production:
         }
         self._phantom_log = deque(maxlen=20)  # log dedicato fantasmi
 
+        # -- Bridge event queue (B4) — eventi urgenti per il bridge ----
+        self._bridge_event_queue = []   # lista eventi: {name, payload, ts}
+        self._bridge_last_event_check = 0
+
         # -- Banner --------------------------------------------------------
         mode_label = "📄 PAPER TRADE" if self.paper_trade else "🔴 LIVE TRADING"
         log.info("=" * 80)
@@ -4494,7 +4524,9 @@ class OvertopBassanoV15Production:
         if now - self.last_config_check > 30:
             if self.config_reloader.check_reload():
                 if self.capsule_runtime.reload():
-                    log.info("[CONFIG] 🔄 Capsule ricaricate a caldo")
+                    caps_attive = [c.get('capsule_id','?') for c in self.capsule_runtime.capsules if c.get('enabled')]
+                    log.info(f"[CAPSULE_LOAD] 🔄 {len(caps_attive)} capsule ricaricate: {caps_attive[:5]}")
+                    self._log_m2("💊", f"[CAPSULE_LOAD] {len(caps_attive)} capsule attive")
             self.last_config_check = now
 
         # Bridge commands check ogni 30 s
@@ -4634,6 +4666,20 @@ class OvertopBassanoV15Production:
         if self.signal_tracker.get_open_count() > 0:
             self.signal_tracker.update(price)
 
+        # -- BRIDGE EVENTS: emetti su condizioni significative (B4) --------
+        if len(self.campo._prices_short) >= 30:
+            _pb_f, _pb_d, _pb_sigs = self.campo._pre_breakout_factor()
+            if _pb_sigs >= 2:
+                self._emit_bridge_event("EVENT_PREBREAKOUT", {
+                    'signals': _pb_sigs, 'factor': round(_pb_f, 3),
+                    'regime': self._regime_current
+                })
+        if self._oi_stato == "FUOCO" and self._oi_carica >= 0.80:
+            self._emit_bridge_event("EVENT_FUOCO", {
+                'carica': round(self._oi_carica, 3),
+                'regime': self._regime_current
+            })
+
         # -- HEARTBEAT M2 - ogni 60s conferma che M2 è vivo ---------------
         if now - self._last_m2_heartbeat > 60:
             self._log_m2("💓", f"M2 vivo | shadow={'aperto' if self._shadow else 'chiuso'} "
@@ -4751,7 +4797,10 @@ class OvertopBassanoV15Production:
         }
         caps_check = self.capsule_runtime.valuta(ctx_caps)
         if caps_check.get('blocca'):
-            self._log("💊", f"CAPSULE_RT blocca: {caps_check['reason']} | {matrimonio_name}")
+            self._log("💊", f"[CAPSULE_APPLY] blocca entry: {caps_check['reason']} | {matrimonio_name}")
+            self.telemetry._events.append({'ts': time.time(), 'event_type': 'CAPSULE_APPLY',
+                'capsule_reason': caps_check['reason'], 'action': 'blocca_entry',
+                'regime': self._regime_current, 'direction': self.campo._direction, 'open_position': False})
             return
 
         # -- ENTRY CONFERMATA ----------------------------------------------
@@ -4765,6 +4814,8 @@ class OvertopBassanoV15Production:
         )
         # Le capsule JSON possono ancora modificare ulteriormente
         caps_size_mult = caps_check.get('size_mult', 1.0)
+        if caps_size_mult != 1.0:
+            self._log("💊", f"[CAPSULE_APPLY] size_mult={caps_size_mult:.2f} applicato")
         size_factor = min(PositionSizer.SIZE_MAX,
                          sizing['size_factor'] * caps_size_mult)
 
@@ -5220,6 +5271,32 @@ class OvertopBassanoV15Production:
             'volatility': vol_override or getattr(self, '_last_volatility', 'UNKNOWN'),
             'bridge_reason': bridge_reason,
         }
+
+    def _emit_bridge_event(self, event_name: str, payload: dict):
+        """
+        B4: Emette evento urgente verso il bridge.
+        Il bridge lo legge nel prossimo ciclo (max 5s) invece di aspettare il timer.
+        """
+        self._bridge_event_queue.append({
+            'name': event_name,
+            'payload': payload,
+            'ts': time.time(),
+        })
+        # Mantieni solo ultimi 10 eventi
+        if len(self._bridge_event_queue) > 10:
+            self._bridge_event_queue.pop(0)
+        # Scrivi nel heartbeat per il bridge
+        if self.heartbeat_lock:
+            self.heartbeat_lock.acquire()
+        try:
+            if self.heartbeat_data is not None:
+                self.heartbeat_data['bridge_events'] = list(self._bridge_event_queue[-5:])
+        except Exception:
+            pass
+        finally:
+            if self.heartbeat_lock:
+                self.heartbeat_lock.release()
+        log.info(f"[BRIDGE_EVENT] {event_name} {payload}")
 
     def _log_m2(self, emoji: str, msg: str):
         """Log dedicato Motore 2 - separato dal Motore 1."""
@@ -7077,6 +7154,24 @@ class OvertopBassanoV15Production:
                     "m2_soglia_base":     self.campo.SOGLIA_BASE,
                     # -- SHORT EVITATI IN RANGING ----------------------
                     "shadow_short_ranging": self._get_shadow_short_report(),
+                    # -- DATI GRANULARI PER BRIDGE (B3) -------------
+                    "bridge_feed": {
+                        "drift_history":   list(self.campo._prices_long)[-20:] and [
+                            round((list(self.campo._prices_long)[-20:][i+1] - list(self.campo._prices_long)[-20:][i]) /
+                                  max(list(self.campo._prices_long)[-20:][i], 1) * 100, 4)
+                            for i in range(len(list(self.campo._prices_long)[-20:])-1)
+                        ] if len(self.campo._prices_long) >= 20 else [],
+                        "compression_now": round((max(list(self.campo._prices_short)[-5:]) - min(list(self.campo._prices_short)[-5:])) /
+                                                  max(max(list(self.campo._prices_short)[-20:]) - min(list(self.campo._prices_short)[-20:]), 0.01), 4)
+                                           if len(self.campo._prices_short) >= 20 else 1.0,
+                        "seed_history":    list(self.campo._seed_history),
+                        "oi_carica":       round(self._oi_carica, 3),
+                        "oi_stato":        self._oi_stato,
+                        "regime":          self._regime_current,
+                        "rsi":             round(self.campo._last_rsi, 1),
+                        "macd_hist":       round(self.campo._last_macd_hist, 4),
+                        "pb_signals":      self.campo._pre_breakout_factor()[2] if len(self.campo._prices_short) >= 30 else 0,
+                    },
                     # -- STABILITY TELEMETRY ------------------------
                     "telemetry":          self.telemetry.generate_report(),
                 })
