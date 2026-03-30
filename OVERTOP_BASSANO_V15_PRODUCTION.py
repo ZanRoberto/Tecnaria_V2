@@ -3235,13 +3235,17 @@ class CampoGravitazionale:
     VETI_LONG = {
         ("DEBOLE", "ALTA", "DOWN"),    # TRAP - WR 5% per LONG
         ("FORTE",  "ALTA", "DOWN"),    # PANIC - WR 15% per LONG
-        ("DEBOLE", "ALTA", "SIDEWAYS"),# RANGE_VOL_W - WR 19% dimostrato da dati reali
+        ("DEBOLE", "ALTA", "SIDEWAYS"),# RANGE_VOL_W - WR 19% dati reali
+        ("FORTE",  "ALTA", "SIDEWAYS"),# RANGE_VOL_F - WR 34% dati reali Oracolo
+        ("MEDIO",  "ALTA", "SIDEWAYS"),# RANGE_VOL_M - WR 28% dati reali Oracolo
     }
     # SHORT: non entrare in mercato che esplode al rialzo
     VETI_SHORT = {
         ("FORTE",  "BASSA", "UP"),     # STRONG_BULL - WR 5% per SHORT
         ("FORTE",  "MEDIA", "UP"),     # STRONG_MED - pericoloso per SHORT
-        ("DEBOLE", "ALTA", "SIDEWAYS"),# RANGE_VOL_W - WR 19% anche in SHORT
+        ("DEBOLE", "ALTA", "SIDEWAYS"),# RANGE_VOL_W - WR 10% in SHORT
+        ("FORTE",  "ALTA", "SIDEWAYS"),# RANGE_VOL_F - WR 12% in SHORT
+        ("MEDIO",  "ALTA", "SIDEWAYS"),# RANGE_VOL_M - WR 8% in SHORT
     }
     FANTASMA_VETO_MIN_SAMPLES = 20
     FANTASMA_VETO_MAX_WR      = 0.30
@@ -4190,8 +4194,9 @@ class SuperCervello:
         # VERITAS: Oracolo FUOCO con carica alta — SC non blocca mai
         # 373 segnali: SC blocca $112 di guadagni reali quando Oracolo ha ragione
         # Carica 0.90 = fisica confermata — entra sempre
+        # ONE-SHOT: usa confidenza come discriminante per evitare 7 log identici
         if oi_stato == "FUOCO" and oi_carica >= 0.75:
-            return self._out("ENTRA", 1.3, -5, f"VERITAS_FUOCO_c{oi_carica:.2f}", 0.90)
+            return self._out("ENTRA", 1.3, -5, f"VERITAS_FUOCO_c{oi_carica:.2f}", oi_carica)
 
         # VETO ASSOLUTO FINGERPRINT TOSSICO
         # Se il fingerprint ha 20+ campioni con WR < 45% — blocca sempre
@@ -5872,6 +5877,13 @@ class OvertopBassanoV15Production:
             if not can_enter:
                 # Non logga phantom per cooldown - è silenzio voluto, non opportunita
                 return
+
+            # -- ANTI-DUPLICATE: un solo entry per tick ----------------
+            # Evita che VERITAS_FUOCO generi 7 entry nello stesso secondo
+            _now_tick = round(time.time(), 1)  # risoluzione 0.1s
+            if getattr(self, '_last_entry_tick', 0) == _now_tick:
+                return
+            self._last_entry_tick = _now_tick
 
 
             seed = self.seed_scorer.score()
