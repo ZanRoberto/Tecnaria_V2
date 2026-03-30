@@ -381,6 +381,9 @@ class CapsuleRuntime:
             elif azione.get('type') == 'set_soglia_ranging':
                 # Imposta soglia ottimale per RANGING
                 risultato['soglia_ranging'] = azione.get('params', {}).get('soglia', 48)
+            elif azione.get('type') == 'set_cap2_soglia':
+                # Auto-calibra soglia Capsule2 dai phantom
+                risultato['cap2_soglia'] = azione.get('params', {}).get('soglia', 0.35)
         return risultato
 
     def _check_trigger(self, trigger: dict, contesto: dict) -> bool:
@@ -519,6 +522,36 @@ class IntelligenzaAutonoma:
         regime     = ctx.get('regime', '')
         st_stats   = ctx.get('signal_tracker_stats', {})
         vt_stats   = ctx.get('veritas_stats', {})
+        phantom    = ctx.get('phantom_stats', {})
+
+        # CAPSULA 6: auto-calibrazione Capsule2 dai phantom
+        # Se un matrimonio bloccato da CAP2 ha net positivo su 50+ blocchi
+        # → la soglia è troppo alta → genera capsula per abbassarla
+        for key, s in phantom.items():
+            if not key.startswith('CAP2_M2_'):
+                continue
+            blk = s.get('blocked', 0)
+            if blk < 50:
+                continue
+            pnl_missed = s.get('pnl_missed', 0)
+            pnl_saved  = s.get('pnl_saved', 0)
+            net = pnl_missed - pnl_saved  # positivo = stavamo perdendo opportunità
+            # Estrai confidence dalla chiave: CAP2_M2_RANGE_VOL_M_conf0.40
+            try:
+                conf = float(key.split('_conf')[-1])
+            except Exception:
+                continue
+            if net > 200 and conf >= 0.30:
+                cap_id = f'AUTO_CAP2_SOGLIA_{conf:.2f}'
+                if self._è_nuova(cap_id):
+                    capsule.append({
+                        'id': cap_id,
+                        'tipo': 'L2',
+                        'motivo': f"Phantom {key}: net=+${net:.0f} su {blk} blocchi conf={conf:.2f} → soglia troppo alta",
+                        'azione': {'type': 'set_cap2_soglia', 'params': {'soglia': max(0.30, conf - 0.05)}},
+                        'scade_ts': ts + 86400, 'vita_ore': 24
+                    })
+                    log.info(f"[IA_AUTO] 📊 Capsula AUTO_CAP2_SOGLIA generata: conf={conf:.2f} net=+${net:.0f}")
 
         # CAPSULA 1: Pesi SC degradati
         if sc_pesi.get('campo_carica', 0.30) < 0.25:
@@ -4130,10 +4163,11 @@ class SuperCervello:
         if loss_streak >= 4:
             return self._out("BLOCCA", 0.5, 0, f"streak_{loss_streak}", 0.90)
 
-        # VERITAS: LONG EXPLOSIVE + Oracolo FUOCO = 80% HIT — SC non blocca
-        # 373 segnali dimostrano che SC blocca $112 di guadagni reali
-        if regime == "EXPLOSIVE" and oi_stato == "FUOCO" and oi_carica >= 0.60:
-            return self._out("ENTRA", 1.3, -5, "VERITAS_EXPLOSIVE_FUOCO", 0.90)
+        # VERITAS: Oracolo FUOCO con carica alta — SC non blocca mai
+        # 373 segnali: SC blocca $112 di guadagni reali quando Oracolo ha ragione
+        # Carica 0.90 = fisica confermata — entra sempre
+        if oi_stato == "FUOCO" and oi_carica >= 0.75:
+            return self._out("ENTRA", 1.3, -5, f"VERITAS_FUOCO_c{oi_carica:.2f}", 0.90)
 
         # VETO ASSOLUTO FINGERPRINT TOSSICO
         # Se il fingerprint ha 20+ campioni con WR < 45% — blocca sempre
@@ -5708,6 +5742,7 @@ class OvertopBassanoV15Production:
                             'regime': self._regime_current,
                             'signal_tracker_stats': self.signal_tracker._stats,
                             'veritas_stats': self.veritas._stats,
+                            'phantom_stats': self._phantom_stats,
                         }
                 # Pesi SuperCervello
                 if hasattr(self,'supercervello'):
@@ -5769,12 +5804,25 @@ class OvertopBassanoV15Production:
             if seed.get('reason') == 'insufficient_data':
                 return
 
+            # -- SHORT VETO: dati Veritas dicono HIT 12-37% su SHORT -------
+            # SHORT RANGING: 37% HIT, SHORT EXPLOSIVE: 12% HIT
+            # Bloccato finché Signal Tracker non dimostra edge reale (>55%)
+            if self.campo._direction == "SHORT":
+                _st_short = self._get_signal_tracker_context(self._regime_current, 50)
+                _st_short_hit = _st_short.get('hit_rate', 0.5)
+                _st_short_n   = _st_short.get('n', 0)
+                if _st_short_n < 20 or _st_short_hit < 0.55:
+                    self._log_m2("🚫", f"SHORT bloccato — HIT={_st_short_hit:.0%} n={_st_short_n} dati insufficienti")
+                    return
+
             # -- CAPSULE 1-5: stessa protezione del Motore 1 --------------
             # M2 usa le stesse capsule di M1 per non entrare in matrimoni tossici.
             # Capsule2 blocca confidence < 0.50 → RANGE_DEAD (conf=0.30) bloccato.
             _mat_m2   = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
             _conf_m2  = _mat_m2.get('confidence', 0.5)
-            _allow2, _reason2 = self.capsule2.riconosci(_conf_m2)
+            # Soglia abbassata a 0.35 — dati phantom: conf 0.40 ha net +$924
+            _cap2_soglia = getattr(self, '_cap2_soglia_override', 0.35)
+            _allow2, _reason2 = self.capsule2.riconosci(_conf_m2) if _conf_m2 >= _cap2_soglia else (True, "OK")
             if not _allow2:
                 if len(self._phantoms_open) < 5:
                     self._record_phantom(price, f"CAP2_M2_{_mat_m2['name']}_conf{_conf_m2:.2f}",
@@ -5891,6 +5939,9 @@ class OvertopBassanoV15Production:
                 if getattr(self.campo, '_last_drift', 0) < -0.02:
                     self.campo._direction = "SHORT"
                     self._log_m2("🔧", f"[CAPSULA] SHORT sbloccato in RANGING")
+            if _m2_caps.get('cap2_soglia') is not None:
+                self._cap2_soglia_override = _m2_caps['cap2_soglia']
+                self._log_m2("🔧", f"[CAPSULA] Capsule2 soglia auto-calibrata: {_m2_caps['cap2_soglia']:.2f}")
 
             # Applica decisione supercervello
             if _sc_dec['azione'] == 'BLOCCA':
@@ -6874,7 +6925,15 @@ class OvertopBassanoV15Production:
                 conn.close()
                 if rows:
                     db_cmds = json.loads(rows[0][0])
+                    # Bridge predittivo scrive oggetto singolo {type, data, ts}
+                    # Normalizza a lista per compatibilità
+                    if isinstance(db_cmds, dict):
+                        db_cmds = [db_cmds]
                     if isinstance(db_cmds, list):
+                        for cmd in db_cmds:
+                            # Normalizza formato bridge predittivo → formato bot
+                            if 'type' in cmd and 'data' in cmd and 'executed' not in cmd:
+                                cmd['executed'] = False
                         commands.extend(db_cmds)
             except Exception:
                 pass
@@ -6918,6 +6977,14 @@ class OvertopBassanoV15Production:
                         self.telemetry.log_param_change(param, old, value, bridge_reason=f"modify_weight:{param}", **{k: ctx[k] for k in ('regime','direction','open_position','active_threshold','drift','macd','trend','volatility')})
                         cmd["executed"] = True
                         modified = True
+
+                elif cmd_type == "entry_signal":
+                    # Bridge predittivo segnala momento di entrata
+                    carica = data.get("carica", 0.0)
+                    motivo = data.get("motivo", "bridge")
+                    self._log("🌉", f"BRIDGE entry_signal — carica={carica:.2f} {motivo}")
+                    cmd["executed"] = True
+                    modified = True
 
                 elif cmd_type == "adjust_soglia":
                     param = data.get("param", "")
