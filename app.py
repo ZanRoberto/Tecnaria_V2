@@ -149,7 +149,7 @@ def trading_log():
             db_execute("""
                 INSERT INTO trades (event_type, asset, price, size, pnl, direction, reason, data_json)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (event_type, data.get("asset","SOLUSDC"),
+            """, (event_type, data.get("asset","BTCUSDC"),
                   data.get("price",0), data.get("size",0), data.get("pnl",0),
                   data.get("direction","LONG"), data.get("reason",""),
                   json.dumps(data)))
