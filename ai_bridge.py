@@ -2,7 +2,7 @@
 """
 AI BRIDGE — OVERTOP BASSANO
 ═══════════════════════════════════════════════════════════════════════════════
-Ponte tra il bot e Claude API.
+Bridge supervisionale locale. Non usa API esterne.
 
 COSA FA:
   1. Legge lo stato del bot ogni N secondi (heartbeat_data)
@@ -406,7 +406,8 @@ class AIBridge:
 
         while self._running:
             try:
-                # C3: timer come fallback — log BRIDGE_TRIGGER_TIMER
+                # CANALE PRIMARIO: process_event() chiamato direttamente dal bot su eventi
+                # CANALE FALLBACK: questo timer ogni {self.interval}s per heartbeat aggregato
                 log.debug(f"[BRIDGE_TRIGGER_TIMER] ciclo timer interval={self.interval}s")
                 snapshot = self._read_snapshot()
                 if snapshot:
@@ -714,9 +715,11 @@ class AIBridge:
 
     def process_event(self, event_name: str, payload: dict):
         """
-        C2: Attivazione event-driven del bridge.
-        Chiamato dal bot su eventi importanti (pre-breakout, FUOCO, regime change).
+        CANALE PRIMARIO event-driven.
+        Chiamato direttamente dal bot su eventi importanti:
+        pre-breakout, FUOCO>=0.80, regime change, capsula creata.
         Non aspetta il timer — processa subito.
+        Il timer (_loop) è solo fallback per heartbeat aggregato.
         """
         self._log("⚡", f"[BRIDGE_TRIGGER_EVENT] event={event_name} payload={payload}")
         # Aggiorna buffer con dati evento
