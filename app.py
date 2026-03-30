@@ -661,7 +661,7 @@ canvas.spark { width:100%; height:40px; }
   <!-- TICKER -->
   <div class="ticker">
     <span class="price-big" id="btc-price">--</span>
-    <span style="color:var(--dim)">SOL/USDC</span>
+    <span style="color:var(--dim)">BTC/USDC</span>
     <span>⚡ <span id="tick-n" style="color:var(--yellow)">0</span></span>
     <span>🕐 <span id="last-tick" style="color:var(--dim)">--</span></span>
     <span id="trade-status-txt" style="color:var(--dim)">🔍 Analizzando...</span>
@@ -873,7 +873,7 @@ canvas.spark { width:100%; height:40px; }
 
   <!-- GRAFICO LIVE — PREZZO + SEGNALI -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--green); border-width:2px;">
-    <div class="panel-head green">📈 GRAFICO LIVE — SOL/USDC
+    <div class="panel-head green">📈 GRAFICO LIVE — BTC/USDC
       <span id="chart-info" style="font-size:9px; color:var(--dim)">ultimi 120 tick · 30s window</span>
     </div>
     <div class="panel-body" style="padding:8px;">
