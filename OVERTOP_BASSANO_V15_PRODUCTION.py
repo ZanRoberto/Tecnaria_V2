@@ -2077,11 +2077,12 @@ class PreTradeSignalTracker:
             # Solo vicini abbastanza simili
             if dist > 4.0: continue
 
-            h60 = sig.get('results', {}).get('hit_60', None)
-            d60 = sig.get('results', {}).get('delta_60', None)
+            h60  = sig.get('results', {}).get('hit_60',  None)
+            d60  = sig.get('results', {}).get('delta_60', None)
+            p60  = sig.get('results', {}).get('pnl_60',   None)
             if h60 is None: continue
 
-            vicini.append({'dist': dist, 'hit': h60, 'delta': d60 or 0})
+            vicini.append({'dist': dist, 'hit': h60, 'delta': d60 or 0, 'pnl': p60})
 
         if len(vicini) < 5:
             return {'confidence': 0, 'hit_rate': 0.5,
@@ -2096,12 +2097,32 @@ class PreTradeSignalTracker:
         # Confidence: cresce con n_vicini, max a 50
         confidence = min(1.0, len(vicini) / 50)
 
-        if hit_rate >= 0.65 and avg_delta > 5:
-            verdict = 'ENTRA'
-        elif hit_rate <= 0.40 or avg_delta < -5:
-            verdict = 'BLOCCA'
+        # CRITERIO ECONOMICO EMERGENTE — nessuna soglia fissa
+        # Fee simulata nella stessa scala di pnl_60: $250 * 0.02% * 2 = $0.10
+        # hit_economica = % vicini con pnl_60 > fee_sim (coprono davvero i costi)
+        # Il numero emerge dalla distribuzione storica dei vicini — non è inventato
+        FEE_SIM = 0.10  # fee nella scala simulata (size=$250)
+        pnl_vicini = [v['pnl'] for v in vicini if v.get('pnl') is not None]
+
+        if pnl_vicini:
+            hit_econ = sum(1 for p in pnl_vicini if p > FEE_SIM) / len(pnl_vicini)
+            pnl_medio = sum(pnl_vicini) / len(pnl_vicini)
+            # ENTRA: maggioranza dei vicini copre davvero le fee E hit direzionale ok
+            if hit_econ >= 0.50 and hit_rate >= 0.60:
+                verdict = 'ENTRA'
+            # BLOCCA: meno di 1/3 dei vicini copre le fee O hit direzionale basso
+            elif hit_econ < 0.30 or hit_rate <= 0.40:
+                verdict = 'BLOCCA'
+            else:
+                verdict = 'NEUTRO'
         else:
-            verdict = 'NEUTRO'
+            # Fallback senza pnl: solo hit_rate + delta conservativo
+            if hit_rate >= 0.65 and avg_delta > 20:
+                verdict = 'ENTRA'
+            elif hit_rate <= 0.40 or avg_delta < -5:
+                verdict = 'BLOCCA'
+            else:
+                verdict = 'NEUTRO'
 
         return {
             'confidence': round(confidence, 2),
