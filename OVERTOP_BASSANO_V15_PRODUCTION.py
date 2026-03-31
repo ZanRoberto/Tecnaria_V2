@@ -5946,9 +5946,8 @@ class OvertopBassanoV15Production:
                 return
 
             # -- GATE: cespuglio avvelenato — entry deboli RANGING con loss streak --
-            # Se 2+ loss consecutivi arrivano da soglia<58 in RANGING
-            # → blocca entry deboli fino a segnale forte (score>58)
-            # Dati: 4 loss SHORT RANGING score 49-51 soglia 48 — entry muoiono subito
+            # BYPASS: se l'Oracolo conosce questo fingerprint con WR>=60% su 8+ campioni
+            # il pattern è statisticamente vincente — bypassa il blocco
             if self._regime_current == "RANGING":
                 _recent = list(self._m2_recent_trades)[-3:]
                 _loss_deboli = sum(1 for t in _recent
@@ -5958,12 +5957,22 @@ class OvertopBassanoV15Production:
                 if _loss_deboli >= 2:
                     _score_now = getattr(self.campo, '_last_score', 0)
                     if _score_now < 58:
-                        self._log_m2("🚫", f"CESPUGLIO_AVVELENATO: {_loss_deboli} loss deboli RANGING "
-                                          f"score={_score_now:.1f}<58 — attendo segnale forte")
-                        if len(self._phantoms_open) < 5:
-                            self._record_phantom(price, f"CESPUGLIO_RANGING_{_loss_deboli}loss",
-                                seed.get('score', 0), momentum, volatility, trend)
-                        return
+                        # BYPASS: controlla se l'Oracolo conosce questo fingerprint come vincente
+                        _fp_wr_now = self.oracolo.get_wr(momentum, volatility, trend, self.campo._direction)
+                        _fp_samples = self.oracolo._memory.get(
+                            f"{momentum}|{volatility}|{trend}|{self.campo._direction}", {}
+                        ).get('samples', 0)
+                        if _fp_wr_now >= 0.60 and _fp_samples >= 5:
+                            self._log_m2("✅", f"CESPUGLIO bypass — Oracolo WR={_fp_wr_now:.0%} "
+                                              f"n={_fp_samples:.0f} su {momentum}|{volatility}|{trend} "
+                                              f"— fingerprint vincente, entro")
+                        else:
+                            self._log_m2("🚫", f"CESPUGLIO_AVVELENATO: {_loss_deboli} loss deboli RANGING "
+                                              f"score={_score_now:.1f}<58 — attendo segnale forte")
+                            if len(self._phantoms_open) < 5:
+                                self._record_phantom(price, f"CESPUGLIO_RANGING_{_loss_deboli}loss",
+                                    seed.get('score', 0), momentum, volatility, trend)
+                            return
 
             # -- CAPSULE 1-5: stessa protezione del Motore 1 --------------
             # M2 usa le stesse capsule di M1 per non entrare in matrimoni tossici.
