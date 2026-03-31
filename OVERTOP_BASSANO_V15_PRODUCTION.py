@@ -4674,6 +4674,14 @@ class OvertopBassanoV15Production:
                 self.campo._last_score  = _sn['score']
                 self.campo._last_soglia = _sn['soglia']
                 # Registra nel tracker se score >= 25
+                # Calcola drift reale — _last_drift non esiste su campo
+                _st_drift = 0.0
+                if len(self.campo._prices_long) >= 100:
+                    _st_p = list(self.campo._prices_long)
+                    _st_old = sum(_st_p[:50]) / 50
+                    _st_new = sum(_st_p[-50:]) / 50
+                    if _st_old > 0:
+                        _st_drift = (_st_new - _st_old) / _st_old * 100
                 self.signal_tracker.record_signal(
                     price=price,
                     direction=self.campo._direction,
@@ -4684,8 +4692,8 @@ class OvertopBassanoV15Production:
                     volatility=volatility,
                     trend=trend,
                     rsi=self.campo._last_rsi,
-                    macd_hist=getattr(self.campo, '_macd_hist', 0.0),
-                    drift=getattr(self.campo, '_last_drift', 0.0),
+                    macd_hist=self.campo._last_macd_hist,
+                    drift=round(_st_drift, 5),
                 )
         # Aggiorna segnali aperti
         if self.signal_tracker.get_open_count() > 0:
@@ -5833,24 +5841,33 @@ class OvertopBassanoV15Production:
                             sum(self._pred_ratio_history) / len(self._pred_ratio_history), 1)
                         self.heartbeat_data["pred_ratio"]     = ratio_smooth
                         self.heartbeat_data["pred_ratio_raw"] = ratio
-                                # Aggiorna SC per boost predizione e Veritas stats
+                        # Aggiorna SC per boost predizione e Veritas stats
                         if hasattr(self, 'supercervello'):
                             self.supercervello._pred_score_ref = conf_pct
                             self.supercervello._pred_calib_ref = ratio_smooth
                             self.supercervello._veritas_stats_ref = self.veritas._stats
-                        # Passa contesto live all'IA per capsule auto-correttive
-                        # IA contesto — usa realtime_engine (nome corretto)
-                        self.realtime_engine._ctx = {
-                            'sc_pesi': self.supercervello._pesi.copy(),
-                            'oi_carica': self._oi_carica,
-                            'oi_stato': self._oi_stato,
-                            'drift': getattr(self.campo, '_last_drift', 0.0),
-                            'macd_hist': self.campo._last_macd_hist,
-                            'regime': self._regime_current,
-                            'signal_tracker_stats': self.signal_tracker._stats,
-                            'veritas_stats': self.veritas._stats,
-                            'phantom_stats': self._phantom_stats,
-                        }
+
+                # FIX: _ctx aggiornato SEMPRE ad ogni tick dell'Oracolo Interno,
+                # indipendentemente da movimenti_pred/supercervello.
+                # drift calcolato realmente da _prices_long (non _last_drift che non esiste).
+                _ia_drift_ctx = 0.0
+                if len(self.campo._prices_long) >= 100:
+                    _p_ctx = list(self.campo._prices_long)
+                    _avg_old_ctx = sum(_p_ctx[:50]) / 50
+                    _avg_new_ctx = sum(_p_ctx[-50:]) / 50
+                    if _avg_old_ctx > 0:
+                        _ia_drift_ctx = (_avg_new_ctx - _avg_old_ctx) / _avg_old_ctx * 100
+                self.realtime_engine._ctx = {
+                    'sc_pesi': self.supercervello._pesi.copy() if hasattr(self, 'supercervello') else {},
+                    'oi_carica': self._oi_carica,
+                    'oi_stato': self._oi_stato,
+                    'drift': round(_ia_drift_ctx, 5),
+                    'macd_hist': self.campo._last_macd_hist,
+                    'regime': self._regime_current,
+                    'signal_tracker_stats': self.signal_tracker._stats,
+                    'veritas_stats': self.veritas._stats,
+                    'phantom_stats': self._phantom_stats,
+                }
                 # Pesi SuperCervello
                 if hasattr(self,'supercervello'):
                     self.heartbeat_data["sc_pesi"] = self.supercervello._pesi
@@ -5900,6 +5917,16 @@ class OvertopBassanoV15Production:
     def _evaluate_shadow_entry(self, price, momentum, volatility, trend):
         """Motore 2 valuta entry con il Campo Gravitazionale."""
         try:
+            # -- DRIFT REALE calcolato una sola volta per tick ----------------
+            # _last_drift non esiste su campo — calcoliamo da _prices_long
+            _drift_real = 0.0
+            if len(self.campo._prices_long) >= 100:
+                _dp = list(self.campo._prices_long)
+                _d_old = sum(_dp[:50]) / 50
+                _d_new = sum(_dp[-50:]) / 50
+                if _d_old > 0:
+                    _drift_real = (_d_new - _d_old) / _d_old * 100
+
             # -- STATE ENGINE GATE - PRIMA DI TUTTO -----------------------
             can_enter, gate_reason = self._state_engine_can_enter()
             if not can_enter:
@@ -6009,8 +6036,7 @@ class OvertopBassanoV15Production:
                             return
                         # Drift troppo debole — rumore puro
                         # MA: se Oracolo è in FUOCO/CARICA con carica alta → ignora drift debole
-                        drifts = [abs(getattr(self.campo, '_last_drift', 0.0))]
-                        drift_avg = drifts[0] if drifts else 0
+                        drift_avg = abs(_drift_real)
                         if drift_avg < 0.0001 and range_pos < 0.80:
                             self._log_m2("🚫", f"DRIFT DEBOLE {drift_avg:.5f} — no trade")
                             return
@@ -6027,7 +6053,7 @@ class OvertopBassanoV15Production:
                 regime=self._regime_current,
                 direction=self.campo._direction,
                 score=result['score'],
-                drift=getattr(self.campo, '_last_drift', 0.0),
+                drift=_drift_real,
                 rsi=self.campo._last_rsi,
             )
             if _pred_veto['confidence'] >= 0.3 and _pred_veto['verdict'] == 'BLOCCA':
@@ -6069,7 +6095,7 @@ class OvertopBassanoV15Production:
                 'direction': self.campo._direction,
                 'oi_carica': self._oi_carica,
                 'oi_stato': self._oi_stato,
-                'drift': getattr(self.campo, '_last_drift', 0.0),
+                'drift': _drift_real,
                 'loss_streak': self._m2_loss_streak,
             })
             if _m2_caps.get('ripristina_pesi_sc'):
@@ -6078,7 +6104,7 @@ class OvertopBassanoV15Production:
                     self.supercervello._pesi.update(pesi)
                     self._log_m2("🔧", f"[CAPSULA] Pesi SC ripristinati")
             if _m2_caps.get('sblocca_short_ranging'):
-                if getattr(self.campo, '_last_drift', 0) < -0.02:
+                if _drift_real < -0.02:
                     self.campo._direction = "SHORT"
                     self._log_m2("🔧", f"[CAPSULA] SHORT sbloccato in RANGING")
             if _m2_caps.get('cap2_soglia') is not None:
@@ -6661,6 +6687,17 @@ class OvertopBassanoV15Production:
             else:
                 self._m2_losses += 1
             self._m2_pnl += pnl
+
+            # FIX: aggiorna _m2_recent_trades — usato dal gate CESPUGLIO_AVVELENATO
+            # Senza questo il gate non ha mai dati e non funziona
+            self._m2_recent_trades.append({
+                'ts':       time.time(),
+                'pnl':      pnl,
+                'is_win':   is_win,
+                'duration': trade_duration,
+                'regime':   self._regime_current,
+                'soglia':   self._shadow.get('soglia', 60) if self._shadow else 60,
+            })
 
             m2_tot = self._m2_wins + self._m2_losses
             m2_wr  = (self._m2_wins / m2_tot * 100) if m2_tot > 0 else 0
