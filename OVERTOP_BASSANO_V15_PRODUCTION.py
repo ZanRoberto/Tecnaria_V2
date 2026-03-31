@@ -2616,8 +2616,11 @@ class PersistenzaStato:
                         'oracolo_fp': 0.25, 'signal_tracker': 0.20,
                         'campo_carica': 0.30, 'matrimonio': 0.13, 'phantom_ratio': 0.12
                     }
+                if pesi_caricati.get('campo_carica', 0) > 0.45:
+                    log.warning("[RUNTIME_LOAD] ⚠️ Pesi degradati — reset default")
+                    pesi_caricati = dict(SuperCervello.PESI_DEFAULT)
                 bot.supercervello._pesi = pesi_caricati
-                log.info(f"[RUNTIME_LOAD] 🧠 Pesi SC ripristinati: {pesi_caricati}")
+                log.info(f"[RUNTIME_LOAD] 🧠 Pesi SC: {pesi_caricati}")
 
             # Ripristina Veritas
             if 'veritas_closed' in data and hasattr(bot, 'veritas'):
@@ -4187,10 +4190,10 @@ class SuperCervello:
     """
     PESI_DEFAULT = {
         'oracolo_fp':    0.25,
-        'signal_tracker':0.25,
-        'campo_carica':  0.20,
-        'matrimonio':    0.15,
-        'phantom_ratio': 0.15,
+        'signal_tracker':0.20,
+        'campo_carica':  0.30,
+        'matrimonio':    0.13,
+        'phantom_ratio': 0.12,
     }
 
     def __init__(self):
@@ -5962,13 +5965,19 @@ class OvertopBassanoV15Production:
                         _fp_samples = self.oracolo._memory.get(
                             f"{momentum}|{volatility}|{trend}|{self.campo._direction}", {}
                         ).get('samples', 0)
-                        # Controlla Oracolo E Signal Tracker — chi ha dati reali vince
+                        # Controlla Signal Tracker — itera su tutte le key per regime+direzione
                         _dir_now = self.campo._direction
-                        _st_key = f"{self._regime_current}|{_dir_now}|DEBOLE_<58"
-                        _st_stats = getattr(self.signal_tracker, '_stats', {}).get(_st_key, {})
-                        _st_hits = _st_stats.get('hit_60', [])
-                        _st_hit_rate = sum(_st_hits)/len(_st_hits) if len(_st_hits) >= 10 else 0
-                        _st_bypass = _st_hit_rate >= 0.60 and len(_st_hits) >= 10
+                        _st_all = getattr(self.signal_tracker, '_stats', {})
+                        _st_hit_rate = 0.0
+                        _st_n = 0
+                        for _sk, _sv in _st_all.items():
+                            if self._regime_current in _sk and _dir_now in _sk:
+                                _sh = list(_sv.get('hit_60', []) or [])
+                                if len(_sh) >= 10:
+                                    _st_hit_rate = sum(_sh)/len(_sh)
+                                    _st_n = len(_sh)
+                                    break
+                        _st_bypass = _st_hit_rate >= 0.60 and _st_n >= 10
                         if (_fp_wr_now >= 0.60 and _fp_samples >= 5) or _st_bypass:
                             _motivo = f"ST hit={_st_hit_rate:.0%} n={len(_st_hits)}" if _st_bypass else f"Oracolo WR={_fp_wr_now:.0%} n={_fp_samples:.0f}"
                             self._log_m2("✅", f"CESPUGLIO bypass — {_motivo} su {momentum}|{volatility}|{trend} — entro")
@@ -5986,7 +5995,7 @@ class OvertopBassanoV15Production:
             _mat_m2   = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
             _conf_m2  = _mat_m2.get('confidence', 0.5)
             # Soglia abbassata a 0.35 — dati phantom: conf 0.40 ha net +$924
-            _cap2_soglia = getattr(self, '_cap2_soglia_override', 0.35)
+            _cap2_soglia = getattr(self, '_cap2_soglia_override', 0.30)
             _allow2, _reason2 = self.capsule2.riconosci(_conf_m2) if _conf_m2 >= _cap2_soglia else (True, "OK")
             if not _allow2:
                 if len(self._phantoms_open) < 5:
