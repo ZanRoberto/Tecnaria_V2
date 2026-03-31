@@ -176,7 +176,7 @@ def trading_status():
             SELECT COUNT(*),
                    SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END),
                    SUM(pnl), MAX(pnl), MIN(pnl)
-            FROM trades WHERE event_type='EXIT'
+            FROM trades WHERE event_type IN ('EXIT', 'M2_EXIT')
         """, fetch=True)
 
         trades_rows = db_execute("""
@@ -332,7 +332,7 @@ def brain_analysis_thread():
             time.sleep(60)
             row = db_execute("""
                 SELECT COUNT(*), SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END), SUM(pnl)
-                FROM trades WHERE event_type='EXIT'
+                FROM trades WHERE event_type IN ('EXIT', 'M2_EXIT')
             """, fetch=True)
             if row and row[0]:
                 n, w, p = row[0][0] or 0, row[0][1] or 0, row[0][2] or 0
