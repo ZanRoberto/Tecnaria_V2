@@ -6132,39 +6132,50 @@ class OvertopBassanoV15Production:
             #   score >= 58: delta medio $60+, pnl POSITIVO
             # ===============================================================
             
-            # MIN_SCORE_ECONOMICO calibrato dinamicamente su SOGLIA_MIN
-            # Non fisso — segue la calibrazione del mercato reale.
-            # Storico: 58 su mercato trending. Oggi: 48 su RANGING (Signal Tracker 3320 campioni)
-            MIN_SCORE_ECONOMICO = self.campo.SOGLIA_MIN
+            # ── ENERGY FILTER ECONOMICO SOVRANO ─────────────────────────
+            # La verità economica locale comanda — non la soglia del campo.
+            # Legge signal_tracker._stats per la chiave {regime}|{direction}|{band}
+            # e decide BLOCK / PILOT / FULL dai dati reali accumulati.
+            #
+            # A. n>=100 e avg_pnl_sim<=-0.05        → ECON_BLOCK
+            # B. avg_pnl_sim<0 o n<20 o pos<0.55    → ECON_PILOT (size cappata)
+            # C. avg_pnl_sim>=+0.05 e pos>=0.55 e n>=20 → ECON_OK (FULL)
+            _score = result['score']
+            if _score >= 75:   _band = "FORTE_75+"
+            elif _score >= 65: _band = "BUONO_65-75"
+            elif _score >= 58: _band = "BASE_58-65"
+            else:              _band = "DEBOLE_<58"
+            _econ_key = f"{self._regime_current}|{self.campo._direction}|{_band}"
+            _st = getattr(self.signal_tracker, '_stats', {}).get(_econ_key, {})
+            _n         = _st.get('n', 0)
+            _pnls      = _st.get('pnl_sim', [])
+            _hits      = _st.get('hit_60', [])
+            _avg_pnl   = sum(_pnls) / len(_pnls) if _pnls else None
+            _pnl_pos   = sum(1 for p in _pnls if p > 0) / len(_pnls) if _pnls else None
 
-            # Valuta ENTRAMBE le condizioni prima di decidere
-            score_ok = result['score'] >= MIN_SCORE_ECONOMICO
-            
-            seed_history = list(self.campo._seed_history)
-            if len(seed_history) >= 5:
-                last5 = seed_history[-5:]
-                rising_count = sum(1 for i in range(1, len(last5)) if last5[i] >= last5[i-1])
-                trend_ok = rising_count >= 3
-            else:
-                trend_ok = True  # non abbastanza dati → lascia passare
-                rising_count = -1
-            
-            # Classifica il rifiuto
-            if not score_ok and not trend_ok:
-                rejection = "ENERGY_BOTH"
-            elif not score_ok:
-                rejection = "ENERGY_SCORE"
-            elif not trend_ok:
-                rejection = "ENERGY_TREND"
-            else:
-                rejection = None  # passa il filtro
-            
-            if rejection:
+            if _avg_pnl is not None and _n >= 100 and _avg_pnl <= -0.05:
+                # A: evidenza forte di perdita — BLOCK
+                self._log_m2("💸", f"ECON_BLOCK {_econ_key} avg_pnl={_avg_pnl:.3f} n={_n}")
                 if len(self._phantoms_open) < 5:
-                    detail = f"{rejection}_s{result['score']:.0f}_min{MIN_SCORE_ECONOMICO}_t{rising_count}/3"
-                    self._record_phantom(price, detail,
+                    self._record_phantom(price, f"ECON_BLOCK_{_econ_key}",
                         seed['score'], momentum, volatility, trend)
                 return
+
+            elif (_avg_pnl is None or _avg_pnl < 0 or _n < 20 or
+                  (_pnl_pos is not None and _pnl_pos < 0.55)):
+                # B: dati insufficienti o edge debole — PILOT (size cappata)
+                if _band == "DEBOLE_<58":
+                    result['size'] = min(result['size'], 0.10)
+                    result['soglia'] = max(result['soglia'], 58)
+                elif _band == "BASE_58-65":
+                    result['size'] = min(result['size'], 0.15)
+                _pilot_reason = (f"n={_n}" if _n < 20 else
+                                 f"avg_pnl={_avg_pnl:.3f}" if _avg_pnl is not None and _avg_pnl < 0 else
+                                 f"pos={_pnl_pos:.0%}" if _pnl_pos is not None else "no_data")
+                self._log_m2("🔬", f"ECON_PILOT {_econ_key} {_pilot_reason} size→{result['size']:.2f}")
+            else:
+                # C: evidenza positiva — FULL
+                self._log_m2("✅", f"ECON_OK {_econ_key} avg_pnl={_avg_pnl:.3f} pos={_pnl_pos:.0%} n={_n}")
 
             # ===============================================================
             # REGIME-AWARE BEHAVIOR - il laterale è un altro mestiere
