@@ -4691,17 +4691,24 @@ class OvertopBassanoV15Production:
         if self.signal_tracker.get_open_count() > 0:
             self.signal_tracker.update(price)
 
-        # -- BRIDGE EVENTS: emetti su condizioni significative (B4) --------
+        # -- BRIDGE EVENTS: rate-limited — max 1 per tipo ogni 10s --------
+        _now_ev = time.time()
         if len(self.campo._prices_short) >= 30:
             _pb_f, _pb_d, _pb_sigs = self.campo._pre_breakout_factor()
             if _pb_sigs >= 2:
-                _pb_payload = {'signals': _pb_sigs, 'factor': round(_pb_f, 3), 'regime': self._regime_current}
-                self._emit_bridge_event("EVENT_PREBREAKOUT", _pb_payload)
-                self.telemetry.log_event_signal("PREBREAKOUT", _pb_payload)
+                _last_pb = getattr(self, '_last_pb_event_ts', 0)
+                if _now_ev - _last_pb >= 10:
+                    _pb_payload = {'signals': _pb_sigs, 'factor': round(_pb_f, 3), 'regime': self._regime_current}
+                    self._emit_bridge_event("EVENT_PREBREAKOUT", _pb_payload)
+                    self.telemetry.log_event_signal("PREBREAKOUT", _pb_payload)
+                    self._last_pb_event_ts = _now_ev
         if self._oi_stato == "FUOCO" and self._oi_carica >= 0.80:
-            _fuoco_payload = {'carica': round(self._oi_carica, 3), 'regime': self._regime_current}
-            self._emit_bridge_event("EVENT_FUOCO", _fuoco_payload)
-            self.telemetry.log_event_signal("FUOCO", _fuoco_payload)
+            _last_fuoco = getattr(self, '_last_fuoco_event_ts', 0)
+            if _now_ev - _last_fuoco >= 10:
+                _fuoco_payload = {'carica': round(self._oi_carica, 3), 'regime': self._regime_current}
+                self._emit_bridge_event("EVENT_FUOCO", _fuoco_payload)
+                self.telemetry.log_event_signal("FUOCO", _fuoco_payload)
+                self._last_fuoco_event_ts = _now_ev
 
         # -- HEARTBEAT M2 - ogni 60s conferma che M2 è vivo ---------------
         if now - self._last_m2_heartbeat > 60:
