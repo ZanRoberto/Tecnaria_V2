@@ -256,6 +256,178 @@ def get_config():
     return jsonify({"version": "V6.0+V15_PRODUCTION+IA", "db": DB_PATH}), 200
 
 # ═══════════════════════════════════════════════════════════════════════════
+# DIAGNOSTIC — tutto quello che serve per capire lo stato del sistema
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route('/diagnostic', methods=['GET'])
+def diagnostic():
+    try:
+        with heartbeat_lock:
+            hb = dict(heartbeat_data)
+
+        # -- FIX ATTIVI: verifica diretta sul file sorgente --
+        src = "/opt/render/project/src/OVERTOP_BASSANO_V15_PRODUCTION.py"
+        fix_attivi = {}
+        try:
+            code = open(src).read()
+            fix_attivi = {
+                "MIN_HOLD_10s":        "if duration >= MIN_HOLD_SECONDS:" in code,
+                "T1_VOL_pnl_guard":    "volatility == \"ALTA\" and current_pnl_real < 0:" in code,
+                "T4_FP_pnl_guard":     "fp_div > DIVORCE_FP_DIVERGE_PCT and current_pnl_real < 0:" in code,
+                "CESPUGLIO_bypass":    "CESPUGLIO bypass" in code,
+                "drawdown_scope_fix":  "FIX: drawdown_pct calcolato sempre" in code,
+            }
+        except Exception as e:
+            fix_attivi = {"error": str(e)}
+
+        # -- ULTIMO TRADE --
+        ultimo_trade = {}
+        trades_rows = db_execute("""
+            SELECT timestamp, event_type, direction, price, pnl, reason, data_json
+            FROM trades ORDER BY id DESC LIMIT 2
+        """, fetch=True)
+        if trades_rows:
+            for r in trades_rows:
+                et = r[1]
+                if et == "M2_EXIT":
+                    try:
+                        dj = json.loads(r[6]) if r[6] else {}
+                    except:
+                        dj = {}
+                    ultimo_trade = {
+                        "timestamp":  r[0],
+                        "direzione":  r[2],
+                        "prezzo":     r[3],
+                        "pnl":        round(float(r[4] or 0), 4),
+                        "motivo":     r[5],
+                        "durata_s":   dj.get("duration", "?"),
+                        "score":      dj.get("score", "?"),
+                        "matrimonio": dj.get("matrimonio", "?"),
+                    }
+                    break
+
+        # -- DIVORZIO STATS: conta trigger oggi --
+        divorzio_stats = {"T1_VOL": 0, "T2_TREND": 0, "T3_DD": 0, "T4_FP": 0, "totale": 0}
+        div_rows = db_execute("""
+            SELECT reason FROM trades
+            WHERE event_type='M2_EXIT' AND reason LIKE 'DIVORZIO%'
+            AND timestamp >= datetime('now', '-1 day')
+        """, fetch=True)
+        if div_rows:
+            for r in div_rows:
+                reason = r[0] or ""
+                divorzio_stats["totale"] += 1
+                for t in ["T1_VOL", "T2_TREND", "T3_DD", "T4_FP"]:
+                    if t in reason:
+                        divorzio_stats[t] += 1
+
+        # -- PESI SC --
+        sc_pesi = hb.get("sc_pesi", {})
+
+        # -- ORACOLO TOP 5 PER WR --
+        oracolo = hb.get("oracolo_snapshot", {})
+        top_fp = sorted(
+            [(k, v) for k, v in oracolo.items()
+             if isinstance(v, dict) and v.get("samples", 0) >= 5 and not k.startswith("_")],
+            key=lambda x: x[1].get("wr", 0), reverse=True
+        )[:5]
+        oracolo_top5 = [
+            {"fingerprint": k, "wr": round(v["wr"]*100, 1),
+             "campioni": v["samples"], "pnl_avg": v["pnl_avg"]}
+            for k, v in top_fp
+        ]
+
+        # -- CESPUGLIO STATS --
+        phantom = hb.get("phantom", {})
+        per_livello = phantom.get("per_livello", {})
+        cespuglio = per_livello.get("CESPUGLIO_RANGING_2loss", {})
+        cespuglio_stats = {
+            "bloccati":    cespuglio.get("blocked", 0),
+            "would_win":   cespuglio.get("would_win", 0),
+            "would_lose":  cespuglio.get("would_lose", 0),
+            "pnl_salvati": round(cespuglio.get("pnl_saved", 0), 2),
+            "pnl_persi":   round(cespuglio.get("pnl_missed", 0), 2),
+            "net":         round(cespuglio.get("pnl_saved", 0) - cespuglio.get("pnl_missed", 0), 2),
+        }
+
+        # -- STATO GENERALE --
+        stato = {
+            "status":        hb.get("status", "UNKNOWN"),
+            "regime":        hb.get("regime", "?"),
+            "m2_trades":     hb.get("m2_trades", 0),
+            "m2_wins":       hb.get("m2_wins", 0),
+            "m2_losses":     hb.get("m2_losses", 0),
+            "m2_pnl":        round(hb.get("m2_pnl", 0), 4),
+            "m2_wr":         round(hb.get("m2_wr", 0) * 100, 1),
+            "m2_state":      hb.get("m2_state", "?"),
+            "loss_streak":   hb.get("m2_loss_streak", 0),
+            "phantom_bilancio": round(phantom.get("bilancio", 0), 2),
+            "tick_count":    hb.get("tick_count", 0),
+            "last_price":    hb.get("last_price", 0),
+        }
+
+        # -- VERITAS SINTESI --
+        veritas = hb.get("veritas", {})
+        veritas_sintesi = veritas.get("conflitto", {})
+
+        result = {
+            "🔧 FIX_ATTIVI":       fix_attivi,
+            "📊 STATO":            stato,
+            "💰 ULTIMO_TRADE":     ultimo_trade,
+            "💔 DIVORZIO_OGGI":    divorzio_stats,
+            "🧠 PESI_SC":          sc_pesi,
+            "🔮 ORACOLO_TOP5":     oracolo_top5,
+            "🌿 CESPUGLIO":        cespuglio_stats,
+            "⚖️ VERITAS":          veritas_sintesi,
+        }
+
+        # Rendering HTML leggibile
+        html = """<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<title>DIAGNOSTIC — OVERTOP V15</title>
+<style>
+body{background:#060810;color:#00ff88;font-family:monospace;padding:20px;font-size:13px;}
+h1{color:#ffd700;font-size:18px;margin-bottom:20px;}
+h2{color:#00aaff;font-size:14px;margin-top:20px;margin-bottom:8px;border-bottom:1px solid #333;padding-bottom:4px;}
+.ok{color:#00ff88;} .err{color:#ff3355;} .warn{color:#ffd700;}
+table{border-collapse:collapse;width:100%;margin-bottom:10px;}
+td,th{padding:4px 12px;text-align:left;border-bottom:1px solid #1a2030;}
+th{color:#aaa;font-weight:normal;}
+.val{color:#fff;}
+</style></head><body>
+<h1>⚡ DIAGNOSTIC — OVERTOP BASSANO V15</h1>
+"""
+        for section, data in result.items():
+            html += f"<h2>{section}</h2><table>"
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    if isinstance(v, bool):
+                        cls = "ok" if v else "err"
+                        val = "✅ ATTIVO" if v else "❌ MANCANTE"
+                    elif isinstance(v, (int, float)):
+                        cls = "val"
+                        val = str(v)
+                    else:
+                        cls = "val"
+                        val = str(v)
+                    html += f"<tr><td style='color:#aaa'>{k}</td><td class='{cls}'>{val}</td></tr>"
+            elif isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        vals = " | ".join(f"<span style='color:#aaa'>{k}:</span> <span class='val'>{v}</span>" for k,v in item.items())
+                        html += f"<tr><td colspan='2'>{vals}</td></tr>"
+            html += "</table>"
+
+        html += f"<p style='color:#333;font-size:11px;margin-top:30px'>Aggiornato: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>"
+        html += "</body></html>"
+
+        from flask import Response
+        return Response(html, mimetype='text/html')
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ═══════════════════════════════════════════════════════════════════════════
 # DOWNLOAD ENDPOINTS — scarica DB, narratives, capsule
 # ═══════════════════════════════════════════════════════════════════════════
 
