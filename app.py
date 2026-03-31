@@ -2117,9 +2117,9 @@ function update() {
         edgeRows || '<div style="color:var(--dim);text-align:center;padding:16px;font-size:10px;">In attesa segnali...</div>';
       // ── END ECONOMIC EDGE ──────────────────────────────────────────
     $('st-counts').textContent = `open:${st.open||0} / chiusi:${st.closed||0}`;
-    const stTop = st.top || [];
-    if (stTop.length > 0) {
-      $('st-body').innerHTML = stTop.map(r => {
+    const stTopRows = st.top || [];
+    if (stTopRows.length > 0) {
+      $('st-body').innerHTML = stTopRows.map(r => {
         const hit = r.hit_60s || 0;
         const hitCol = hit >= 0.65 ? 'var(--green)' : hit >= 0.50 ? 'var(--yellow)' : 'var(--red)';
         const pnl = r.pnl_sim_avg || 0;
