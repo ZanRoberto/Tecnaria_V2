@@ -184,11 +184,13 @@ def trading_status():
             FROM trades ORDER BY timestamp DESC LIMIT 20
         """, fetch=True)
 
-        n_trades  = (row[0][0] if row and row[0] else 0) or 0
-        n_wins    = (row[0][1] if row and row[0] else 0) or 0
-        total_pnl = (row[0][2] if row and row[0] else 0) or 0
-        max_pnl   = (row[0][3] if row and row[0] else 0) or 0
-        min_pnl   = (row[0][4] if row and row[0] else 0) or 0
+        # db_execute con COUNT usa fetchone → tupla diretta, non lista di tuple
+        _row = row if (row and not isinstance(row, list)) else (row[0] if row else None)
+        n_trades  = int(_row[0] or 0) if _row else 0
+        n_wins    = int(_row[1] or 0) if _row else 0
+        total_pnl = float(_row[2] or 0) if _row else 0
+        max_pnl   = float(_row[3] or 0) if _row else 0
+        min_pnl   = float(_row[4] or 0) if _row else 0
         wr        = (n_wins / n_trades * 100) if n_trades > 0 else 0
 
         with heartbeat_lock:
