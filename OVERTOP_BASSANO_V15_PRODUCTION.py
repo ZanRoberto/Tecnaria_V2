@@ -4490,7 +4490,7 @@ class OvertopBassanoV15Production:
         # -- Banner --------------------------------------------------------
         mode_label = "📄 PAPER TRADE" if self.paper_trade else "🔴 LIVE TRADING"
         log.info("=" * 80)
-        log.info(f"🚀 OVERTOP BASSANO V14 PRODUCTION - {mode_label}")
+        log.info(f"🚀 OVERTOP BASSANO V15 PRODUCTION - {mode_label}")
         log.info(f"   Capital: ${self.capital:,.2f}  |  Trades totali: {self.total_trades}")
         log.info(f"   SeedScorer threshold: {SEED_ENTRY_THRESHOLD}")
         log.info(f"   Divorce triggers minimi: {DIVORCE_MIN_TRIGGERS}/4")
