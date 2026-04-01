@@ -2540,7 +2540,7 @@ def supervisor_analyze():
     """Chiama DeepSeek e ritorna la decisione. Throttle: max 1 call ogni 30s."""
     global _last_supervisor_call, _last_supervisor_result
     now = time.time()
-    if now - _last_supervisor_call < 30:
+    if now - _last_supervisor_call < 7:
         return jsonify({"cached": True, "result": _last_supervisor_result}), 200
 
     with heartbeat_lock:
@@ -2892,7 +2892,7 @@ function loadLog() {
 
 function startCountdown() {
   if (autoTimer) clearInterval(autoTimer);
-  countdown = 30;
+  countdown = 7;
   autoTimer = setInterval(()=>{
     countdown--;
     document.getElementById('auto-countdown').textContent = '(auto ' + countdown + 's)';
