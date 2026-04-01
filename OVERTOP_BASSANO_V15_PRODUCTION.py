@@ -6035,11 +6035,31 @@ class OvertopBassanoV15Production:
                 return
 
             if not result['enter']:
-                # -- PHANTOM: score vicino alla soglia ma non abbastanza --
-                if result['score'] > 50 and len(self._phantoms_open) < 5:
-                    self._record_phantom(price, f"SCORE_SOTTO_{result['score']:.0f}_vs_{result['soglia']:.0f}",
-                                        seed['score'], momentum, volatility, trend)
-                return
+                # -- RANGING FINGERPRINT GATE: bypass score se Oracolo conosce questo pattern come vincente --
+                # In RANGING il momentum DEBOLE abbassa lo score sotto soglia
+                # ma se il fingerprint ha WR ≥ 60% su 8+ campioni reali → entra con size ridotta
+                _rf_wr = self.oracolo.get_wr(momentum, volatility, trend, self.campo._direction)
+                _rf_mem = self.oracolo._memory.get(
+                    f"{momentum}|{volatility}|{trend}|{self.campo._direction}", {}
+                )
+                _rf_samples = _rf_mem.get('samples', 0)
+                _rf_real = _rf_mem.get('real', 0)  # campioni reali (non sintetici)
+
+                if (self._regime_current == "RANGING" and
+                    _rf_wr >= 0.60 and _rf_samples >= 5 and
+                    result['score'] >= 40 and  # score minimo assoluto
+                    not result['veto']):
+                    # Entra con size ridotta — il fingerprint compensa lo score basso
+                    self._log_m2("🎯", f"RANGING_FP_GATE: {momentum}|{volatility}|{trend} "
+                                      f"WR={_rf_wr:.0%} n={_rf_samples:.0f} score={result['score']:.1f} — entro size 0.5x")
+                    result['enter'] = True
+                    result['size'] = min(result['size'], 0.5)  # max 0.5x size
+                else:
+                    # -- PHANTOM: score vicino alla soglia ma non abbastanza --
+                    if result['score'] > 50 and len(self._phantoms_open) < 5:
+                        self._record_phantom(price, f"SCORE_SOTTO_{result['score']:.0f}_vs_{result['soglia']:.0f}",
+                                            seed['score'], momentum, volatility, trend)
+                    return
 
             # -- MIDZONE FILTER (regola del trader) ────────────────────────
             # In RANGING centrale (40-60% del range) ZERO TRADE
