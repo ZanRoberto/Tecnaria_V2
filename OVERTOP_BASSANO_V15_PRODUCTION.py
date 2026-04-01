@@ -6086,6 +6086,13 @@ class OvertopBassanoV15Production:
                             return
 
             # -- HARD GUARD: doppio check anti-bug --------------------------
+            # DeepSeek può abbassare la soglia temporaneamente
+            _ds_soglia = getattr(self.campo, '_soglia_min_override', None)
+            _result_soglia = result['soglia']
+            if _ds_soglia is not None and _ds_soglia < _result_soglia:
+                self._log_m2("🤖", f"DS soglia override: {_result_soglia:.1f}→{_ds_soglia:.1f}")
+                result['soglia'] = _ds_soglia
+
             if result['score'] < result['soglia']:
                 self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
                 return
@@ -6155,16 +6162,25 @@ class OvertopBassanoV15Production:
                 self._cap2_soglia_override = _m2_caps['cap2_soglia']
                 self._log_m2("🔧", f"[CAPSULA] Capsule2 soglia auto-calibrata: {_m2_caps['cap2_soglia']:.2f}")
 
+            # -- DEEPSEEK OVERRIDE: se DS ha comandato, ignora SC ──────────
+            _ds_blocca_sc = getattr(self, '_ds_blocca_sc', False)
+            _ds_forza_entry = getattr(self, '_ds_forza_entry', False)
+
             # Applica decisione supercervello
             if _sc_dec['azione'] == 'BLOCCA':
-                self._log_m2("🧠", f"SC BLOCCA — {_sc_dec['motivo']}")
-                # Veritas: registra FUOCO|BLOCCA o CARICA|BLOCCA — la verità arriverà a 60s
-                self.veritas.registra(price, self._oi_stato, self._oi_carica,
-                    "BLOCCA", _sc_dec['confidenza'], self._regime_current, time.time())
-                if len(self._phantoms_open) < 5:
-                    self._record_phantom(price, f"SC_BLOCCA_c{_sc_dec['confidenza']:.2f}",
-                        seed['score'], momentum, volatility, trend)
-                return
+                if _ds_blocca_sc or _ds_forza_entry:
+                    self._log_m2("🤖", f"DS OVERRIDE SC BLOCCA → entro lo stesso (DS comando attivo)")
+                    # Resetta dopo uso
+                    self._ds_forza_entry = False
+                else:
+                    self._log_m2("🧠", f"SC BLOCCA — {_sc_dec['motivo']}")
+                    # Veritas: registra FUOCO|BLOCCA o CARICA|BLOCCA — la verità arriverà a 60s
+                    self.veritas.registra(price, self._oi_stato, self._oi_carica,
+                        "BLOCCA", _sc_dec['confidenza'], self._regime_current, time.time())
+                    if len(self._phantoms_open) < 5:
+                        self._record_phantom(price, f"SC_BLOCCA_c{_sc_dec['confidenza']:.2f}",
+                            seed['score'], momentum, volatility, trend)
+                    return
 
             # Aggiusta size e soglia in base alla confidenza
             if _sc_dec['azione'] == 'ENTRA':
@@ -7403,12 +7419,68 @@ class OvertopBassanoV15Production:
                 break
         return count
 
+    def _read_deepseek_commands(self):
+        """Legge e applica i comandi DeepSeek da heartbeat_data ogni tick."""
+        if not self._heartbeat_data:
+            return
+        try:
+            with self._heartbeat_lock:
+                hb = self._heartbeat_data
+
+            now = time.time()
+
+            # ABBASSA_SOGLIA — valida per 60 secondi
+            if hb.get("ds_soglia_override"):
+                ts = hb.get("ds_soglia_ts", 0)
+                if now - ts < 60:
+                    val = float(hb["ds_soglia_override"])
+                    self.campo._soglia_min_override = val
+                    self.campo._soglia_base_override = val
+                else:
+                    # Scaduto — rimuovi
+                    with self._heartbeat_lock:
+                        self._heartbeat_data.pop("ds_soglia_override", None)
+                        self._heartbeat_data.pop("ds_soglia_ts", None)
+                    self.campo._soglia_min_override = None
+                    self.campo._soglia_base_override = None
+
+            # RESET_PESI
+            if hb.get("ds_reset_pesi"):
+                self.supercervello._pesi = dict(self.supercervello.PESI_DEFAULT)
+                log.info("[DS] ✅ Pesi SC resettati ai default")
+                with self._heartbeat_lock:
+                    self._heartbeat_data["ds_reset_pesi"] = False
+
+            # FORZA_ENTRY — valido per 30 secondi
+            if hb.get("ds_forza_entry"):
+                ts = hb.get("ds_forza_ts", 0)
+                if now - ts < 30:
+                    self._ds_forza_entry = True
+                else:
+                    with self._heartbeat_lock:
+                        self._heartbeat_data["ds_forza_entry"] = False
+                    self._ds_forza_entry = False
+
+            # BLOCCA_SC — valido per 180 secondi (3 minuti)
+            if hb.get("ds_blocca_sc"):
+                ts = hb.get("ds_blocca_sc_ts", 0)
+                if now - ts < 180:
+                    self._ds_blocca_sc = True
+                else:
+                    with self._heartbeat_lock:
+                        self._heartbeat_data["ds_blocca_sc"] = False
+                    self._ds_blocca_sc = False
+
+        except Exception as e:
+            log.warning(f"[DS_CMD] Errore lettura comandi: {e}")
+
     def run(self):
         log.info("[START] Bot avviato - connessione Binance WS...")
         self.connect_binance()
         try:
             while True:
                 time.sleep(1)
+                self._read_deepseek_commands()
         except KeyboardInterrupt:
             log.info("[STOP] Bot fermato da utente")
             self._persist.save(self.capital, self.total_trades)
