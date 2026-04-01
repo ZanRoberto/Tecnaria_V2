@@ -823,6 +823,7 @@ canvas.spark { width:100%; height:40px; }
   <div class="hdr">
     <div class="hdr-title">⚡ MISSION CONTROL V6.0</div>
     <div class="hdr-right">
+      <a href="/supervisor" style="padding:4px 12px;background:linear-gradient(135deg,rgba(187,102,255,0.2),rgba(187,102,255,0.08));border:1px solid var(--purple);color:var(--purple);font-family:Orbitron,monospace;font-size:10px;letter-spacing:1px;text-decoration:none;border-radius:2px;display:inline-flex;align-items:center;gap:6px;transition:all .2s;" onmouseover="this.style.boxShadow='0 0 15px rgba(187,102,255,0.5)'" onmouseout="this.style.boxShadow='none'">🤖 AI SUPERVISOR</a>
       <span><span class="status-dot" id="status-dot"></span><span id="status-txt" style="font-size:11px">OFFLINE</span></span>
       <span id="mode-badge" class="badge badge-paper">PAPER</span>
       <span style="font-size:10px; color:var(--dim)" id="last-seen">--</span>
