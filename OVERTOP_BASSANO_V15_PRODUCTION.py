@@ -7421,11 +7421,11 @@ class OvertopBassanoV15Production:
 
     def _read_deepseek_commands(self):
         """Legge e applica i comandi DeepSeek da heartbeat_data ogni tick."""
-        if not self._heartbeat_data:
+        if not self.heartbeat_data:
             return
         try:
-            with self._heartbeat_lock:
-                hb = self._heartbeat_data
+            with self.heartbeat_lock:
+                hb = self.heartbeat_data
 
             now = time.time()
 
@@ -7437,10 +7437,9 @@ class OvertopBassanoV15Production:
                     self.campo._soglia_min_override = val
                     self.campo._soglia_base_override = val
                 else:
-                    # Scaduto — rimuovi
-                    with self._heartbeat_lock:
-                        self._heartbeat_data.pop("ds_soglia_override", None)
-                        self._heartbeat_data.pop("ds_soglia_ts", None)
+                    with self.heartbeat_lock:
+                        self.heartbeat_data.pop("ds_soglia_override", None)
+                        self.heartbeat_data.pop("ds_soglia_ts", None)
                     self.campo._soglia_min_override = None
                     self.campo._soglia_base_override = None
 
@@ -7448,8 +7447,8 @@ class OvertopBassanoV15Production:
             if hb.get("ds_reset_pesi"):
                 self.supercervello._pesi = dict(self.supercervello.PESI_DEFAULT)
                 log.info("[DS] ✅ Pesi SC resettati ai default")
-                with self._heartbeat_lock:
-                    self._heartbeat_data["ds_reset_pesi"] = False
+                with self.heartbeat_lock:
+                    self.heartbeat_data["ds_reset_pesi"] = False
 
             # FORZA_ENTRY — valido per 30 secondi
             if hb.get("ds_forza_entry"):
@@ -7457,8 +7456,8 @@ class OvertopBassanoV15Production:
                 if now - ts < 30:
                     self._ds_forza_entry = True
                 else:
-                    with self._heartbeat_lock:
-                        self._heartbeat_data["ds_forza_entry"] = False
+                    with self.heartbeat_lock:
+                        self.heartbeat_data["ds_forza_entry"] = False
                     self._ds_forza_entry = False
 
             # BLOCCA_SC — valido per 180 secondi (3 minuti)
@@ -7467,8 +7466,8 @@ class OvertopBassanoV15Production:
                 if now - ts < 180:
                     self._ds_blocca_sc = True
                 else:
-                    with self._heartbeat_lock:
-                        self._heartbeat_data["ds_blocca_sc"] = False
+                    with self.heartbeat_lock:
+                        self.heartbeat_data["ds_blocca_sc"] = False
                     self._ds_blocca_sc = False
 
         except Exception as e:
