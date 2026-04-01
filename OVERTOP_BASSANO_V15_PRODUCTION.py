@@ -5448,7 +5448,7 @@ class OvertopBassanoV15Production:
         # ECCEZIONE VERITAS: se il Veritas vede movimento ribassista reale
         # con delta_60s < -20 su almeno 5 segnali → lo SHORT è legittimo
         _veritas_short_ok = False
-        _drift_short_ok = drift < -0.02 and bearish_energy >= 3
+        _drift_short_ok = drift < -0.005 and bearish_energy >= 3
         if hasattr(self, 'veritas') and self.veritas._stats:
             for k, s in self.veritas._stats.items():
                 if 'FUOCO' in k or 'CARICA' in k:
