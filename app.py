@@ -2534,7 +2534,7 @@ REGOLA 2 — ABBASSA_SOGLIA poi FORZA_ENTRY:
   NOTA: al ciclo successivo se score supera soglia abbassata → applica REGOLA 1
 
 REGOLA 3 — RESET_PESI:
-  Se campo_carica SC > 0.45
+  Se campo_carica SC > 0.35
   → decisione: RESET_PESI, comando: RESET_PESI, urgenza: MEDIA
 
 REGOLA 4 — BLOCCA_SC:
