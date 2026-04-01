@@ -2522,12 +2522,29 @@ SIGNAL TRACKER (hit rate reale):
 FINGERPRINT VINCENTI ORACOLO ({direzione}):
 {chr(10).join(fp_vincenti[:5]) if fp_vincenti else "Nessuno sopra 60% WR"}
 
-COMANDI DISPONIBILI:
-- ABBASSA_SOGLIA:<valore> — abbassa soglia_min temporaneamente (es: ABBASSA_SOGLIA:40)
-- RESET_PESI — resetta pesi SC ai default (0.30/0.25/0.20)
-- FORZA_ENTRY — forza entry con fingerprint corrente se WR >= 60%
-- ASPETTA — non fare nulla, condizioni non favorevoli
-- BLOCCA_SC — ignora SC per i prossimi 3 segnali, fidati solo dell'Oracolo
+REGOLE DECISIONALI — SEGUILE IN ORDINE RIGOROSO:
+
+REGOLA 1 — FORZA_ENTRY immediato:
+  Se score >= soglia E OracoloInterno FUOCO o CARICA con carica >= 0.65 E almeno 1 fingerprint WR >= 60%
+  → decisione: FORZA_ENTRY, comando: FORZA_ENTRY, urgenza: ALTA
+
+REGOLA 2 — ABBASSA_SOGLIA poi FORZA_ENTRY:
+  Se score >= (soglia - 12) E OracoloInterno FUOCO con carica >= 0.75 E fingerprint WR >= 60%
+  → decisione: ABBASSA_SOGLIA, comando: ABBASSA_SOGLIA:{score-2:.0f}, urgenza: ALTA
+  NOTA: al ciclo successivo se score supera soglia abbassata → applica REGOLA 1
+
+REGOLA 3 — RESET_PESI:
+  Se campo_carica SC > 0.45
+  → decisione: RESET_PESI, comando: RESET_PESI, urgenza: MEDIA
+
+REGOLA 4 — BLOCCA_SC:
+  Se Veritas mostra SC SBAGLIATO su FUOCO per N > 15 casi con pnl_avg < -1.5
+  E OracoloInterno FUOCO con carica >= 0.70
+  → decisione: BLOCCA_SC, comando: BLOCCA_SC, urgenza: ALTA
+
+REGOLA 5 — ASPETTA:
+  In tutti gli altri casi
+  → decisione: ASPETTA, comando: null, urgenza: BASSA
 
 Rispondi SOLO con JSON valido, nessun testo aggiuntivo:
 {{
