@@ -2352,6 +2352,79 @@ _supervisor_log = []
 _supervisor_lock = threading.Lock()
 _last_supervisor_call = 0
 _last_supervisor_result = {}
+_supervisor_auto_enabled = True  # autonomo sempre attivo
+
+def _execute_deepseek_command(cmd: str, result: dict):
+    """Esegue il comando DeepSeek direttamente sul bot tramite heartbeat_data."""
+    if not cmd:
+        return
+    try:
+        with heartbeat_lock:
+            # ABBASSA_SOGLIA:<valore>
+            if cmd.startswith("ABBASSA_SOGLIA:"):
+                val = float(cmd.split(":")[1])
+                heartbeat_data["ds_soglia_override"] = val
+                heartbeat_data["ds_soglia_ts"] = time.time()
+                log(f"[DS_EXEC] 📉 Soglia abbassata a {val}")
+
+            # RESET_PESI
+            elif cmd == "RESET_PESI":
+                heartbeat_data["ds_reset_pesi"] = True
+                log("[DS_EXEC] 🔄 Reset pesi SC richiesto")
+
+            # FORZA_ENTRY
+            elif cmd == "FORZA_ENTRY":
+                heartbeat_data["ds_forza_entry"] = True
+                heartbeat_data["ds_forza_ts"] = time.time()
+                log("[DS_EXEC] ⚡ Forza entry richiesto")
+
+            # BLOCCA_SC
+            elif cmd == "BLOCCA_SC":
+                heartbeat_data["ds_blocca_sc"] = True
+                heartbeat_data["ds_blocca_sc_ts"] = time.time()
+                log("[DS_EXEC] 🛑 Blocca SC richiesto")
+
+    except Exception as e:
+        log(f"[DS_EXEC] ❌ {e}")
+
+def _supervisor_auto_loop():
+    """Thread autonomo — chiama DeepSeek ogni 7 secondi e agisce."""
+    global _last_supervisor_call, _last_supervisor_result
+    time.sleep(15)  # attendi boot bot
+    log("[DS_AUTO] 🤖 Supervisor autonomo avviato — ogni 7 secondi")
+    while True:
+        try:
+            time.sleep(7)
+            if not _supervisor_auto_enabled:
+                continue
+            with heartbeat_lock:
+                hb = dict(heartbeat_data)
+            # Non chiamare se bot non è running
+            if hb.get("status") != "RUNNING":
+                continue
+            result = _call_deepseek(hb)
+            result["ts"] = datetime.utcnow().strftime("%H:%M:%S")
+            result["score"] = hb.get("m2_last_score", 0)
+            result["soglia"] = hb.get("m2_last_soglia", 0)
+            result["regime"] = hb.get("regime", "?")
+            result["direzione"] = hb.get("m2_direction", "?")
+            result["auto"] = True
+            _last_supervisor_call = time.time()
+            _last_supervisor_result = result
+            # Salva in log
+            with _supervisor_lock:
+                _supervisor_log.append(result)
+                if len(_supervisor_log) > 100:
+                    _supervisor_log.pop(0)
+            # Esegui comando se presente
+            cmd = result.get("comando")
+            if cmd and result.get("decisione") != "ASPETTA":
+                _execute_deepseek_command(cmd, result)
+                log(f"[DS_AUTO] ✅ {result['decisione']} — {result['motivo'][:60]}")
+        except Exception as e:
+            log(f"[DS_AUTO] ❌ {e}")
+
+threading.Thread(target=_supervisor_auto_loop, daemon=True, name='ds_supervisor').start()
 
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 
