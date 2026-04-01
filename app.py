@@ -2357,34 +2357,62 @@ _supervisor_auto_enabled = True  # autonomo sempre attivo
 def _execute_deepseek_command(cmd: str, result: dict):
     """Esegue il comando DeepSeek direttamente sul bot tramite heartbeat_data."""
     if not cmd:
+        result["eseguito"] = False
+        result["eseguito_motivo"] = "Nessun comando"
         return
     try:
+        with heartbeat_lock:
+            hb = heartbeat_data
+            status = hb.get("status", "UNKNOWN")
+
+        # Bot non running — non eseguire
+        if status != "RUNNING":
+            result["eseguito"] = False
+            result["eseguito_motivo"] = f"Bot non RUNNING (stato={status})"
+            log(f"[DS_EXEC] ❌ Bot non running — comando ignorato: {cmd}")
+            return
+
         with heartbeat_lock:
             # ABBASSA_SOGLIA:<valore>
             if cmd.startswith("ABBASSA_SOGLIA:"):
                 val = float(cmd.split(":")[1])
                 heartbeat_data["ds_soglia_override"] = val
                 heartbeat_data["ds_soglia_ts"] = time.time()
-                log(f"[DS_EXEC] 📉 Soglia abbassata a {val}")
+                result["eseguito"] = True
+                result["eseguito_motivo"] = f"Soglia abbassata a {val} per 60s"
+                log(f"[DS_EXEC] ✅ Soglia abbassata a {val}")
 
             # RESET_PESI
             elif cmd == "RESET_PESI":
                 heartbeat_data["ds_reset_pesi"] = True
-                log("[DS_EXEC] 🔄 Reset pesi SC richiesto")
+                result["eseguito"] = True
+                result["eseguito_motivo"] = "Pesi SC in reset"
+                log("[DS_EXEC] ✅ Reset pesi SC richiesto")
 
             # FORZA_ENTRY
             elif cmd == "FORZA_ENTRY":
                 heartbeat_data["ds_forza_entry"] = True
                 heartbeat_data["ds_forza_ts"] = time.time()
-                log("[DS_EXEC] ⚡ Forza entry richiesto")
+                result["eseguito"] = True
+                result["eseguito_motivo"] = "Forza entry attivo per 30s"
+                log("[DS_EXEC] ✅ Forza entry richiesto")
 
             # BLOCCA_SC
             elif cmd == "BLOCCA_SC":
                 heartbeat_data["ds_blocca_sc"] = True
                 heartbeat_data["ds_blocca_sc_ts"] = time.time()
-                log("[DS_EXEC] 🛑 Blocca SC richiesto")
+                result["eseguito"] = True
+                result["eseguito_motivo"] = "SC bloccato per 3 minuti"
+                log("[DS_EXEC] ✅ Blocca SC richiesto")
+
+            else:
+                result["eseguito"] = False
+                result["eseguito_motivo"] = f"Comando non riconosciuto: {cmd}"
+                log(f"[DS_EXEC] ❌ Comando sconosciuto: {cmd}")
 
     except Exception as e:
+        result["eseguito"] = False
+        result["eseguito_motivo"] = f"Errore: {str(e)}"
         log(f"[DS_EXEC] ❌ {e}")
 
 def _supervisor_auto_loop():
@@ -2880,13 +2908,22 @@ function loadLog() {
   fetch('/supervisor/log').then(r=>r.json()).then(logs=>{
     if (!logs.length) return;
     const urgCol = {ALTA:'urg-alta', MEDIA:'urg-media', BASSA:'urg-bassa'};
-    document.getElementById('log-body').innerHTML = logs.slice(0,20).map(r => `
+    document.getElementById('log-body').innerHTML = logs.slice(0,30).map(r => {
+      const eseguito = r.eseguito;
+      const eseguitoHtml = r.comando && r.comando !== 'null' ? 
+        `<span style="font-size:9px;padding:1px 5px;border-radius:2px;margin-left:4px;${eseguito ? 'background:rgba(0,255,136,0.15);color:var(--green)' : 'background:rgba(255,51,85,0.15);color:var(--red)'}">
+          ${eseguito ? '✅ ESEGUITO' : '❌ NON ESEGUITO'}
+        </span>
+        <span style="font-size:9px;color:var(--dim);margin-left:4px">${r.eseguito_motivo || ''}</span>` : '';
+      return `
       <div class="log-entry">
         <span class="log-ts">${r.ts||''}</span>
         <span class="log-dec ${urgCol[r.urgenza]||'urg-bassa'}">${r.decisione||'?'}</span>
         <span class="log-msg">${r.motivo||''}</span>
-        <span style="color:var(--dim);font-size:9px;margin-left:auto">${r.regime||''} ${r.direzione||''}</span>
-      </div>`).join('');
+        ${eseguitoHtml}
+        <span style="color:var(--dim);font-size:9px;margin-left:auto">${r.regime||''} ${r.direzione||''} ${r.score ? 'sc='+r.score.toFixed(1) : ''}</span>
+      </div>`;
+    }).join('');
   });
 }
 
