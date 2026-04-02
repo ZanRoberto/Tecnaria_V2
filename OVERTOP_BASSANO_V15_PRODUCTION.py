@@ -5979,7 +5979,7 @@ class OvertopBassanoV15Production:
                                     break
                         _st_bypass = _st_hit_rate >= 0.60 and _st_n >= 10
                         if (_fp_wr_now >= 0.60 and _fp_samples >= 5) or _st_bypass:
-                            _motivo = f"ST hit={_st_hit_rate:.0%} n={len(_st_hits)}" if _st_bypass else f"Oracolo WR={_fp_wr_now:.0%} n={_fp_samples:.0f}"
+                            _motivo = f"ST hit={_st_hit_rate:.0%} n={_st_n}" if _st_bypass else f"Oracolo WR={_fp_wr_now:.0%} n={_fp_samples:.0f}"
                             self._log_m2("✅", f"CESPUGLIO bypass — {_motivo} su {momentum}|{volatility}|{trend} — entro")
                         else:
                             self._log_m2("🚫", f"CESPUGLIO_AVVELENATO: {_loss_deboli} loss deboli RANGING "
@@ -7491,3 +7491,4 @@ class OvertopBassanoV15Production:
 if __name__ == '__main__':
     bot = OvertopBassanoV15Production()
     bot.run()
+v
