@@ -2620,10 +2620,10 @@ REGOLE DECISIONALI — SEGUILE IN ORDINE RIGOROSO:
 REGOLA 0 — MOMENTO PERFETTO (priorità assoluta, controlla PRIMA di tutto):
   ATTENZIONE: pred_score è DIVERSO da score M2. pred_score misura la precisione della predizione.
   Se (Predizione SC score) >= 88 E (scostamento $) <= 3.0 E OracoloInterno FUOCO con carica >= 0.70
-  E pnl_sim del Signal Tracker per direzione corrente >= -0.02 (non perdente)
+  E Signal Tracker pnl_sim direzione corrente >= -0.02
   → decisione: FORZA_ENTRY, comando: FORZA_ENTRY, urgenza: ALTA
-  ESEMPIO: pred_score=100%, scostamento=$0.7, FUOCO carica=0.96, pnl_sim=+0.04 → FORZA_ENTRY immediato
-  SE pnl_sim < -0.02 → ASPETTA sempre, non importa quanto è buona la predizione
+  ESEMPIO: pred_score=100%, scostamento=$0.7, FUOCO carica=0.96, pnl_sim=+0.04 → FORZA_ENTRY
+  SE pnl_sim < -0.02 → ASPETTA sempre, mercato non redditizio adesso
 
 REGOLA 1 — FORZA_ENTRY immediato:
   Se score >= soglia E OracoloInterno FUOCO o CARICA con carica >= 0.65 E almeno 1 fingerprint WR >= 60%
