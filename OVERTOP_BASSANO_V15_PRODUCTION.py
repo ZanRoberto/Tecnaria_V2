@@ -5982,7 +5982,7 @@ class OvertopBassanoV15Production:
                             _motivo = f"ST hit={_st_hit_rate:.0%} n={_st_n}" if _st_bypass else f"Oracolo WR={_fp_wr_now:.0%} n={_fp_samples:.0f}"
                             self._log_m2("✅", f"CESPUGLIO bypass — {_motivo} su {momentum}|{volatility}|{trend} — entro")
                         else:
-                            if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                            if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and fingerprint_wr >= 0.55:
                                 self._log_m2("🔥", f"CESPUGLIO bypassed — FUOCO carica={self._oi_carica:.2f}")
                             else:
                                 self._log_m2("🚫", f"CESPUGLIO_AVVELENATO: {_loss_deboli} loss deboli RANGING "
@@ -6001,7 +6001,7 @@ class OvertopBassanoV15Production:
             _cap2_soglia = getattr(self, '_cap2_soglia_override', 0.30)
             _allow2, _reason2 = self.capsule2.riconosci(_conf_m2) if _conf_m2 >= _cap2_soglia else (True, "OK")
             if not _allow2:
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and fingerprint_wr >= 0.55:
                     self._log_m2("🔥", f"CAP2 bypassed — FUOCO carica={self._oi_carica:.2f}")
                 else:
                     if len(self._phantoms_open) < 5:
@@ -6035,7 +6035,7 @@ class OvertopBassanoV15Production:
 
             if result['veto']:
                 veto = result['veto']
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and fingerprint_wr >= 0.55:
                     self._log_m2("🔥", f"VETO bypassed — FUOCO carica={self._oi_carica:.2f} veto={veto}")
                 else:
                     if not veto.startswith("WARMUP") and len(self._phantoms_open) < 5:
@@ -6044,7 +6044,7 @@ class OvertopBassanoV15Production:
 
             if not result['enter']:
                 # FUOCO BYPASS — forza entry con size ridotta
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and fingerprint_wr >= 0.55:
                     self._log_m2("🔥", f"ENTER FORCED — FUOCO carica={self._oi_carica:.2f} score={result['score']:.1f}")
                     result['enter'] = True
                     result['size'] = min(result.get('size', 1.0), 0.3)
@@ -6083,7 +6083,7 @@ class OvertopBassanoV15Production:
                         # Midzone: prezzo nel 40-60% del range → size ridotta, non blocco
                         if 0.40 <= range_pos <= 0.60:
                             # Se OracoloInterno in FUOCO con carica alta → entra con size 0.3x
-                            if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                            if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and fingerprint_wr >= 0.55:
                                 self._log_m2("⚠️", f"MIDZONE pos={range_pos:.2f} — FUOCO attivo, entro size 0.3x")
                                 result['size'] = min(result.get('size', 1.0), 0.3)
                             else:
@@ -6109,7 +6109,7 @@ class OvertopBassanoV15Production:
 
             if result['score'] < result['soglia']:
                 # FUOCO BYPASS anche sul HARD GUARD
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and fingerprint_wr >= 0.55:
                     self._log_m2("🔥", f"HARD GUARD bypassed — FUOCO carica={self._oi_carica:.2f} score={result['score']:.1f}")
                 else:
                     self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
@@ -6126,7 +6126,7 @@ class OvertopBassanoV15Production:
                 rsi=self.campo._last_rsi,
             )
             if _pred_veto['confidence'] >= 0.3 and _pred_veto['verdict'] == 'BLOCCA':
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and fingerprint_wr >= 0.55:
                     self._log_m2("🔥", f"PRED_VETO bypassed — FUOCO carica={self._oi_carica:.2f}")
                 else:
                     self._log_m2("🔮", f"PRED_VETO SC — hit={_pred_veto['hit_rate']:.0%} "
@@ -6215,6 +6215,9 @@ class OvertopBassanoV15Production:
                     result['soglia'] = max(self.campo.SOGLIA_MIN,
                                           result['soglia'] + _sc_dec['soglia_adj'])
                 self._log_m2("🧠", f"SC ENTRA — {_sc_dec['motivo']} size×{_sc_dec['size_mult']}")
+                if result['size'] < 0.05 and self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                    result['size'] = 0.3
+                    self._log_m2("🔥", f"SIZE FORCED 0.3 — FUOCO carica={self._oi_carica:.2f}")
                 self._last_sc_dec = _sc_dec
                 self.veritas.registra(price, self._oi_stato, self._oi_carica,
                     "ENTRA", _sc_dec['confidenza'], self._regime_current, time.time())
@@ -6274,7 +6277,7 @@ class OvertopBassanoV15Production:
 
             if _avg_pnl is not None and _n >= 100 and _avg_pnl <= -0.05:
                     # Bypass ECON_BLOCK se OracoloInterno in FUOCO con carica alta
-                    if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                    if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and fingerprint_wr >= 0.55:
                         self._log_m2("🔥", f"ECON_BLOCK bypassed — FUOCO carica={self._oi_carica:.2f}")
                     else:
                         self._log_m2("💸", f"ECON_BLOCK {_econ_key} avg_pnl={_avg_pnl:.3f} n={_n}")
@@ -6286,7 +6289,7 @@ class OvertopBassanoV15Production:
             elif (_avg_pnl is None or _avg_pnl < 0 or _n < 20 or
                   (_pnl_pos is not None and _pnl_pos < 0.55)):
                 # B: dati insufficienti o edge debole — PILOT (size cappata)
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and fingerprint_wr >= 0.55:
                     self._log_m2("🔥", f"ECON_PILOT bypassed — FUOCO carica={self._oi_carica:.2f}")
                 elif _band == "DEBOLE_<58":
                     result['size'] = min(result['size'], 0.10)
@@ -6322,7 +6325,7 @@ class OvertopBassanoV15Production:
                     if range_size > 0:
                         position_in_range = (price - range_low) / range_size
                         if 0.40 <= position_in_range <= 0.60:
-                            if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                            if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and fingerprint_wr >= 0.55:
                                 self._log_m2("⚠️", f"RANGE_MIDZONE2 pos={position_in_range:.0%} — FUOCO, size 0.3x")
                                 result['size'] = min(result.get('size', 1.0), 0.3)
                             else:
@@ -6355,7 +6358,7 @@ class OvertopBassanoV15Production:
                 self._regime_current, self.campo._direction, _oc_rsi,
                 _oc_drift, _oc_rpos, momentum, self._m2_loss_streak)
             if oc_block:
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and fingerprint_wr >= 0.55:
                     self._log_m2("🔥", f"OC_BLOCK bypassed — FUOCO carica={self._oi_carica:.2f}")
                 else:
                     if len(self._phantoms_open) < 5:
@@ -6367,7 +6370,7 @@ class OvertopBassanoV15Production:
                 self._regime_current, momentum, volatility, trend,
                 self.campo._direction, _oc_rsi, _oc_drift, _oc_rpos)
             if ctx['verdict'] == 'BLOCCA' and ctx['confidence'] > 0.4:
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and fingerprint_wr >= 0.55:
                     self._log_m2("🔥", f"CTX_MATCH bypassed — FUOCO carica={self._oi_carica:.2f}")
                 else:
                     if len(self._phantoms_open) < 5:
