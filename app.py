@@ -88,7 +88,7 @@ init_db()
 # HEARTBEAT_DATA — dizionario condiviso tra app.py e bot (thread-safe)
 # ═══════════════════════════════════════════════════════════════════════════
 
-heartbeat_lock = threading.Lock()
+heartbeat_lock = threading.RLock()
 heartbeat_data = {
     "status":             "UNKNOWN",
     "mode":               "PAPER",    # PAPER | LIVE
@@ -594,19 +594,16 @@ def _auto_inject_brain():
 def bot_thread_launcher():
     global bridge
     retry_count = 0
-    max_retries = 5
-    while retry_count < max_retries:
+    while True:  # Riavvia sempre — nessun limite
         try:
-            # ── AUTO-INJECT BRAIN — prima del bot ───────────────────────
             _auto_inject_brain()
 
-            log("[BOT_LAUNCHER] 🚀 Avvio OvertopBassanoV15Production...")
+            log(f"[BOT_LAUNCHER] 🚀 Avvio OvertopBassanoV15Production (tentativo {retry_count+1})...")
             bot = OvertopBassanoV15Production(
                 heartbeat_data=heartbeat_data,
                 heartbeat_lock=heartbeat_lock,
                 db_execute=db_execute,
             )
-            # ── Heartbeat IMMEDIATO — non aspettare 30s ──────────────────
             with heartbeat_lock:
                 heartbeat_data["status"]  = "RUNNING"
                 heartbeat_data["mode"]    = "PAPER" if bot.paper_trade else "LIVE"
@@ -614,19 +611,22 @@ def bot_thread_launcher():
                 heartbeat_data["trades"]  = bot.total_trades
                 heartbeat_data["last_seen"] = datetime.utcnow().isoformat()
 
-            # ── AI BRIDGE — connette il bot a bridge predittivo locale ─────────────────
             bridge = AIBridge(heartbeat_data, heartbeat_lock)
             bridge.start()
 
+            retry_count = 0  # Reset conta se parte bene
             log(f"[BOT_LAUNCHER] ✅ Bot istanziato — capital=${bot.capital:.2f} — bot.run() in partenza")
             bot.run()
+
         except Exception as e:
             retry_count += 1
-            log(f"[BOT_LAUNCHER] ❌ Errore tentativo {retry_count}/{max_retries}: {e}")
+            wait = min(30, retry_count * 5)  # Max 30s di attesa
+            log(f"[BOT_LAUNCHER] ❌ Crash #{retry_count}: {e} — riavvio in {wait}s")
             import traceback
             log(traceback.format_exc())
-            time.sleep(5)
-    log(f"[BOT_LAUNCHER] ❌ Bot non avviabile dopo {max_retries} tentativi")
+            with heartbeat_lock:
+                heartbeat_data["status"] = "RESTARTING"
+            time.sleep(wait)
 
 threading.Thread(target=bot_thread_launcher, daemon=True, name='bot_v15').start()
 log("[MAIN] ✅ Bot thread + AI Bridge avviati")
