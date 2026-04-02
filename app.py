@@ -2476,10 +2476,13 @@ def _call_deepseek(hb: dict) -> dict:
     phantom_bil  = phantom.get("bilancio", 0)
     signal_top   = hb.get("signal_tracker", {}).get("top", [])
     oracolo      = hb.get("oracolo_snapshot", {})
-    pred_score   = hb.get("pred_score", 0)
+    pred_score   = hb.get("pred_score", 0) or hb.get("pred_ratio", 0)
     pred_scost   = hb.get("pred_scostamento", 999)
     pred_conf    = hb.get("pred_conferme", 0)
     pred_tot     = hb.get("pred_totale", 1)
+    # Se pred_score non ancora disponibile, usa pred_ratio_raw come fallback
+    if pred_score == 0:
+        pred_score = hb.get("pred_ratio_raw", 0)
 
     # Fingerprint migliori per direzione corrente
     fp_vincenti = []
@@ -2529,10 +2532,11 @@ FINGERPRINT VINCENTI ORACOLO ({direzione}):
 
 REGOLE DECISIONALI — SEGUILE IN ORDINE RIGOROSO:
 
-REGOLA 0 — MOMENTO PERFETTO (priorità assoluta):
-  Se pred_score >= 88 E pred_scostamento <= 3.0 E OracoloInterno FUOCO con carica >= 0.70
+REGOLA 0 — MOMENTO PERFETTO (priorità assoluta, controlla PRIMA di tutto):
+  ATTENZIONE: pred_score è DIVERSO da score M2. pred_score misura la precisione della predizione.
+  Se (Predizione SC score) >= 88 E (scostamento $) <= 3.0 E OracoloInterno FUOCO con carica >= 0.70
   → decisione: FORZA_ENTRY, comando: FORZA_ENTRY, urgenza: ALTA
-  MOTIVO: il sistema è in alta sincronia col mercato — momento favorevole per entrare
+  ESEMPIO: pred_score=100%, scostamento=$0.7, FUOCO carica=0.96 → FORZA_ENTRY immediato
 
 REGOLA 1 — FORZA_ENTRY immediato:
   Se score >= soglia E OracoloInterno FUOCO o CARICA con carica >= 0.65 E almeno 1 fingerprint WR >= 60%
@@ -2972,6 +2976,8 @@ function startCountdown() {
 updateLive();
 loadLog();
 setInterval(updateLive, 3000);
+// Auto-start: analizza subito al caricamento senza aspettare il bottone
+runAnalysis();
 </script>
 </body>
 </html>"""
