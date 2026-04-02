@@ -74,6 +74,26 @@ def init_db():
                 value TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ds_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts          TEXT,
+                decisione   TEXT,
+                comando     TEXT,
+                motivo      TEXT,
+                eseguito    INTEGER,
+                eseguito_motivo TEXT,
+                regime      TEXT,
+                direzione   TEXT,
+                score       REAL,
+                soglia      REAL,
+                oi_stato    TEXT,
+                oi_carica   REAL,
+                pred_score  REAL,
+                pred_scost  REAL,
+                urgenza     TEXT
+            )
+        """)
         conn.commit()
         conn.close()
         log("[DB_INIT] ✅ DB OK")
@@ -81,6 +101,54 @@ def init_db():
     except Exception as e:
         log(f"[DB_INIT] ❌ {e}")
         return False
+
+def _ds_save(result: dict):
+    """Salva decisione DeepSeek nel DB. Max 500 record — elimina i più vecchi."""
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn.execute("""
+            INSERT INTO ds_history 
+            (ts, decisione, comando, motivo, eseguito, eseguito_motivo,
+             regime, direzione, score, soglia, oi_stato, oi_carica, pred_score, pred_scost, urgenza)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            result.get("ts"), result.get("decisione"), result.get("comando"),
+            result.get("motivo"), 1 if result.get("eseguito") else 0,
+            result.get("eseguito_motivo"), result.get("regime"), result.get("direzione"),
+            result.get("score"), result.get("soglia"), result.get("oi_stato"),
+            result.get("oi_carica"), result.get("pred_score"), result.get("pred_scost"),
+            result.get("urgenza")
+        ))
+        # Mantieni solo gli ultimi 500 record
+        conn.execute("""
+            DELETE FROM ds_history WHERE id NOT IN (
+                SELECT id FROM ds_history ORDER BY id DESC LIMIT 500
+            )
+        """)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log(f"[DS_SAVE] ❌ {e}")
+
+def _ds_load_history(limit=20) -> list:
+    """Carica storico decisioni DeepSeek dal DB."""
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        rows = conn.execute("""
+            SELECT ts, decisione, comando, motivo, eseguito, eseguito_motivo,
+                   regime, direzione, score, soglia, oi_stato, oi_carica, urgenza
+            FROM ds_history ORDER BY id DESC LIMIT ?
+        """, (limit,)).fetchall()
+        conn.close()
+        return [{
+            "ts": r[0], "decisione": r[1], "comando": r[2], "motivo": r[3],
+            "eseguito": bool(r[4]), "eseguito_motivo": r[5],
+            "regime": r[6], "direzione": r[7], "score": r[8], "soglia": r[9],
+            "oi_stato": r[10], "oi_carica": r[11], "urgenza": r[12]
+        } for r in rows]
+    except Exception as e:
+        log(f"[DS_LOAD] ❌ {e}")
+        return []
 
 init_db()
 
@@ -2439,11 +2507,13 @@ def _supervisor_auto_loop():
             result["auto"] = True
             _last_supervisor_call = time.time()
             _last_supervisor_result = result
-            # Salva in log
+            # Salva in log RAM
             with _supervisor_lock:
                 _supervisor_log.append(result)
                 if len(_supervisor_log) > 100:
                     _supervisor_log.pop(0)
+            # Salva nel DB persistente
+            _ds_save(result)
             # Esegui comando se presente
             cmd = result.get("comando")
             if cmd and result.get("decisione") != "ASPETTA":
@@ -2501,6 +2571,13 @@ def _call_deepseek(hb: dict) -> dict:
     for s in signal_top[:3]:
         st_info.append(f"{s['context']}: hit={s['hit_60s']*100:.0f}% n={s['n']}")
 
+    # Storico ultime decisioni DeepSeek (dal DB)
+    _ds_hist = _ds_load_history(10)
+    st_hist = []
+    for h in _ds_hist[:5]:
+        esito = "✅" if h.get("eseguito") else "⏭"
+        st_hist.append(f"{h['ts']} {esito} {h['decisione']} — {h['motivo'][:50]}")
+
     prompt = f"""Sei il supervisore AI del bot di trading BTC/USDC OVERTOP BASSANO V15.
 Il tuo compito è analizzare lo stato del sistema e decidere se intervenire con un comando operativo.
 
@@ -2529,6 +2606,9 @@ SIGNAL TRACKER (hit rate reale):
 
 FINGERPRINT VINCENTI ORACOLO ({direzione}):
 {chr(10).join(fp_vincenti[:5]) if fp_vincenti else "Nessuno sopra 60% WR"}
+
+ULTIME TUE DECISIONI (memoria storica):
+{chr(10).join(st_hist) if st_hist else "Nessuna decisione precedente"}
 
 REGOLE DECISIONALI — SEGUILE IN ORDINE RIGOROSO:
 
