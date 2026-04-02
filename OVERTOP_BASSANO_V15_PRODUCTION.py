@@ -6166,15 +6166,20 @@ class OvertopBassanoV15Production:
             _ds_blocca_sc = getattr(self, '_ds_blocca_sc', False)
             _ds_forza_entry = getattr(self, '_ds_forza_entry', False)
 
+            # -- FUOCO PERMANENTE: quando OracoloInterno è in FUOCO con carica >= 0.65
+            # il SC non può bloccare — il Veritas ha dimostrato che SC sbaglia sistematicamente
+            _fuoco_bypass = (self._oi_stato == "FUOCO" and self._oi_carica >= 0.65)
+
             # Applica decisione supercervello
             if _sc_dec['azione'] == 'BLOCCA':
-                if _ds_blocca_sc or _ds_forza_entry:
-                    self._log_m2("🤖", f"DS OVERRIDE SC BLOCCA → entro lo stesso (DS comando attivo)")
-                    # Resetta dopo uso
+                if _ds_blocca_sc or _ds_forza_entry or _fuoco_bypass:
+                    if _fuoco_bypass:
+                        self._log_m2("🔥", f"FUOCO BYPASS SC — OI={self._oi_stato} carica={self._oi_carica:.2f} — Oracolo decide")
+                    else:
+                        self._log_m2("🤖", f"DS OVERRIDE SC BLOCCA → entro lo stesso (DS comando attivo)")
                     self._ds_forza_entry = False
                 else:
                     self._log_m2("🧠", f"SC BLOCCA — {_sc_dec['motivo']}")
-                    # Veritas: registra FUOCO|BLOCCA o CARICA|BLOCCA — la verità arriverà a 60s
                     self.veritas.registra(price, self._oi_stato, self._oi_carica,
                         "BLOCCA", _sc_dec['confidenza'], self._regime_current, time.time())
                     if len(self._phantoms_open) < 5:
