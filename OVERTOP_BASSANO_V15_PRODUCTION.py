@@ -5982,12 +5982,15 @@ class OvertopBassanoV15Production:
                             _motivo = f"ST hit={_st_hit_rate:.0%} n={_st_n}" if _st_bypass else f"Oracolo WR={_fp_wr_now:.0%} n={_fp_samples:.0f}"
                             self._log_m2("✅", f"CESPUGLIO bypass — {_motivo} su {momentum}|{volatility}|{trend} — entro")
                         else:
-                            self._log_m2("🚫", f"CESPUGLIO_AVVELENATO: {_loss_deboli} loss deboli RANGING "
-                                              f"score={_score_now:.1f}<58 — attendo segnale forte")
-                            if len(self._phantoms_open) < 5:
-                                self._record_phantom(price, f"CESPUGLIO_RANGING_{_loss_deboli}loss",
-                                    seed.get('score', 0), momentum, volatility, trend)
-                            return
+                            if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                                self._log_m2("🔥", f"CESPUGLIO bypassed — FUOCO carica={self._oi_carica:.2f}")
+                            else:
+                                self._log_m2("🚫", f"CESPUGLIO_AVVELENATO: {_loss_deboli} loss deboli RANGING "
+                                                  f"score={_score_now:.1f}<58 — attendo segnale forte")
+                                if len(self._phantoms_open) < 5:
+                                    self._record_phantom(price, f"CESPUGLIO_RANGING_{_loss_deboli}loss",
+                                        seed.get('score', 0), momentum, volatility, trend)
+                                return
 
             # -- CAPSULE 1-5: stessa protezione del Motore 1 --------------
             # M2 usa le stesse capsule di M1 per non entrare in matrimoni tossici.
@@ -5998,10 +6001,13 @@ class OvertopBassanoV15Production:
             _cap2_soglia = getattr(self, '_cap2_soglia_override', 0.30)
             _allow2, _reason2 = self.capsule2.riconosci(_conf_m2) if _conf_m2 >= _cap2_soglia else (True, "OK")
             if not _allow2:
-                if len(self._phantoms_open) < 5:
-                    self._record_phantom(price, f"CAP2_M2_{_mat_m2['name']}_conf{_conf_m2:.2f}",
-                        seed['score'], momentum, volatility, trend)
-                return
+                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                    self._log_m2("🔥", f"CAP2 bypassed — FUOCO carica={self._oi_carica:.2f}")
+                else:
+                    if len(self._phantoms_open) < 5:
+                        self._record_phantom(price, f"CAP2_M2_{_mat_m2['name']}_conf{_conf_m2:.2f}",
+                            seed['score'], momentum, volatility, trend)
+                    return
 
             # -- DECIDI DIREZIONE: LONG o SHORT -----------------------------
             # Il mercato decide, non noi. Drift + MACD + Trend = verdetto.
@@ -6028,11 +6034,13 @@ class OvertopBassanoV15Production:
             )
 
             if result['veto']:
-                # -- PHANTOM: registra il trade bloccato (solo veti significativi) --
                 veto = result['veto']
-                if not veto.startswith("WARMUP") and len(self._phantoms_open) < 5:
-                    self._record_phantom(price, veto, seed['score'], momentum, volatility, trend)
-                return
+                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                    self._log_m2("🔥", f"VETO bypassed — FUOCO carica={self._oi_carica:.2f} veto={veto}")
+                else:
+                    if not veto.startswith("WARMUP") and len(self._phantoms_open) < 5:
+                        self._record_phantom(price, veto, seed['score'], momentum, volatility, trend)
+                    return
 
             if not result['enter']:
                 # -- RANGING FINGERPRINT GATE: bypass score se Oracolo conosce questo pattern come vincente --
@@ -6117,13 +6125,16 @@ class OvertopBassanoV15Production:
                 rsi=self.campo._last_rsi,
             )
             if _pred_veto['confidence'] >= 0.3 and _pred_veto['verdict'] == 'BLOCCA':
-                self._log_m2("🔮", f"PRED_VETO SC — hit={_pred_veto['hit_rate']:.0%} "
-                                   f"n={_pred_veto['n_vicini']} — SC non può scavalcare")
-                if len(self._phantoms_open) < 5:
-                    self._record_phantom(price,
-                        f"PRED_VETO_SC_hr{_pred_veto['hit_rate']:.0%}",
-                        seed['score'], momentum, volatility, trend)
-                return
+                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                    self._log_m2("🔥", f"PRED_VETO bypassed — FUOCO carica={self._oi_carica:.2f}")
+                else:
+                    self._log_m2("🔮", f"PRED_VETO SC — hit={_pred_veto['hit_rate']:.0%} "
+                                       f"n={_pred_veto['n_vicini']} — SC non può scavalcare")
+                    if len(self._phantoms_open) < 5:
+                        self._record_phantom(price,
+                            f"PRED_VETO_SC_hr{_pred_veto['hit_rate']:.0%}",
+                            seed['score'], momentum, volatility, trend)
+                    return
 
             # -- SUPERCERVELLO: decisione unificata da tutti gli organi ────
             # Legge simultaneamente tutti i sistemi e decide una volta sola.
