@@ -2568,8 +2568,12 @@ def _call_deepseek(hb: dict) -> dict:
 
     # Signal Tracker
     st_info = []
+    st_pnl_sim = None
     for s in signal_top[:3]:
-        st_info.append(f"{s['context']}: hit={s['hit_60s']*100:.0f}% n={s['n']}")
+        pnl = s.get('pnl_sim_avg', s.get('pnl_sim', 0))
+        st_info.append(f"{s['context']}: hit={s['hit_60s']*100:.0f}% n={s['n']} pnl_sim={pnl:+.3f}")
+        if direzione in s.get('context', '') and st_pnl_sim is None:
+            st_pnl_sim = pnl
 
     # Storico ultime decisioni DeepSeek (dal DB)
     _ds_hist = _ds_load_history(10)
@@ -2597,6 +2601,7 @@ STATO ATTUALE:
 - Pesi SC: campo_carica={campo_carica:.2f} (ottimale=0.30), oracolo_fp={sc_pesi.get('oracolo_fp',0):.2f}
 - Phantom bilancio: ${phantom_bil:.0f}
 - Predizione SC: score={pred_score:.1f}% corretto | scostamento=${pred_scost:.2f} | conferme={pred_conf}/{pred_tot}
+- Signal Tracker pnl_sim direzione corrente: {f'{st_pnl_sim:+.3f}' if st_pnl_sim is not None else 'N/D'} (se negativo → ASPETTA)
 
 VERITAS (chi aveva ragione):
 {chr(10).join(v_conflitti) if v_conflitti else "Nessun conflitto rilevato"}
@@ -2615,8 +2620,10 @@ REGOLE DECISIONALI — SEGUILE IN ORDINE RIGOROSO:
 REGOLA 0 — MOMENTO PERFETTO (priorità assoluta, controlla PRIMA di tutto):
   ATTENZIONE: pred_score è DIVERSO da score M2. pred_score misura la precisione della predizione.
   Se (Predizione SC score) >= 88 E (scostamento $) <= 3.0 E OracoloInterno FUOCO con carica >= 0.70
+  E pnl_sim del Signal Tracker per direzione corrente >= -0.02 (non perdente)
   → decisione: FORZA_ENTRY, comando: FORZA_ENTRY, urgenza: ALTA
-  ESEMPIO: pred_score=100%, scostamento=$0.7, FUOCO carica=0.96 → FORZA_ENTRY immediato
+  ESEMPIO: pred_score=100%, scostamento=$0.7, FUOCO carica=0.96, pnl_sim=+0.04 → FORZA_ENTRY immediato
+  SE pnl_sim < -0.02 → ASPETTA sempre, non importa quanto è buona la predizione
 
 REGOLA 1 — FORZA_ENTRY immediato:
   Se score >= soglia E OracoloInterno FUOCO o CARICA con carica >= 0.65 E almeno 1 fingerprint WR >= 60%
