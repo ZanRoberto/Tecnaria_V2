@@ -6071,13 +6071,18 @@ class OvertopBassanoV15Production:
                     if r20 > 0:
                         range_pos = (price - min(prices_buf)) / r20
 
-                        # Midzone: prezzo nel 40-60% del range → STOP
+                        # Midzone: prezzo nel 40-60% del range → size ridotta, non blocco
                         if 0.40 <= range_pos <= 0.60:
-                            if len(self._phantoms_open) < 5:
-                                self._record_phantom(price, f"MIDZONE_pos{range_pos:.2f}",
-                                    seed['score'], momentum, volatility, trend)
-                            self._log_m2("🚫", f"MIDZONE BLOCK pos={range_pos:.2f} — no trade in centro range")
-                            return
+                            # Se OracoloInterno in FUOCO con carica alta → entra con size 0.3x
+                            if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                                self._log_m2("⚠️", f"MIDZONE pos={range_pos:.2f} — FUOCO attivo, entro size 0.3x")
+                                result['size'] = min(result.get('size', 1.0), 0.3)
+                            else:
+                                if len(self._phantoms_open) < 5:
+                                    self._record_phantom(price, f"MIDZONE_pos{range_pos:.2f}",
+                                        seed['score'], momentum, volatility, trend)
+                                self._log_m2("🚫", f"MIDZONE BLOCK pos={range_pos:.2f} — no trade in centro range")
+                                return
                         # Drift troppo debole — rumore puro
                         # MA: se Oracolo è in FUOCO/CARICA con carica alta → ignora drift debole
                         drift_avg = abs(_drift_real)
