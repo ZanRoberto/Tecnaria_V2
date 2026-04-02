@@ -7491,4 +7491,3 @@ class OvertopBassanoV15Production:
 if __name__ == '__main__':
     bot = OvertopBassanoV15Production()
     bot.run()
-v
