@@ -6099,8 +6099,12 @@ class OvertopBassanoV15Production:
                 result['soglia'] = _ds_soglia
 
             if result['score'] < result['soglia']:
-                self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
-                return
+                # FUOCO BYPASS anche sul HARD GUARD
+                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                    self._log_m2("🔥", f"HARD GUARD bypassed — FUOCO carica={self._oi_carica:.2f} score={result['score']:.1f}")
+                else:
+                    self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
+                    return
 
             # -- LEGGE OPERATIVA: predizione forte blocca SC ─────────────
             # Se la predizione storica dice BLOCCA con confidenza reale
@@ -6257,12 +6261,15 @@ class OvertopBassanoV15Production:
             _pnl_pos   = sum(1 for p in _pnls if p > 0) / len(_pnls) if _pnls else None
 
             if _avg_pnl is not None and _n >= 100 and _avg_pnl <= -0.05:
-                # A: evidenza forte di perdita — BLOCK
-                self._log_m2("💸", f"ECON_BLOCK {_econ_key} avg_pnl={_avg_pnl:.3f} n={_n}")
-                if len(self._phantoms_open) < 5:
-                    self._record_phantom(price, f"ECON_BLOCK_{_econ_key}",
-                        seed['score'], momentum, volatility, trend)
-                return
+                    # Bypass ECON_BLOCK se OracoloInterno in FUOCO con carica alta
+                    if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                        self._log_m2("🔥", f"ECON_BLOCK bypassed — FUOCO carica={self._oi_carica:.2f}")
+                    else:
+                        self._log_m2("💸", f"ECON_BLOCK {_econ_key} avg_pnl={_avg_pnl:.3f} n={_n}")
+                        if len(self._phantoms_open) < 5:
+                            self._record_phantom(price, f"ECON_BLOCK_{_econ_key}",
+                                seed['score'], momentum, volatility, trend)
+                        return
 
             elif (_avg_pnl is None or _avg_pnl < 0 or _n < 20 or
                   (_pnl_pos is not None and _pnl_pos < 0.55)):
@@ -6300,11 +6307,15 @@ class OvertopBassanoV15Production:
                     if range_size > 0:
                         position_in_range = (price - range_low) / range_size
                         if 0.40 <= position_in_range <= 0.60:
-                            if len(self._phantoms_open) < 5:
-                                self._record_phantom(price,
-                                    f"RANGE_MIDZONE_{position_in_range:.0%}",
-                                    seed['score'], momentum, volatility, trend)
-                            return
+                            if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65:
+                                self._log_m2("⚠️", f"RANGE_MIDZONE2 pos={position_in_range:.0%} — FUOCO, size 0.3x")
+                                result['size'] = min(result.get('size', 1.0), 0.3)
+                            else:
+                                if len(self._phantoms_open) < 5:
+                                    self._record_phantom(price,
+                                        f"RANGE_MIDZONE_{position_in_range:.0%}",
+                                        seed['score'], momentum, volatility, trend)
+                                return
 
             # ===============================================================
             # ORACOLO 2.0 - CAPSULE STATICHE + CONTEXT-MATCHING
