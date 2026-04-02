@@ -2476,6 +2476,10 @@ def _call_deepseek(hb: dict) -> dict:
     phantom_bil  = phantom.get("bilancio", 0)
     signal_top   = hb.get("signal_tracker", {}).get("top", [])
     oracolo      = hb.get("oracolo_snapshot", {})
+    pred_score   = hb.get("pred_score", 0)
+    pred_scost   = hb.get("pred_scostamento", 999)
+    pred_conf    = hb.get("pred_conferme", 0)
+    pred_tot     = hb.get("pred_totale", 1)
 
     # Fingerprint migliori per direzione corrente
     fp_vincenti = []
@@ -2512,6 +2516,7 @@ STATO ATTUALE:
 - OracoloInterno: stato={oi_stato}, carica={oi_carica:.2f}
 - Pesi SC: campo_carica={campo_carica:.2f} (ottimale=0.30), oracolo_fp={sc_pesi.get('oracolo_fp',0):.2f}
 - Phantom bilancio: ${phantom_bil:.0f}
+- Predizione SC: score={pred_score:.1f}% corretto | scostamento=${pred_scost:.2f} | conferme={pred_conf}/{pred_tot}
 
 VERITAS (chi aveva ragione):
 {chr(10).join(v_conflitti) if v_conflitti else "Nessun conflitto rilevato"}
@@ -2523,6 +2528,11 @@ FINGERPRINT VINCENTI ORACOLO ({direzione}):
 {chr(10).join(fp_vincenti[:5]) if fp_vincenti else "Nessuno sopra 60% WR"}
 
 REGOLE DECISIONALI — SEGUILE IN ORDINE RIGOROSO:
+
+REGOLA 0 — MOMENTO PERFETTO (priorità assoluta):
+  Se pred_score >= 88 E pred_scostamento <= 3.0 E OracoloInterno FUOCO con carica >= 0.70
+  → decisione: FORZA_ENTRY, comando: FORZA_ENTRY, urgenza: ALTA
+  MOTIVO: il sistema è in alta sincronia col mercato — momento favorevole per entrare
 
 REGOLA 1 — FORZA_ENTRY immediato:
   Se score >= soglia E OracoloInterno FUOCO o CARICA con carica >= 0.65 E almeno 1 fingerprint WR >= 60%
