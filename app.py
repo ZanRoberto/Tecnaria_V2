@@ -1443,6 +1443,7 @@ const SCPanel = (() => {
     const price = hb.last_price || 0;
     if (!price) return;
     window._hb_live = hb;  // accessibile al canvas per marker live
+    window._lastHb  = hb;  // accessibile a cmToggle/cmDelete
 
     // Usa storia completa dal bot — non accumula tick per tick
     const carica = hb.oi_carica || 0;
