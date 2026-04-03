@@ -521,51 +521,6 @@ def download_capsule():
         abort(404, "capsule_attive.json non trovato")
     return send_file(capsule_file, as_attachment=True, download_name="capsule_attive.json")
 
-# ── CAPSULE MANAGER API ─────────────────────────────────────────────────────
-
-@app.route('/api/capsule/list')
-def api_capsule_list():
-    """Tutte le capsule per questo asset dal CapsuleManager."""
-    try:
-        if bot and hasattr(bot, 'capsule_manager') and bot.capsule_manager:
-            caps = bot.capsule_manager.get_all_for_dashboard()
-            return jsonify({"ok": True, "capsule": caps, "asset": bot.capsule_manager.asset})
-        return jsonify({"ok": False, "error": "CapsuleManager non disponibile"})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
-
-@app.route('/api/capsule/toggle', methods=['POST'])
-def api_capsule_toggle():
-    """Abilita/disabilita capsule senza deploy."""
-    try:
-        data = request.get_json()
-        cap_id  = data.get('id','')
-        enabled = bool(data.get('enabled', True))
-        if not cap_id:
-            return jsonify({"ok": False, "error": "id mancante"})
-        if bot and hasattr(bot, 'capsule_manager') and bot.capsule_manager:
-            ok = bot.capsule_manager.toggle_capsule(cap_id, enabled)
-            return jsonify({"ok": ok, "id": cap_id, "enabled": enabled})
-        return jsonify({"ok": False, "error": "CapsuleManager non disponibile"})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
-
-@app.route('/api/capsule/delete', methods=['POST'])
-def api_capsule_delete():
-    """Elimina capsule LEARNED/AUTO (non STATIC)."""
-    try:
-        data   = request.get_json()
-        cap_id = data.get('id','')
-        if not cap_id:
-            return jsonify({"ok": False, "error": "id mancante"})
-        if bot and hasattr(bot, 'capsule_manager') and bot.capsule_manager:
-            ok = bot.capsule_manager.delete_capsule(cap_id)
-            msg = "eliminata" if ok else "non eliminabile (STATIC o non trovata)"
-            return jsonify({"ok": ok, "id": cap_id, "msg": msg})
-        return jsonify({"ok": False, "error": "CapsuleManager non disponibile"})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
-
 @app.route('/debug/db')
 def debug_db():
     _check_key()
@@ -948,7 +903,7 @@ canvas.spark { width:100%; height:40px; }
 
   <!-- TICKER -->
   <div class="ticker">
-    <span class="price-big" id="asset-price">--</span> <span id="asset-label" style="font-size:11px;color:var(--dim)">BTCUSDC</span>
+    <span class="price-big" id="asset-price">--</span> <span id="asset-label" style="font-size:11px;color:var(--dim)">SOLUSDC</span>
     <span style="color:var(--dim)">SOL/USDC</span>
     <span>⚡ <span id="tick-n" style="color:var(--yellow)">0</span></span>
     <span>🕐 <span id="last-tick" style="color:var(--dim)">--</span></span>
@@ -1024,6 +979,36 @@ canvas.spark { width:100%; height:40px; }
         </div>
         <div class="drift-bar-wrap"><div class="drift-bar-fill" id="drift-fill" style="width:50%;background:var(--blue)"></div></div>
         <div style="font-size:9px;color:var(--dim);margin-top:2px;text-align:center" id="drift-lbl">drift 0.000%</div>
+
+        <!-- ═══ DISTANZA DAL BUY ═══ -->
+        <div style="margin-top:10px;padding:8px;background:rgba(0,0,0,0.35);border-radius:6px;border:1px solid rgba(255,255,255,0.07);">
+          <div style="font-size:9px;color:var(--dim);text-align:center;letter-spacing:1px;margin-bottom:6px">📏 DISTANZA DAL BUY</div>
+          <!-- Barra progresso -->
+          <div style="position:relative;height:24px;background:rgba(255,255,255,0.06);border-radius:4px;overflow:hidden;margin-bottom:5px;">
+            <div id="buy-dist-fill" style="height:100%;border-radius:4px;transition:width 0.4s,background 0.4s;width:0%;background:#ff3355;"></div>
+            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;">
+              <span id="buy-dist-label" style="text-shadow:0 0 4px rgba(0,0,0,0.8)">— punti al BUY</span>
+            </div>
+          </div>
+          <!-- Score vs Soglia -->
+          <div style="display:flex;justify-content:space-between;font-size:9px;margin-bottom:5px;">
+            <span style="color:var(--dim)">Score <span id="bd-score" style="color:var(--text);font-weight:bold">0</span></span>
+            <span style="color:var(--dim)">Soglia <span id="bd-soglia" style="color:var(--yellow);font-weight:bold">60</span></span>
+            <span style="color:var(--dim)">Regime <span id="bd-regime" style="color:var(--blue)">—</span></span>
+          </div>
+          <!-- Componenti -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px;font-size:9px;">
+            <div style="color:var(--dim)">Seed <span id="bd-seed" style="color:var(--text)">0/25</span></div>
+            <div style="color:var(--dim)">FP <span id="bd-fp" style="color:var(--text)">0/20</span></div>
+            <div style="color:var(--dim)">RSI <span id="bd-rsi-c" style="color:var(--text)">0/10</span></div>
+            <div style="color:var(--dim)">MACD <span id="bd-macd-c" style="color:var(--text)">0/10</span></div>
+          </div>
+          <div id="bd-warmup" style="display:none;font-size:9px;color:var(--yellow);margin-top:4px;text-align:center;">
+            ⏳ Warmup RSI/MACD <span id="bd-warmup-n">0</span>/35
+          </div>
+        </div>
+        <!-- ═══ fine DISTANZA DAL BUY ═══ -->
+
         <div class="log-feed" id="m2-log" style="margin-top:8px">In attesa M2...</div>
       </div>
     </div>
@@ -1061,20 +1046,24 @@ canvas.spark { width:100%; height:40px; }
   <!-- ROW 2: IA CAPSULE + PHANTOM -->
   <div class="two-col">
 
-    <!-- CAPSULE MANAGER — Sistema Unificato -->
+    <!-- INTELLIGENZA AUTONOMA -->
     <div class="panel">
-      <div class="panel-head orange">🧠 CAPSULE MANAGER — Sistema Unificato
-        <span id="cm-stats-badge" style="font-size:9px; color:var(--dim)">STATIC:0 LEARNED:0 AUTO:0</span>
+      <div class="panel-head orange">🧠 INTELLIGENZA AUTONOMA — Capsule Vive
+        <span id="ia-gen-count" style="font-size:9px; color:var(--dim)">gen: 0 / exp: 0</span>
       </div>
       <div class="panel-body">
         <div class="stat-row" style="margin-bottom:8px">
-          <div class="stat-item"><span class="stat-lbl">STATIC</span><span class="stat-val" id="cm-static">0</span></div>
-          <div class="stat-item"><span class="stat-lbl">LEARNED</span><span class="stat-val" id="cm-learned">0</span></div>
-          <div class="stat-item"><span class="stat-lbl">AUTO</span><span class="stat-val" id="cm-auto">0</span></div>
-          <div class="stat-item"><span class="stat-lbl">Trade obs.</span><span class="stat-val" id="cm-trades">0</span></div>
-          <div class="stat-item"><span class="stat-lbl">Scadono</span><span class="stat-val" id="cm-scadono" style="color:var(--yellow)">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">L2 (esperienza)</span><span class="stat-val" id="ia-l2">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">L3 (evento)</span><span class="stat-val" id="ia-l3">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">Blocchi</span><span class="stat-val" id="ia-blocks">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">Boost soglia</span><span class="stat-val" id="ia-boosts">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">Trade osservati</span><span class="stat-val" id="ia-observed">0</span></div>
         </div>
-        <div id="cm-capsule-list" style="max-height:240px; overflow-y:auto;"></div>
+        <div id="ia-capsule-list" style="max-height:200px; overflow-y:auto;">
+          <div style="color:var(--dim); font-size:10px; text-align:center; padding:20px 0">
+            Nessuna capsule attiva.<br>Il sistema impara dai trade.
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1157,7 +1146,7 @@ canvas.spark { width:100%; height:40px; }
 
   <!-- GRAFICO LIVE — PREZZO + SEGNALI -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--green); border-width:2px;">
-    <div class="panel-head green">📈 GRAFICO LIVE — <span id="chart-asset-label">LIVE</span>
+    <div class="panel-head green">📈 GRAFICO LIVE — <span id="chart-asset-label">SOL/USDC</span>
       <span id="chart-info" style="font-size:9px; color:var(--dim)">ultimi 120 tick · 30s window</span>
     </div>
     <div class="panel-body" style="padding:8px;">
@@ -1442,8 +1431,8 @@ const SCPanel = (() => {
   function update(hb) {
     const price = hb.last_price || 0;
     if (!price) return;
-    window._hb_live = hb;  // accessibile al canvas per marker live
-    window._lastHb  = hb;  // accessibile a cmToggle/cmDelete
+    window._hb_live = hb;
+    window._lastHb  = hb;  // accessibile al canvas per marker live
 
     // Usa storia completa dal bot — non accumula tick per tick
     const carica = hb.oi_carica || 0;
@@ -1505,13 +1494,13 @@ const SCPanel = (() => {
         pnlTot += p;
         if (p > 0) wins++; else losses++;
         const idx = prices.length - 1;
-        const tradePrice = t.price || (prices[idx] || price);
+        const tradePrice = t.price || (prices[Math.min(idx, prices.length-1)] || price);
         if (p > 0) sellMkrs.push({x: idx, y: tradePrice});
         else       sellMkrs.push({x: idx, y: tradePrice, loss: true});
       });
       trades.filter(t => t.type === 'M2_ENTRY').forEach(t => {
         const idx = prices.length - 1;
-        const tradePrice = t.price || (prices[idx] || price);
+        const tradePrice = t.price || (prices[Math.min(idx, prices.length-1)] || price);
         buyMkrs.push({x: idx, y: tradePrice});
       });
     }
@@ -2081,14 +2070,7 @@ function update() {
 
     // TICKER
     if(hb.last_price) $('asset-price').textContent = '$'+hb.last_price.toLocaleString('en-US',{minimumFractionDigits:2});
-    if(hb.symbol) {
-      $('asset-label').textContent = hb.symbol;
-      const base = hb.symbol.replace('USDC','').replace('USDT','');
-      const chartLbl = document.getElementById('chart-asset-label');
-      if(chartLbl) chartLbl.textContent = base+'/USDC';
-      const svLbl = document.getElementById('sv-asset-lbl');
-      if(svLbl) svLbl.textContent = base;
-    }
+    if(hb.symbol){ $('asset-label').textContent=hb.symbol; const base=hb.symbol.replace('USDC','').replace('USDT',''); const cl=document.getElementById('chart-asset-label'); if(cl) cl.textContent=base+'/USDC'; }
     $('tick-n').textContent = (hb.tick_count||0).toLocaleString();
     $('last-tick').textContent = hb.last_tick ? new Date(hb.last_tick).toLocaleTimeString() : '--';
 
@@ -2233,46 +2215,34 @@ function update() {
     $('calib-params').textContent = cp.seed_threshold?
       `seed≥${cp.seed_threshold} cap1≥${cp.cap1_soglia_buona} cap3≥${cp.cap3_fp_minimo}`:'--';
 
-    // CAPSULE MANAGER PANEL
-    $('cm-static').textContent  = ia.static||0;
-    $('cm-learned').textContent = ia.learned||0;
-    $('cm-auto').textContent    = ia.auto||0;
-    $('cm-trades').textContent  = ia.trade_osservati||0;
-    $('cm-scadono').textContent = ia.scadono_presto||0;
-    $('cm-stats-badge').textContent = 'STATIC:'+(ia.static||0)+' LEARNED:'+(ia.learned||0)+' AUTO:'+(ia.auto||0);
-    // Render lista capsule
-    const cmList = ia.capsule_list||[];
-    if(cmList.length>0){
-      $('cm-capsule-list').innerHTML = cmList.map(c=>{
-        const lvlCol  = c.livello==='STATIC'?'#888':c.livello==='LEARNED'?'#ffd700':'#00bfff';
-        const actIcon = c.azione?.type==='blocca_entry'?'🚫':
-                        c.azione?.type==='modifica_size'?'📏':
-                        c.azione?.type==='boost_soglia'?'⬆':'⬇';
-        const enCol   = c.enabled?'var(--green)':'var(--dim)';
-        const scadeStr = c.scade_in!=null?(c.scade_in>3600?(c.scade_in/3600).toFixed(1)+'h':
-                          c.scade_in>60?(c.scade_in/60).toFixed(0)+'m':c.scade_in+'s'):'∞';
-        const canDel  = c.livello!=='STATIC';
-        return `<div style="padding:5px 8px;margin-bottom:3px;border-radius:3px;
-                  background:rgba(255,255,255,0.03);border-left:3px solid ${lvlCol};
-                  font-size:9px;display:flex;align-items:center;gap:6px;">
-          <span style="min-width:14px">${actIcon}</span>
-          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${c.id}">${c.id}</span>
-          <span style="color:${lvlCol};min-width:44px">${c.livello}</span>
-          <span style="color:var(--dim);min-width:28px">n=${c.samples}</span>
-          <span style="color:${c.wr>0.5?'var(--green)':c.wr>0.3?'var(--yellow)':'var(--red)'};min-width:32px">
-            ${c.wr>0?(c.wr*100).toFixed(0)+'%':'—'}</span>
-          <span style="color:var(--dim);min-width:22px">${scadeStr}</span>
-          <button onclick="cmToggle('${c.id}',${!c.enabled})"
-            style="font-size:8px;padding:1px 5px;border:1px solid ${enCol};
-                   color:${enCol};background:transparent;cursor:pointer;border-radius:2px">
-            ${c.enabled?'ON':'OFF'}</button>
-          ${canDel?`<button onclick="cmDelete('${c.id}')"
-            style="font-size:8px;padding:1px 5px;border:1px solid #ff3355;
-                   color:#ff3355;background:transparent;cursor:pointer;border-radius:2px">✕</button>`:''}
+    // IA CAPSULE LIST
+    $('ia-l2').textContent = ia.l2||0;
+    $('ia-l3').textContent = ia.l3||0;
+    $('ia-blocks').textContent = ia.blocchi||0;
+    $('ia-boosts').textContent = ia.boost_soglia_usati||0;
+    $('ia-observed').textContent = ia.trade_osservati||0;
+    $('ia-gen-count').textContent = 'gen:'+(ia.generate_totali||0)+' / exp:'+(ia.scadute||0);
+
+    // Carica capsule da API capsule o da ia_stats
+    const capsule = hb.ia_capsule_attive||[];
+    if(capsule.length>0) {
+      $('ia-capsule-list').innerHTML = capsule.map(c=>{
+        const ttl = c.ttl_seconds||0;
+        const ttlStr = ttl>3600?(ttl/3600).toFixed(1)+'h':ttl>60?(ttl/60).toFixed(0)+'m':ttl+'s';
+        const typeClass = {
+          'L2_BLK':'cap-l2-blk','L2_BST':'cap-l2-bst',
+          'L3_STK':'cap-l3-stk','L3_RBLO':'cap-l3-reg','L3_OPP':'cap-l3-opp'
+        }[c.tipo]||'cap-l3-stk';
+        const icon = c.tipo?.includes('BLK')||c.tipo?.includes('RBLO')?'🚫':
+                     c.tipo?.includes('BST')||c.tipo?.includes('OPP')?'🚀':
+                     c.tipo?.includes('STK')?'⚡':'💊';
+        return `<div class="capsule-item ${typeClass}">
+          <span>${icon} ${c.id||c.capsule_id||'?'}</span>
+          <span class="ttl-bar">TTL ${ttlStr} | ${c.tipo||'?'}</span>
         </div>`;
       }).join('');
     } else {
-      $('cm-capsule-list').innerHTML = '<div style="color:var(--dim);font-size:10px;text-align:center;padding:20px 0">Nessuna capsule attiva.<br>Il sistema impara dai trade.</div>';
+      $('ia-capsule-list').innerHTML = '<div style="color:var(--dim);font-size:10px;text-align:center;padding:16px 0">Nessuna capsule attiva. Il sistema impara dai trade.</div>';
     }
 
     // PHANTOM
@@ -2341,6 +2311,50 @@ function update() {
     const lastScore  = hb.m2_last_score  || 0;
     const lastSoglia = hb.m2_last_soglia || hb.m2_soglia_base || 60;
     LiveChart.setScore(lastScore, lastSoglia);
+
+    // ═══ DISTANZA DAL BUY ═══
+    (function(){
+      const dist  = (hb.m2_buy_distance !== undefined) ? hb.m2_buy_distance : (lastSoglia - lastScore);
+      const comp  = hb.m2_score_components || {};
+      const open  = hb.m2_shadow_open || false;
+      const fill  = document.getElementById('buy-dist-fill');
+      const lbl   = document.getElementById('buy-dist-label');
+      const bScore  = document.getElementById('bd-score');
+      const bSoglia = document.getElementById('bd-soglia');
+      const bRegime = document.getElementById('bd-regime');
+      const bSeed   = document.getElementById('bd-seed');
+      const bFp     = document.getElementById('bd-fp');
+      const bRsi    = document.getElementById('bd-rsi-c');
+      const bMacd   = document.getElementById('bd-macd-c');
+      const bWarmup = document.getElementById('bd-warmup');
+      const bWarmN  = document.getElementById('bd-warmup-n');
+      if (!fill || !lbl) return;
+      if (open) {
+        fill.style.width='100%'; fill.style.background='var(--green)';
+        lbl.textContent='🟢 TRADE APERTO'; lbl.style.color='#fff';
+      } else {
+        if (bScore)  bScore.textContent  = lastScore.toFixed(1);
+        if (bSoglia) bSoglia.textContent = lastSoglia.toFixed(1);
+        if (bRegime) bRegime.textContent = comp.regime || hb.regime || '—';
+        if (bSeed)   bSeed.textContent   = (comp.seed||0).toFixed(1)+'/25';
+        if (bFp)     bFp.textContent     = (comp.fp||0).toFixed(1)+'/20';
+        if (bRsi) { bRsi.textContent=(comp.rsi||0).toFixed(1)+'/10'; bRsi.style.color=(comp.rsi||0)>=7?'var(--green)':(comp.rsi||0)>=4?'var(--yellow)':'var(--red)'; }
+        if (bMacd){ bMacd.textContent=(comp.macd||0).toFixed(1)+'/10'; bMacd.style.color=(comp.macd||0)>=7?'var(--green)':(comp.macd||0)>=4?'var(--yellow)':'var(--red)'; }
+        const wn = comp.warmup_rsi||0, wt = comp.warmup_needed||35;
+        if (bWarmup) bWarmup.style.display = (wn<wt) ? 'block' : 'none';
+        if (bWarmN)  bWarmN.textContent = wn+'/'+wt;
+        if (dist <= 0) {
+          fill.style.width='100%'; fill.style.background='var(--green)';
+          lbl.textContent='⚡ PRONTO — score ok'; lbl.style.color='var(--green)';
+        } else {
+          const pct = Math.min(100, Math.max(2, (lastScore/Math.max(1,lastSoglia))*100));
+          const col = pct>=85?'#ffd700':pct>=60?'#ff8800':'#ff3355';
+          fill.style.width=pct+'%'; fill.style.background=col;
+          lbl.textContent='−'+dist.toFixed(1)+' pt al BUY'; lbl.style.color=col;
+        }
+      }
+    })();
+    // ═══ fine DISTANZA DAL BUY ═══
 
     // Rileva nuovi eventi dal log M2
     const m2log = hb.m2_log || [];
@@ -2547,46 +2561,6 @@ function sendCmd(cmd){
 
 update();
 setInterval(update, 2000);
-
-// ── CAPSULE MANAGER — toggle / delete ──────────────────────────────────
-async function cmToggle(id, enable) {
-  try {
-    const r = await fetch('/api/capsule/toggle', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({id, enabled: enable})
-    });
-    const d = await r.json();
-    if (d.ok) {
-      // Aggiorna lista immediatamente
-      const ia = window._lastHb?.ia_stats || {};
-      const cmList = ia.capsule_list || [];
-      const cap = cmList.find(c => c.id === id);
-      if (cap) cap.enabled = enable;
-      update();
-    } else {
-      alert('Errore toggle: ' + (d.error||'?'));
-    }
-  } catch(e) { alert('Errore: ' + e.message); }
-}
-
-async function cmDelete(id) {
-  if (!confirm('Eliminare capsule ' + id + '?')) return;
-  try {
-    const r = await fetch('/api/capsule/delete', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({id})
-    });
-    const d = await r.json();
-    if (d.ok) {
-      update();
-    } else {
-      alert('Non eliminabile: ' + (d.msg||d.error||'?'));
-    }
-  } catch(e) { alert('Errore: ' + e.message); }
-}
-// ── fine CAPSULE MANAGER ────────────────────────────────────────────────
 </script>
 </body>
 </html>
@@ -3026,7 +3000,7 @@ h1{font-family:'Orbitron',monospace;font-size:16px;font-weight:900;letter-spacin
       <div class="metric-row"><span class="metric-key">OracoloInterno</span><span class="metric-val" id="sv-oi">—</span></div>
       <div class="metric-row"><span class="metric-key">campo_carica SC</span><span class="metric-val" id="sv-cc">—</span></div>
       <div class="metric-row"><span class="metric-key">Phantom bilancio</span><span class="metric-val" id="sv-phantom">—</span></div>
-      <div class="metric-row"><span class="metric-key">Prezzo <span id="sv-asset-lbl">BTC</span></span><span class="metric-val" id="sv-price">—</span></div>
+      <div class="metric-row"><span class="metric-key">Prezzo BTC</span><span class="metric-val" id="sv-price">—</span></div>
     </div>
   </div>
 
