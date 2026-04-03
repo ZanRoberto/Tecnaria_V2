@@ -576,6 +576,11 @@ class CapsuleManager:
         self._refresh_cache()
         return True
 
+    def check_reload(self) -> bool:
+        """Compatibility con ConfigHotReloader.check_reload()"""
+        self._refresh_cache()
+        return True
+
     @property
     def capsules(self):
         return self._cache
