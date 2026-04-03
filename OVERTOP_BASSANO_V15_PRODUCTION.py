@@ -42,7 +42,7 @@ DB_PATH        = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
 NARRATIVES_DB  = os.environ.get("NARRATIVES_DB", "/home/app/data/narratives.db")
 
 # --- BINANCE -----------------------------------------------------------------
-SYMBOL         = "BTCUSDC"
+SYMBOL         = "SOLUSDC"
 BINANCE_WS_URL = f"wss://stream.binance.com:9443/ws/{SYMBOL.lower()}@aggTrade"
 
 # ===========================================================================
@@ -4577,7 +4577,7 @@ class OvertopBassanoV15Production:
             self.connect_binance()
 
         def on_open(ws):
-            log.info("[WS] [OK] Connesso a Binance aggTrade BTCUSDC")
+            log.info("[WS] [OK] Connesso a Binance aggTrade SOLUSDC")
 
         self.ws = websocket.WebSocketApp(
             self.ws_url,
@@ -4626,6 +4626,7 @@ class OvertopBassanoV15Production:
                 self.heartbeat_data["last_price"] = round(price, 2)
                 self.heartbeat_data["last_tick"]  = datetime.utcnow().isoformat()
                 self.heartbeat_data["tick_count"] = self.heartbeat_data.get("tick_count", 0) + 1
+                self.heartbeat_data["symbol"]     = SYMBOL
         except Exception:
             pass
         finally:
