@@ -3690,9 +3690,9 @@ class CampoGravitazionale:
                 base = 72  # trend bear confermato
         
         elif regime == "EXPLOSIVE":
-            base = 65
+            base = 75   # EXPLOSIVE rischiosa — serve segnale forte
             if volatility == "ALTA":
-                base = 63  # esplosione vera, cattura subito
+                base = 72  # ancora alta — esplosione vera ma volatilità aumenta rischio
         
         else:
             base = 80
@@ -4250,8 +4250,8 @@ class SuperCervello:
         # VERITAS: Oracolo FUOCO con carica alta — SC non blocca mai
         # 373 segnali: SC blocca $112 di guadagni reali quando Oracolo ha ragione
         # Carica 0.90 = fisica confermata — entra sempre
-        # ONE-SHOT: usa confidenza come discriminante per evitare 7 log identici
-        if oi_stato == "FUOCO" and oi_carica >= 0.75:
+        # ECCEZIONE: EXPLOSIVE è troppo volatile — FUOCO non affidabile
+        if oi_stato == "FUOCO" and oi_carica >= 0.75 and regime != "EXPLOSIVE":
             return self._out("ENTRA", 1.3, -5, f"VERITAS_FUOCO_c{oi_carica:.2f}", oi_carica)
 
         # VETO ASSOLUTO FINGERPRINT TOSSICO
@@ -4577,7 +4577,7 @@ class OvertopBassanoV15Production:
             self.connect_binance()
 
         def on_open(ws):
-            log.info("[WS] [OK] Connesso a Binance aggTrade BTCUSDC")
+            log.info("[WS] [OK] Connesso a Binance aggTrade SOLUSDC")
 
         self.ws = websocket.WebSocketApp(
             self.ws_url,
@@ -5851,7 +5851,7 @@ class OvertopBassanoV15Production:
                     # Conferme: predizione indicava direzione giusta?
                     conferme = 0
                     totale = 0
-                    _sig_threshold = 0.5
+                    _sig_threshold = max(0.05, (_ph[0] * 0.0008)) if _ph else 0.10
                     for i in range(1, len(preds)):
                         dir_pred   = preds[i] - preds[i-1]
                         dir_reale  = _ph[i]   - _ph[i-1]
@@ -5876,7 +5876,7 @@ class OvertopBassanoV15Production:
                     for i in range(1, min(len(preds), len(_ph))):
                         dp = preds[i] - preds[i-1]
                         dr = _ph[i]   - _ph[i-1]
-                        _dp_thresh = 0.5
+                        _dp_thresh = max(0.05, (_ph[0] * 0.0008)) if _ph else 0.10
                         if abs(dp) > _dp_thresh and abs(dr) > 0.01:
                             movimenti_pred.append(abs(dp))
                             movimenti_reali.append(abs(dr))
@@ -6071,6 +6071,20 @@ class OvertopBassanoV15Production:
             fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend, _dir)
             self._last_fingerprint_wr = fingerprint_wr
             self._last_fingerprint_wr = fingerprint_wr  # salvato per bypass FUOCO precedenti
+
+            # -- GATE EXPLOSIVE: entra solo con fingerprint provato ---------
+            # In EXPLOSIVE la volatilità è massima — serve evidenza storica forte
+            # Senza memoria reale su questo pattern, il rischio è troppo alto
+            if self._regime_current == "EXPLOSIVE":
+                _exp_mem = self.oracolo._memory.get(
+                    f"{momentum}|{volatility}|{trend}|{_dir}", {})
+                _exp_real = _exp_mem.get('real_samples', 0)
+                _exp_wr   = fingerprint_wr
+                if _exp_real < 5 or _exp_wr < 0.65:
+                    self._record_phantom(price, f"EXPLOSIVE_GATE_fp={_exp_wr:.0%}_n={_exp_real}",
+                        seed['score'], momentum, volatility, trend)
+                    return
+
             matrimonio     = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
             matrimonio_name = matrimonio["name"]
             fantasma_info  = self.oracolo.is_fantasma(momentum, volatility, trend, _dir)
@@ -6091,7 +6105,12 @@ class OvertopBassanoV15Production:
 
             if result['veto']:
                 veto = result['veto']
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                # TOSSICO e DIVORZIO sono assoluti — FUOCO non li bypassa mai
+                is_absolute = (veto.startswith("TOSSICO") or 
+                               veto.startswith("CM_TOSSICO") or
+                               veto.startswith("STATIC_TOSSICO") or
+                               veto.startswith("DIVORZIO"))
+                if not is_absolute and self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
                     self._log_m2("🔥", f"VETO bypassed — FUOCO carica={self._oi_carica:.2f} veto={veto}")
                 else:
                     if not veto.startswith("WARMUP") and len(self._phantoms_open) < 5:
@@ -6100,7 +6119,12 @@ class OvertopBassanoV15Production:
 
             if not result['enter']:
                 # FUOCO BYPASS — forza entry con size ridotta
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                # NON in EXPLOSIVE: troppo volatile, FUOCO non è affidabile
+                _fuoco_bypass_ok = (self._oi_stato == "FUOCO" and 
+                                    self._oi_carica >= 0.65 and 
+                                    getattr(self, "_last_fingerprint_wr", 0) >= 0.55 and
+                                    self._regime_current != "EXPLOSIVE")
+                if _fuoco_bypass_ok:
                     self._log_m2("🔥", f"ENTER FORCED — FUOCO carica={self._oi_carica:.2f} score={result['score']:.1f}")
                     result['enter'] = True
                     result['size'] = min(result.get('size', 1.0), 0.3)
@@ -6201,6 +6225,17 @@ class OvertopBassanoV15Production:
             _ph_zav    = self._phantom_stats.get('total_missed', 0.0)
             _st_data   = self._get_signal_tracker_context(self._regime_current, result['score'])
 
+            # GUARD ASSOLUTO: se campo.evaluate ha dato veto TOSSICO,
+            # il SuperCervello non può bypassarlo con VERITAS_FUOCO
+            if result.get('veto') and (
+                result['veto'].startswith("TOSSICO") or
+                result['veto'].startswith("CM_TOSSICO") or
+                result['veto'].startswith("STATIC_TOSSICO")
+            ):
+                if len(self._phantoms_open) < 5:
+                    self._record_phantom(price, result['veto'], result.get('score',0), momentum, volatility, trend)
+                return
+
             _sc_dec = self.supercervello.decide(
                 fp_wr=fingerprint_wr, fp_samples=int(self.oracolo._memory.get(
                     f"{momentum}|{volatility}|{trend}|{self.campo._direction}",{}).get('samples',0)),
@@ -6245,7 +6280,10 @@ class OvertopBassanoV15Production:
 
             # -- FUOCO PERMANENTE: quando OracoloInterno è in FUOCO con carica >= 0.65
             # il SC non può bloccare — il Veritas ha dimostrato che SC sbaglia sistematicamente
-            _fuoco_bypass = (self._oi_stato == "FUOCO" and self._oi_carica >= 0.65)
+            # ECCEZIONE: in EXPLOSIVE il FUOCO non è affidabile — troppa volatilità
+            _fuoco_bypass = (self._oi_stato == "FUOCO" and 
+                             self._oi_carica >= 0.65 and
+                             self._regime_current != "EXPLOSIVE")
 
             # Applica decisione supercervello
             if _sc_dec['azione'] == 'BLOCCA':
@@ -6511,15 +6549,19 @@ class OvertopBassanoV15Production:
             # CRITICO: direzione al momento dell'ENTRY, non quella attuale
             entry_direction = self._shadow.get("direction", "LONG")
 
-            # -- HARD STOP LOSS 2% SUL MARGINE --------------------------
+            # -- HARD STOP LOSS 2% SUL PNL REALE --------------------------
+            # Stop sul PnL della posizione, non sul prezzo.
+            # Formula: delta% × esposizione
+            # 2% di $5000 esposizione = $100 max loss
+            # Su SOL $130: $100 / 38.46 = $2.60 movimento — ragionevole
             exposure_sl = self.TRADE_SIZE_USD * self.LEVERAGE
             btc_qty_sl = exposure_sl / self._shadow["price_entry"]
             if entry_direction == "SHORT":
                 current_pnl_real = (self._shadow["price_entry"] - price) * btc_qty_sl
             else:
                 current_pnl_real = (price - self._shadow["price_entry"]) * btc_qty_sl
-            
-            HARD_STOP_USD = self.TRADE_SIZE_USD * 0.01  # 1% del margine = $10 max loss per trade
+
+            HARD_STOP_USD = exposure_sl * 0.02  # 2% dell'esposizione = $100 su $5000
             if current_pnl_real < -HARD_STOP_USD:
                 self._close_shadow_trade(price, f"HARD_STOP_${abs(current_pnl_real):.1f}_max${HARD_STOP_USD:.0f}")
                 return
@@ -7414,6 +7456,16 @@ class OvertopBassanoV15Production:
                     "m2_campo_stats":     self.campo.get_stats(),
                     "m2_last_score":      round(getattr(self.campo, '_last_score', 0), 1),
                     "m2_last_soglia":     round(getattr(self.campo, '_last_soglia', 60), 1),
+                    "m2_buy_distance":    round(getattr(self.campo, '_last_soglia', 60) - getattr(self.campo, '_last_score', 0), 1),
+                    "m2_score_components": {
+                        "seed":   round(min(1.0,max(0.0,(self.seed_scorer.score().get('score',0)-0.20)/0.60))*25, 1),
+                        "fp":     round(min(1.0,max(0.0,(self.oracolo.get_wr(self._last_momentum or 'MEDIO', self._last_volatility or 'MEDIA', self._last_trend or 'SIDEWAYS', self.campo._direction)-0.30)/0.50))*20, 1),
+                        "rsi":    round(self.campo._rsi_score()*10, 1),
+                        "macd":   round(self.campo._macd_score()*10, 1),
+                        "regime": self._regime_current,
+                        "warmup_rsi": len(self.campo._rsi_history) if hasattr(self.campo, '_rsi_history') else 0,
+                        "warmup_needed": 35,
+                    },
                     "oi_stato":           self._oi_stato,
                     "oi_carica":          round(self._oi_carica, 3),
                     "veritas":            self.veritas.dump_dashboard(),
