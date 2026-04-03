@@ -4212,6 +4212,52 @@ class VeritatisTracker:
             'n_open':    len(self._open),
         }
 
+    def save(self, db_path: str):
+        """Persiste _stats e _closed su SQLite — sopravvive al restart."""
+        try:
+            import sqlite3, json
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute("""CREATE TABLE IF NOT EXISTS veritas_stats
+                         (chiave TEXT PRIMARY KEY, data TEXT)""")
+            c.execute("""CREATE TABLE IF NOT EXISTS veritas_closed
+                         (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT)""")
+            # Salva stats
+            for k, s in self._stats.items():
+                c.execute("INSERT OR REPLACE INTO veritas_stats VALUES (?,?)",
+                          (k, json.dumps(s)))
+            # Salva ultimi 200 closed (non duplicare)
+            c.execute("DELETE FROM veritas_closed")
+            for sig in self._closed[-200:]:
+                c.execute("INSERT INTO veritas_closed (data) VALUES (?)",
+                          (json.dumps(sig),))
+            conn.commit(); conn.close()
+        except Exception as e:
+            log.error(f"[VERITAS_SAVE] {e}")
+
+    def load(self, db_path: str):
+        """Carica _stats e _closed da SQLite al boot."""
+        try:
+            import sqlite3, json, os
+            if not os.path.exists(db_path): return
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            # Stats
+            try:
+                for row in c.execute("SELECT chiave, data FROM veritas_stats"):
+                    self._stats[row[0]] = json.loads(row[1])
+            except: pass
+            # Closed
+            try:
+                for row in c.execute("SELECT data FROM veritas_closed ORDER BY id"):
+                    self._closed.append(json.loads(row[0]))
+            except: pass
+            conn.close()
+            if self._stats:
+                log.info(f"[VERITAS_LOAD] Caricati {len(self._stats)} stats, {len(self._closed)} closed")
+        except Exception as e:
+            log.error(f"[VERITAS_LOAD] {e}")
+
 
 class SuperCervello:
     """
@@ -4505,6 +4551,7 @@ class OvertopBassanoV15Production:
         self._last_sc_dec   = None
         # -- VERITAS TRACKER: chi aveva ragione ───────────────────────────
         self.veritas        = VeritatisTracker(sc_ref=self.supercervello)
+        self.veritas.load(DB_PATH)  # carica statistiche dal disco al boot
 
         # -- ORACOLO INTERNO: sensore predittivo che vive ogni tick -------
         self._oi_carica     = 0.0        # energia accumulata 0→1
@@ -4690,6 +4737,12 @@ class OvertopBassanoV15Production:
         # Oracolo e Veritas girano sempre
         self._oracolo_interno_tick(price, _mom, _vol, _trd)
         self.veritas.aggiorna(price, time.time())
+        # Salva Veritas su disco ogni 60 secondi
+        if not hasattr(self, '_veritas_last_save'):
+            self._veritas_last_save = 0
+        if time.time() - self._veritas_last_save >= 60:
+            self.veritas.save(DB_PATH)
+            self._veritas_last_save = time.time()
 
         if not _contesto_ok:
             return
