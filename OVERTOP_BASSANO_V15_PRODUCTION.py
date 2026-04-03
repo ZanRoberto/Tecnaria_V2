@@ -5851,7 +5851,7 @@ class OvertopBassanoV15Production:
                     # Conferme: predizione indicava direzione giusta?
                     conferme = 0
                     totale = 0
-                    _sig_threshold = (_ph[0] * 0.0005) if _ph else 0.05
+                    _sig_threshold = 0.5
                     for i in range(1, len(preds)):
                         dir_pred   = preds[i] - preds[i-1]
                         dir_reale  = _ph[i]   - _ph[i-1]
@@ -5876,7 +5876,7 @@ class OvertopBassanoV15Production:
                     for i in range(1, min(len(preds), len(_ph))):
                         dp = preds[i] - preds[i-1]
                         dr = _ph[i]   - _ph[i-1]
-                        _dp_thresh = (_ph[0] * 0.0005) if _ph else 0.05
+                        _dp_thresh = 0.5
                         if abs(dp) > _dp_thresh and abs(dr) > 0.01:
                             movimenti_pred.append(abs(dp))
                             movimenti_reali.append(abs(dr))
