@@ -1,5 +1,5 @@
 """
-MISSION CONTROL V6.0 — BOT V15 PRODUCTION + AI BRIDGE
+MISSION CONTROL V6.0 — BOT V15 PRODUCTION SOL + AI BRIDGE
 =====================================================
 ✅ Bot gira DENTRO app.py come thread daemon
 ✅ Memoria condivisa thread-safe (heartbeat_data + Lock)
@@ -521,6 +521,51 @@ def download_capsule():
         abort(404, "capsule_attive.json non trovato")
     return send_file(capsule_file, as_attachment=True, download_name="capsule_attive.json")
 
+# ── CAPSULE MANAGER API ─────────────────────────────────────────────────────
+
+@app.route('/api/capsule/list')
+def api_capsule_list():
+    """Tutte le capsule per questo asset dal CapsuleManager."""
+    try:
+        if bot and hasattr(bot, 'capsule_manager') and bot.capsule_manager:
+            caps = bot.capsule_manager.get_all_for_dashboard()
+            return jsonify({"ok": True, "capsule": caps, "asset": bot.capsule_manager.asset})
+        return jsonify({"ok": False, "error": "CapsuleManager non disponibile"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+@app.route('/api/capsule/toggle', methods=['POST'])
+def api_capsule_toggle():
+    """Abilita/disabilita capsule senza deploy."""
+    try:
+        data = request.get_json()
+        cap_id  = data.get('id','')
+        enabled = bool(data.get('enabled', True))
+        if not cap_id:
+            return jsonify({"ok": False, "error": "id mancante"})
+        if bot and hasattr(bot, 'capsule_manager') and bot.capsule_manager:
+            ok = bot.capsule_manager.toggle_capsule(cap_id, enabled)
+            return jsonify({"ok": ok, "id": cap_id, "enabled": enabled})
+        return jsonify({"ok": False, "error": "CapsuleManager non disponibile"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+@app.route('/api/capsule/delete', methods=['POST'])
+def api_capsule_delete():
+    """Elimina capsule LEARNED/AUTO (non STATIC)."""
+    try:
+        data   = request.get_json()
+        cap_id = data.get('id','')
+        if not cap_id:
+            return jsonify({"ok": False, "error": "id mancante"})
+        if bot and hasattr(bot, 'capsule_manager') and bot.capsule_manager:
+            ok = bot.capsule_manager.delete_capsule(cap_id)
+            msg = "eliminata" if ok else "non eliminabile (STATIC o non trovata)"
+            return jsonify({"ok": ok, "id": cap_id, "msg": msg})
+        return jsonify({"ok": False, "error": "CapsuleManager non disponibile"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
 @app.route('/debug/db')
 def debug_db():
     _check_key()
@@ -903,8 +948,8 @@ canvas.spark { width:100%; height:40px; }
 
   <!-- TICKER -->
   <div class="ticker">
-    <span class="price-big" id="btc-price">--</span>
-    <span style="color:var(--dim)">BTC/USDC</span>
+    <span class="price-big" id="asset-price">--</span> <span id="asset-label" style="font-size:11px;color:var(--dim)">BTCUSDC</span>
+    <span style="color:var(--dim)">SOL/USDC</span>
     <span>⚡ <span id="tick-n" style="color:var(--yellow)">0</span></span>
     <span>🕐 <span id="last-tick" style="color:var(--dim)">--</span></span>
     <span id="trade-status-txt" style="color:var(--dim)">🔍 Analizzando...</span>
@@ -1016,24 +1061,20 @@ canvas.spark { width:100%; height:40px; }
   <!-- ROW 2: IA CAPSULE + PHANTOM -->
   <div class="two-col">
 
-    <!-- INTELLIGENZA AUTONOMA -->
+    <!-- CAPSULE MANAGER — Sistema Unificato -->
     <div class="panel">
-      <div class="panel-head orange">🧠 INTELLIGENZA AUTONOMA — Capsule Vive
-        <span id="ia-gen-count" style="font-size:9px; color:var(--dim)">gen: 0 / exp: 0</span>
+      <div class="panel-head orange">🧠 CAPSULE MANAGER — Sistema Unificato
+        <span id="cm-stats-badge" style="font-size:9px; color:var(--dim)">STATIC:0 LEARNED:0 AUTO:0</span>
       </div>
       <div class="panel-body">
         <div class="stat-row" style="margin-bottom:8px">
-          <div class="stat-item"><span class="stat-lbl">L2 (esperienza)</span><span class="stat-val" id="ia-l2">0</span></div>
-          <div class="stat-item"><span class="stat-lbl">L3 (evento)</span><span class="stat-val" id="ia-l3">0</span></div>
-          <div class="stat-item"><span class="stat-lbl">Blocchi</span><span class="stat-val" id="ia-blocks">0</span></div>
-          <div class="stat-item"><span class="stat-lbl">Boost soglia</span><span class="stat-val" id="ia-boosts">0</span></div>
-          <div class="stat-item"><span class="stat-lbl">Trade osservati</span><span class="stat-val" id="ia-observed">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">STATIC</span><span class="stat-val" id="cm-static">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">LEARNED</span><span class="stat-val" id="cm-learned">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">AUTO</span><span class="stat-val" id="cm-auto">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">Trade obs.</span><span class="stat-val" id="cm-trades">0</span></div>
+          <div class="stat-item"><span class="stat-lbl">Scadono</span><span class="stat-val" id="cm-scadono" style="color:var(--yellow)">0</span></div>
         </div>
-        <div id="ia-capsule-list" style="max-height:200px; overflow-y:auto;">
-          <div style="color:var(--dim); font-size:10px; text-align:center; padding:20px 0">
-            Nessuna capsule attiva.<br>Il sistema impara dai trade.
-          </div>
-        </div>
+        <div id="cm-capsule-list" style="max-height:240px; overflow-y:auto;"></div>
       </div>
     </div>
 
@@ -1116,7 +1157,7 @@ canvas.spark { width:100%; height:40px; }
 
   <!-- GRAFICO LIVE — PREZZO + SEGNALI -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--green); border-width:2px;">
-    <div class="panel-head green">📈 GRAFICO LIVE — BTC/USDC
+    <div class="panel-head green">📈 GRAFICO LIVE — <span id="chart-asset-label">LIVE</span>
       <span id="chart-info" style="font-size:9px; color:var(--dim)">ultimi 120 tick · 30s window</span>
     </div>
     <div class="panel-body" style="padding:8px;">
@@ -1160,6 +1201,13 @@ canvas.spark { width:100%; height:40px; }
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">P&L</div>
           <div id="sc-pnl" style="font-size:14px;font-weight:500;">$0</div>
+        </div>
+        <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;color:var(--dim)">💰 PROB. PNL</div>
+          <div id="sc-prob-pnl" style="font-size:14px;font-weight:500;color:var(--dim)">—</div>
+          <div id="sc-prob-bar" style="margin-top:3px;height:3px;border-radius:2px;background:rgba(255,255,255,0.08);">
+            <div id="sc-prob-fill" style="height:100%;border-radius:2px;width:0%;transition:width 0.5s;"></div>
+          </div>
         </div>
       </div>
 
@@ -1394,6 +1442,7 @@ const SCPanel = (() => {
   function update(hb) {
     const price = hb.last_price || 0;
     if (!price) return;
+    window._hb_live = hb;  // accessibile al canvas per marker live
 
     // Usa storia completa dal bot — non accumula tick per tick
     const carica = hb.oi_carica || 0;
@@ -1408,8 +1457,8 @@ const SCPanel = (() => {
         labels.push(i);
         const c = ch[i] !== undefined ? ch[i] : carica;
         // Delta reali dal Veritas — non fattore inventato
-        const deltaFuoco  = hb.pred_delta_fuoco  || 5.0;
-        const deltaCarica = hb.pred_delta_carica || 2.0;
+        const deltaFuoco  = hb.pred_delta_fuoco  || (price * 0.003);
+        const deltaCarica = hb.pred_delta_carica || (price * 0.001);
         let delta = 0;
         if (c >= 0.65)      delta = deltaFuoco;
         else if (c >= 0.40) delta = deltaCarica;
@@ -1420,7 +1469,7 @@ const SCPanel = (() => {
       prices.push(price);
       labels.push(labels.length);
       if (prices.length > MAX) { prices.shift(); labels.shift(); }
-      preds.push(Math.round((price + (carica - 0.5) * 150) * 100) / 100);
+      preds.push(Math.round((price + (carica - 0.5) * price * 0.002) * 100) / 100);
       cariche.push(Math.round(carica * 1000) / 1000);
       if (preds.length   > MAX) preds.shift();
       if (cariche.length > MAX) cariche.shift();
@@ -1454,14 +1503,15 @@ const SCPanel = (() => {
         const p = t.pnl || 0;
         pnlTot += p;
         if (p > 0) wins++; else losses++;
-        // Marker sul grafico
-        const idx = Math.min(prices.length - 1, Math.max(0, prices.length - 10));
-        if (p > 0) sellMkrs.push({x: labels[idx]||0, y: t.price||price});
-        else       sellMkrs.push({x: labels[idx]||0, y: t.price||price, loss: true});
+        const idx = prices.length - 1;
+        const tradePrice = t.price || (prices[idx] || price);
+        if (p > 0) sellMkrs.push({x: idx, y: tradePrice});
+        else       sellMkrs.push({x: idx, y: tradePrice, loss: true});
       });
       trades.filter(t => t.type === 'M2_ENTRY').forEach(t => {
-        const idx = Math.min(prices.length - 1, Math.max(0, prices.length - 15));
-        buyMkrs.push({x: labels[idx]||0, y: t.price||price});
+        const idx = prices.length - 1;
+        const tradePrice = t.price || (prices[idx] || price);
+        buyMkrs.push({x: idx, y: tradePrice});
       });
     }
 
@@ -1473,6 +1523,48 @@ const SCPanel = (() => {
     const pnlEl = document.getElementById('sc-pnl');
     if (pnlEl) { pnlEl.textContent = (pnlTot>=0?'+':'') + '$' + Math.round(pnlTot);
                pnlEl.style.color = pnlTot >= 0 ? '#00ff88' : '#ff3355'; }
+
+    // PROB. PNL — hit_economica dal contesto corrente
+    const probEl  = document.getElementById('sc-prob-pnl');
+    const fillEl  = document.getElementById('sc-prob-fill');
+    if (probEl && fillEl) {
+      const st = hb.signal_tracker || {};
+      const stTop = st.top || [];
+      const regime  = hb.regime  || '';
+      const vol     = hb.volatility || '';
+      const FEE_SIM = hb.last_price ? hb.last_price * 0.0004 : 0.10;
+      let bestHit = null;
+      stTop.forEach(row => {
+        if (row.n < 5) return;
+        const ctx = row.context || '';
+        const pnlAvg = row.pnl_sim_avg || 0;
+        let hitEcon;
+        if (pnlAvg > FEE_SIM * 3)    hitEcon = 0.80;
+        else if (pnlAvg > FEE_SIM)   hitEcon = 0.60;
+        else if (pnlAvg > 0)          hitEcon = 0.40;
+        else if (pnlAvg > -FEE_SIM)  hitEcon = 0.25;
+        else                           hitEcon = 0.10;
+        if (ctx.includes(regime) || ctx.includes(vol)) {
+          if (bestHit === null || hitEcon > bestHit) bestHit = hitEcon;
+        }
+      });
+      if (bestHit === null && stTop.length > 0) {
+        const avg = stTop.filter(r=>r.n>=5).reduce((s,r)=>s+(r.pnl_sim_avg||0),0) / Math.max(1,stTop.filter(r=>r.n>=5).length);
+        bestHit = avg > FEE_SIM ? 0.60 : avg > 0 ? 0.40 : 0.20;
+      }
+      if (bestHit !== null) {
+        const pct = Math.round(bestHit * 100);
+        const col = bestHit >= 0.55 ? '#00ff88' : bestHit >= 0.35 ? '#ffd700' : '#ff3355';
+        probEl.textContent = pct + '%';
+        probEl.style.color = col;
+        fillEl.style.width = pct + '%';
+        fillEl.style.background = col;
+      } else {
+        probEl.textContent = '—';
+        probEl.style.color = 'var(--dim)';
+        fillEl.style.width = '0%';
+      }
+    }
 
     // Narrativa oracolo interno
     const narr = hb.oi_narrativa || [];
@@ -1573,7 +1665,7 @@ const SCPanel = (() => {
     preds.forEach((p,i)=>{ if(p>0) i===0?ctx1.moveTo(xOf(i),yOf(p)):ctx1.lineTo(xOf(i),yOf(p)); });
     ctx1.stroke(); ctx1.setLineDash([]);
 
-    // BUY markers
+    // BUY markers storici
     buyMkrs.forEach(m=>{
       const xi=Math.min(prices.length-1,Math.max(0,m.x));
       const xp=xOf(xi), yp=yOf(m.y||prices[xi]||minP);
@@ -1581,7 +1673,7 @@ const SCPanel = (() => {
       ctx1.fillText('▲',xp,yp+14);
     });
 
-    // SELL markers
+    // SELL markers storici
     sellMkrs.forEach(m=>{
       const xi=Math.min(prices.length-1,Math.max(0,m.x));
       const xp=xOf(xi), yp=yOf(m.y||prices[xi]||minP);
@@ -1589,6 +1681,37 @@ const SCPanel = (() => {
       ctx1.font='12px sans-serif'; ctx1.textAlign='center';
       ctx1.fillText('▼',xp,yp-4);
     });
+
+    // ── MARKER LIVE — posizione aperta in tempo reale ─────────
+    if (window._hb_live && window._hb_live.m2_shadow_open) {
+      const entryP = window._hb_live.m2_entry_price || 0;
+      const dir    = window._hb_live.m2_direction || 'LONG';
+      const stato  = window._hb_live.oi_stato || '';
+      if (entryP > 0) {
+        const yEntry = yOf(entryP);
+        ctx1.beginPath(); ctx1.strokeStyle='rgba(255,215,0,0.5)';
+        ctx1.lineWidth=1; ctx1.setLineDash([4,3]);
+        ctx1.moveTo(PAD.left, yEntry); ctx1.lineTo(PAD.left+w1, yEntry);
+        ctx1.stroke(); ctx1.setLineDash([]);
+        const col = dir === 'LONG' ? '#00ff88' : '#ff3355';
+        const sym = dir === 'LONG' ? '▲' : '▼';
+        ctx1.fillStyle = col; ctx1.font = 'bold 13px sans-serif'; ctx1.textAlign = 'left';
+        ctx1.fillText(sym, PAD.left + 2, yEntry + (dir==='LONG'?12:-2));
+        ctx1.font = '9px Share Tech Mono'; ctx1.fillStyle = 'rgba(255,215,0,0.8)';
+        ctx1.textAlign = 'right';
+        ctx1.fillText('IN@$'+Math.round(entryP), PAD.left+w1-2, yEntry-3);
+        if (stato === 'FUOCO') {
+          const xNow = xOf(prices.length-1);
+          const yNow = yOf(prices[prices.length-1]||entryP);
+          ctx1.beginPath();
+          ctx1.arc(xNow, yNow, 5, 0, Math.PI*2);
+          ctx1.fillStyle = col; ctx1.fill();
+          ctx1.beginPath();
+          ctx1.arc(xNow, yNow, 8, 0, Math.PI*2);
+          ctx1.strokeStyle = col; ctx1.lineWidth = 1.5; ctx1.stroke();
+        }
+      }
+    }
 
     // Label prezzo live
     const lp=prices[prices.length-1];
@@ -1778,7 +1901,8 @@ const LiveChart = (() => {
     const vals = prices.map(p=>p.v);
     let mn=Math.min(...vals), mx=Math.max(...vals);
     const sp=mx-mn;
-    if(sp<15){mn-=8;mx+=8;}else{mn-=sp*.06;mx+=sp*.06;}
+    const minSpan=(mx||100)*0.006;
+    if(sp<minSpan){const pad=minSpan/2;mn-=pad;mx+=pad;}else{mn-=sp*.06;mx+=sp*.06;}
 
     const xOf = i => PAD.left + (i/(prices.length-1))*w;
     const yOf = v => PAD.top  + h - ((v-mn)/(mx-mn))*h;
@@ -1955,7 +2079,15 @@ function update() {
     $('last-seen').textContent = hb.last_seen ? new Date(hb.last_seen).toLocaleTimeString() : '--';
 
     // TICKER
-    if(hb.last_price) $('btc-price').textContent = '$'+hb.last_price.toLocaleString('en-US',{minimumFractionDigits:2});
+    if(hb.last_price) $('asset-price').textContent = '$'+hb.last_price.toLocaleString('en-US',{minimumFractionDigits:2});
+    if(hb.symbol) {
+      $('asset-label').textContent = hb.symbol;
+      const base = hb.symbol.replace('USDC','').replace('USDT','');
+      const chartLbl = document.getElementById('chart-asset-label');
+      if(chartLbl) chartLbl.textContent = base+'/USDC';
+      const svLbl = document.getElementById('sv-asset-lbl');
+      if(svLbl) svLbl.textContent = base;
+    }
     $('tick-n').textContent = (hb.tick_count||0).toLocaleString();
     $('last-tick').textContent = hb.last_tick ? new Date(hb.last_tick).toLocaleTimeString() : '--';
 
@@ -2100,34 +2232,46 @@ function update() {
     $('calib-params').textContent = cp.seed_threshold?
       `seed≥${cp.seed_threshold} cap1≥${cp.cap1_soglia_buona} cap3≥${cp.cap3_fp_minimo}`:'--';
 
-    // IA CAPSULE LIST
-    $('ia-l2').textContent = ia.l2||0;
-    $('ia-l3').textContent = ia.l3||0;
-    $('ia-blocks').textContent = ia.blocchi||0;
-    $('ia-boosts').textContent = ia.boost_soglia_usati||0;
-    $('ia-observed').textContent = ia.trade_osservati||0;
-    $('ia-gen-count').textContent = 'gen:'+(ia.generate_totali||0)+' / exp:'+(ia.scadute||0);
-
-    // Carica capsule da API capsule o da ia_stats
-    const capsule = hb.ia_capsule_attive||[];
-    if(capsule.length>0) {
-      $('ia-capsule-list').innerHTML = capsule.map(c=>{
-        const ttl = c.ttl_seconds||0;
-        const ttlStr = ttl>3600?(ttl/3600).toFixed(1)+'h':ttl>60?(ttl/60).toFixed(0)+'m':ttl+'s';
-        const typeClass = {
-          'L2_BLK':'cap-l2-blk','L2_BST':'cap-l2-bst',
-          'L3_STK':'cap-l3-stk','L3_RBLO':'cap-l3-reg','L3_OPP':'cap-l3-opp'
-        }[c.tipo]||'cap-l3-stk';
-        const icon = c.tipo?.includes('BLK')||c.tipo?.includes('RBLO')?'🚫':
-                     c.tipo?.includes('BST')||c.tipo?.includes('OPP')?'🚀':
-                     c.tipo?.includes('STK')?'⚡':'💊';
-        return `<div class="capsule-item ${typeClass}">
-          <span>${icon} ${c.id||c.capsule_id||'?'}</span>
-          <span class="ttl-bar">TTL ${ttlStr} | ${c.tipo||'?'}</span>
+    // CAPSULE MANAGER PANEL
+    $('cm-static').textContent  = ia.static||0;
+    $('cm-learned').textContent = ia.learned||0;
+    $('cm-auto').textContent    = ia.auto||0;
+    $('cm-trades').textContent  = ia.trade_osservati||0;
+    $('cm-scadono').textContent = ia.scadono_presto||0;
+    $('cm-stats-badge').textContent = 'STATIC:'+(ia.static||0)+' LEARNED:'+(ia.learned||0)+' AUTO:'+(ia.auto||0);
+    // Render lista capsule
+    const cmList = ia.capsule_list||[];
+    if(cmList.length>0){
+      $('cm-capsule-list').innerHTML = cmList.map(c=>{
+        const lvlCol  = c.livello==='STATIC'?'#888':c.livello==='LEARNED'?'#ffd700':'#00bfff';
+        const actIcon = c.azione?.type==='blocca_entry'?'🚫':
+                        c.azione?.type==='modifica_size'?'📏':
+                        c.azione?.type==='boost_soglia'?'⬆':'⬇';
+        const enCol   = c.enabled?'var(--green)':'var(--dim)';
+        const scadeStr = c.scade_in!=null?(c.scade_in>3600?(c.scade_in/3600).toFixed(1)+'h':
+                          c.scade_in>60?(c.scade_in/60).toFixed(0)+'m':c.scade_in+'s'):'∞';
+        const canDel  = c.livello!=='STATIC';
+        return `<div style="padding:5px 8px;margin-bottom:3px;border-radius:3px;
+                  background:rgba(255,255,255,0.03);border-left:3px solid ${lvlCol};
+                  font-size:9px;display:flex;align-items:center;gap:6px;">
+          <span style="min-width:14px">${actIcon}</span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${c.id}">${c.id}</span>
+          <span style="color:${lvlCol};min-width:44px">${c.livello}</span>
+          <span style="color:var(--dim);min-width:28px">n=${c.samples}</span>
+          <span style="color:${c.wr>0.5?'var(--green)':c.wr>0.3?'var(--yellow)':'var(--red)'};min-width:32px">
+            ${c.wr>0?(c.wr*100).toFixed(0)+'%':'—'}</span>
+          <span style="color:var(--dim);min-width:22px">${scadeStr}</span>
+          <button onclick="cmToggle('${c.id}',${!c.enabled})"
+            style="font-size:8px;padding:1px 5px;border:1px solid ${enCol};
+                   color:${enCol};background:transparent;cursor:pointer;border-radius:2px">
+            ${c.enabled?'ON':'OFF'}</button>
+          ${canDel?`<button onclick="cmDelete('${c.id}')"
+            style="font-size:8px;padding:1px 5px;border:1px solid #ff3355;
+                   color:#ff3355;background:transparent;cursor:pointer;border-radius:2px">✕</button>`:''}
         </div>`;
       }).join('');
     } else {
-      $('ia-capsule-list').innerHTML = '<div style="color:var(--dim);font-size:10px;text-align:center;padding:16px 0">Nessuna capsule attiva. Il sistema impara dai trade.</div>';
+      $('cm-capsule-list').innerHTML = '<div style="color:var(--dim);font-size:10px;text-align:center;padding:20px 0">Nessuna capsule attiva.<br>Il sistema impara dai trade.</div>';
     }
 
     // PHANTOM
@@ -2402,6 +2546,46 @@ function sendCmd(cmd){
 
 update();
 setInterval(update, 2000);
+
+// ── CAPSULE MANAGER — toggle / delete ──────────────────────────────────
+async function cmToggle(id, enable) {
+  try {
+    const r = await fetch('/api/capsule/toggle', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({id, enabled: enable})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      // Aggiorna lista immediatamente
+      const ia = window._lastHb?.ia_stats || {};
+      const cmList = ia.capsule_list || [];
+      const cap = cmList.find(c => c.id === id);
+      if (cap) cap.enabled = enable;
+      update();
+    } else {
+      alert('Errore toggle: ' + (d.error||'?'));
+    }
+  } catch(e) { alert('Errore: ' + e.message); }
+}
+
+async function cmDelete(id) {
+  if (!confirm('Eliminare capsule ' + id + '?')) return;
+  try {
+    const r = await fetch('/api/capsule/delete', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({id})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      update();
+    } else {
+      alert('Non eliminabile: ' + (d.msg||d.error||'?'));
+    }
+  } catch(e) { alert('Errore: ' + e.message); }
+}
+// ── fine CAPSULE MANAGER ────────────────────────────────────────────────
 </script>
 </body>
 </html>
@@ -2582,7 +2766,7 @@ def _call_deepseek(hb: dict) -> dict:
         esito = "✅" if h.get("eseguito") else "⏭"
         st_hist.append(f"{h['ts']} {esito} {h['decisione']} — {h['motivo'][:50]}")
 
-    prompt = f"""Sei il supervisore AI del bot di trading BTC/USDC OVERTOP BASSANO V15.
+    prompt = f"""Sei il supervisore AI del bot di trading SOL/USDC OVERTOP BASSANO V15.
 Il tuo compito è analizzare lo stato del sistema e decidere se intervenire con un comando operativo.
 
 ARCHITETTURA:
@@ -2841,7 +3025,7 @@ h1{font-family:'Orbitron',monospace;font-size:16px;font-weight:900;letter-spacin
       <div class="metric-row"><span class="metric-key">OracoloInterno</span><span class="metric-val" id="sv-oi">—</span></div>
       <div class="metric-row"><span class="metric-key">campo_carica SC</span><span class="metric-val" id="sv-cc">—</span></div>
       <div class="metric-row"><span class="metric-key">Phantom bilancio</span><span class="metric-val" id="sv-phantom">—</span></div>
-      <div class="metric-row"><span class="metric-key">Prezzo BTC</span><span class="metric-val" id="sv-price">—</span></div>
+      <div class="metric-row"><span class="metric-key">Prezzo <span id="sv-asset-lbl">BTC</span></span><span class="metric-val" id="sv-price">—</span></div>
     </div>
   </div>
 
