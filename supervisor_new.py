@@ -22,6 +22,29 @@ _last_result      = {}
 _asset_snapshots  = {}   # {asset: heartbeat_dict}
 _asset_lock       = threading.Lock()
 
+# URL degli altri bot — fetch server-side (bypassa CORS)
+PEER_URLS = {
+    "BTCUSDC": os.environ.get("URL_BTC", "https://tecnaria-v2.onrender.com"),
+    "SOLUSDC": os.environ.get("URL_SOL", "https://tecnaria-v4.onrender.com"),
+    "XAUUSDT": os.environ.get("URL_GOLD", "https://tecnaria-v5.onrender.com"),
+}
+
+def _fetch_peers():
+    """Fetch heartbeat dagli altri bot ogni 10 secondi — server side."""
+    import urllib.request
+    while True:
+        for asset, url in PEER_URLS.items():
+            try:
+                req = urllib.request.urlopen(url+"/heartbeat", timeout=5)
+                data = json.loads(req.read())
+                with _asset_lock:
+                    _asset_snapshots[asset] = data
+            except:
+                pass
+        time.sleep(10)
+
+threading.Thread(target=_fetch_peers, daemon=True, name="sv_peer_fetch").start()
+
 def register_asset(asset: str, heartbeat_data: dict, heartbeat_lock):
     """Ogni bot registra il proprio heartbeat al supervisor."""
     def updater():
