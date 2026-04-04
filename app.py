@@ -3241,42 +3241,37 @@ header {
 </div>
 
 <script>
-// ── FETCH DATA ─────────────────────────────────────────────
-const ASSETS = {
-  BTC:  'https://tecnaria-v2.onrender.com',
-  SOL:  'https://tecnaria-v4.onrender.com',
-  GOLD: 'https://tecnaria-v5.onrender.com',
-};
-
+// ── FETCH DATA — tutto server-side, no CORS ──────────────
 let _lastResult  = {};
 let _callTimer   = 300;
 let _hbCache     = {};
 let _historyLog  = [];
 
-// Fetch heartbeat da ogni bot
-async function fetchHB(asset, url) {
-  try {
-    const r = await fetch(url + '/heartbeat', {signal: AbortSignal.timeout(5000)});
-    if (!r.ok) return null;
-    const d = await r.json();
-    _hbCache[asset] = d;
-    return d;
-  } catch { return null; }
-}
-
-// Fetch supervisor result
+// Unico fetch — il server aggrega tutto
 async function fetchSupervisor() {
   try {
-    const r = await fetch('/supervisor/result', {signal: AbortSignal.timeout(5000)});
+    const r = await fetch('/supervisor/result', {signal: AbortSignal.timeout(8000)});
     if (!r.ok) return;
     const d = await r.json();
     _lastResult = d.result || {};
     _historyLog = d.log || [];
     _callTimer  = d.next_call_in || 300;
+    // Aggiorna cache asset dai snapshot server-side
+    const snaps = d.snapshots || {};
+    for (const [sym, hb] of Object.entries(snaps)) {
+      // Mappa SYMBOL → asset key
+      const key = sym.includes('BTC') ? 'BTC' :
+                  sym.includes('SOL') ? 'SOL' :
+                  sym.includes('XAU') || sym.includes('GOLD') ? 'GOLD' : sym;
+      _hbCache[key] = hb;
+    }
     updateAIDecision();
     updateHistory();
-  } catch {}
+  } catch(e) { console.warn('supervisor fetch:', e); }
 }
+
+// fetchHB non serve più — tutto dal supervisor
+async function fetchHB(asset, url) { return null; }
 
 // ── RENDER ─────────────────────────────────────────────────
 function renderAsset(asset, hb) {
@@ -3436,12 +3431,10 @@ async function supervisorTick() {
   await fetchSupervisor();
 }
 
-// Avvio
-tick();
-supervisorTick();
-setInterval(tick, 3000);           // heartbeat ogni 3s
-setInterval(supervisorTick, 15000);// supervisor ogni 15s
-setInterval(updateTimer, 1000);    // countdown ogni 1s
+// Avvio — un solo fetch aggregato
+fetchSupervisor();
+setInterval(fetchSupervisor, 5000); // aggiorna ogni 5s
+setInterval(updateTimer, 1000);     // countdown ogni 1s
 </script>
 </body>
 </html>
@@ -3451,12 +3444,24 @@ setInterval(updateTimer, 1000);    // countdown ogni 1s
 @app.route('/supervisor/result')
 def supervisor_result():
     if not _sv_new_ok or not sv_new:
-        return jsonify({"result":{}, "log":[], "next_call_in":300, "assets":[]})
+        # Fallback: usa heartbeat locale
+        with heartbeat_lock:
+            local_hb = dict(heartbeat_data)
+        from OVERTOP_BASSANO_V15_PRODUCTION import SYMBOL as _SYM
+        return jsonify({"result":{}, "log":[], "next_call_in":300,
+                        "assets":[], "snapshots":{_SYM: local_hb}})
+    snaps = sv_new.get_asset_snapshots()
+    # Aggiungi sempre il bot locale
+    with heartbeat_lock:
+        local_hb = dict(heartbeat_data)
+    from OVERTOP_BASSANO_V15_PRODUCTION import SYMBOL as _SYM
+    snaps[_SYM] = local_hb
     return jsonify({
         "result":       sv_new.get_last_result(),
         "log":          sv_new.get_log(),
         "next_call_in": sv_new.get_next_call_in(),
-        "assets":       list(sv_new.get_asset_snapshots().keys()),
+        "assets":       list(snaps.keys()),
+        "snapshots":    snaps,
     })
 
 @app.route('/supervisor')
