@@ -5910,7 +5910,10 @@ class OvertopBassanoV15Production:
                     # Conferme: predizione indicava direzione giusta?
                     conferme = 0
                     totale = 0
-                    _sig_threshold = max(0.05, (_ph[0] * 0.0008)) if _ph else 0.10
+                    # Soglia = 10% del delta medio della predizione
+                    # Se _delta_fuoco=0 (Veritas non ancora pronto) → soglia basata su movimento tick
+                    _pred_range = max(abs(preds[i] - preds[i-1]) for i in range(1, len(preds))) if len(preds) > 1 else 0
+                    _sig_threshold = max(_pred_range * 0.10, _ph[0] * 0.00005) if _ph and _pred_range > 0 else max(0.05, _ph[0] * 0.00005) if _ph else 0.05
                     for i in range(1, len(preds)):
                         dir_pred   = preds[i] - preds[i-1]
                         dir_reale  = _ph[i]   - _ph[i-1]
