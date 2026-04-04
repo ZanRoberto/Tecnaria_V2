@@ -231,6 +231,13 @@ def trading_log():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/heartbeat')
+def heartbeat_get():
+    """Alias GET per /heartbeat — usato dal supervisor cross-asset."""
+    with heartbeat_lock:
+        hb = dict(heartbeat_data)
+    return jsonify(hb)
+
 @app.route('/trading/heartbeat', methods=['POST'])
 def trading_heartbeat():
     """Compatibilità: accetta heartbeat HTTP se qualcuno lo invia ancora."""
