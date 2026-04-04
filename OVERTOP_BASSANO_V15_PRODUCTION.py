@@ -5867,7 +5867,6 @@ class OvertopBassanoV15Production:
 
                 # Metriche predizione vs mercato reale
                 if len(_ph) >= 10 and len(_ch) >= 10:
-                    # Predizione = prezzo + (carica - 0.5) * 150
                     # Predizione dai delta reali del Veritas — non fattore inventato
                     # Usa il delta medio misurato per ogni livello di carica
                     _vt_stats = self.veritas._stats if hasattr(self.veritas, '_stats') else {}
@@ -5886,6 +5885,13 @@ class OvertopBassanoV15Production:
                                 _delta_carica += sum(deltas) / len(deltas)
                     if _n_fuoco > 0:
                         _delta_fuoco /= _n_fuoco
+                    # Fallback se Veritas non ha ancora dati sufficienti
+                    if _delta_fuoco == 0 and _ph:
+                        _vt_closed = self.veritas._closed[-200:] if self.veritas._closed else []
+                        _fuoco_d = [s['delta_60'] for s in _vt_closed if s.get('oi_carica',0)>=0.65 and 'delta_60' in s]
+                        _carica_d = [s['delta_60'] for s in _vt_closed if 0.40<=s.get('oi_carica',0)<0.65 and 'delta_60' in s]
+                        if len(_fuoco_d) >= 3: _delta_fuoco = sum(_fuoco_d) / len(_fuoco_d)
+                        if len(_carica_d) >= 3: _delta_carica = sum(_carica_d) / len(_carica_d)
                     # Predizione: prezzo + delta atteso in base alla carica
                     preds = []
                     for i in range(min(len(_ph), len(_ch))):
@@ -7516,7 +7522,7 @@ class OvertopBassanoV15Production:
                         "rsi":    round(self.campo._rsi_score()*10, 1),
                         "macd":   round(self.campo._macd_score()*10, 1),
                         "regime": self._regime_current,
-                        "warmup_rsi": len(self.campo._rsi_history) if hasattr(self.campo, '_rsi_history') else 0,
+                        "warmup_rsi": len(self.campo._prices_ta),
                         "warmup_needed": 35,
                     },
                     "oi_stato":           self._oi_stato,
