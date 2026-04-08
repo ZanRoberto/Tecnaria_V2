@@ -527,7 +527,14 @@ class IntelligenzaAutonoma:
         """Cuore del motore. Osserva, misura, genera. Ritorna le capsule create."""
         nuove = []
         trades = list(self._trade_buffer)
+
+        # -- LIVELLO 2 da Signal Tracker — non aspetta trade reali --------
+        # Il Signal Tracker ha centinaia di osservazioni — usale subito
+        nuove += self._analisi_l2_signal_tracker()
+
         if len(trades) < self.MIN_SAMPLES_L3:
+            if nuove:
+                self._persisti(nuove)
             return nuove
 
         # -- LIVELLO 2: pattern statistici ---------------------------------
@@ -545,6 +552,77 @@ class IntelligenzaAutonoma:
 
         if nuove:
             self._persisti(nuove)
+        return nuove
+
+    def _analisi_l2_signal_tracker(self) -> list:
+        """
+        Genera capsule direttamente dal Signal Tracker.
+        Non aspetta trade reali — usa le osservazioni di mercato accumulate.
+        MIN 100 segnali chiusi per contesto.
+        """
+        nuove = []
+        if not hasattr(self, '_signal_tracker_ref') or not self._signal_tracker_ref:
+            return nuove
+
+        stats = self._signal_tracker_ref._stats
+        for context, s in stats.items():
+            n = s.get('n', 0)
+            if n < 100:
+                continue
+
+            hit = s.get('hit_60s', 0.5)
+            pnl = s.get('pnl_sim_avg', 0)
+
+            # Parsing context: "RANGING|LONG|DEBOLE_<58"
+            parts = context.split('|')
+            if len(parts) != 3:
+                continue
+            regime, direction, score_band = parts
+
+            cap_id = f"L2_ST_{context.replace('|','_').replace('<','lt').replace('>','gt')}"
+
+            # OPPORTUNITA: hit > 55% E pnl positivo → boost entry
+            if hit >= 0.55 and pnl > 0.05 and n >= 200:
+                if not any(c.get('id') == cap_id for c in self._auto_capsules):
+                    nuove.append({
+                        'id': cap_id,
+                        'livello': 'L2',
+                        'tipo': 'BOOST_ST',
+                        'descrizione': f"L2_ST OPP: {context} hit={hit:.0%} pnl={pnl:+.3f} n={n}",
+                        'trigger': [
+                            {'param': 'regime',    'op': '==', 'value': regime},
+                            {'param': 'direction', 'op': '==', 'value': direction},
+                        ],
+                        'azione': {'type': 'modifica_soglia', 'params': {'delta': -3}},
+                        'priority': 5,
+                        'enabled': True,
+                        'vita': 3600,
+                        'samples': n,
+                        'wr': hit,
+                        'pnl_avg': pnl,
+                    })
+
+            # TOSSICO: hit < 40% E pnl negativo → blocca
+            elif hit < 0.40 and pnl < -0.05 and n >= 100:
+                if not any(c.get('id') == cap_id for c in self._auto_capsules):
+                    nuove.append({
+                        'id': cap_id,
+                        'livello': 'L2',
+                        'tipo': 'BLOCCA_ST',
+                        'descrizione': f"L2_ST TOSSICO: {context} hit={hit:.0%} pnl={pnl:+.3f} n={n}",
+                        'trigger': [
+                            {'param': 'regime',    'op': '==', 'value': regime},
+                            {'param': 'direction', 'op': '==', 'value': direction},
+                        ],
+                        'azione': {'type': 'blocca_entry', 'params': {'reason': f'ST_TOSSICO_{context}'}},
+                        'priority': 8,
+                        'enabled': True,
+                        'vita': 7200,
+                        'samples': n,
+                        'wr': hit,
+                        'pnl_avg': pnl,
+                    })
+
         return nuove
 
     def _analisi_auto_correttive(self) -> list:
@@ -4464,6 +4542,8 @@ class OvertopBassanoV15Production:
             self.capsule_runtime = CapsuleRuntime(capsule_file="capsule_attive.json")
             self.config_reloader = ConfigHotReloader(capsule_path="capsule_attive.json")
             self.realtime_engine = IntelligenzaAutonoma(capsule_file="capsule_attive.json", db_path=DB_PATH)
+            # Collega Signal Tracker all'IA — genera capsule L2 senza aspettare trade reali
+            self.realtime_engine._signal_tracker_ref = self.signal_tracker
             log.warning("[CM] ⚠️ Fallback ai sistemi originali")
         # -----------------------------------------------------------------
 
@@ -5633,11 +5713,29 @@ class OvertopBassanoV15Production:
             campo._direction_bearish_streak = 0
             # Non flippa - resta LONG
         
-        # In NON-RANGING: flip normale LONG → SHORT
-        elif campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
-            campo._direction = "SHORT"
+        # RSI OVERRIDE: ipervenduto/ipercomprato sovrasta tutto
+        # RSI < 30 = mercato caduto troppo → LONG obbligatorio
+        # RSI > 75 = mercato salito troppo → SHORT permesso solo se già SHORT
+        _rsi_now = campo._last_rsi if hasattr(campo, '_last_rsi') else 50.0
+        if _rsi_now < 30 and campo._direction == "SHORT" and cooldown_ok:
+            campo._direction = "LONG"
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
+            self._log_m2("🔄", f"RSI OVERRIDE → LONG (RSI={_rsi_now:.0f} ipervenduto)")
+        elif _rsi_now < 30 and campo._direction == "LONG":
+            # Già LONG e ipervenduto — blocca qualsiasi flip a SHORT
+            campo._direction_bearish_streak = 0
+
+        # In NON-RANGING: flip normale LONG → SHORT
+        elif campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
+            # Non flippare SHORT se RSI ipervenduto
+            if _rsi_now < 35:
+                self._log_m2("🔇", f"SHORT BLOCCATO da RSI={_rsi_now:.0f} ipervenduto")
+                campo._direction_bearish_streak = 0
+            else:
+                campo._direction = "SHORT"
+                campo._direction_last_change = now
+                campo._direction_bearish_streak = 0
         # SHORT → LONG: energia bearish scesa sotto 2 + cooldown
         elif campo._direction == "SHORT" and bearish_energy < 2 and cooldown_ok:
             campo._direction = "LONG"
@@ -6186,6 +6284,19 @@ class OvertopBassanoV15Production:
             matrimonio_name = matrimonio["name"]
             fantasma_info  = self.oracolo.is_fantasma(momentum, volatility, trend, _dir)
 
+            _st_gate_entry = False  # ST GATE disabilitato — RANGING non profittevole
+
+            # VETO ORACOLO REALE: se abbiamo dati reali con WR < 35% — blocca sempre
+            # L'Oracolo ha evidenza diretta — non ignorarla
+            _fp_mem = self.oracolo._memory.get(f"{_dir}|{momentum}|{volatility}|{trend}", {})
+            _fp_real = _fp_mem.get('real_samples', 0)
+            _fp_wr = fingerprint_wr
+            if _fp_real >= 3 and _fp_wr < 0.35:
+                self._record_phantom(price, f"ORACOLO_REALE_VETO_WR={_fp_wr:.0%}_real={_fp_real}",
+                    seed['score'], momentum, volatility, trend)
+                self._log_m2("🚫", f"ORACOLO VETO — {_dir}|{momentum}|{volatility}|{trend} WR={_fp_wr:.0%} real={_fp_real} — dati reali dicono NO")
+                return
+
             result = self.campo.evaluate(
                 seed_score=seed['score'],
                 fingerprint_wr=fingerprint_wr,
@@ -6199,7 +6310,6 @@ class OvertopBassanoV15Production:
                 loss_consecutivi=self._m2_loss_consecutivi(),
                 soglia_boost=self._get_ia_soglia_boost(momentum, volatility, trend),
             )
-
             if result['veto']:
                 veto = result['veto']
                 # TOSSICO e DIVORZIO sono assoluti — FUOCO non li bypassa mai
