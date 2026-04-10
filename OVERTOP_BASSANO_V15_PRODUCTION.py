@@ -2958,7 +2958,7 @@ class RegimeDetector:
         """
         Ritorna (regime: str, confidence: float, dettaglio: dict)
         """
-        if len(self.prices) < 100:
+        if len(self.prices) < 50:
             return 'RANGING', 0.0, {}
 
         prices  = list(self.prices)
@@ -3446,9 +3446,9 @@ class CampoGravitazionale:
         self._seed_history = deque(maxlen=10)     # ultimi 10 seed per derivata
         self._volumes_short = deque(maxlen=50)    # ultimi 50 volumi per accelerazione
         # -- DRIFT DETECTOR ------------------------------------------------
-        self._prices_long = deque(maxlen=200)     # ultimi 200 prezzi per drift
+        self._prices_long = deque(maxlen=100)     # ultimi 100 prezzi per drift
         # -- RSI + MACD CONSIGLIERI ----------------------------------------
-        self._prices_ta = deque(maxlen=200)       # buffer prezzi CAMPIONATI per indicatori tecnici
+        self._prices_ta = deque(maxlen=50)        # buffer prezzi CAMPIONATI per indicatori tecnici
         self._ta_tick_counter = 0                  # conta tick per campionamento
         self._ta_sample_rate = 50                  # campiona ogni 50 tick (non ogni tick!)
         self._rsi_period = 14                     # RSI standard 14 periodi
@@ -3602,7 +3602,7 @@ class CampoGravitazionale:
         warmup_checks = []
         if self._tick_count < 200:
             warmup_checks.append(f"tick={self._tick_count}/200")
-        if len(self._prices_long) < 100:
+        if len(self._prices_long) < 50:
             warmup_checks.append(f"drift={len(self._prices_long)}/100")
         if len(self._prices_ta) < 35:
             warmup_checks.append(f"RSI_MACD={len(self._prices_ta)}/35")
@@ -3950,7 +3950,7 @@ class CampoGravitazionale:
         
         TRENDING: il drift è un segnale reale. Fattore pieno.
         """
-        if len(self._prices_long) < 100:
+        if len(self._prices_long) < 50:
             return 1.0, ""
 
         prices = list(self._prices_long)
