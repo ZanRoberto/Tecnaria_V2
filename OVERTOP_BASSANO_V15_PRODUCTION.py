@@ -2914,7 +2914,7 @@ class RegimeDetector:
       EXPLOSIVE      - breakout improvviso, volume spike + range expansion
     """
 
-    WINDOW = 500   # tick per valutare il regime
+    WINDOW = 200   # tick per valutare il regime — finestra più reattiva
 
     # Moltiplicatori per ogni regime - applicati ai parametri del calibratore
     REGIME_PARAMS = {
@@ -2999,15 +2999,15 @@ class RegimeDetector:
             regime     = 'EXPLOSIVE'
             confidence = min(1.0, vol_accel / 3.0)
 
-        elif trend_pct > 0.5 and dir_ratio > 0.55:
-            # Trend rialzista strutturale
+        elif trend_pct > 0.3 and dir_ratio > 0.52:
+            # Trend rialzista strutturale — soglia abbassata per rilevare prima
             regime     = 'TRENDING_BULL'
-            confidence = min(1.0, (dir_ratio - 0.5) * 4)
+            confidence = min(1.0, (dir_ratio - 0.50) * 5)
 
-        elif trend_pct < -0.5 and dir_ratio < 0.45:
+        elif trend_pct < -0.3 and dir_ratio < 0.48:
             # Trend ribassista strutturale
             regime     = 'TRENDING_BEAR'
-            confidence = min(1.0, (0.5 - dir_ratio) * 4)
+            confidence = min(1.0, (0.50 - dir_ratio) * 5)
 
         else:
             # Laterale
@@ -3688,6 +3688,7 @@ class CampoGravitazionale:
             loss_f = 1.0
 
         soglia_raw = self.SOGLIA_BASE * context_ratio * regime_f * vol_f * history_f * prebreak_f * drift_f * loss_f
+
         SOGLIA_FLOOR_ASSOLUTO = 48
         soglia_min_ctx = max(SOGLIA_FLOOR_ASSOLUTO, self.SOGLIA_MIN * context_ratio)
         
@@ -4802,6 +4803,31 @@ class OvertopBassanoV15Production:
             self._regime_conf       = conf
             self._last_regime_check = now
 
+            # ── AUTOCORRETTORE REGIME ─────────────────────────────────────
+            # Se il rilevatore dice RANGING ma il prezzo si muove davvero
+            # → corregge il regime in tempo reale senza aspettare nessuno
+            if regime == 'RANGING' and len(self.regime_detector.prices) >= 50:
+                _prezzi = list(self.regime_detector.prices)
+                _p_start = _prezzi[0]
+                _p_end   = _prezzi[-1]
+                _move_pct = (_p_end - _p_start) / _p_start * 100
+                _changes  = [_prezzi[i+1] - _prezzi[i] for i in range(len(_prezzi)-1)]
+                _up       = sum(1 for c in _changes if c > 0)
+                _dir      = _up / len(_changes)
+
+                # Prezzo salito > 0.4% con dir_ratio > 0.54 → TRENDING_BULL reale
+                if _move_pct > 0.4 and _dir > 0.54:
+                    self._regime_current = 'TRENDING_BULL'
+                    self._regime_conf    = min(1.0, _move_pct / 1.0)
+                    self._log(f"🔄 AUTOCORRETTORE: RANGING→TRENDING_BULL "
+                             f"(move={_move_pct:+.2f}% dir={_dir:.2f})")
+                # Prezzo sceso > 0.4% con dir_ratio < 0.46 → TRENDING_BEAR reale
+                elif _move_pct < -0.4 and _dir < 0.46:
+                    self._regime_current = 'TRENDING_BEAR'
+                    self._regime_conf    = min(1.0, abs(_move_pct) / 1.0)
+                    self._log(f"🔄 AUTOCORRETTORE: RANGING→TRENDING_BEAR "
+                             f"(move={_move_pct:+.2f}% dir={_dir:.2f})")
+
         # Persistenza ogni 5 minuti
         if now - self.last_persist > 300:
             self._persist.save(self.capital, self.total_trades)
@@ -5660,6 +5686,27 @@ class OvertopBassanoV15Production:
             campo._direction_bearish_streak = 0
             self._log_m2("🔄", f"FLIP → SHORT in EXPLOSIVE (bearish_energy={bearish_energy} drift={drift:+.3f}%)")
 
+        # FLIP LONG in EXPLOSIVE — speculare al SHORT
+        # OI LONG FUOCO >= 0.80 + momentum positivo → flippa a LONG
+        # LONG|FORTE|BASSA|UP WR=78%, LONG|FORTE|MEDIA|UP WR=68%
+        _oi_long_fuoco = (getattr(self, '_oi_stato', '') == "FUOCO" and
+                          getattr(self, '_oi_carica', 0) >= 0.65)
+        _bullish_energy = 0
+        if mom_fast > 0.5:  _bullish_energy += 1
+        if mom_fast > 1.0:  _bullish_energy += 1
+        if macd_hist > 2.0: _bullish_energy += 1
+        if drift > 0.08:    _bullish_energy += 1
+
+        if (self._regime_current == "EXPLOSIVE" and
+                campo._direction == "SHORT" and
+                _oi_long_fuoco and
+                _bullish_energy >= 2 and
+                cooldown_ok):
+            campo._direction = "LONG"
+            campo._direction_last_change = now
+            campo._direction_bearish_streak = 0
+            self._log_m2("🔄", f"FLIP → LONG in EXPLOSIVE (bullish_energy={_bullish_energy} drift={drift:+.3f}%)")
+
         # -- RANGING GATE: in laterale NON flippare a SHORT --------------
         # ECCEZIONE VERITAS: se il Veritas vede movimento ribassista reale
         # con delta_60s < -20 su almeno 5 segnali → lo SHORT è legittimo
@@ -5858,16 +5905,30 @@ class OvertopBassanoV15Production:
         # Stato macchina LONG
         vecchio_stato = self._oi_stato
         if midzone:
-            self._oi_stato      = "ATTESA"
+            self._oi_stato       = "ATTESA"
             self._oi_tick_pronto = 0
+            self._oi_fuoco_ts    = 0
         elif self._oi_carica >= 0.65:
             self._oi_tick_pronto += 1
-            self._oi_stato = "FUOCO" if self._oi_tick_pronto >= 2 else "CARICA"
+            if self._oi_tick_pronto >= 2:
+                self._oi_stato   = "FUOCO"
+                if not getattr(self, '_oi_fuoco_ts', 0):
+                    self._oi_fuoco_ts = time.time()
+            else:
+                self._oi_stato   = "CARICA"
         elif self._oi_carica >= 0.40:
-            self._oi_stato      = "CARICA"
-            self._oi_tick_pronto = 0
+            # FUOCO sticky: se era FUOCO da meno di 30s e carica ancora > 0.40 → mantieni FUOCO
+            _fuoco_age = time.time() - getattr(self, '_oi_fuoco_ts', 0)
+            if getattr(self, '_oi_stato', '') == "FUOCO" and _fuoco_age < 30:
+                pass  # mantieni FUOCO — finestra di 30s
+            else:
+                self._oi_stato       = "CARICA"
+                self._oi_tick_pronto = 0
+                self._oi_fuoco_ts    = 0
         else:
-            self._oi_stato      = "ATTESA"
+            self._oi_stato       = "ATTESA"
+            self._oi_tick_pronto = 0
+            self._oi_fuoco_ts    = 0
             self._oi_tick_pronto = 0
 
         # ── CARICA SHORT speculare ────────────────────────────────────
