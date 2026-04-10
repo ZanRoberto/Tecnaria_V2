@@ -3479,6 +3479,146 @@ def supervisor_page():
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HEALTH MONITOR — Dashboard verde/rosso sistema
+# ═══════════════════════════════════════════════════════════════════════════
+
+HEALTH_HTML = """<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OVERTOP — System Health</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Bebas+Neue&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: 'Space Mono', monospace; background: #030810; color: #8a9bb0; min-height:100vh; padding:20px 16px; }
+.title { font-family:'Bebas Neue',sans-serif; font-size:13px; letter-spacing:5px; color:#1e3a5f; margin-bottom:20px; text-align:center; }
+.score-wrap { text-align:center; margin-bottom:24px; }
+.score-label { font-size:9px; letter-spacing:3px; color:#1e3a5f; margin-bottom:6px; }
+.score-num { font-family:'Bebas Neue',sans-serif; font-size:72px; line-height:1; transition:color .5s; }
+.score-num.good { color:#00c97a; text-shadow:0 0 30px rgba(0,201,122,0.3); }
+.score-num.warn { color:#f0b429; text-shadow:0 0 30px rgba(240,180,41,0.3); }
+.score-num.bad  { color:#ff3355; text-shadow:0 0 30px rgba(255,51,85,0.3); }
+.score-sub { font-size:10px; color:#1e3a5f; margin-top:4px; letter-spacing:1px; }
+.bar-wrap { display:flex; gap:3px; margin-bottom:24px; height:3px; }
+.bar-seg { flex:1; border-radius:2px; }
+.counters { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:24px; }
+.counter-box { background:#050d1a; border-radius:8px; padding:12px 14px; border:0.5px solid #0a1828; text-align:center; }
+.counter-n { font-family:'Bebas Neue',sans-serif; font-size:36px; line-height:1; }
+.counter-n.green { color:#00c97a; }
+.counter-n.red   { color:#ff3355; }
+.counter-label { font-size:9px; letter-spacing:2px; margin-top:4px; }
+.section-title { font-size:9px; letter-spacing:3px; color:#1e3a5f; margin-bottom:10px; padding-left:2px; }
+.checks { margin-bottom:20px; }
+.check-item { display:flex; align-items:flex-start; gap:10px; padding:10px 12px; margin-bottom:5px; border-radius:6px; border-left:2px solid transparent; animation:fadeIn .4s ease both; }
+@keyframes fadeIn { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:translateX(0)} }
+.check-item.verde { background:rgba(0,201,122,0.05); border-left-color:#00c97a; }
+.check-item.rosso { background:rgba(255,51,85,0.05); border-left-color:#ff3355; }
+.check-dot { width:6px; height:6px; border-radius:50%; margin-top:5px; flex-shrink:0; }
+.verde .check-dot { background:#00c97a; }
+.rosso .check-dot { background:#ff3355; }
+.check-text { font-size:11px; line-height:1.6; flex:1; }
+.verde .check-text { color:#4dd9a0; }
+.rosso .check-text { color:#ff6680; }
+.check-score { font-family:'Bebas Neue',sans-serif; font-size:16px; flex-shrink:0; }
+.verde .check-score { color:rgba(0,201,122,0.4); }
+.rosso .check-score { color:rgba(255,51,85,0.4); }
+.patch-wrap { background:#050d1a; border-radius:8px; padding:14px; border:0.5px solid #0a1828; margin-bottom:20px; }
+.patch-title { font-size:9px; letter-spacing:3px; color:#1e3a5f; margin-bottom:10px; }
+.patch-item { display:flex; gap:8px; align-items:baseline; padding:4px 0; border-bottom:0.5px solid #0a1828; font-size:10px; }
+.patch-item:last-child { border-bottom:none; }
+.patch-ts { color:#1e3a5f; flex-shrink:0; }
+.patch-text { color:#3d5a7a; flex:1; }
+.patch-result { color:#00c97a; flex-shrink:0; font-size:9px; }
+.goal-wrap { text-align:center; padding:14px; border:0.5px solid #0a1828; border-radius:8px; font-size:10px; color:#1e3a5f; letter-spacing:1px; }
+.goal-wrap span { color:#00c97a; }
+.refresh-info { text-align:center; font-size:9px; color:#1e3a5f; margin-top:12px; }
+</style>
+</head>
+<body>
+<div class="title">OVERTOP — SYSTEM HEALTH MONITOR</div>
+<div class="score-wrap">
+  <div class="score-label">HEALTH SCORE — OBIETTIVO ZERO</div>
+  <div class="score-num" id="scoreNum">...</div>
+  <div class="score-sub" id="scoreSub">caricamento...</div>
+</div>
+<div class="bar-wrap" id="barWrap"></div>
+<div class="counters">
+  <div class="counter-box"><div class="counter-n green" id="countGreen">—</div><div class="counter-label" style="color:#00c97a">CORRETTI</div></div>
+  <div class="counter-box"><div class="counter-n red"   id="countRed">—</div><div class="counter-label" style="color:#ff3355">DA FIXARE</div></div>
+</div>
+<div class="checks" id="greenChecks"><div class="section-title">✓ FUNZIONA CORRETTAMENTE</div></div>
+<div class="checks" id="redChecks"><div class="section-title">✗ PROBLEMI RILEVATI</div></div>
+<div class="patch-wrap">
+  <div class="patch-title">PATCH LOG — PROBLEMI RISOLTI</div>
+  <div id="patchLog">
+    <div class="patch-item"><span class="patch-ts">10/04 12:31</span><span class="patch-text">FLIP LONG in EXPLOSIVE mancante — logica asimmetrica</span><span class="patch-result">✓ VERDE</span></div>
+    <div class="patch-item"><span class="patch-ts">10/04 11:45</span><span class="patch-text">Warmup RSI/drift/regime disallineati — sistema cieco 30min</span><span class="patch-result">✓ VERDE</span></div>
+    <div class="patch-item"><span class="patch-ts">10/04 11:20</span><span class="patch-text">real_samples=0 — EXPLOSIVE_GATE bloccato per sempre</span><span class="patch-result">✓ VERDE</span></div>
+    <div class="patch-item"><span class="patch-ts">09/04 23:01</span><span class="patch-text">RSI override mancante — SHORT in ipervenduto RSI&lt;30</span><span class="patch-result">✓ VERDE</span></div>
+    <div class="patch-item"><span class="patch-ts">09/04 14:22</span><span class="patch-text">Regime WINDOW 500→200, soglia TRENDING_BULL 0.55→0.52</span><span class="patch-result">✓ VERDE</span></div>
+    <div class="patch-item"><span class="patch-ts">08/04 13:00</span><span class="patch-text">MIN_HOLD 0→25s — uscite premature dopo 15 secondi</span><span class="patch-result">✓ VERDE</span></div>
+  </div>
+</div>
+<div class="goal-wrap">OBIETTIVO: score <span>ZERO</span> = motore perfetto con qualsiasi mercato</div>
+<div class="refresh-info">aggiornamento automatico ogni 15 secondi</div>
+<script>
+const CHECKS = [
+  {color:'verde', eval:h=>h.m2_wr===1.0&&h.m2_trades>0,          text:h=>`WR ${(h.m2_wr*100).toFixed(0)}% sui ${h.m2_trades} trade eseguiti`},
+  {color:'verde', eval:h=>(h.phantom?.pnl_saved||0)>(h.phantom?.pnl_missed||0)*3, text:h=>`Protezione: salvati $${Math.round(h.phantom?.pnl_saved||0)} vs mancati $${Math.round(h.phantom?.pnl_missed||0)}`},
+  {color:'verde', eval:h=>(h.m2_loss_streak||0)===0,              text:()=>'Zero loss streak attiva'},
+  {color:'verde', eval:h=>(h.m2_score_components?.macd||0)>=8,    text:h=>`MACD score=${h.m2_score_components?.macd}/10 — momentum confermato`},
+  {color:'verde', eval:h=>Math.max(h.oi_carica||0,h.oi_carica_short||0)>0.80, text:h=>`OI FUOCO carica=${Math.max(h.oi_carica||0,h.oi_carica_short||0).toFixed(2)}`},
+  {color:'verde', eval:h=>(h.m2_score_components?.warmup_rsi||0)>=50, text:()=>'Warmup RSI completo — sistema operativo al 100%'},
+  {color:'rosso', eval:h=>(h.m2_score_components?.warmup_rsi||50)<50, text:h=>`WARMUP RSI incompleto: ${h.m2_score_components?.warmup_rsi||0}/50 — perdo ${(10-(h.m2_score_components?.rsi||0)).toFixed(0)} punti score`},
+  {color:'rosso', eval:h=>(h.m2_score_components?.fp||0)===0,     text:()=>'FINGERPRINT score=0 — Oracolo non riconosce il contesto'},
+  {color:'rosso', eval:h=>(h.telemetry?.B_direction?.flips_per_hour||0)>8, text:h=>`Direzione instabile: ${(h.telemetry?.B_direction?.flips_per_hour||0).toFixed(0)} flip/ora`},
+  {color:'rosso', eval:h=>h.veritas?.rows?.some(r=>r.verdetto==='SBAGLIATO'&&r.n>500&&r.pnl_avg<-1.5), text:h=>{const r=h.veritas?.rows?.find(r=>r.verdetto==='SBAGLIATO'&&r.n>500&&r.pnl_avg<-1.5);return r?`Veritas: ${r.chiave} sbaglia su ${r.n} casi pnl=${r.pnl_avg?.toFixed(2)}`:''}},
+  {color:'rosso', eval:h=>h.regime==='RANGING',                   text:()=>'Regime RANGING — mercato senza edge scalping'},
+  {color:'rosso', eval:h=>h.signal_tracker?.top?.length>0&&h.signal_tracker.top.every(s=>s.pnl_sim_avg<0), text:h=>`Signal Tracker: tutti ${h.signal_tracker?.top?.length} contesti pnl negativo`},
+];
+
+function render(hb) {
+  const active = CHECKS.map(c=>({...c,active:c.eval(hb),txt:c.text(hb)}));
+  const greens = active.filter(c=>c.color==='verde'&&c.active);
+  const reds   = active.filter(c=>c.color==='rosso'&&c.active);
+  const score  = reds.length - greens.length;
+  const sEl = document.getElementById('scoreNum');
+  sEl.textContent = (score>0?'+':'')+score;
+  sEl.className = 'score-num '+(score<=0?'good':score<=3?'warn':'bad');
+  document.getElementById('scoreSub').textContent = score<=0?'Sistema sano — tutto verde':score<=2?score+' problema'+(score>1?'i':'')+' da correggere':score+' problemi critici';
+  document.getElementById('countGreen').textContent = greens.length;
+  document.getElementById('countRed').textContent   = reds.length;
+  const bar=document.getElementById('barWrap'); bar.innerHTML='';
+  [...greens,...reds].forEach((c,i)=>{const s=document.createElement('div');s.className='bar-seg';s.style.background=i<greens.length?'#00c97a':'#ff3355';bar.appendChild(s);});
+  const gc=document.getElementById('greenChecks'); gc.innerHTML='<div class="section-title">✓ FUNZIONA CORRETTAMENTE</div>';
+  if(!greens.length) gc.innerHTML+='<div style="font-size:10px;color:#1e3a5f;padding:8px 12px">Nessun elemento verde al momento</div>';
+  greens.forEach((c,i)=>gc.innerHTML+=`<div class="check-item verde" style="animation-delay:${i*.08}s"><div class="check-dot"></div><div class="check-text">${c.txt}</div><div class="check-score">+1</div></div>`);
+  const rc=document.getElementById('redChecks'); rc.innerHTML='<div class="section-title">✗ PROBLEMI RILEVATI</div>';
+  if(!reds.length) rc.innerHTML+='<div style="font-size:10px;color:#00c97a;padding:8px 12px">✓ Nessun problema rilevato</div>';
+  reds.forEach((c,i)=>rc.innerHTML+=`<div class="check-item rosso" style="animation-delay:${i*.08}s"><div class="check-dot"></div><div class="check-text">${c.txt}</div><div class="check-score">−1</div></div>`);
+}
+
+async function load() {
+  try {
+    const r = await fetch('/trading/status');
+    const d = await r.json();
+    render(d.heartbeat || d);
+  } catch(e) { document.getElementById('scoreSub').textContent='Errore connessione'; }
+}
+
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>"""
+
+@app.route('/health')
+def health_monitor():
+    return render_template_string(HEALTH_HTML)
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     log(f"[MAIN] 🚀 MISSION CONTROL V6.0 + AI BRIDGE — porta {port}")
