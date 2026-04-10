@@ -6292,7 +6292,7 @@ class OvertopBassanoV15Production:
                             _motivo = f"ST hit={_st_hit_rate:.0%} n={_st_n}" if _st_bypass else f"Oracolo WR={_fp_wr_now:.0%} n={_fp_samples:.0f}"
                             self._log_m2("✅", f"CESPUGLIO bypass — {_motivo} su {momentum}|{volatility}|{trend} — entro")
                         else:
-                            if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                            if _fuoco_ok():
                                 self._log_m2("🔥", f"CESPUGLIO bypassed — FUOCO carica={self._oi_carica:.2f}")
                             else:
                                 self._log_m2("🚫", f"CESPUGLIO_AVVELENATO: {_loss_deboli} loss deboli RANGING "
@@ -6311,7 +6311,7 @@ class OvertopBassanoV15Production:
             _cap2_soglia = getattr(self, '_cap2_soglia_override', 0.30)
             _allow2, _reason2 = self.capsule2.riconosci(_conf_m2) if _conf_m2 >= _cap2_soglia else (True, "OK")
             if not _allow2:
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                if _fuoco_ok():
                     self._log_m2("🔥", f"CAP2 bypassed — FUOCO carica={self._oi_carica:.2f}")
                 else:
                     if len(self._phantoms_open) < 5:
@@ -6347,6 +6347,37 @@ class OvertopBassanoV15Production:
 
             _st_gate_entry = False  # ST GATE disabilitato — RANGING non profittevole
 
+            # FUOCO BYPASS — condizione unificata usata da tutti i gate
+            # Una sola definizione, tutti i gate la leggono
+            def _fuoco_ok():
+                return (self._oi_stato == "FUOCO" and
+                        self._oi_carica >= 0.65 and
+                        getattr(self, "_last_fingerprint_wr", 0) >= 0.55 and
+                        self._regime_current != "EXPLOSIVE")
+
+            # is_absolute: definito QUI una volta sola — usato da tutti i gate sotto
+            # TOSSICO e DIVORZIO sono assoluti — FUOCO non li bypassa mai
+            # Definito prima di campo.evaluate() perché CESPUGLIO lo usa già sopra
+            _veto_anticipato = None
+            _combo = (momentum, volatility, trend)
+            _bot = getattr(self.campo, '_bot_ref', None)
+            _cm  = getattr(_bot, 'capsule_manager', None) if _bot else None
+            if _cm is not None:
+                _veto_ctx_pre = {
+                    'momentum': momentum, 'volatility': volatility,
+                    'trend': trend, 'direction': self.campo._direction,
+                    'regime': self._regime_current,
+                }
+                _cm_pre = _cm.valuta(_veto_ctx_pre)
+                if _cm_pre.get('blocca'):
+                    _veto_anticipato = _cm_pre.get('reason', 'CM_TOSSICO')
+            else:
+                _veti = self.campo.VETI_SHORT if self.campo._direction == "SHORT" else self.campo.VETI_LONG
+                if _combo in _veti:
+                    _veto_anticipato = f"TOSSICO_{self.campo._direction}_{momentum}_{volatility}_{trend}"
+            is_absolute = (_veto_anticipato is not None or
+                           self.campo._direction in self.memoria.divorzio)
+
             # VETO ORACOLO REALE: se abbiamo dati reali con WR < 35% — blocca sempre
             # L'Oracolo ha evidenza diretta — non ignorarla
             _fp_mem = self.oracolo._memory.get(f"{_dir}|{momentum}|{volatility}|{trend}", {})
@@ -6378,7 +6409,7 @@ class OvertopBassanoV15Production:
                                veto.startswith("CM_TOSSICO") or
                                veto.startswith("STATIC_TOSSICO") or
                                veto.startswith("DIVORZIO"))
-                if not is_absolute and self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                if not is_absolute and _fuoco_ok():
                     self._log_m2("🔥", f"VETO bypassed — FUOCO carica={self._oi_carica:.2f} veto={veto}")
                 else:
                     if not veto.startswith("WARMUP") and len(self._phantoms_open) < 5:
@@ -6431,7 +6462,7 @@ class OvertopBassanoV15Production:
                         # Midzone: prezzo nel 40-60% del range → size ridotta, non blocco
                         if 0.40 <= range_pos <= 0.60:
                             # Se OracoloInterno in FUOCO con carica alta → entra con size 0.3x
-                            if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                            if _fuoco_ok():
                                 self._log_m2("⚠️", f"MIDZONE pos={range_pos:.2f} — FUOCO attivo, entro size 0.3x")
                                 result['size'] = min(result.get('size', 1.0), 0.3)
                             else:
@@ -6457,7 +6488,7 @@ class OvertopBassanoV15Production:
 
             if result['score'] < result['soglia']:
                 # FUOCO BYPASS anche sul HARD GUARD
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                if _fuoco_ok():
                     self._log_m2("🔥", f"HARD GUARD bypassed — FUOCO carica={self._oi_carica:.2f} score={result['score']:.1f}")
                 else:
                     self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
@@ -6474,7 +6505,7 @@ class OvertopBassanoV15Production:
                 rsi=self.campo._last_rsi,
             )
             if _pred_veto['confidence'] >= 0.3 and _pred_veto['verdict'] == 'BLOCCA':
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                if _fuoco_ok():
                     self._log_m2("🔥", f"PRED_VETO bypassed — FUOCO carica={self._oi_carica:.2f}")
                 else:
                     self._log_m2("🔮", f"PRED_VETO SC — hit={_pred_veto['hit_rate']:.0%} "
@@ -6639,7 +6670,7 @@ class OvertopBassanoV15Production:
 
             if _avg_pnl is not None and _n >= 100 and _avg_pnl <= -0.05:
                     # Bypass ECON_BLOCK se OracoloInterno in FUOCO con carica alta
-                    if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                    if _fuoco_ok():
                         self._log_m2("🔥", f"ECON_BLOCK bypassed — FUOCO carica={self._oi_carica:.2f}")
                     else:
                         self._log_m2("💸", f"ECON_BLOCK {_econ_key} avg_pnl={_avg_pnl:.3f} n={_n}")
@@ -6651,7 +6682,7 @@ class OvertopBassanoV15Production:
             elif (_avg_pnl is None or _avg_pnl < 0 or _n < 20 or
                   (_pnl_pos is not None and _pnl_pos < 0.55)):
                 # B: dati insufficienti o edge debole — PILOT (size cappata)
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                if _fuoco_ok():
                     self._log_m2("🔥", f"ECON_PILOT bypassed — FUOCO carica={self._oi_carica:.2f}")
                 elif _band == "DEBOLE_<58":
                     result['size'] = min(result['size'], 0.10)
@@ -6687,7 +6718,7 @@ class OvertopBassanoV15Production:
                     if range_size > 0:
                         position_in_range = (price - range_low) / range_size
                         if 0.40 <= position_in_range <= 0.60:
-                            if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                            if _fuoco_ok():
                                 self._log_m2("⚠️", f"RANGE_MIDZONE2 pos={position_in_range:.0%} — FUOCO, size 0.3x")
                                 result['size'] = min(result.get('size', 1.0), 0.3)
                             else:
@@ -6720,7 +6751,7 @@ class OvertopBassanoV15Production:
                 self._regime_current, self.campo._direction, _oc_rsi,
                 _oc_drift, _oc_rpos, momentum, self._m2_loss_streak)
             if oc_block:
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                if _fuoco_ok():
                     self._log_m2("🔥", f"OC_BLOCK bypassed — FUOCO carica={self._oi_carica:.2f}")
                 else:
                     if len(self._phantoms_open) < 5:
@@ -6732,7 +6763,7 @@ class OvertopBassanoV15Production:
                 self._regime_current, momentum, volatility, trend,
                 self.campo._direction, _oc_rsi, _oc_drift, _oc_rpos)
             if ctx['verdict'] == 'BLOCCA' and ctx['confidence'] > 0.4:
-                if self._oi_stato == "FUOCO" and self._oi_carica >= 0.65 and getattr(self, "_last_fingerprint_wr", 0) >= 0.55:
+                if _fuoco_ok():
                     self._log_m2("🔥", f"CTX_MATCH bypassed — FUOCO carica={self._oi_carica:.2f}")
                 else:
                     if len(self._phantoms_open) < 5:
@@ -7685,6 +7716,84 @@ class OvertopBassanoV15Production:
     # HEARTBEAT → app.py (Mission Control)
     # ========================================================================
 
+    def _build_diagnosis(self) -> dict:
+        """Catena causale completa — pronta per DeepSeek."""
+        sc        = getattr(self, 'm2_score_components', {})
+        score     = getattr(self, '_last_score', self.m2_last_score if hasattr(self,'m2_last_score') else 0)
+        soglia    = getattr(self, '_last_soglia', self.m2_last_soglia if hasattr(self,'m2_last_soglia') else 48)
+        regime    = self._regime_current
+        direction = self.campo._direction if hasattr(self.campo, '_direction') else '?'
+
+        warmup_rsi    = len(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else 0
+        fp_score      = sc.get('fp', 0)
+        rsi_score     = sc.get('rsi', 0)
+        seed_score    = sc.get('seed', 0)
+        macd_score    = sc.get('macd', 0)
+        gap           = round(soglia - score, 1) if score and soglia else None
+
+        blocco = None
+        motivo = None
+        azione = None
+
+        if warmup_rsi < 50:
+            blocco = 'WARMUP_RSI_INCOMPLETO'
+            motivo = (f"RSI buffer {warmup_rsi}/50 — contribuisce {rsi_score:.0f}/10 "
+                      f"invece di 10 — perdo {10-rsi_score:.0f} punti score")
+            azione = f"Attendere {50-warmup_rsi} campioni (~{max(1,(50-warmup_rsi)//10)} min)"
+        elif fp_score == 0 and gap and gap > 0:
+            blocco = 'FINGERPRINT_ZERO'
+            motivo = (f"FP=0 — fingerprint {direction} senza real_samples. "
+                      f"Score {score:.1f} vs soglia {soglia:.1f} gap={gap}")
+            azione = "real_samples=5 già iniettati — verificare se regime è EXPLOSIVE"
+        elif gap and gap > 0 and gap <= 8:
+            blocco = 'SCORE_VICINO_SOGLIA'
+            motivo = (f"Score {score:.1f} vs soglia {soglia:.1f} — gap={gap} punti. "
+                      f"seed={seed_score:.1f} fp={fp_score:.1f} rsi={rsi_score:.1f} macd={macd_score:.1f}")
+            azione = "In EXPLOSIVE il gap si chiude — attendere regime favorevole"
+        elif regime == 'RANGING':
+            blocco = 'RANGING_NO_EDGE'
+            motivo = f"RANGING — score {score:.1f} correttamente sotto soglia. Mercato senza direzionalità."
+            azione = "Attendere EXPLOSIVE o TRENDING_BULL"
+
+        # Veritas: chi sbaglia sistematicamente
+        veritas_err = None
+        if hasattr(self, 'veritas'):
+            for k, s in self.veritas._stats.items():
+                if s.get('verdetto') == 'SBAGLIATO' and s.get('n',0) > 200 and s.get('pnl_avg',0) < -1.5:
+                    veritas_err = {'chiave': k, 'n': s['n'],
+                                   'pnl_avg': round(s['pnl_avg'],2),
+                                   'diagnosi': f"SC sistematicamente sbagliato in {k}"}
+                    break
+
+        # Phantom: bilancio economico decisioni
+        phantom_summary = None
+        if hasattr(self, '_phantom_per_livello'):
+            missed  = sum(v.get('pnl_missed',0) for v in self._phantom_per_livello.values())
+            saved   = sum(v.get('pnl_saved',0)  for v in self._phantom_per_livello.values())
+            phantom_summary = {
+                'mancati':  round(missed,0),
+                'salvati':  round(saved,0),
+                'bilancio': round(saved-missed,0),
+                'alert':    'TROPPO DIFENSIVO' if missed > saved*0.25 else 'OK'
+            }
+
+        return {
+            'blocco':           blocco,
+            'motivo':           motivo,
+            'azione':           azione,
+            'score':            round(score,1),
+            'soglia':           round(soglia,1),
+            'gap':              gap,
+            'regime':           regime,
+            'direction':        direction,
+            'warmup_rsi':       f"{warmup_rsi}/50",
+            'warmup_pronto':    warmup_rsi >= 50,
+            'veritas_errore':   veritas_err,
+            'phantom':          phantom_summary,
+            'pronto_entry':     warmup_rsi >= 50 and (not gap or gap <= 0),
+        }
+
+
     def _update_heartbeat(self):
         if self.heartbeat_lock:
             self.heartbeat_lock.acquire()
@@ -7754,6 +7863,7 @@ class OvertopBassanoV15Production:
                     # -- SOGLIA DINAMICA MONITOR -----------------------
                     "m2_soglia_min":      self.campo.SOGLIA_MIN,
                     "m2_soglia_base":     self.campo.SOGLIA_BASE,
+                    "diagnosis":          self._build_diagnosis(),
                     # -- SHORT EVITATI IN RANGING ----------------------
                     "shadow_short_ranging": self._get_shadow_short_report(),
                     # -- DATI GRANULARI PER BRIDGE (B3) -------------
