@@ -825,6 +825,8 @@ canvas.spark { width:100%; height:40px; }
     <div class="hdr-right">
       <span><span class="status-dot" id="status-dot"></span><span id="status-txt" style="font-size:11px">OFFLINE</span></span>
       <span id="mode-badge" class="badge badge-paper">PAPER</span>
+      <a href="/supervisor" style="background:rgba(139,92,246,0.3); border:1px solid rgba(139,92,246,0.6); color:#a78bfa; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; letter-spacing:1px;">⚡ COMMAND CENTER</a>
+      <a href="/health" style="background:rgba(0,201,122,0.15); border:1px solid rgba(0,201,122,0.4); color:#00c97a; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; letter-spacing:1px;">🩺 HEALTH</a>
       <span style="font-size:10px; color:var(--dim)" id="last-seen">--</span>
     </div>
   </div>
