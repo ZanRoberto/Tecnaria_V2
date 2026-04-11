@@ -6295,7 +6295,7 @@ class OvertopBassanoV15Production:
                             _motivo = f"ST hit={_st_hit_rate:.0%} n={_st_n}" if _st_bypass else f"Oracolo WR={_fp_wr_now:.0%} n={_fp_samples:.0f}"
                             self._log_m2("✅", f"CESPUGLIO bypass — {_motivo} su {momentum}|{volatility}|{trend} — entro")
                         else:
-                            if _fuoco_ok():
+                            if (self._oi_stato == "FUOCO" and self._oi_carica >= 0.65):
                                 self._log_m2("🔥", f"CESPUGLIO bypassed — FUOCO carica={self._oi_carica:.2f}")
                             else:
                                 self._log_m2("🚫", f"CESPUGLIO_AVVELENATO: {_loss_deboli} loss deboli RANGING "
@@ -6314,7 +6314,7 @@ class OvertopBassanoV15Production:
             _cap2_soglia = getattr(self, '_cap2_soglia_override', 0.30)
             _allow2, _reason2 = self.capsule2.riconosci(_conf_m2) if _conf_m2 >= _cap2_soglia else (True, "OK")
             if not _allow2:
-                if _fuoco_ok():
+                if (self._oi_stato == "FUOCO" and self._oi_carica >= 0.65):
                     self._log_m2("🔥", f"CAP2 bypassed — FUOCO carica={self._oi_carica:.2f}")
                 else:
                     if len(self._phantoms_open) < 5:
