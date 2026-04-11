@@ -6290,7 +6290,7 @@ class OvertopBassanoV15Production:
                                     _st_hit_rate = sum(_sh)/len(_sh)
                                     _st_n = len(_sh)
                                     break
-                        _st_bypass = _st_hit_rate >= 0.60 and _st_n >= 10 and not is_absolute and not is_absolute
+                        _st_bypass = _st_hit_rate >= 0.60 and _st_n >= 10
                         if (_fp_wr_now >= 0.60 and _fp_samples >= 5) or _st_bypass:
                             _motivo = f"ST hit={_st_hit_rate:.0%} n={_st_n}" if _st_bypass else f"Oracolo WR={_fp_wr_now:.0%} n={_fp_samples:.0f}"
                             self._log_m2("✅", f"CESPUGLIO bypass — {_motivo} su {momentum}|{volatility}|{trend} — entro")
