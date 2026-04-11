@@ -6412,7 +6412,11 @@ class OvertopBassanoV15Production:
                                veto.startswith("CM_TOSSICO") or
                                veto.startswith("STATIC_TOSSICO") or
                                veto.startswith("DIVORZIO"))
-                if not is_absolute and _fuoco_ok():
+                # FUOCO con carica >= 0.85 bypassa anche STATIC_TOSSICO — energia reale
+                _fuoco_estremo = (self._oi_stato == "FUOCO" and self._oi_carica >= 0.85)
+                _bypassabile = (not is_absolute or
+                                (veto.startswith("STATIC_TOSSICO") and _fuoco_estremo))
+                if _bypassabile and _fuoco_ok():
                     self._log_m2("🔥", f"VETO bypassed — FUOCO carica={self._oi_carica:.2f} veto={veto}")
                 else:
                     if not veto.startswith("WARMUP") and len(self._phantoms_open) < 5:
@@ -7985,8 +7989,12 @@ class OvertopBassanoV15Production:
         if not self.heartbeat_data:
             return
         try:
-            with self.heartbeat_lock:
-                hb = self.heartbeat_data
+            # heartbeat_lock potrebbe essere None se non inizializzato — usa fallback
+            if self.heartbeat_lock is not None:
+                with self.heartbeat_lock:
+                    hb = dict(self.heartbeat_data)
+            else:
+                hb = dict(self.heartbeat_data)
 
             now = time.time()
 
