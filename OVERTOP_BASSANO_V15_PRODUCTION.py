@@ -6243,6 +6243,7 @@ class OvertopBassanoV15Production:
             # -- STATE ENGINE GATE - PRIMA DI TUTTO -----------------------
             can_enter, gate_reason = self._state_engine_can_enter()
             if not can_enter:
+                self._log_m2("🔇", f"STATE_ENGINE: {gate_reason}")
                 # Non logga phantom per cooldown - è silenzio voluto, non opportunita
                 return
 
@@ -6250,12 +6251,14 @@ class OvertopBassanoV15Production:
             # Evita che VERITAS_FUOCO generi 7 entry nello stesso secondo
             _now_tick = round(time.time(), 1)  # risoluzione 0.1s
             if getattr(self, '_last_entry_tick', 0) == _now_tick:
+                self._log_m2("🔇", "ANTI_DUPLICATE tick")
                 return
             self._last_entry_tick = _now_tick
 
 
             seed = self.seed_scorer.score()
             if seed.get('reason') == 'insufficient_data':
+                self._log_m2("🔇", f"SEED_DATI_INSUFFICIENTI score={seed.get('score',0):.2f}")
                 return
 
             # -- GATE: cespuglio avvelenato — entry deboli RANGING con loss streak --
@@ -6292,7 +6295,7 @@ class OvertopBassanoV15Production:
                             _motivo = f"ST hit={_st_hit_rate:.0%} n={_st_n}" if _st_bypass else f"Oracolo WR={_fp_wr_now:.0%} n={_fp_samples:.0f}"
                             self._log_m2("✅", f"CESPUGLIO bypass — {_motivo} su {momentum}|{volatility}|{trend} — entro")
                         else:
-                            if _fuoco_ok():
+                            if (self._oi_stato == "FUOCO" and self._oi_carica >= 0.65):
                                 self._log_m2("🔥", f"CESPUGLIO bypassed — FUOCO carica={self._oi_carica:.2f}")
                             else:
                                 self._log_m2("🚫", f"CESPUGLIO_AVVELENATO: {_loss_deboli} loss deboli RANGING "
@@ -6311,7 +6314,7 @@ class OvertopBassanoV15Production:
             _cap2_soglia = getattr(self, '_cap2_soglia_override', 0.30)
             _allow2, _reason2 = self.capsule2.riconosci(_conf_m2) if _conf_m2 >= _cap2_soglia else (True, "OK")
             if not _allow2:
-                if _fuoco_ok():
+                if (self._oi_stato == "FUOCO" and self._oi_carica >= 0.65):
                     self._log_m2("🔥", f"CAP2 bypassed — FUOCO carica={self._oi_carica:.2f}")
                 else:
                     if len(self._phantoms_open) < 5:
@@ -6350,9 +6353,9 @@ class OvertopBassanoV15Production:
             # FUOCO BYPASS — condizione unificata usata da tutti i gate
             # Una sola definizione, tutti i gate la leggono
             def _fuoco_ok():
+                # FP score non richiesto — OI FUOCO è sufficiente da solo
                 return (self._oi_stato == "FUOCO" and
                         self._oi_carica >= 0.65 and
-                        getattr(self, "_last_fingerprint_wr", 0) >= 0.55 and
                         self._regime_current != "EXPLOSIVE")
 
             # is_absolute: definito QUI una volta sola — usato da tutti i gate sotto
@@ -6409,7 +6412,12 @@ class OvertopBassanoV15Production:
                                veto.startswith("CM_TOSSICO") or
                                veto.startswith("STATIC_TOSSICO") or
                                veto.startswith("DIVORZIO"))
-                if not is_absolute and _fuoco_ok():
+                # FUOCO con carica >= 0.85 bypassa anche STATIC_TOSSICO — energia reale
+                _fuoco_inline = (self._oi_stato == "FUOCO" and self._oi_carica >= 0.65)
+                _fuoco_estremo = (self._oi_stato == "FUOCO" and self._oi_carica >= 0.85)
+                _bypassabile = (not is_absolute or
+                                (veto.startswith("STATIC_TOSSICO") and _fuoco_estremo))
+                if _bypassabile and _fuoco_inline:
                     self._log_m2("🔥", f"VETO bypassed — FUOCO carica={self._oi_carica:.2f} veto={veto}")
                 else:
                     if not veto.startswith("WARMUP") and len(self._phantoms_open) < 5:
@@ -6444,6 +6452,7 @@ class OvertopBassanoV15Production:
                         result['enter'] = True
                         result['size'] = min(result['size'], 0.5)
                     else:
+                        self._log_m2("🔇", f"SCORE_SOTTO_SOGLIA: {result['score']:.1f} vs {result['soglia']:.1f} — FP_WR={_rf_wr:.0%} samples={_rf_samples:.0f}")
                         if result['score'] > 50 and len(self._phantoms_open) < 5:
                             self._record_phantom(price, f"SCORE_SOTTO_{result['score']:.0f}_vs_{result['soglia']:.0f}",
                                                 seed['score'], momentum, volatility, trend)
@@ -6831,6 +6840,15 @@ class OvertopBassanoV15Production:
             import traceback
             self._log_m2("💥", f"ERRORE shadow_entry: {e}")
             log.error(f"[M2_ENTRY_ERROR] {e}\n{traceback.format_exc()}")
+            # AUTO-RECOVERY: reset stato per riprendere al prossimo tick
+            try:
+                self._last_entry_tick = 0
+                if self._shadow:
+                    self._shadow = None
+                    self._shadow_entry_time = None
+                log.info("[AUTO-RECOVERY] Stato entry resettato dopo errore")
+            except Exception:
+                pass
 
     def _evaluate_shadow_exit(self, price, momentum, volatility, trend):
         """Stessa logica di uscita del Motore 1 applicata al shadow trade."""
@@ -7735,21 +7753,44 @@ class OvertopBassanoV15Production:
         motivo = None
         azione = None
 
+        # Controlla gate post-soglia — quelli silenziosi
+        oi_carica   = getattr(self, '_oi_carica', 0)
+        oi_stato    = getattr(self, '_oi_stato', '')
+        last_fp_wr  = getattr(self, '_last_fingerprint_wr', 0)
+        fuoco_ok    = (oi_stato == 'FUOCO' and oi_carica >= 0.65)
+
         if warmup_rsi < 50:
             blocco = 'WARMUP_RSI_INCOMPLETO'
             motivo = (f"RSI buffer {warmup_rsi}/50 — contribuisce {rsi_score:.0f}/10 "
                       f"invece di 10 — perdo {10-rsi_score:.0f} punti score")
             azione = f"Attendere {50-warmup_rsi} campioni (~{max(1,(50-warmup_rsi)//10)} min)"
+
+        elif gap is not None and gap <= 0 and fp_score == 0 and not fuoco_ok:
+            # Score sopra soglia MA FP=0 e no FUOCO → gate post-soglia attivi
+            blocco = 'GATE_POST_SOGLIA_FP_ZERO'
+            motivo = (f"Score {score:.1f} > soglia {soglia:.1f} MA FP=0 e OI={oi_stato} carica={oi_carica:.2f}. "
+                      f"MIDZONE/DRIFT bloccano silenziosamente perché _fuoco_ok=False (FP_WR basso)")
+            azione = "Fix: _fuoco_ok non deve richiedere FP_WR — OI FUOCO è sufficiente"
+
+        elif gap is not None and gap <= 0 and fp_score == 0 and fuoco_ok:
+            # Score sopra soglia, FUOCO ok, FP=0 → dovrebbe entrare ma non lo fa
+            blocco = 'GATE_SILENZIOSO_SCONOSCIUTO'
+            motivo = (f"Score {score:.1f} > soglia {soglia:.1f}, OI FUOCO {oi_carica:.2f} — "
+                      f"sistema non entra. Gate silenzioso non identificato.")
+            azione = "Controllare MIDZONE, DRIFT DEBOLE, HARD GUARD nel log M2"
+
         elif fp_score == 0 and gap and gap > 0:
             blocco = 'FINGERPRINT_ZERO'
             motivo = (f"FP=0 — fingerprint {direction} senza real_samples. "
                       f"Score {score:.1f} vs soglia {soglia:.1f} gap={gap}")
             azione = "real_samples=5 già iniettati — verificare se regime è EXPLOSIVE"
+
         elif gap and gap > 0 and gap <= 8:
             blocco = 'SCORE_VICINO_SOGLIA'
             motivo = (f"Score {score:.1f} vs soglia {soglia:.1f} — gap={gap} punti. "
                       f"seed={seed_score:.1f} fp={fp_score:.1f} rsi={rsi_score:.1f} macd={macd_score:.1f}")
             azione = "In EXPLOSIVE il gap si chiude — attendere regime favorevole"
+
         elif regime == 'RANGING':
             blocco = 'RANGING_NO_EDGE'
             motivo = f"RANGING — score {score:.1f} correttamente sotto soglia. Mercato senza direzionalità."
@@ -7777,6 +7818,14 @@ class OvertopBassanoV15Production:
                 'alert':    'TROPPO DIFENSIVO' if missed > saved*0.25 else 'OK'
             }
 
+        # Controlla errori critici nel log M2 — visibili a DeepSeek
+        m2_log = getattr(self, '_m2_log', [])
+        errori_recenti = [l for l in list(m2_log)[-20:] if 'ERRORE' in str(l) or 'ERROR' in str(l)]
+        if errori_recenti:
+            blocco = 'CRASH_M2'
+            motivo = f"CRASH in _evaluate_shadow_entry: {errori_recenti[-1]}"
+            azione = "STOP — sistema in crash, non valuta entry. Deploy immediato richiesto."
+
         return {
             'blocco':           blocco,
             'motivo':           motivo,
@@ -7791,6 +7840,8 @@ class OvertopBassanoV15Production:
             'veritas_errore':   veritas_err,
             'phantom':          phantom_summary,
             'pronto_entry':     warmup_rsi >= 50 and (not gap or gap <= 0),
+            'crash_attivo':     len(errori_recenti) > 0,
+            'errori_recenti':   errori_recenti[-3:] if errori_recenti else [],
         }
 
 
@@ -7958,8 +8009,12 @@ class OvertopBassanoV15Production:
         if not self.heartbeat_data:
             return
         try:
-            with self.heartbeat_lock:
-                hb = self.heartbeat_data
+            # heartbeat_lock potrebbe essere None se non inizializzato — usa fallback
+            if self.heartbeat_lock is not None:
+                with self.heartbeat_lock:
+                    hb = dict(self.heartbeat_data)
+            else:
+                hb = dict(self.heartbeat_data)
 
             now = time.time()
 
@@ -8007,13 +8062,69 @@ class OvertopBassanoV15Production:
         except Exception as e:
             log.warning(f"[DS_CMD] Errore lettura comandi: {e}")
 
+
+    def _watchdog_autorepair(self):
+        """
+        Watchdog autonomo — controlla e ripara errori senza fermare il bot.
+        Gira ogni 30 secondi nel loop principale.
+        """
+        try:
+            m2_log = list(getattr(self, '_m2_log', []))
+            errori = [l for l in m2_log[-10:] if 'ERRORE' in str(l)]
+            if not errori:
+                return
+
+            ultimo_errore = errori[-1]
+            log.warning(f"[WATCHDOG] Errore rilevato: {ultimo_errore}")
+
+            # REPAIR 1: _fuoco_ok non definita → reset closure
+            if '_fuoco_ok' in ultimo_errore:
+                # Forza reset dello stato interno per far ricreare la closure
+                self._last_entry_tick = 0
+                log.info("[WATCHDOG] ✅ REPAIR: reset _last_entry_tick per forzare nuova closure")
+
+            # REPAIR 2: heartbeat_lock None → ricrea il lock
+            if 'heartbeat_lock' in ultimo_errore or 'NoneType' in ultimo_errore:
+                import threading
+                if self.heartbeat_lock is None:
+                    self.heartbeat_lock = threading.RLock()
+                    log.info("[WATCHDOG] ✅ REPAIR: heartbeat_lock ricreato")
+
+            # REPAIR 3: shadow corrotto → chiudi posizione aperta
+            if 'shadow' in ultimo_errore.lower() and self._shadow:
+                self._shadow = None
+                self._shadow_entry_time = None
+                log.info("[WATCHDOG] ✅ REPAIR: shadow position resettata")
+
+            # REPAIR 4: errore generico → reset stato entry
+            if errori and len(errori) >= 3:
+                # 3+ errori consecutivi → reset completo stato entry
+                self._last_entry_tick = 0
+                self._m2_loss_consecutivi_cache = 0
+                if hasattr(self, '_phantoms_open'):
+                    self._phantoms_open.clear()
+                log.info("[WATCHDOG] ✅ REPAIR: reset completo stato entry dopo 3+ errori")
+
+            # Svuota gli errori dal log per evitare loop infiniti
+            if hasattr(self, '_m2_log'):
+                cleaned = [l for l in self._m2_log if 'ERRORE' not in str(l)]
+                self._m2_log = type(self._m2_log)(cleaned, maxlen=getattr(self._m2_log, 'maxlen', 200))
+
+        except Exception as e:
+            log.error(f"[WATCHDOG] Errore nel watchdog stesso: {e}")
+
     def run(self):
         log.info("[START] Bot avviato - connessione Binance WS...")
         self.connect_binance()
+        _watchdog_last = time.time()
         try:
             while True:
                 time.sleep(1)
                 self._read_deepseek_commands()
+                # Watchdog ogni 30 secondi
+                if time.time() - _watchdog_last >= 30:
+                    self._watchdog_autorepair()
+                    _watchdog_last = time.time()
         except KeyboardInterrupt:
             log.info("[STOP] Bot fermato da utente")
             self._persist.save(self.capital, self.total_trades)
