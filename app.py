@@ -14,6 +14,12 @@ from flask import Flask, jsonify, render_template_string, request, send_file, ab
 from OVERTOP_BASSANO_V15_PRODUCTION import OvertopBassanoV15Production
 from ai_bridge import AIBridge
 import sqlite3
+try:
+    import supervisor_new as sv_new
+    _sv_new_ok = True
+except ImportError:
+    _sv_new_ok = False
+    sv_new = None
 import json
 import threading
 import time
@@ -2471,6 +2477,242 @@ load(); setInterval(load,15000);
 @app.route('/health')
 def health_monitor():
     return render_template_string(HEALTH_HTML)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SUPERVISOR ROUTES
+# ═══════════════════════════════════════════════════════════════════════════
+
+SUPERVISOR_HTML = """<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Command Center</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Share Tech Mono',monospace;background:#060810;color:#8a9bb0;min-height:100vh;padding:16px}
+.hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid #0f1a28}
+.hdr-title{font-family:'Orbitron',sans-serif;font-size:16px;color:#8b5cf6;letter-spacing:3px}
+.back-btn{background:rgba(59,130,246,0.2);border:1px solid rgba(59,130,246,0.4);color:#60a5fa;padding:6px 14px;border-radius:6px;font-size:11px;text-decoration:none;font-family:'Share Tech Mono',monospace}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:20px}
+.card{background:#0c1020;border:1px solid #0f1a28;border-radius:8px;padding:14px}
+.card-title{font-size:10px;letter-spacing:2px;color:#1e3a5f;margin-bottom:8px}
+.card-regime{font-size:12px;font-weight:700;margin-bottom:4px}
+.card-score{font-size:11px;color:#3d5a7a;margin-bottom:6px}
+.card-oi{font-size:11px}
+.bar-wrap{height:4px;background:#0a1020;border-radius:2px;margin-top:8px;overflow:hidden}
+.bar-fill{height:100%;border-radius:2px;transition:width .5s}
+.ai-box{background:#0c1020;border:1px solid #0f1a28;border-radius:8px;padding:16px;margin-bottom:16px}
+.ai-title{font-size:10px;letter-spacing:2px;color:#1e3a5f;margin-bottom:10px}
+.ai-stato{font-size:18px;font-weight:700;margin-bottom:8px}
+.sm-opportunita{color:#00ff88} .sm-attesa{color:#3b82f6} .sm-pericoloso{color:#ff3355} .sm-fermo{color:#6b7280} .sm-errore{color:#f59e0b}
+.ai-analisi{font-size:12px;line-height:1.6;color:#8a9bb0;margin-bottom:8px}
+.ai-azione{font-size:11px;color:#60a5fa;margin-bottom:6px}
+.ai-trigger{font-size:10px;color:#3d5a7a}
+.hist{background:#0c1020;border:1px solid #0f1a28;border-radius:8px;padding:14px}
+.hist-title{font-size:10px;letter-spacing:2px;color:#1e3a5f;margin-bottom:10px;display:flex;justify-content:space-between}
+.hist-entry{padding:6px 0;border-bottom:1px solid #0a1020;font-size:11px;display:grid;grid-template-columns:80px 140px 1fr;gap:8px}
+.hist-entry:last-child{border-bottom:none}
+.hist-ts{color:#1e3a5f} .hist-stato{font-weight:700}
+.timer-bar{background:#0a1020;height:3px;border-radius:2px;margin-bottom:16px;overflow:hidden}
+.timer-fill{height:100%;background:#8b5cf6;transition:width 1s linear}
+.badge-best{background:rgba(0,255,136,0.15);color:#00ff88;padding:2px 8px;border-radius:3px;font-size:10px}
+.badge-worst{background:rgba(255,51,85,0.15);color:#ff3355;padding:2px 8px;border-radius:3px;font-size:10px}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <div>
+    <div class="hdr-title">⚡ COMMAND CENTER</div>
+    <div style="font-size:10px;color:#1e3a5f;margin-top:4px">OVERTOP BASSANO V15 — AI SUPERVISOR MULTI-ASSET</div>
+  </div>
+  <a href="/" class="back-btn">← MISSION CONTROL</a>
+</div>
+
+<div class="timer-bar"><div class="timer-fill" id="next-fill" style="width:0%"></div></div>
+
+<div class="cards" id="asset-cards">
+  <div class="card" id="card-BTC">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div class="card-title">BTCUSDC</div>
+      <span id="badge-BTC"></span>
+    </div>
+    <div class="card-regime" id="btc-regime">—</div>
+    <div class="card-score" id="btc-score">—</div>
+    <div class="card-oi" id="btc-oi">—</div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:#1e3a5f;margin-top:6px">
+      <span id="btc-trades">—</span><span id="btc-pnl">—</span><span id="btc-phantom">—</span>
+    </div>
+    <div class="bar-wrap"><div class="bar-fill" id="btc-dist" style="width:2%"></div></div>
+  </div>
+  <div class="card" id="card-SOL">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div class="card-title">SOL/USDC</div>
+      <span id="badge-SOL"></span>
+    </div>
+    <div class="card-regime" id="sol-regime">—</div>
+    <div class="card-score" id="sol-score">—</div>
+    <div class="card-oi" id="sol-oi">—</div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:#1e3a5f;margin-top:6px">
+      <span id="sol-trades">—</span><span id="sol-pnl">—</span><span id="sol-phantom">—</span>
+    </div>
+    <div class="bar-wrap"><div class="bar-fill" id="sol-dist" style="width:2%"></div></div>
+  </div>
+  <div class="card" id="card-GOLD">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div class="card-title">GOLD/USDT</div>
+      <span id="badge-GOLD"></span>
+    </div>
+    <div class="card-regime" id="gold-regime">—</div>
+    <div class="card-score" id="gold-score">—</div>
+    <div class="card-oi" id="gold-oi">—</div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:#1e3a5f;margin-top:6px">
+      <span id="gold-trades">—</span><span id="gold-pnl">—</span><span id="gold-phantom">—</span>
+    </div>
+    <div class="bar-wrap"><div class="bar-fill" id="gold-dist" style="width:2%"></div></div>
+  </div>
+</div>
+
+<div class="ai-box" id="ai-decision">
+  <div class="ai-title">🤖 AI SUPERVISOR — ANALISI CROSS-ASSET <span id="dec-tokens" style="float:right;color:#1e3a5f"></span></div>
+  <div class="ai-stato sm-attesa" id="dec-stato">IN ATTESA</div>
+  <div class="ai-analisi" id="dec-analisi">Caricamento...</div>
+  <div class="ai-azione" id="dec-azione" style="display:none"></div>
+  <div class="ai-trigger" id="dec-trigger"></div>
+  <div style="font-size:10px;color:#1e3a5f;margin-top:8px"><span id="dec-badge"></span> · prossimo aggiornamento <span id="next-secs">—</span>s</div>
+</div>
+
+<div class="hist">
+  <div class="hist-title"><span>STORICO DECISIONI AI</span><span id="hist-count" style="color:#1e3a5f"></span></div>
+  <div id="history-body"></div>
+</div>
+
+<script>
+const ASSETS = {BTC:'BTCUSDC',SOL:'SOLUSDC',GOLD:'XAUUSDT'};
+let _hbCache={}, _lastResult={}, _historyLog=[], _callTimer=300;
+
+async function fetchSupervisor() {
+  try {
+    const r = await fetch('/supervisor/result');
+    const d = await r.json();
+    _lastResult = d.result || {};
+    _historyLog = d.log || [];
+    _callTimer  = d.next_call_in || 300;
+    const snaps = d.snapshots || {};
+    for (const [sym, hb] of Object.entries(snaps)) {
+      const key = sym.includes('BTC')?'BTC':sym.includes('SOL')?'SOL':sym.includes('XAU')||sym.includes('GOLD')?'GOLD':sym;
+      _hbCache[key] = hb;
+    }
+    for (const [asset, hb] of Object.entries(_hbCache)) renderAsset(asset, hb);
+    updateAIDecision();
+    updateHistory();
+  } catch(e) {}
+}
+
+function renderAsset(asset, hb) {
+  if (!hb) return;
+  const pfx = asset.toLowerCase();
+  const regime=hb.regime||'—', score=hb.m2_last_score||0, soglia=hb.m2_last_soglia||60;
+  const trades=hb.m2_trades||0, wins=hb.m2_wins||0, pnl=hb.m2_pnl||0;
+  const oi=hb.oi_stato||'—', carica=hb.oi_carica||0;
+  const phantom=hb.phantom||{}, bil=phantom.bilancio||0;
+  const wr=trades>0?Math.round(wins/trades*100):0;
+  const dist=score-soglia;
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v};
+  const col=(id,c)=>{const el=document.getElementById(id);if(el)el.style.color=c};
+  set(pfx+'-regime',regime);
+  set(pfx+'-score',score.toFixed(1)+'/'+soglia.toFixed(1)+' ('+( dist>=0?'+':'')+dist.toFixed(1)+')');
+  set(pfx+'-oi',oi+' '+carica.toFixed(2));
+  set(pfx+'-trades',trades+'t '+wr+'%');
+  set(pfx+'-pnl','$'+(pnl>=0?'+':'')+pnl.toFixed(2));
+  set(pfx+'-phantom','ph$'+(bil>=0?'+':'')+bil.toFixed(0));
+  col(pfx+'-regime',regime==='EXPLOSIVE'?'#f59e0b':regime==='TRENDING_BULL'?'#00ff88':regime==='RANGING'?'#3b82f6':'#ff3355');
+  col(pfx+'-oi',oi==='FUOCO'?'#00ff88':oi==='CARICA'?'#f59e0b':'#3d5a7a');
+  const pct=Math.min(100,Math.max(2,(score/Math.max(1,soglia))*100));
+  const fillEl=document.getElementById(pfx+'-dist');
+  if(fillEl){fillEl.style.width=pct+'%';fillEl.style.background=dist>=0?'#00ff88':pct>=80?'#f59e0b':'#ff3355';}
+}
+
+function updateAIDecision() {
+  const r=_lastResult;
+  if (!r.stato_mercato) return;
+  const smClass={'OPPORTUNITA':'sm-opportunita','ATTESA':'sm-attesa','PERICOLOSO':'sm-pericoloso','FERMO':'sm-fermo','ERRORE':'sm-errore'}[r.stato_mercato]||'sm-attesa';
+  const stato=document.getElementById('dec-stato');
+  if(stato){stato.textContent=r.stato_mercato;stato.className='ai-stato '+smClass;}
+  const analisi=document.getElementById('dec-analisi');
+  if(analisi)analisi.textContent=r.analisi||'—';
+  const azione=document.getElementById('dec-azione');
+  if(azione&&r.azione){azione.textContent='→ '+r.azione;azione.style.display='block';}
+  const trigger=document.getElementById('dec-trigger');
+  if(trigger)trigger.textContent=r.prossimo_trigger?'⏳ '+r.prossimo_trigger:'';
+  const badge=document.getElementById('dec-badge');
+  if(badge)badge.textContent='🤖 AI — '+(r.ts||'');
+  const tokens=document.getElementById('dec-tokens');
+  if(tokens&&r.tokens)tokens.textContent=r.tokens+' token';
+  const box=document.getElementById('ai-decision');
+  if(box)box.style.borderColor={'green':'rgba(0,255,136,0.3)','yellow':'rgba(245,158,11,0.3)','red':'rgba(255,51,85,0.3)'}[r.alert_level]||'#0f1a28';
+  ['BTC','SOL','GOLD'].forEach(a=>{
+    const card=document.getElementById('card-'+a);
+    const bdg=document.getElementById('badge-'+a);
+    if(!card)return;
+    card.style.borderColor='#0f1a28';
+    if(bdg)bdg.textContent='';
+    if(a===r.asset_migliore){card.style.borderColor='rgba(0,255,136,0.4)';if(bdg){bdg.textContent='▲ MIGLIORE';bdg.className='badge-best';}}
+    else if(a===r.asset_peggiore){card.style.borderColor='rgba(255,51,85,0.3)';if(bdg){bdg.textContent='▼ PEGGIORE';bdg.className='badge-worst';}}
+  });
+}
+
+function updateHistory() {
+  const body=document.getElementById('history-body');
+  const cnt=document.getElementById('hist-count');
+  if(!_historyLog.length)return;
+  if(cnt)cnt.textContent=_historyLog.length+' analisi';
+  if(body)body.innerHTML=_historyLog.map(r=>{
+    const col=r.stato_mercato==='OPPORTUNITA'?'#00ff88':r.stato_mercato==='PERICOLOSO'?'#ff3355':r.stato_mercato==='FERMO'?'#3d5a7a':'#3b82f6';
+    return '<div class="hist-entry"><span class="hist-ts">'+(r.ts||'—')+'</span><span class="hist-stato" style="color:'+col+'">'+(r.stato_mercato||'?')+' '+(r.asset_migliore?'→'+r.asset_migliore:'')+'</span><span style="color:#3d5a7a">'+(r.analisi||'').substring(0,80)+'</span></div>';
+  }).join('');
+}
+
+function updateTimer() {
+  _callTimer=Math.max(0,_callTimer-1);
+  const el=document.getElementById('next-secs');
+  if(el)el.textContent=_callTimer;
+  const fill=document.getElementById('next-fill');
+  if(fill)fill.style.width=((300-_callTimer)/300*100).toFixed(1)+'%';
+}
+
+fetchSupervisor();
+setInterval(fetchSupervisor,5000);
+setInterval(updateTimer,1000);
+</script>
+</body>
+</html>"""
+
+@app.route('/supervisor')
+def supervisor_page():
+    return render_template_string(SUPERVISOR_HTML)
+
+@app.route('/supervisor/result')
+def supervisor_result():
+    if not _sv_new_ok or not sv_new:
+        with heartbeat_lock:
+            local_hb = dict(heartbeat_data)
+        from OVERTOP_BASSANO_V15_PRODUCTION import SYMBOL as _SYM
+        return jsonify({"result":{}, "log":[], "next_call_in":300,
+                        "assets":[], "snapshots":{_SYM: local_hb}})
+    snaps = sv_new.get_asset_snapshots()
+    with heartbeat_lock:
+        local_hb = dict(heartbeat_data)
+    from OVERTOP_BASSANO_V15_PRODUCTION import SYMBOL as _SYM
+    snaps[_SYM] = local_hb
+    return jsonify({
+        "result":       sv_new.get_last_result(),
+        "log":          sv_new.get_log(),
+        "next_call_in": sv_new.get_next_call_in(),
+        "assets":       list(snaps.keys()),
+        "snapshots":    snaps,
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
