@@ -6413,10 +6413,11 @@ class OvertopBassanoV15Production:
                                veto.startswith("STATIC_TOSSICO") or
                                veto.startswith("DIVORZIO"))
                 # FUOCO con carica >= 0.85 bypassa anche STATIC_TOSSICO — energia reale
+                _fuoco_inline = (self._oi_stato == "FUOCO" and self._oi_carica >= 0.65)
                 _fuoco_estremo = (self._oi_stato == "FUOCO" and self._oi_carica >= 0.85)
                 _bypassabile = (not is_absolute or
                                 (veto.startswith("STATIC_TOSSICO") and _fuoco_estremo))
-                if _bypassabile and _fuoco_ok():
+                if _bypassabile and _fuoco_inline:
                     self._log_m2("🔥", f"VETO bypassed — FUOCO carica={self._oi_carica:.2f} veto={veto}")
                 else:
                     if not veto.startswith("WARMUP") and len(self._phantoms_open) < 5:
@@ -6839,6 +6840,15 @@ class OvertopBassanoV15Production:
             import traceback
             self._log_m2("💥", f"ERRORE shadow_entry: {e}")
             log.error(f"[M2_ENTRY_ERROR] {e}\n{traceback.format_exc()}")
+            # AUTO-RECOVERY: reset stato per riprendere al prossimo tick
+            try:
+                self._last_entry_tick = 0
+                if self._shadow:
+                    self._shadow = None
+                    self._shadow_entry_time = None
+                log.info("[AUTO-RECOVERY] Stato entry resettato dopo errore")
+            except Exception:
+                pass
 
     def _evaluate_shadow_exit(self, price, momentum, volatility, trend):
         """Stessa logica di uscita del Motore 1 applicata al shadow trade."""
@@ -7808,6 +7818,14 @@ class OvertopBassanoV15Production:
                 'alert':    'TROPPO DIFENSIVO' if missed > saved*0.25 else 'OK'
             }
 
+        # Controlla errori critici nel log M2 — visibili a DeepSeek
+        m2_log = getattr(self, '_m2_log', [])
+        errori_recenti = [l for l in list(m2_log)[-20:] if 'ERRORE' in str(l) or 'ERROR' in str(l)]
+        if errori_recenti:
+            blocco = 'CRASH_M2'
+            motivo = f"CRASH in _evaluate_shadow_entry: {errori_recenti[-1]}"
+            azione = "STOP — sistema in crash, non valuta entry. Deploy immediato richiesto."
+
         return {
             'blocco':           blocco,
             'motivo':           motivo,
@@ -7822,6 +7840,8 @@ class OvertopBassanoV15Production:
             'veritas_errore':   veritas_err,
             'phantom':          phantom_summary,
             'pronto_entry':     warmup_rsi >= 50 and (not gap or gap <= 0),
+            'crash_attivo':     len(errori_recenti) > 0,
+            'errori_recenti':   errori_recenti[-3:] if errori_recenti else [],
         }
 
 
@@ -8042,13 +8062,69 @@ class OvertopBassanoV15Production:
         except Exception as e:
             log.warning(f"[DS_CMD] Errore lettura comandi: {e}")
 
+
+    def _watchdog_autorepair(self):
+        """
+        Watchdog autonomo — controlla e ripara errori senza fermare il bot.
+        Gira ogni 30 secondi nel loop principale.
+        """
+        try:
+            m2_log = list(getattr(self, '_m2_log', []))
+            errori = [l for l in m2_log[-10:] if 'ERRORE' in str(l)]
+            if not errori:
+                return
+
+            ultimo_errore = errori[-1]
+            log.warning(f"[WATCHDOG] Errore rilevato: {ultimo_errore}")
+
+            # REPAIR 1: _fuoco_ok non definita → reset closure
+            if '_fuoco_ok' in ultimo_errore:
+                # Forza reset dello stato interno per far ricreare la closure
+                self._last_entry_tick = 0
+                log.info("[WATCHDOG] ✅ REPAIR: reset _last_entry_tick per forzare nuova closure")
+
+            # REPAIR 2: heartbeat_lock None → ricrea il lock
+            if 'heartbeat_lock' in ultimo_errore or 'NoneType' in ultimo_errore:
+                import threading
+                if self.heartbeat_lock is None:
+                    self.heartbeat_lock = threading.RLock()
+                    log.info("[WATCHDOG] ✅ REPAIR: heartbeat_lock ricreato")
+
+            # REPAIR 3: shadow corrotto → chiudi posizione aperta
+            if 'shadow' in ultimo_errore.lower() and self._shadow:
+                self._shadow = None
+                self._shadow_entry_time = None
+                log.info("[WATCHDOG] ✅ REPAIR: shadow position resettata")
+
+            # REPAIR 4: errore generico → reset stato entry
+            if errori and len(errori) >= 3:
+                # 3+ errori consecutivi → reset completo stato entry
+                self._last_entry_tick = 0
+                self._m2_loss_consecutivi_cache = 0
+                if hasattr(self, '_phantoms_open'):
+                    self._phantoms_open.clear()
+                log.info("[WATCHDOG] ✅ REPAIR: reset completo stato entry dopo 3+ errori")
+
+            # Svuota gli errori dal log per evitare loop infiniti
+            if hasattr(self, '_m2_log'):
+                cleaned = [l for l in self._m2_log if 'ERRORE' not in str(l)]
+                self._m2_log = type(self._m2_log)(cleaned, maxlen=getattr(self._m2_log, 'maxlen', 200))
+
+        except Exception as e:
+            log.error(f"[WATCHDOG] Errore nel watchdog stesso: {e}")
+
     def run(self):
         log.info("[START] Bot avviato - connessione Binance WS...")
         self.connect_binance()
+        _watchdog_last = time.time()
         try:
             while True:
                 time.sleep(1)
                 self._read_deepseek_commands()
+                # Watchdog ogni 30 secondi
+                if time.time() - _watchdog_last >= 30:
+                    self._watchdog_autorepair()
+                    _watchdog_last = time.time()
         except KeyboardInterrupt:
             log.info("[STOP] Bot fermato da utente")
             self._persist.save(self.capital, self.total_trades)
