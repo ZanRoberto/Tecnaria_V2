@@ -5457,8 +5457,8 @@ class OvertopBassanoV15Production:
         recent_losses = sum(1 for t in recent if not t.get('is_win', False))
         if recent_losses >= 3 and len(recent) >= 3:
             step = base_step
-            new_min  = min(68, self.campo.SOGLIA_MIN  + step)
-            new_base = min(72, self.campo.SOGLIA_BASE + step)
+            new_min  = min(52, self.campo.SOGLIA_MIN  + step)
+            new_base = min(55, self.campo.SOGLIA_BASE + step)
             old_min  = self.campo.SOGLIA_MIN
             old_base = self.campo.SOGLIA_BASE
             self.campo.SOGLIA_MIN  = new_min
@@ -5502,8 +5502,8 @@ class OvertopBassanoV15Production:
             new_base = max(55, old_base - step)
             action = "ABBASSA"
         elif delta_wr < 0.40:
-            new_min = min(68, old_min + step)
-            new_base = min(72, old_base + step)
+            new_min = min(52, old_min + step)
+            new_base = min(55, old_base + step)
             action = "ALZA"
         elif bilancio < -100:
             # WR nella zona morta (40-60%) MA bilancio molto negativo
@@ -6415,10 +6415,18 @@ class OvertopBassanoV15Production:
                 # FUOCO con carica >= 0.85 bypassa anche STATIC_TOSSICO — energia reale
                 _fuoco_inline = (self._oi_stato == "FUOCO" and self._oi_carica >= 0.65)
                 _fuoco_estremo = (self._oi_stato == "FUOCO" and self._oi_carica >= 0.85)
+                # Bypass FUOCO solo se fingerprint ha dati sufficienti
+                _fp_dir_key = f"{self.campo._direction}|{momentum}|{volatility}|{trend}"
+                _fp_dir_mem = self.oracolo._memory.get(_fp_dir_key, {})
+                _fp_dir_real = _fp_dir_mem.get('real_samples', 0)
+                _fp_dir_wr   = _fp_dir_mem.get('wr', 0)
+                _fp_ha_dati  = _fp_dir_real >= 3 and _fp_dir_wr >= 0.30
                 _bypassabile = (not is_absolute or
-                                (veto.startswith("STATIC_TOSSICO") and _fuoco_estremo))
-                if _bypassabile and _fuoco_inline:
-                    self._log_m2("🔥", f"VETO bypassed — FUOCO carica={self._oi_carica:.2f} veto={veto}")
+                                (veto.startswith("STATIC_TOSSICO") and _fuoco_estremo and _fp_ha_dati))
+                if _bypassabile and _fuoco_inline and _fp_ha_dati:
+                    self._log_m2("🔥", f"VETO bypassed — FUOCO carica={self._oi_carica:.2f} veto={veto} fp_real={_fp_dir_real} wr={_fp_dir_wr:.0%}")
+                elif _fuoco_inline and not _fp_ha_dati:
+                    self._log_m2("🔇", f"FUOCO bypass BLOCCATO — fp vuoti real={_fp_dir_real} wr={_fp_dir_wr:.0%} su {_fp_dir_key}")
                 else:
                     if not veto.startswith("WARMUP") and len(self._phantoms_open) < 5:
                         self._record_phantom(price, veto, seed['score'], momentum, volatility, trend)
