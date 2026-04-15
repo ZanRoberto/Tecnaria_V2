@@ -6918,7 +6918,12 @@ class OvertopBassanoV15Production:
                         f"FUOCO bypass score — carica={self._oi_carica:.2f}")
 
             # ── BREATH ENGINE: conferma timing entry ─────────────────────────
-            if _V16_ENGINES_OK and self._breath:
+            # BYPASS: OI FUOCO >= 0.85 — Veritas dimostra FUOCO|BLOCCA sbagliato
+            # nel 65% dei casi. Quando l'energia di mercato è dichiarata al 85%+
+            # il breath non ha autorità di bloccare.
+            _fuoco_bypass_breath = (self._oi_stato == "FUOCO" and
+                                    self._oi_carica >= 0.85)
+            if _V16_ENGINES_OK and self._breath and not _fuoco_bypass_breath:
                 _nerv_val = getattr(self._nerv, '_nervosismo', 0.3) if self._nerv else 0.3
                 b_entry = self._breath.segnale_entry(_dir, _nerv_val)
                 if not b_entry["ok"]:
@@ -6931,6 +6936,9 @@ class OvertopBassanoV15Production:
                 else:
                     self._log_m2("🌬",
                         f"BREATH_OK: {b_entry['motivo']} energia={b_entry.get('energia',0):.1f}")
+            elif _fuoco_bypass_breath:
+                self._log_m2("🔥",
+                    f"BREATH_BYPASS — FUOCO carica={self._oi_carica:.2f} prevale")
 
             # ── COMPARTO: dimensiona la size in base all'assetto ─────────────
             if _V16_ENGINES_OK and self._comparto:
