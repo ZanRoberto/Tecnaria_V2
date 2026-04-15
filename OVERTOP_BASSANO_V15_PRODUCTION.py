@@ -4866,6 +4866,14 @@ class OvertopBassanoV15Production:
         # L'AutoCalibratore alzava la soglia fino a 83 — il CompartoEngine gestisce le soglie
         # self._auto_tune_soglia()
 
+        # ── PHANTOM SUPERVISOR — loop chiuso ogni 60s ───────────────────
+        # Aggiorna _phantom_per_livello dal heartbeat
+        if self.heartbeat_data:
+            _ph = self.heartbeat_data.get('phantom', {})
+            if isinstance(_ph, dict):
+                self._phantom_per_livello = _ph.get('per_livello', {})
+        self._phantom_supervisor()
+
         # ── V16: NervosismoEngine + CompartoEngine ad ogni tick ──────────
         if _V16_ENGINES_OK and self._nerv and self._comparto:
             _regime_now = self._regime_current
@@ -5604,6 +5612,79 @@ class OvertopBassanoV15Production:
     # ========================================================================
     # MOTORE 2: CAMPO GRAVITAZIONALE - Shadow Entry/Exit/Close
     # ========================================================================
+
+    def _phantom_supervisor(self):
+        """
+        Loop chiuso Phantom → Capsule correttiva.
+
+        Ogni 60s analizza il Phantom per componente.
+        Se un componente blocca con WR anomalo → genera capsule correttiva.
+
+        WR blocco > 45% su 20+ casi → sta bloccando cose buone → AUTO_ALLENTA soglia
+        WR blocco < 25% su 20+ casi → sta lasciando passare cose cattive → AUTO_IRRIGIDISCE
+
+        Questo è il sistema che si autocorregge da solo.
+        """
+        now = time.time()
+        if now - getattr(self, '_last_phantom_sup', 0) < 60:
+            return
+        self._last_phantom_sup = now
+
+        per_livello = getattr(self, '_phantom_per_livello', {})
+        if not per_livello:
+            return
+
+        for blocco_id, dati in per_livello.items():
+            ww  = dati.get('would_win', 0)
+            wl  = dati.get('would_lose', 0)
+            blk = dati.get('blocked', 0)
+            tot = ww + wl
+            if tot < 20:
+                continue
+
+            wr_blocco = ww / tot
+
+            # Sta bloccando cose che avrebbero vinto — soglia troppo alta
+            if wr_blocco > 0.45 and blk > 20:
+                cap_id = f"AUTO_ALLENTA_{blocco_id[:30]}"
+                existing = [c for c in self.capsule_runtime.capsules
+                           if c.get('capsule_id') == cap_id and c.get('enabled')]
+                if not existing:
+                    # Abbassa soglia di 3 punti per 30 minuti
+                    old_base = self.campo.SOGLIA_BASE
+                    new_base = max(40, old_base - 3)
+                    self.campo.SOGLIA_BASE = new_base
+                    self._log_m2("🧠",
+                        f"PHANTOM_SUP: {blocco_id} WR={wr_blocco:.0%} blk={blk} "
+                        f"→ AUTO_ALLENTA soglia {old_base}→{new_base}")
+                    # Salva nella storia per apprendimento
+                    if not hasattr(self, '_phantom_sup_log'):
+                        self._phantom_sup_log = []
+                    self._phantom_sup_log.append({
+                        'ts':      time.strftime('%H:%M:%S'),
+                        'blocco':  blocco_id,
+                        'wr':      round(wr_blocco, 3),
+                        'azione':  f'ALLENTA {old_base}→{new_base}',
+                    })
+
+            # Sta lasciando passare cose che perdono — soglia troppo bassa
+            elif wr_blocco < 0.25 and blk > 20:
+                old_base = self.campo.SOGLIA_BASE
+                new_base = min(60, old_base + 3)
+                if new_base != old_base:
+                    self.campo.SOGLIA_BASE = new_base
+                    self._log_m2("🧠",
+                        f"PHANTOM_SUP: {blocco_id} WR={wr_blocco:.0%} blk={blk} "
+                        f"→ AUTO_IRRIGIDISCE soglia {old_base}→{new_base}")
+                    if not hasattr(self, '_phantom_sup_log'):
+                        self._phantom_sup_log = []
+                    self._phantom_sup_log.append({
+                        'ts':      time.strftime('%H:%M:%S'),
+                        'blocco':  blocco_id,
+                        'wr':      round(wr_blocco, 3),
+                        'azione':  f'IRRIGIDISCE {old_base}→{new_base}',
+                    })
+
 
     def _tele_ctx(self, trend_override=None, vol_override=None, bridge_reason=None):
         """Snapshot di contesto per telemetria. Zero logica, solo lettura."""
@@ -7585,6 +7666,10 @@ class OvertopBassanoV15Production:
         finally:
             if self.heartbeat_lock:
                 
+                # ── Phantom Supervisor log ──────────────────────────────
+                _sup_log = getattr(self, '_phantom_sup_log', [])
+                self.heartbeat_data["phantom_sup_log"] = _sup_log[-10:]
+
                 # ── V16 data ────────────────────────────────────────────
                 if _V16_ENGINES_OK:
                     if self._nerv:
