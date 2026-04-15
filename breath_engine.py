@@ -141,7 +141,7 @@ class BreathEngine:
             score += 10
 
         # 2. Energia sopra soglia minima
-        soglia_energia = 1.5 if nervosismo < 0.3 else 2.5
+        soglia_energia = 0.5 if nervosismo < 0.3 else 1.2
         if self._energia >= soglia_energia:
             score += 30
             motivi.append(f"ENERGIA_{self._energia:.1f}")
