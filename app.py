@@ -976,7 +976,71 @@ canvas.spark { width:100%; height:40px; }
       </div>
     </div>
 
-    <!-- PHANTOM TRACKER -->
+    
+    <!-- V16 MOTORI -->
+    <div class="panel">
+      <div class="panel-head" style="background:linear-gradient(90deg,#0a1628,#0d1f3c);border-left:3px solid var(--green)">
+        🏎️ V16 — ASSETTO MERCATO
+        <span id="v16-comparto-nome" style="float:right;font-size:10px;color:var(--green)">—</span>
+      </div>
+      <div class="panel-body">
+        <!-- COMPARTO -->
+        <div style="margin-bottom:10px">
+          <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:5px">COMPARTO ATTIVO</div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px" id="v16-comparti-grid"></div>
+        </div>
+        <!-- GOMME / NERVOSISMO -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
+          <div class="stat-item">
+            <span class="stat-lbl">GOMME</span>
+            <span class="stat-val" id="v16-gomme" style="font-size:14px">—</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-lbl">NERVOSISMO</span>
+            <span class="stat-val" id="v16-nerv" style="font-size:14px">—</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-lbl">BREATH FASE</span>
+            <span class="stat-val" id="v16-breath" style="font-size:14px">—</span>
+          </div>
+        </div>
+        <!-- BARRA NERVOSISMO -->
+        <div style="margin-bottom:8px">
+          <div style="font-size:9px;color:var(--dim);margin-bottom:3px">TENSIONE MERCATO</div>
+          <div style="height:8px;background:#0a1020;border-radius:4px;overflow:hidden;position:relative">
+            <div id="v16-nerv-bar" style="height:100%;width:30%;border-radius:4px;transition:width 0.5s,background 0.5s;background:var(--green)"></div>
+            <!-- soglie -->
+            <div style="position:absolute;top:0;left:25%;width:1px;height:100%;background:rgba(255,255,255,0.2)"></div>
+            <div style="position:absolute;top:0;left:60%;width:1px;height:100%;background:rgba(255,255,255,0.2)"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:8px;color:var(--dim);margin-top:2px">
+            <span>SLICK</span><span>INTER</span><span>RAIN</span>
+          </div>
+        </div>
+        <!-- SWITCH LOG -->
+        <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:4px">ULTIMI SWITCH ASSETTO</div>
+        <div id="v16-switch-log" style="max-height:80px;overflow-y:auto;font-size:10px"></div>
+      </div>
+    </div>
+
+    <!-- PHANTOM SUPERVISOR -->
+    <div class="panel">
+      <div class="panel-head" style="background:linear-gradient(90deg,#0a1628,#0d1f3c);border-left:3px solid var(--orange)">
+        🧠 PHANTOM SUPERVISOR — Autocorrezione
+        <span id="v16-sup-interventi" style="float:right;font-size:9px;color:var(--orange)">0 interventi</span>
+      </div>
+      <div class="panel-body">
+        <div style="font-size:9px;color:var(--dim);margin-bottom:6px">
+          Il sistema legge il Phantom e si autocorregge. Ogni componente che blocca troppo o troppo poco viene bilanciato automaticamente.
+        </div>
+        <div id="v16-phantom-sup-log" style="max-height:120px;overflow-y:auto"></div>
+        <!-- Phantom per livello -->
+        <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin:8px 0 4px">PHANTOM PER COMPONENTE</div>
+        <div id="v16-phantom-livelli" style="font-size:10px"></div>
+      </div>
+    </div>
+
+<!-- PHANTOM TRACKER -->
     <div class="panel">
       <div class="panel-head yellow">👻 PHANTOM — Se avessi fatto...
         <span style="font-size:9px; color:var(--dim)">Zavorra o Protezione?</span>
@@ -1469,7 +1533,118 @@ const SCPanel = (() => {
 
     // Disegna grafici
     drawCharts();
-  }
+  
+    // ── V16 AGGIORNAMENTO ─────────────────────────────────────
+    // COMPARTO
+    const comparto = hb.comparto || 'NEUTRO';
+    const compartiTutti = hb.comparti_tutti || [];
+    const COMP_COL = {
+      DIFENSIVO:'#6b7280', NEUTRO:'#3b82f6',
+      ATTACCO:'#00d97a', TRENDING_BULL:'#00ff88', TRENDING_BEAR:'#ff3355'
+    };
+    $('v16-comparto-nome').textContent = comparto;
+    $('v16-comparto-nome').style.color = COMP_COL[comparto] || '#3b82f6';
+
+    // Grid comparti
+    const compGrid = $('v16-comparti-grid');
+    if (compGrid) {
+      const nomi = ['DIFENSIVO','NEUTRO','ATTACCO','TRENDING_BULL','TRENDING_BEAR'];
+      compGrid.innerHTML = nomi.map(n => {
+        const attivo = n === comparto;
+        const col = COMP_COL[n] || '#3b82f6';
+        return `<div style="padding:4px 2px;border-radius:3px;text-align:center;
+          background:${attivo ? col+'22' : '#0a1020'};
+          border:1px solid ${attivo ? col : '#1e3a5f'};
+          font-size:8px;color:${attivo ? col : '#3d5a7a'};
+          font-weight:${attivo ? '700' : '400'}">
+          ${n.replace('_',' ')}
+        </div>`;
+      }).join('');
+    }
+
+    // GOMME / NERVOSISMO
+    const gomme   = hb.gomme || 'INTER';
+    const nervVal = typeof hb.nervosismo === 'number' ? hb.nervosismo : 0.3;
+    const breath  = hb.breath || {};
+    const breathFase = breath.fase || 'NEUTRO';
+    const GOMME_COL = {SLICK:'#00d97a', INTER:'#f59e0b', RAIN:'#3b82f6'};
+    const gcol = GOMME_COL[gomme] || '#f59e0b';
+    $('v16-gomme').textContent = gomme;
+    $('v16-gomme').style.color = gcol;
+    const NERV_COL = nervVal > 0.6 ? '#3b82f6' : nervVal > 0.3 ? '#f59e0b' : '#00d97a';
+    $('v16-nerv').textContent = (nervVal * 100).toFixed(0) + '%';
+    $('v16-nerv').style.color = NERV_COL;
+    const BREATH_COL = {INALAZIONE:'#00d97a', PICCO:'#f59e0b', ESALAZIONE:'#ff3355', NEUTRO:'#3d5a7a'};
+    $('v16-breath').textContent = breathFase;
+    $('v16-breath').style.color = BREATH_COL[breathFase] || '#3d5a7a';
+
+    // Barra nervosismo
+    const nervBar = $('v16-nerv-bar');
+    if (nervBar) {
+      nervBar.style.width = Math.min(100, nervVal * 100) + '%';
+      nervBar.style.background = NERV_COL;
+    }
+
+    // Switch log comparti
+    const switchLog = hb.switch_log || [];
+    const slEl = $('v16-switch-log');
+    if (slEl && switchLog.length) {
+      slEl.innerHTML = switchLog.slice(0,5).map(s =>
+        `<div style="display:grid;grid-template-columns:45px 70px 70px 1fr;gap:4px;
+          padding:2px 0;border-bottom:1px solid #0a1020;color:#3d5a7a">
+          <span style="color:#1e3a5f">${s.ts||''}</span>
+          <span style="color:${COMP_COL[s.da]||'#3d5a7a'}">${s.da||''}</span>
+          <span style="color:#1e3a5f">→</span>
+          <span style="color:${COMP_COL[s.a]||'#00d97a'};font-weight:700">${s.a||''}</span>
+        </div>`
+      ).join('');
+    } else if (slEl) {
+      slEl.innerHTML = '<div style="color:#1e3a5f;font-size:10px">Nessun switch ancora</div>';
+    }
+
+    // Phantom supervisor
+    const supLog = hb.phantom_sup_log || [];
+    $('v16-sup-interventi').textContent = supLog.length + ' interventi';
+    const supEl = $('v16-phantom-sup-log');
+    if (supEl) {
+      if (supLog.length) {
+        supEl.innerHTML = supLog.slice().reverse().map(s => {
+          const isAllenta = s.azione && s.azione.includes('ALLENTA');
+          const col = isAllenta ? '#00d97a' : '#ff3355';
+          return `<div style="display:grid;grid-template-columns:45px 1fr 80px;gap:4px;
+            padding:3px 0;border-bottom:1px solid #0a1020">
+            <span style="color:#1e3a5f;font-size:9px">${s.ts||''}</span>
+            <span style="color:#3d5a7a;font-size:10px">${(s.blocco||'').slice(0,25)}</span>
+            <span style="color:${col};font-size:9px;font-weight:700">${s.azione||''}</span>
+          </div>`;
+        }).join('');
+      } else {
+        supEl.innerHTML = '<div style="color:#1e3a5f;font-size:10px">Sistema in osservazione — nessun intervento ancora</div>';
+      }
+    }
+
+    // Phantom per livello
+    const perLiv = (hb.phantom||{}).per_livello || {};
+    const livEl = $('v16-phantom-livelli');
+    if (livEl && Object.keys(perLiv).length) {
+      livEl.innerHTML = Object.entries(perLiv).map(([id, d]) => {
+        const tot = (d.would_win||0) + (d.would_lose||0);
+        const wr  = tot > 0 ? Math.round(d.would_win/tot*100) : 0;
+        const col = wr > 45 ? '#f59e0b' : wr < 25 ? '#ff3355' : '#3d5a7a';
+        const alert = wr > 45 ? '⚠️ ALLENTA' : wr < 25 ? '🛡️ OK' : '';
+        return `<div style="display:grid;grid-template-columns:1fr 40px 40px 40px 70px;
+          gap:4px;padding:3px 0;border-bottom:1px solid #0a1020;align-items:center">
+          <span style="color:#3d5a7a;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${id}</span>
+          <span style="color:#1e3a5f;font-size:9px;text-align:center">${d.blocked||0}</span>
+          <span style="color:${col};font-size:9px;text-align:center;font-weight:700">${wr}%</span>
+          <span style="color:#1e3a5f;font-size:9px;text-align:center">WR</span>
+          <span style="color:${col};font-size:8px">${alert}</span>
+        </div>`;
+      }).join('');
+    }
+    // ── FINE V16 ─────────────────────────────────────────────
+
+}
 
   function drawCharts() {
     // Canvas puro — zero dipendenze Chart.js
