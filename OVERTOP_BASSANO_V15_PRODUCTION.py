@@ -6926,7 +6926,7 @@ class OvertopBassanoV15Production:
                 soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend),
             )
 
-            # ── CAPSULE STATIC — veto assoluto ───────────────────────────────
+            # ── CAPSULE STATIC — veto assoluto MA gestibile dalla CI ────────
             if result['veto']:
                 veto = result['veto']
                 is_tossico = (veto.startswith("TOSSICO") or
@@ -6938,8 +6938,38 @@ class OvertopBassanoV15Production:
                     # Controlla se OI FUOCO estremo può bypassare STATIC
                     _fuoco_estremo = (self._oi_stato == "FUOCO" and
                                       self._oi_carica >= 0.85)
-                    if veto.startswith("STATIC_TOSSICO") and _fuoco_estremo:
-                        self._log_m2("🔥", f"STATIC bypassed — FUOCO carica={self._oi_carica:.2f}")
+
+                    # ── CI OVERRIDE: le capsule possono ribaltare il VETO ────
+                    # Quando la CI ha evidenza live più forte del VETO storico,
+                    # la CI vince. Il VETO è una regola del passato — la CI
+                    # porta dati del presente.
+                    _ci_override = False
+                    if veto.startswith("STATIC_TOSSICO") and not veto.startswith("DIVORZIO"):
+                        try:
+                            _ci_mods_veto = self.ci.get_entry_mods()
+                            # CI può ribaltare il VETO se:
+                            # 1. Ha almeno una capsula OPPORTUNITA attiva con forza >= 0.5
+                            # 2. Signal Tracker conferma hit_rate >= 0.63 su 300+ campioni
+                            _ci_caps_forti = [
+                                c for c in _ci_mods_veto.get('motivi', [])
+                                if 'RANGING_EDGE' in c or 'FUOCO_WINDOW' in c
+                            ]
+                            _st_top = self.signal_tracker.dump_top(3)
+                            _st_edge = any(
+                                s.get('hit_60s', 0) >= 0.63 and s.get('n', 0) >= 300
+                                for s in _st_top
+                            )
+                            if _ci_caps_forti and _st_edge:
+                                _ci_override = True
+                                _motivo_ci = f"CI_OVERRIDE_VETO: ST_hit>63% + capsule={_ci_caps_forti}"
+                        except Exception:
+                            pass
+
+                    if veto.startswith("STATIC_TOSSICO") and (_fuoco_estremo or _ci_override):
+                        if _fuoco_estremo:
+                            self._log_m2("🔥", f"STATIC bypassed — FUOCO carica={self._oi_carica:.2f}")
+                        else:
+                            self._log_m2("💊", f"STATIC bypassed — CI ha autorità: {_motivo_ci}")
                     else:
                         self._log_m2("🚫", f"VETO_TOSSICO: {veto}")
                         if len(self._phantoms_open) < 5:
