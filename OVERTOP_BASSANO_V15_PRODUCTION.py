@@ -1235,6 +1235,407 @@ class IntelligenzaAutonoma:
 RealtimeLearningEngine = IntelligenzaAutonoma
 
 # ===========================================================================
+# CAPSULE INTELLIGENTE — Sistema Immunitario Predittivo
+# ===========================================================================
+
+class CapsuleIntelligente:
+    """
+    Sistema immunitario predittivo del bot.
+
+    NON reagisce al regime dichiarato — ANTICIPA il cambiamento leggendo
+    i precursori: breath, nervosismo, comparto, OI, drift, regime, momentum.
+
+    QUATTRO LIVELLI:
+      P1 - Predittivo:  legge precursori → prepara capsule PRIMA del cambio
+      P2 - Adattivo:    genera il set capsule giusto per QUESTO momento
+      P3 - Pervasivo:   ogni punto di decisione (entry/exit/size/soglia) sente le capsule
+      P4 - Evolutivo:   le capsule imparano dal Phantom → si rafforzano o muoiono
+
+    INTERFACCIA con il bot:
+      tick(ctx)         → aggiorna stato predittivo ad ogni tick
+      get_entry_mods()  → modifche da applicare all'entry (soglia delta, size mult, veto)
+      get_exit_signal() → segnale anticipato di uscita
+      get_narrative()   → testo vivo per la dashboard
+      register_outcome(capsule_id, was_win, pnl) → apprendimento post-trade
+    """
+
+    # Soglie precursori
+    NERV_RAIN_SOGLIA   = 0.60   # nervosismo sopra = RAIN in arrivo
+    NERV_SLICK_SOGLIA  = 0.25   # nervosismo sotto = pista asciutta
+    BREATH_ESALAZ      = "ESALAZIONE"
+    BREATH_INALAZ      = "INALAZIONE"
+    BREATH_PICCO       = "PICCO"
+    OI_FUOCO_MIN       = 0.75   # OI FUOCO da questa carica in su
+
+    def __init__(self):
+        self._stato_predittivo = "NEUTRO"   # ALLERTA / OFFENSIVO / DIFENSIVO / NEUTRO
+        self._capsule_attive: dict = {}      # {capsule_id: capsula_dict}
+        self._storia: list = []              # log ultimi 20 eventi per narrativa
+        self._outcome_memory: dict = {}      # {capsule_id: {'wins':0,'losses':0,'pnl':0}}
+        self._tick_count = 0
+        self._ultimo_cambio_stato = 0.0
+        self._precursori_storia: list = []   # rolling 10 tick per trend precursori
+        self._ctx_prev = {}
+
+    # ── TICK PRINCIPALE ──────────────────────────────────────────────────
+
+    def tick(self, ctx: dict):
+        """
+        Chiamato ad ogni tick del bot.
+        ctx contiene: breath_fase, breath_energia, nervosismo, gomme,
+                      comparto, oi_stato, oi_carica, regime, drift,
+                      momentum, volatility, trend, sc_pesi, phantom_stats
+        """
+        self._tick_count += 1
+        try:
+            # 1. Leggi precursori
+            precursori = self._leggi_precursori(ctx)
+
+            # 2. Aggiorna storico precursori (rolling 10)
+            self._precursori_storia.append(precursori)
+            if len(self._precursori_storia) > 10:
+                self._precursori_storia.pop(0)
+
+            # 3. Calcola stato predittivo
+            nuovo_stato = self._calcola_stato_predittivo(precursori)
+
+            # 4. Se cambio di stato → genera capsule appropriate
+            if nuovo_stato != self._stato_predittivo:
+                self._on_cambio_stato(self._stato_predittivo, nuovo_stato, precursori, ctx)
+                self._stato_predittivo = nuovo_stato
+                self._ultimo_cambio_stato = time.time()
+
+            # 5. Aggiorna capsule esistenti (vita, rinforzo)
+            self._aggiorna_capsule_attive(precursori, ctx)
+
+            # 6. Verifica se creare capsule di opportunità
+            self._verifica_opportunita(precursori, ctx)
+
+            # 7. Apprendimento dal Phantom
+            if self._tick_count % 50 == 0:
+                self._apprendi_dal_phantom(ctx.get('phantom_stats', {}))
+
+        except Exception as e:
+            log.error(f"[CI_TICK] {e}")
+
+        self._ctx_prev = ctx.copy()
+
+    # ── LETTURA PRECURSORI ────────────────────────────────────────────────
+
+    def _leggi_precursori(self, ctx: dict) -> dict:
+        """Trasforma il contesto grezzo in segnali predittivi interpretati."""
+        nerv         = ctx.get('nervosismo', 0.3)
+        breath_fase  = ctx.get('breath_fase', 'NEUTRO')
+        breath_en    = ctx.get('breath_energia', 0.5)
+        comparto     = ctx.get('comparto', 'NEUTRO')
+        oi_stato     = ctx.get('oi_stato', 'ATTESA')
+        oi_carica    = ctx.get('oi_carica', 0.0)
+        regime       = ctx.get('regime', 'RANGING')
+        drift        = ctx.get('drift', 0.0)
+        gomme        = ctx.get('gomme', 'INTER')
+
+        # Segnale RAIN in arrivo: nervosismo sale + breath in esalazione
+        rain_precursore = (nerv > self.NERV_RAIN_SOGLIA * 0.8 and
+                           breath_fase in (self.BREATH_ESALAZ, self.BREATH_PICCO))
+
+        # Segnale ATTACCO: OI FUOCO + breath in inalazione + comparto offensivo
+        attacco_precursore = (oi_carica >= self.OI_FUOCO_MIN and
+                               breath_fase == self.BREATH_INALAZ and
+                               comparto in ('ATTACCO', 'TRENDING_BULL'))
+
+        # Segnale DIFESA: nervosismo alto + drift negativo + comparto difensivo
+        difesa_precursore = (nerv > self.NERV_RAIN_SOGLIA and
+                              drift < -0.02 and
+                              comparto in ('DIFENSIVO', 'NEUTRO'))
+
+        # Trend nervosismo: sta salendo o scendendo?
+        nerv_trend = 0.0
+        if len(self._precursori_storia) >= 3:
+            nerv_storia = [p.get('nervosismo', 0.3) for p in self._precursori_storia[-3:]]
+            nerv_trend = nerv_storia[-1] - nerv_storia[0]
+
+        return {
+            'nervosismo':       nerv,
+            'breath_fase':      breath_fase,
+            'breath_energia':   breath_en,
+            'comparto':         comparto,
+            'oi_stato':         oi_stato,
+            'oi_carica':        oi_carica,
+            'regime':           regime,
+            'drift':            drift,
+            'gomme':            gomme,
+            'rain_precursore':  rain_precursore,
+            'attacco_precursore': attacco_precursore,
+            'difesa_precursore':  difesa_precursore,
+            'nerv_trend':       round(nerv_trend, 3),
+        }
+
+    # ── STATO PREDITTIVO ─────────────────────────────────────────────────
+
+    def _calcola_stato_predittivo(self, prec: dict) -> str:
+        """
+        Determina lo stato predittivo del sistema PRIMA che il mercato si dichiari.
+        Priorità: ALLERTA > DIFENSIVO > OFFENSIVO > NEUTRO
+        """
+        # ALLERTA: RAIN imminente — segnali multipli concordi
+        if prec['rain_precursore'] and prec['nerv_trend'] > 0.05:
+            return "ALLERTA"
+
+        # DIFENSIVO: drift negativo + nervosismo alto
+        if prec['difesa_precursore']:
+            return "DIFENSIVO"
+
+        # OFFENSIVO: tutto verde — OI carico, breath in inalazione, comparto attacco
+        if prec['attacco_precursore'] and prec['drift'] > 0:
+            return "OFFENSIVO"
+
+        # NEUTRO: condizioni miste
+        return "NEUTRO"
+
+    # ── CAMBIO DI STATO ──────────────────────────────────────────────────
+
+    def _on_cambio_stato(self, stato_da: str, stato_a: str, prec: dict, ctx: dict):
+        """Quando lo stato predittivo cambia → genera le capsule appropriate."""
+        ts = time.time()
+        evento = f"{stato_da}→{stato_a}"
+
+        if stato_a == "ALLERTA":
+            # RAIN in arrivo — capsule difensive immediate
+            self._attiva_capsula("CI_RAIN_SIZE", {
+                'id': 'CI_RAIN_SIZE', 'tipo': 'DIFENSIVO',
+                'azione': 'RIDUCI_SIZE', 'params': {'mult': 0.20},
+                'motivo': f"RAIN precursore: nerv={prec['nervosismo']:.0%} breath={prec['breath_fase']}",
+                'vita': 600, 'ts_nato': ts, 'forza': 0.8,
+            })
+            self._attiva_capsula("CI_RAIN_SOGLIA", {
+                'id': 'CI_RAIN_SOGLIA', 'tipo': 'DIFENSIVO',
+                'azione': 'ALZA_SOGLIA', 'params': {'delta': +10},
+                'motivo': f"RAIN precursore: soglia alzata preventivamente",
+                'vita': 600, 'ts_nato': ts, 'forza': 0.7,
+            })
+            self._log_evento(f"🌧 ALLERTA RAIN — 2 capsule difensive attivate PRIMA del cambio regime")
+
+        elif stato_a == "OFFENSIVO":
+            # Siamo pronti ad attaccare — capsule offensive
+            self._attiva_capsula("CI_ATTACCO_SOGLIA", {
+                'id': 'CI_ATTACCO_SOGLIA', 'tipo': 'OFFENSIVO',
+                'azione': 'ABBASSA_SOGLIA', 'params': {'delta': -5},
+                'motivo': f"OI FUOCO carica={prec['oi_carica']:.2f} + breath={prec['breath_fase']}",
+                'vita': 300, 'ts_nato': ts, 'forza': 0.75,
+            })
+            self._attiva_capsula("CI_ATTACCO_SIZE", {
+                'id': 'CI_ATTACCO_SIZE', 'tipo': 'OFFENSIVO',
+                'azione': 'BOOST_SIZE', 'params': {'mult': 1.25},
+                'motivo': f"Comparto={prec['comparto']} + OI carica alta",
+                'vita': 300, 'ts_nato': ts, 'forza': 0.65,
+            })
+            self._log_evento(f"🚀 OFFENSIVO — 2 capsule offensive. OI={prec['oi_carica']:.2f} comparto={prec['comparto']}")
+
+        elif stato_a == "DIFENSIVO":
+            self._attiva_capsula("CI_DIFESA_SOGLIA", {
+                'id': 'CI_DIFESA_SOGLIA', 'tipo': 'DIFENSIVO',
+                'azione': 'ALZA_SOGLIA', 'params': {'delta': +7},
+                'motivo': f"drift={prec['drift']:.3f} + nerv={prec['nervosismo']:.0%}",
+                'vita': 480, 'ts_nato': ts, 'forza': 0.6,
+            })
+            self._log_evento(f"🛡 DIFENSIVO — soglia alzata +7. drift={prec['drift']:.3f}")
+
+        elif stato_a == "NEUTRO":
+            # Ritorno al neutro — rimuovi capsule più aggressive
+            self._disattiva_tipo("ALLERTA")
+            self._log_evento(f"⚖️ NEUTRO — capsule di allerta rimosse. Mercato si stabilizza.")
+
+    # ── CAPSULE OPPORTUNITÀ ───────────────────────────────────────────────
+
+    def _verifica_opportunita(self, prec: dict, ctx: dict):
+        """
+        Controlla se esistono condizioni di opportunità non ancora capsulate.
+        Genera capsule di boost se tutto è allineato.
+        """
+        # Allineamento perfetto: FUOCO + INALAZIONE + SLICK + ATTACCO
+        if (prec['oi_carica'] >= 0.85 and
+            prec['breath_fase'] == self.BREATH_INALAZ and
+            prec['gomme'] == 'SLICK' and
+            prec['comparto'] in ('ATTACCO', 'TRENDING_BULL') and
+            'CI_PERFETTO' not in self._capsule_attive):
+
+            self._attiva_capsula("CI_PERFETTO", {
+                'id': 'CI_PERFETTO', 'tipo': 'OPPORTUNITA',
+                'azione': 'BOOST_SIZE', 'params': {'mult': 1.40},
+                'motivo': f"Allineamento PERFETTO: OI={prec['oi_carica']:.2f} SLICK INALAZIONE ATTACCO",
+                'vita': 180, 'ts_nato': time.time(), 'forza': 0.95,
+            })
+            self._log_evento(f"⚡ ALLINEAMENTO PERFETTO — capsula boost max attivata")
+
+    # ── AGGIORNAMENTO CAPSULE ─────────────────────────────────────────────
+
+    def _aggiorna_capsule_attive(self, prec: dict, ctx: dict):
+        """Rimuove capsule scadute, aggiorna forza in base a contesto corrente."""
+        ts = time.time()
+        scadute = []
+        for cid, cap in self._capsule_attive.items():
+            # Verifica scadenza
+            eta = ts - cap.get('ts_nato', ts)
+            if eta > cap.get('vita', 300):
+                scadute.append(cid)
+                continue
+            # Rafforza capsule DIFENSIVE se il nervosismo continua a salire
+            if cap['tipo'] == 'DIFENSIVO' and prec['nerv_trend'] > 0.03:
+                cap['forza'] = min(1.0, cap['forza'] + 0.05)
+            # Indebolisce capsule OFFENSIVE se il breath cade
+            if cap['tipo'] == 'OFFENSIVO' and prec['breath_fase'] == self.BREATH_ESALAZ:
+                cap['forza'] = max(0.0, cap['forza'] - 0.10)
+                if cap['forza'] < 0.2:
+                    scadute.append(cid)
+
+        for cid in scadute:
+            self._capsule_attive.pop(cid, None)
+            self._log_evento(f"💊 Capsula {cid} scaduta/rimossa")
+
+    # ── APPRENDIMENTO DAL PHANTOM ─────────────────────────────────────────
+
+    def _apprendi_dal_phantom(self, phantom_stats: dict):
+        """
+        Le capsule guardano il Phantom e imparano.
+        Se una capsula ha bloccato trade che il Phantom dice erano vincenti → si indebolisce.
+        Se ha bloccato perdenti → si rinforza.
+        """
+        for cid, cap in list(self._capsule_attive.items()):
+            mem = self._outcome_memory.get(cid, {})
+            wins   = mem.get('wins', 0)
+            losses = mem.get('losses', 0)
+            tot = wins + losses
+            if tot < 5:
+                continue
+            wr = wins / tot
+            # Capsula difensiva che blocca troppi vincenti → indeboliscila
+            if cap['tipo'] == 'DIFENSIVO' and wr > 0.55:
+                cap['forza'] = max(0.1, cap['forza'] - 0.15)
+                self._log_evento(f"📉 {cid} indebolita — stava bloccando troppi vincenti (wr={wr:.0%})")
+            # Capsula difensiva che blocca perdenti → rinforza
+            elif cap['tipo'] == 'DIFENSIVO' and wr < 0.30:
+                cap['forza'] = min(1.0, cap['forza'] + 0.10)
+                self._log_evento(f"📈 {cid} rafforzata — sta bloccando perdenti (wr={wr:.0%})")
+
+    def register_outcome(self, capsule_id: str, was_win: bool, pnl: float):
+        """Registra l'esito di un trade bloccato/modificato da una capsula."""
+        if capsule_id not in self._outcome_memory:
+            self._outcome_memory[capsule_id] = {'wins': 0, 'losses': 0, 'pnl': 0.0}
+        mem = self._outcome_memory[capsule_id]
+        if was_win:
+            mem['wins'] += 1
+        else:
+            mem['losses'] += 1
+        mem['pnl'] += pnl
+
+    # ── INTERFACCIA CON IL BOT ────────────────────────────────────────────
+
+    def get_entry_mods(self) -> dict:
+        """
+        Ritorna le modifiche da applicare all'entry.
+        Chiamato da _evaluate_shadow_entry prima di ogni decisione.
+        """
+        soglia_delta = 0.0
+        size_mult    = 1.0
+        veto         = None
+        motivi       = []
+
+        for cid, cap in self._capsule_attive.items():
+            forza = cap.get('forza', 0.5)
+            az    = cap.get('azione', '')
+            par   = cap.get('params', {})
+
+            if az == 'ALZA_SOGLIA':
+                delta = par.get('delta', 0) * forza
+                soglia_delta += delta
+                motivi.append(f"{cid}:+{delta:.1f}")
+
+            elif az == 'ABBASSA_SOGLIA':
+                delta = par.get('delta', 0) * forza
+                soglia_delta += delta
+                motivi.append(f"{cid}:{delta:.1f}")
+
+            elif az == 'RIDUCI_SIZE':
+                size_mult = min(size_mult, par.get('mult', 1.0) + (1.0 - par.get('mult', 1.0)) * (1 - forza))
+                motivi.append(f"{cid}:size={size_mult:.2f}")
+
+            elif az == 'BOOST_SIZE':
+                size_mult = max(size_mult, 1.0 + (par.get('mult', 1.0) - 1.0) * forza)
+                motivi.append(f"{cid}:size={size_mult:.2f}")
+
+        return {
+            'soglia_delta': round(soglia_delta, 2),
+            'size_mult':    round(size_mult, 3),
+            'veto':         veto,
+            'motivi':       motivi,
+            'n_capsule':    len(self._capsule_attive),
+            'stato':        self._stato_predittivo,
+        }
+
+    def get_exit_signal(self, ctx: dict) -> dict:
+        """
+        Segnale anticipato di uscita dalla posizione.
+        Ritorna {'esci': bool, 'motivo': str}
+        """
+        prec = self._leggi_precursori(ctx)
+        # Uscita anticipata se ALLERTA mentre siamo long + breath in esalazione + nerv esplode
+        if (self._stato_predittivo == "ALLERTA" and
+            prec['breath_fase'] == self.BREATH_ESALAZ and
+            prec['nervosismo'] > 0.70):
+            return {'esci': True, 'motivo': f"CI_EXIT_ANTICIPATA: ALLERTA+ESALAZ+nerv={prec['nervosismo']:.0%}"}
+        return {'esci': False, 'motivo': ''}
+
+    # ── NARRATIVA VIVA ───────────────────────────────────────────────────
+
+    def get_narrative(self) -> list:
+        """
+        Ritorna la storia viva delle ultime decisioni per la dashboard.
+        Non numeri — frasi che raccontano cosa sta succedendo.
+        """
+        return list(self._storia)
+
+    def get_status_dashboard(self) -> dict:
+        """Snapshot completo per heartbeat dashboard."""
+        caps_list = []
+        for cid, cap in self._capsule_attive.items():
+            eta = time.time() - cap.get('ts_nato', time.time())
+            vita_rim = max(0, cap.get('vita', 300) - eta)
+            caps_list.append({
+                'id':      cid,
+                'tipo':    cap.get('tipo', '?'),
+                'azione':  cap.get('azione', '?'),
+                'motivo':  cap.get('motivo', ''),
+                'forza':   round(cap.get('forza', 0), 2),
+                'ttl':     round(vita_rim),
+            })
+        return {
+            'stato':           self._stato_predittivo,
+            'capsule_attive':  caps_list,
+            'n_capsule':       len(self._capsule_attive),
+            'storia':          self._storia[-8:],
+            'tick':            self._tick_count,
+        }
+
+    # ── HELPER INTERNI ────────────────────────────────────────────────────
+
+    def _attiva_capsula(self, cid: str, cap: dict):
+        self._capsule_attive[cid] = cap
+
+    def _disattiva_tipo(self, tipo: str):
+        da_rimuovere = [cid for cid, c in self._capsule_attive.items() if c.get('tipo') == tipo]
+        for cid in da_rimuovere:
+            self._capsule_attive.pop(cid, None)
+
+    def _log_evento(self, msg: str):
+        ts_str = datetime.utcnow().strftime('%H:%M:%S')
+        entry = f"[{ts_str}] {msg}"
+        self._storia.append(entry)
+        if len(self._storia) > 20:
+            self._storia.pop(0)
+        log.info(f"[CI] {msg}")
+
+
+# ===========================================================================
 # LOG ANALYZER
 # ===========================================================================
 
@@ -4570,6 +4971,10 @@ class OvertopBassanoV15Production:
         self.telemetry       = StabilityTelemetry()
         self.signal_tracker  = PreTradeSignalTracker()
 
+        # ── CAPSULE INTELLIGENTE — Sistema Immunitario Predittivo ──────────
+        self.ci = CapsuleIntelligente()
+        log.info("[CI] ✅ CapsuleIntelligente attiva — sistema immunitario predittivo")
+
         # -- Ripristina intelligenza accumulata ----------------------------
         self._persist.load_brain(self.oracolo, self.memoria, self.calibratore)
         self._persist.load_signal_tracker(self.signal_tracker)
@@ -4917,6 +5322,26 @@ class OvertopBassanoV15Production:
                         self.heartbeat_data["breath_fase"] = self._breath._fase if self._breath else "NEUTRO"
                 finally:
                     self.heartbeat_lock.release()
+
+        # ── CAPSULE INTELLIGENTE — tick predittivo ad ogni ciclo ──────────
+        try:
+            _ci_ctx = {
+                'breath_fase':   (self._breath._fase    if _V16_ENGINES_OK and self._breath   else 'NEUTRO'),
+                'breath_energia':(self._breath._energia if _V16_ENGINES_OK and self._breath   else 0.5),
+                'nervosismo':    (self._nerv._nervosismo if _V16_ENGINES_OK and self._nerv    else 0.3),
+                'gomme':         (self._nerv._gomme_attuale if _V16_ENGINES_OK and self._nerv else 'INTER'),
+                'comparto':      (self._comparto._attivo if _V16_ENGINES_OK and self._comparto else 'NEUTRO'),
+                'oi_stato':      self._oi_stato,
+                'oi_carica':     self._oi_carica,
+                'regime':        self._regime_current,
+                'drift':         _drift_for_classify if '_drift_for_classify' in dir() else 0.0,
+                'momentum':      getattr(self, '_last_momentum', 'MEDIO'),
+                'phantom_stats': self._phantom_stats if hasattr(self, '_phantom_stats') else {},
+                'sc_pesi':       self.supercervello._pesi if hasattr(self, 'supercervello') else {},
+            }
+            self.ci.tick(_ci_ctx)
+        except Exception as _ci_e:
+            log.debug(f"[CI_TICK_ERR] {_ci_e}")
 
         # Calcola drift per il downgrade momentum in RANGING
         _drift_for_classify = 0.0
@@ -6527,6 +6952,34 @@ class OvertopBassanoV15Production:
                     # Pista asciutta — size piena
                     pass
 
+            # ── CAPSULE INTELLIGENTE: modifiche predittive ───────────────────
+            try:
+                _ci_mods = self.ci.get_entry_mods()
+                if _ci_mods['n_capsule'] > 0:
+                    # Applica soglia_delta: riduce o aumenta il gap score/soglia
+                    if _ci_mods['soglia_delta'] != 0:
+                        soglia_adj = soglia + _ci_mods['soglia_delta']
+                        # Rispetta sempre il floor assoluto
+                        soglia_adj = max(48.0, soglia_adj)
+                        if not result.get('enter') and score >= soglia_adj:
+                            result['enter'] = True
+                            self._log_m2("💊", f"CI_ENTRY_UNLOCK: soglia {soglia:.1f}→{soglia_adj:.1f} "
+                                             f"motivi={_ci_mods['motivi']}")
+                        elif result.get('enter') and score < soglia_adj:
+                            result['enter'] = False
+                            self._log_m2("💊", f"CI_ENTRY_BLOCK: soglia alzata {soglia:.1f}→{soglia_adj:.1f} "
+                                             f"motivi={_ci_mods['motivi']}")
+                    # Applica size_mult
+                    if _ci_mods['size_mult'] != 1.0 and result.get('enter'):
+                        old_size = result.get('size', 0.3)
+                        result['size'] = round(
+                            min(1.0, max(0.05, old_size * _ci_mods['size_mult'])), 3
+                        )
+                        self._log_m2("💊", f"CI_SIZE: {old_size:.2f}→{result['size']:.2f} "
+                                         f"stato={_ci_mods['stato']}")
+            except Exception as _ci_e:
+                log.debug(f"[CI_ENTRY_ERR] {_ci_e}")
+
             # ── ENTRA ────────────────────────────────────────────────────────
             size = result.get('size', 0.3)
             self._log_m2("🚀",
@@ -6569,6 +7022,30 @@ class OvertopBassanoV15Production:
 
             # CRITICO: direzione al momento dell'ENTRY, non quella attuale
             entry_direction = self._shadow.get("direction", "LONG")
+
+            # ── CAPSULE INTELLIGENTE EXIT — uscita anticipata predittiva ────
+            if duration > 5:
+                try:
+                    _ci_exit_ctx = {
+                        'breath_fase':    (self._breath._fase    if _V16_ENGINES_OK and self._breath else 'NEUTRO'),
+                        'nervosismo':     (self._nerv._nervosismo if _V16_ENGINES_OK and self._nerv  else 0.3),
+                        'comparto':       (self._comparto._attivo if _V16_ENGINES_OK and self._comparto else 'NEUTRO'),
+                        'oi_stato':       self._oi_stato,
+                        'oi_carica':      self._oi_carica,
+                        'regime':         self._regime_current,
+                        'drift':          0.0,
+                        'gomme':          (self._nerv._gomme_attuale if _V16_ENGINES_OK and self._nerv else 'INTER'),
+                    }
+                    _ci_exit = self.ci.get_exit_signal(_ci_exit_ctx)
+                    if _ci_exit['esci']:
+                        self._log_m2("💊", f"CI_EXIT: {_ci_exit['motivo']}")
+                        self._close_shadow_position(
+                            price, momentum, volatility, trend,
+                            reason="CI_EXIT_ANTICIPATA"
+                        )
+                        return
+                except Exception as _ci_ex:
+                    log.debug(f"[CI_EXIT_ERR] {_ci_ex}")
 
             # ── BREATH EXIT — priorità alta ─────────────────────────────────
             if _V16_ENGINES_OK and self._breath and duration > 10:
@@ -7677,11 +8154,63 @@ class OvertopBassanoV15Production:
                         self.heartbeat_data["gomme"]      = self._nerv._gomme_attuale
                     if self._comparto:
                         self.heartbeat_data["comparto"]   = self._comparto._attivo
+                        try:
+                            _sw_log = getattr(self._comparto, '_switch_log', [])
+                            self.heartbeat_data["switch_log"] = list(_sw_log)[-10:]
+                        except Exception:
+                            self.heartbeat_data["switch_log"] = []
+                        try:
+                            _tutti = getattr(self._comparto, '_comparti_stats', {})
+                            if not _tutti and hasattr(self._comparto, '_attivo'):
+                                _nomi = ['DIFENSIVO','NEUTRO','ATTACCO','TRENDING_BULL','TRENDING_BEAR']
+                                _tutti = {n: {'attivo': n == self._comparto._attivo} for n in _nomi}
+                            self.heartbeat_data["comparti_tutti"] = _tutti
+                        except Exception:
+                            self.heartbeat_data["comparti_tutti"] = {}
                     if self._breath:
                         self.heartbeat_data["breath"] = {
                             "fase":    self._breath._fase,
                             "energia": round(self._breath._energia, 2),
                         }
+
+                # ── CapsuleIntelligente — stato predittivo live ──────────
+                try:
+                    _ci_dash = self.ci.get_status_dashboard()
+                    self.heartbeat_data["ci_stato"]   = _ci_dash["stato"]
+                    self.heartbeat_data["ci_capsule"] = _ci_dash["capsule_attive"]
+                    self.heartbeat_data["ci_storia"]  = _ci_dash["storia"]
+                    self.heartbeat_data["ci_n"]       = _ci_dash["n_capsule"]
+                except Exception:
+                    pass
+
+                # ── ia_capsule_attive — lista capsule vive per dashboard ──
+                try:
+                    _cm = self.capsule_manager
+                    if _cm and hasattr(_cm, 'get_active_capsules'):
+                        self.heartbeat_data["ia_capsule_attive"] = _cm.get_active_capsules()
+                    elif _cm and hasattr(_cm, 'capsule_file'):
+                        import json as _json
+                        if os.path.exists(_cm.capsule_file):
+                            with open(_cm.capsule_file) as _f:
+                                _caps = _json.load(_f)
+                            _now_ts = time.time()
+                            self.heartbeat_data["ia_capsule_attive"] = [
+                                {
+                                    'id':          c.get('id', c.get('capsule_id', '?')),
+                                    'tipo':        c.get('tipo', c.get('type', '?')),
+                                    'ttl_seconds': max(0, int(c.get('scade_ts', _now_ts) - _now_ts))
+                                                   if c.get('scade_ts') else 0,
+                                    'enabled':     c.get('enabled', True),
+                                }
+                                for c in _caps if c.get('enabled', True)
+                            ]
+                        else:
+                            self.heartbeat_data["ia_capsule_attive"] = []
+                    else:
+                        self.heartbeat_data["ia_capsule_attive"] = []
+                except Exception:
+                    self.heartbeat_data["ia_capsule_attive"] = []
+
             self.heartbeat_lock.release()
 
     def _get_shadow_short_report(self):
