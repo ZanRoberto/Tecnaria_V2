@@ -1311,7 +1311,10 @@ class CapsuleIntelligente:
             # 6. Verifica se creare capsule di opportunità
             self._verifica_opportunita(precursori, ctx)
 
-            # 7. Apprendimento dal Phantom
+            # 7. Capsule di contesto persistente — attive anche senza cambio stato
+            self._verifica_contesto_persistente(precursori, ctx)
+
+            # 8. Apprendimento dal Phantom
             if self._tick_count % 50 == 0:
                 self._apprendi_dal_phantom(ctx.get('phantom_stats', {}))
 
@@ -1466,6 +1469,72 @@ class CapsuleIntelligente:
                 'vita': 180, 'ts_nato': time.time(), 'forza': 0.95,
             })
             self._log_evento(f"⚡ ALLINEAMENTO PERFETTO — capsula boost max attivata")
+
+    def _verifica_contesto_persistente(self, prec: dict, ctx: dict):
+        """
+        Capsule attive anche senza cambio di stato — leggono il contesto
+        accumulato nel tempo, non solo i transitori.
+
+        CAPSULA 1 — RANGING_EDGE:
+        Signal Tracker ha hit_rate > 0.55 su 200+ osservazioni in RANGING
+        → abbassa soglia di 8 punti per catturare l'edge statistico.
+
+        CAPSULA 2 — FUOCO_WINDOW:
+        OI ha toccato FUOCO nell'ultimo minuto (anche se ora è sceso a CARICA)
+        → apre finestra di 30s con soglia abbassata di 6 punti.
+        """
+        ts = time.time()
+        signal_top = ctx.get('signal_top', [])
+        oi_stato   = prec.get('oi_stato', 'ATTESA')
+        oi_carica  = prec.get('oi_carica', 0.0)
+        regime     = prec.get('regime', 'RANGING')
+
+        # ── CAPSULA 1: RANGING_EDGE ─────────────────────────────────────────
+        # Signal Tracker dice che in RANGING c'è un edge reale > 55%
+        ranging_hit = 0.0
+        ranging_n   = 0
+        for st in signal_top:
+            if 'RANGING' in st.get('context', '') and st.get('n', 0) >= 200:
+                ranging_hit = st.get('hit_60s', 0.0)
+                ranging_n   = st.get('n', 0)
+                break
+
+        if (ranging_hit >= 0.55 and ranging_n >= 200 and
+            regime == 'RANGING' and
+            'CI_RANGING_EDGE' not in self._capsule_attive):
+            self._attiva_capsula("CI_RANGING_EDGE", {
+                'id': 'CI_RANGING_EDGE', 'tipo': 'OPPORTUNITA',
+                'azione': 'ABBASSA_SOGLIA', 'params': {'delta': -8},
+                'motivo': f"RANGING edge: hit={ranging_hit:.0%} n={ranging_n} — soglia abbassata",
+                'vita': 300, 'ts_nato': ts, 'forza': min(1.0, (ranging_hit - 0.55) * 10 + 0.5),
+            })
+            self._log_evento(f"📊 RANGING_EDGE — hit={ranging_hit:.0%} n={ranging_n} → soglia -8")
+
+        elif ranging_hit < 0.52 and 'CI_RANGING_EDGE' in self._capsule_attive:
+            # Edge è svanito — rimuovi la capsula
+            self._capsule_attive.pop('CI_RANGING_EDGE', None)
+            self._log_evento(f"📊 RANGING_EDGE rimossa — hit sceso a {ranging_hit:.0%}")
+
+        # ── CAPSULA 2: FUOCO_WINDOW ─────────────────────────────────────────
+        # Traccia l'ultimo momento in cui OI era FUOCO
+        if oi_stato == 'FUOCO' and oi_carica >= 0.80:
+            self._ultimo_fuoco_ts = ts
+
+        # Se FUOCO è stato visto negli ultimi 45 secondi → finestra aperta
+        _ultimo_fuoco = getattr(self, '_ultimo_fuoco_ts', 0.0)
+        _eta_fuoco    = ts - _ultimo_fuoco
+        if (_eta_fuoco < 45 and _ultimo_fuoco > 0 and
+            'CI_FUOCO_WINDOW' not in self._capsule_attive and
+            regime == 'RANGING'):
+            self._attiva_capsula("CI_FUOCO_WINDOW", {
+                'id': 'CI_FUOCO_WINDOW', 'tipo': 'OPPORTUNITA',
+                'azione': 'ABBASSA_SOGLIA', 'params': {'delta': -6},
+                'motivo': f"FUOCO visto {_eta_fuoco:.0f}s fa — finestra entry aperta",
+                'vita': 45, 'ts_nato': ts, 'forza': max(0.3, 1.0 - _eta_fuoco/45),
+            })
+            self._log_evento(f"🔥 FUOCO_WINDOW aperta — {_eta_fuoco:.0f}s dal FUOCO")
+
+
 
     # ── AGGIORNAMENTO CAPSULE ─────────────────────────────────────────────
 
@@ -5338,6 +5407,7 @@ class OvertopBassanoV15Production:
                 'momentum':      getattr(self, '_last_momentum', 'MEDIO'),
                 'phantom_stats': self._phantom_stats if hasattr(self, '_phantom_stats') else {},
                 'sc_pesi':       self.supercervello._pesi if hasattr(self, 'supercervello') else {},
+                'signal_top':    self.signal_tracker.dump_top(5) if hasattr(self, 'signal_tracker') else [],
             }
             self.ci.tick(_ci_ctx)
         except Exception as _ci_e:
