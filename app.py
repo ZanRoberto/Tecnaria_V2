@@ -977,6 +977,30 @@ canvas.spark { width:100%; height:40px; }
     </div>
 
     
+    <!-- CAPSULE INTELLIGENTE — Sistema Immunitario Predittivo -->
+    <div class="panel" style="margin-bottom:10px;border-color:#a855f7;border-width:2px;">
+      <div class="panel-head" style="background:linear-gradient(90deg,#1a0a2e,#2d1060);border-left:3px solid #a855f7;color:#a855f7;">
+        🧬 SISTEMA IMMUNITARIO — Capsule Predittive
+        <span id="ci-stato-badge" style="float:right;font-size:9px;padding:2px 8px;border-radius:10px;background:rgba(168,85,247,0.15);border:1px solid #a855f7">NEUTRO</span>
+      </div>
+      <div class="panel-body">
+        <!-- STATO + CAPSULE ATTIVE -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+          <div>
+            <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:4px">CAPSULE ATTIVE</div>
+            <div id="ci-capsule-list" style="max-height:120px;overflow-y:auto;font-size:10px"></div>
+          </div>
+          <div>
+            <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:4px">EFFETTI LIVE</div>
+            <div id="ci-effetti" style="font-size:10px;line-height:1.8"></div>
+          </div>
+        </div>
+        <!-- NARRATIVA VIVA -->
+        <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:4px">NARRATIVA VIVA</div>
+        <div id="ci-storia" style="max-height:100px;overflow-y:auto;font-size:10px;font-family:monospace;line-height:1.7;background:rgba(168,85,247,0.05);border-radius:4px;padding:6px"></div>
+      </div>
+    </div>
+
     <!-- V16 MOTORI -->
     <div class="panel">
       <div class="panel-head" style="background:linear-gradient(90deg,#0a1628,#0d1f3c);border-left:3px solid var(--green)">
@@ -1643,6 +1667,92 @@ const SCPanel = (() => {
       }).join('');
     }
     // ── FINE V16 ─────────────────────────────────────────────
+
+    // ── CAPSULE INTELLIGENTE — Sistema Immunitario Predittivo ─
+    const ciStato   = hb.ci_stato   || 'NEUTRO';
+    const ciCapsule = hb.ci_capsule || [];
+    const ciStoria  = hb.ci_storia  || [];
+    const ciN       = hb.ci_n       || 0;
+
+    const CI_STATO_COL = {
+      'ALLERTA':   '#ef4444',
+      'OFFENSIVO': '#00d97a',
+      'DIFENSIVO': '#3b82f6',
+      'NEUTRO':    '#6b7280',
+    };
+    const CI_TIPO_ICON = {
+      'DIFENSIVO':   '🛡',
+      'OFFENSIVO':   '🚀',
+      'ALLERTA':     '⚠️',
+      'OPPORTUNITA': '⚡',
+    };
+
+    // Badge stato
+    const ciStatoEl = $('ci-stato-badge');
+    if (ciStatoEl) {
+      ciStatoEl.textContent = ciStato + (ciN > 0 ? ` (${ciN})` : '');
+      ciStatoEl.style.background = (CI_STATO_COL[ciStato] || '#6b7280') + '22';
+      ciStatoEl.style.borderColor = CI_STATO_COL[ciStato] || '#6b7280';
+      ciStatoEl.style.color       = CI_STATO_COL[ciStato] || '#6b7280';
+    }
+
+    // Lista capsule attive
+    const ciListEl = $('ci-capsule-list');
+    if (ciListEl) {
+      if (ciCapsule.length) {
+        ciListEl.innerHTML = ciCapsule.map(c => {
+          const col  = CI_STATO_COL[c.tipo] || '#a855f7';
+          const icon = CI_TIPO_ICON[c.tipo] || '💊';
+          const ttl  = c.ttl > 60 ? Math.round(c.ttl/60)+'m' : c.ttl+'s';
+          const forza = Math.round((c.forza||0)*100);
+          return `<div style="display:flex;justify-content:space-between;align-items:center;
+            padding:3px 6px;margin-bottom:3px;border-radius:3px;
+            background:${col}11;border-left:2px solid ${col}">
+            <span style="color:${col}">${icon} ${c.id.replace('CI_','')}</span>
+            <span style="color:var(--dim);font-size:9px">${forza}% · ${ttl}</span>
+          </div>`;
+        }).join('');
+
+        // Effetti live: calcola soglia_delta e size_mult aggregati
+        let deltaTot = 0, sizeMult = 1.0;
+        ciCapsule.forEach(c => {
+          if (c.azione === 'ALZA_SOGLIA')    deltaTot += (c.params?.delta||0) * (c.forza||0.5);
+          if (c.azione === 'ABBASSA_SOGLIA') deltaTot += (c.params?.delta||0) * (c.forza||0.5);
+          if (c.azione === 'RIDUCI_SIZE')    sizeMult  = Math.min(sizeMult, c.params?.mult||1);
+          if (c.azione === 'BOOST_SIZE')     sizeMult  = Math.max(sizeMult, c.params?.mult||1);
+        });
+        const effEl = $('ci-effetti');
+        if (effEl) {
+          const dCol = deltaTot > 0 ? '#ef4444' : deltaTot < 0 ? '#00d97a' : '#6b7280';
+          const sCol = sizeMult < 1 ? '#3b82f6' : sizeMult > 1 ? '#00d97a' : '#6b7280';
+          effEl.innerHTML = `
+            <div style="color:${dCol}">Soglia: ${deltaTot>=0?'+':''}${deltaTot.toFixed(1)}</div>
+            <div style="color:${sCol}">Size mult: ×${sizeMult.toFixed(2)}</div>
+            <div style="color:#6b7280">Stato: ${ciStato}</div>`;
+        }
+      } else {
+        ciListEl.innerHTML = '<div style="color:#1e3a5f;font-size:10px;padding:8px 0">Nessuna capsula attiva — mercato neutro</div>';
+        const effEl = $('ci-effetti');
+        if (effEl) effEl.innerHTML = '<div style="color:#1e3a5f">Nessun effetto attivo</div>';
+      }
+    }
+
+    // Narrativa viva
+    const ciStoriaEl = $('ci-storia');
+    if (ciStoriaEl) {
+      if (ciStoria.length) {
+        ciStoriaEl.innerHTML = ciStoria.slice().reverse().map(s => {
+          const col = s.includes('ALLERTA')||s.includes('🌧') ? '#ef4444' :
+                      s.includes('OFFENSIVO')||s.includes('🚀') ? '#00d97a' :
+                      s.includes('DIFENSIVO')||s.includes('🛡') ? '#3b82f6' :
+                      s.includes('PERFETTO')||s.includes('⚡') ? '#a855f7' : '#4b6a8a';
+          return `<div style="color:${col};margin-bottom:2px">${s}</div>`;
+        }).join('');
+      } else {
+        ciStoriaEl.innerHTML = '<div style="color:#1e3a5f">In ascolto del mercato...</div>';
+      }
+    }
+    // ── FINE CAPSULE INTELLIGENTE ─────────────────────────────
 
 }
 
