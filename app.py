@@ -1227,6 +1227,14 @@ canvas.spark { width:100%; height:40px; }
         <span id="narratore-cap-ts" style="color:#4c1d95;margin-left:8px;float:right"></span>
         <div id="narratore-cap-motivo" style="color:#6b21a8;margin-top:2px;font-size:9px"></div>
       </div>
+      <!-- Pannello diagnostica canale Narratore→Bot -->
+      <div id="narratore-diag" style="padding:6px 12px;background:#0d0519;border-bottom:1px solid #2d1060;font-size:10px;font-family:monospace;">
+        <span style="color:#6b21a8;letter-spacing:1px;font-size:9px">📡 CANALE NARRATORE→BOT</span>
+        <span id="nd-iniettate" style="color:#00d97a;margin-left:12px">iniettate: 0</span>
+        <span id="nd-bloccate" style="color:#f59e0b;margin-left:12px">bloccate: 0</span>
+        <span id="nd-ultima" style="color:#4c1d95;margin-left:12px">ultima: mai</span>
+        <div id="nd-storia" style="margin-top:4px;color:#3d1a6e;font-size:9px;max-height:40px;overflow:hidden"></div>
+      </div>
       <div class="panel-body" id="narratore-body">
         <div style="color:#3d1a6e;font-size:10px;font-family:monospace;text-align:center;padding:16px 0">
           In ascolto del mercato...
@@ -1916,6 +1924,32 @@ const SCPanel = (() => {
       if (el('narratore-cap-forza'))  el('narratore-cap-forza').textContent = `forza=${ultCap.forza?.toFixed(2) || '?'}`;
       if (el('narratore-cap-ts'))     el('narratore-cap-ts').textContent    = (ultCap.ts || '').slice(11,16);
       if (el('narratore-cap-motivo')) el('narratore-cap-motivo').textContent = ultCap.motivo || '';
+    }
+
+    // Diagnostica canale Narratore→Bot
+    const diag = hb.narratore_diagnostica || {};
+    const ndI = document.getElementById('nd-iniettate');
+    const ndB = document.getElementById('nd-bloccate');
+    const ndU = document.getElementById('nd-ultima');
+    const ndS = document.getElementById('nd-storia');
+    if (ndI) {
+      const tot = diag.iniettate_tot || 0;
+      ndI.textContent = `iniettate: ${tot}`;
+      ndI.style.color = tot > 0 ? '#00d97a' : '#4c1d95';
+    }
+    if (ndB) ndB.textContent = `bloccate: ${diag.bloccate_tot || 0}`;
+    if (ndU) {
+      const ult = diag.ultima_iniettata;
+      ndU.textContent = ult ? `ultima: ${ult.ids?.join(',')} @ ${ult.ts}` : 'ultima: mai';
+      ndU.style.color = ult ? '#c4b5fd' : '#4c1d95';
+    }
+    if (ndS) {
+      const storia = (diag.storia || []).slice(-3).reverse();
+      ndS.innerHTML = storia.map(s =>
+        `<span style="color:#6b21a8">${s.ts}</span> ` +
+        `<span style="color:#00d97a">+[${s.iniettate?.join(',')||''}]</span>` +
+        (s.bloccate?.length ? ` <span style="color:#f59e0b">✗[${s.bloccate.join(',')}]</span>` : '')
+      ).join(' &nbsp;·&nbsp; ');
     }
 
     if (narrativa.length && narratoreBody) {
