@@ -657,13 +657,42 @@ Rispondi SOLO con la domanda, in italiano, senza spiegazioni aggiuntive.
 Esempio: "Perché l'OI è a FUOCO ma il sistema non entra nonostante il Signal Tracker mostri 87% di hit rate?"
 """
 
-PROMPT_RAGIONATORE = """Sei il Ragionatore di un sistema di trading algoritmico.
-Non conosci i dati del sistema — conosci solo la domanda che ti viene posta.
-Il tuo compito è ragionare liberamente, generare ipotesi, trovare possibili spiegazioni.
-Non devi essere certo — devi essere perspicace.
-Parla in prima persona, come se stessi pensando ad alta voce.
-Usa frasi come "Forse...", "Potrebbe essere che...", "Mi chiedo se...", "Una spiegazione è..."
-Rispondi in italiano, massimo 3-4 frasi. Sii diretto e curioso.
+PROMPT_RAGIONATORE = """Sei il Ragionatore del sistema OVERTOP BASSANO — un trading bot su BTC/USDC.
+
+CONOSCI L'ARCHITETTURA COMPLETA:
+
+COMPONENTI PRINCIPALI:
+- CampoGravitazionale: calcola lo score di entry (0-100). Componenti: seed(25pt), fingerprint_wr(25pt), RSI(10pt), MACD(10pt), regime(15pt), prebreakout(15pt). Soglia default 48-55.
+- OracoloDinamico: memoria fingerprint WR per contesto (momentum|volatility|trend|direction). Impara da trade reali con decay 0.95.
+- SuperCervello: pesi adattativi su 5 organi. campo_carica(0.3), oracolo_fp(0.22), signal_tracker(0.25), phantom_ratio(0.11), matrimonio(0.12).
+- PhantomTracker: simula ogni trade bloccato. Se bilancio positivo = sistema protegge bene. Se zavorra alta = stiamo bloccando troppo.
+- VeritatisTracker: confronta predizioni SC con outcome reali. SBAGLIATO = il SC blocca quando dovrebbe entrare.
+- CapsuleIntelligente (CI): sistema immunitario predittivo. Legge precursori (breath, nervosismo, OI, comparto) e genera capsule PRIMA del cambio regime. Capsule attive: CI_RANGING_EDGE (abbassa soglia -8 se hit>55%), CI_FUOCO_WINDOW (abbassa -6 se OI FUOCO recente), CI_OI_ESTREMO (abbassa -12 se OI>=0.95).
+- VETO_TOSSICO: blocca entry in contesti storicamente perdenti (DEBOLE+ALTA+SIDEWAYS WR 19%, ecc). Può essere bypassato da CI se ha evidenza contraria.
+- IntelligenzaAutonoma: genera capsule L2/L3 da trade reali. PROBLEMA: richiede trade nel buffer — con zero trade non genera nulla.
+
+IL PARADOSSO ATTUALE:
+Il sistema ha zero trade reali → IntelligenzaAutonoma non può generare capsule → senza capsule il sistema non entra → nessun trade reale.
+
+IL TUO RUOLO:
+Ricevi una domanda sull'anomalia rilevata dall'Osservatore.
+Devi fare DUE cose:
+1. Spiegare in 2 frasi cosa sta succedendo nel sistema (usa la tua conoscenza dell'architettura)
+2. Se esiste una capsula che risolverebbe l'anomalia, generarla in JSON
+
+FORMATO RISPOSTA (sempre questo schema):
+ANALISI: [2 frasi che spiegano l'anomalia usando i componenti reali del sistema]
+CAPSULA: [JSON capsula oppure "nessuna capsula necessaria"]
+
+Il JSON capsula deve avere questa struttura:
+{"id": "NOME_CAPSULA", "azione": "ABBASSA_SOGLIA|ALZA_SOGLIA|RIDUCI_SIZE|BOOST_SIZE", "params": {"delta": N oppure "mult": N}, "motivo": "spiegazione", "vita": secondi, "forza": 0.0-1.0, "priorita": 1-10}
+
+REGOLE:
+- Non inventare dati — ragiona solo su quello che c'è nella domanda
+- Le capsule devono essere proporzionate — non abbassare soglie oltre -15
+- Se il Phantom bilancio è molto positivo e zavorra bassa → il sistema protegge bene, non serve capsula aggressiva
+- Se VETO blocca con WR < 5% su 500+ → è giusto bloccare, non serve capsula
+- Rispondi in italiano
 """
 
 def _chiama_deepseek(prompt_sistema: str, messaggio: str, max_tokens: int = 200) -> str:
@@ -753,23 +782,64 @@ def narratore_thread():
                 time.sleep(NARRATORE_INTERVAL)
                 continue
 
-            # ── LIVELLO 2: RAGIONATORE ────────────────────────────────
+            # ── LIVELLO 2: RAGIONATORE con architettura ───────────────
             risposta = _chiama_deepseek(
                 PROMPT_RAGIONATORE,
                 domanda,
-                max_tokens=180
+                max_tokens=300
             )
 
             if not risposta:
                 time.sleep(NARRATORE_INTERVAL)
                 continue
 
+            # ── ESTRAI CAPSULA DAL RAGIONATORE ────────────────────────
+            capsula_iniettata = None
+            try:
+                if "CAPSULA:" in risposta and "{" in risposta:
+                    # Estrae il JSON dalla risposta
+                    import re as _re
+                    json_match = _re.search(r'\{[^}]+\}', risposta)
+                    if json_match:
+                        cap_raw = json_match.group(0)
+                        cap_data = json.loads(cap_raw)
+                        # Valida campi minimi
+                        if all(k in cap_data for k in ['id', 'azione', 'params', 'motivo']):
+                            # Gerarchia autorità: Ragionatore = priorità 3 (bassa)
+                            # Non sovrascrive capsule CI (priorità 1-2)
+                            cap_data['fonte'] = 'RAGIONATORE_AI'
+                            cap_data['ts'] = datetime.utcnow().isoformat()
+                            cap_data.setdefault('vita', 120)
+                            cap_data.setdefault('forza', 0.4)
+                            cap_data.setdefault('priorita', 3)
+
+                            # Inietta nel heartbeat — il bot la leggerà al prossimo ciclo CI
+                            with heartbeat_lock:
+                                capsule_ra = heartbeat_data.get("capsule_ragionatore", [])
+                                # Rimuovi eventuale capsula precedente con stesso ID
+                                capsule_ra = [c for c in capsule_ra if c.get('id') != cap_data['id']]
+                                capsule_ra.append(cap_data)
+                                if len(capsule_ra) > 5:
+                                    capsule_ra = capsule_ra[-5:]
+                                heartbeat_data["capsule_ragionatore"] = capsule_ra
+
+                            capsula_iniettata = cap_data['id']
+                            log(f"[NARRATORE] 💊 Capsula iniettata: {cap_data['id']} — {cap_data['motivo'][:50]}")
+            except Exception as _ce:
+                log(f"[NARRATORE] Capsula parse error: {_ce}")
+
+            # ── SEPARA ANALISI DA CAPSULA per la narrativa ────────────
+            analisi_testo = risposta
+            if "CAPSULA:" in risposta:
+                analisi_testo = risposta.split("CAPSULA:")[0].replace("ANALISI:", "").strip()
+
             # ── SALVA NELLA NARRATIVA ─────────────────────────────────
             ts = datetime.utcnow().strftime("%H:%M")
             narrativa_entry = {
-                "ts":       ts,
-                "domanda":  domanda,
-                "risposta": risposta,
+                "ts":              ts,
+                "domanda":         domanda,
+                "risposta":        analisi_testo,
+                "capsula":         capsula_iniettata,
             }
 
             with heartbeat_lock:
@@ -779,7 +849,7 @@ def narratore_thread():
                     storico = storico[-10:]
                 heartbeat_data["narrativa_ds"] = storico
 
-            log(f"[NARRATORE] 💬 {ts} | Q: {domanda[:60]}...")
+            log(f"[NARRATORE] 💬 {ts} | Q: {domanda[:60]}..." + (f" | 💊 {capsula_iniettata}" if capsula_iniettata else ""))
 
         except Exception as e:
             log(f"[NARRATORE] Errore: {e}")
