@@ -5427,6 +5427,75 @@ class OvertopBassanoV15Production:
                 'signal_top':    self.signal_tracker.dump_top(5) if hasattr(self, 'signal_tracker') else [],
             }
             self.ci.tick(_ci_ctx)
+
+            # ── CAPSULE DAL RAGIONATORE AI → CI ──────────────────────
+            # Legge capsule generate dal Narratore e le inietta nella CI
+            # Gerarchia: capsule CI esistenti hanno sempre precedenza
+            _ra_iniettate = []
+            _ra_bloccate  = []
+            try:
+                _caps_ra = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
+                _now_ra  = time.time()
+                for _cap in _caps_ra:
+                    _cid = _cap.get('id', '')
+                    if not _cid:
+                        continue
+                    # Non sovrascrive capsule CI già attive
+                    if _cid in self.ci._capsule_attive:
+                        _ra_bloccate.append(f"{_cid}(già_attiva)")
+                        continue
+                    # Verifica scadenza
+                    try:
+                        from datetime import datetime as _dt2
+                        _cap_ts = _dt2.fromisoformat(_cap.get('ts','')).timestamp()
+                        if _now_ra - _cap_ts > _cap.get('vita', 300):
+                            _ra_bloccate.append(f"{_cid}(scaduta)")
+                            continue
+                    except Exception:
+                        pass
+                    # Inietta con forza limitata
+                    _forza = min(0.65, _cap.get('forza', 0.5))
+                    self.ci._attiva_capsula(_cid, {
+                        'id':     _cid,
+                        'tipo':   'OPPORTUNITA',
+                        'azione': _cap.get('azione', 'ABBASSA_SOGLIA'),
+                        'params': _cap.get('params', {'delta': -5}),
+                        'motivo': f"[RA] {_cap.get('motivo','')[:60]}",
+                        'vita':   _cap.get('vita', 300),
+                        'ts_nato': _now_ra,
+                        'forza':  _forza,
+                    })
+                    _ra_iniettate.append(_cid)
+                    log.info(f"[CI] 🤖 RA capsula→CI: {_cid} forza={_forza:.2f}")
+            except Exception as _ra_e:
+                log.debug(f"[CI_RA_ERR] {_ra_e}")
+
+            # Aggiorna diagnostica nel heartbeat
+            if _ra_iniettate or _ra_bloccate:
+                try:
+                    _diag = (self.heartbeat_data or {}).get("narratore_diagnostica", {
+                        "iniettate_tot": 0, "bloccate_tot": 0,
+                        "ultima_iniettata": None, "storia": []
+                    })
+                    _diag["iniettate_tot"] += len(_ra_iniettate)
+                    _diag["bloccate_tot"]  += len(_ra_bloccate)
+                    if _ra_iniettate:
+                        _diag["ultima_iniettata"] = {
+                            "ids": _ra_iniettate,
+                            "ts":  datetime.utcnow().strftime("%H:%M:%S")
+                        }
+                        _storia = _diag.get("storia", [])
+                        _storia.append({
+                            "ts":       datetime.utcnow().strftime("%H:%M:%S"),
+                            "iniettate": _ra_iniettate,
+                            "bloccate":  _ra_bloccate,
+                        })
+                        _diag["storia"] = _storia[-20:]
+                    if self.heartbeat_data is not None:
+                        self.heartbeat_data["narratore_diagnostica"] = _diag
+                except Exception:
+                    pass
+
         except Exception as _ci_e:
             log.debug(f"[CI_TICK_ERR] {_ci_e}")
 
