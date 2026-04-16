@@ -1534,6 +1534,23 @@ class CapsuleIntelligente:
             })
             self._log_evento(f"🔥 FUOCO_WINDOW aperta — {_eta_fuoco:.0f}s dal FUOCO")
 
+        # ── CAPSULA 3: OI_ESTREMO ────────────────────────────────────────────
+        # OI >= 0.95 è una dichiarazione fisica del mercato — non un'opinione.
+        # Quando il mercato urla così forte, il VETO storico diventa irrilevante.
+        # Questa capsula bypassa il requisito hit_rate >= 0.63 nel CI_OVERRIDE.
+        _oi_estremo = oi_carica >= 0.95 and oi_stato == 'FUOCO'
+        if _oi_estremo and 'CI_OI_ESTREMO' not in self._capsule_attive:
+            self._attiva_capsula("CI_OI_ESTREMO", {
+                'id': 'CI_OI_ESTREMO', 'tipo': 'OPPORTUNITA',
+                'azione': 'ABBASSA_SOGLIA', 'params': {'delta': -12},
+                'motivo': f"OI ESTREMO carica={oi_carica:.3f} — dichiarazione fisica del mercato",
+                'vita': 60, 'ts_nato': ts, 'forza': min(1.0, (oi_carica - 0.95) * 20 + 0.5),
+            })
+            self._log_evento(f"⚡ OI_ESTREMO — carica={oi_carica:.3f} soglia -12 — il mercato urla")
+        elif not _oi_estremo and 'CI_OI_ESTREMO' in self._capsule_attive:
+            self._capsule_attive.pop('CI_OI_ESTREMO', None)
+            self._log_evento(f"⚡ OI_ESTREMO rimossa — carica scesa a {oi_carica:.3f}")
+
 
 
     # ── AGGIORNAMENTO CAPSULE ─────────────────────────────────────────────
@@ -6957,18 +6974,26 @@ class OvertopBassanoV15Production:
                         try:
                             _ci_mods_veto = self.ci.get_entry_mods()
                             # CI può ribaltare il VETO se:
-                            # 1. Ha almeno una capsula OPPORTUNITA attiva con forza >= 0.5
+                            # 1. Ha almeno una capsula OPPORTUNITA attiva
                             # 2. Signal Tracker conferma hit_rate >= 0.63 su 300+ campioni
+                            # OPPURE: OI_ESTREMO >= 0.95 — il mercato urla, nessuna soglia regge
                             _ci_caps_forti = [
                                 c for c in _ci_mods_veto.get('motivi', [])
-                                if 'RANGING_EDGE' in c or 'FUOCO_WINDOW' in c
+                                if 'RANGING_EDGE' in c or 'FUOCO_WINDOW' in c or 'OI_ESTREMO' in c
                             ]
+                            _oi_estremo_bypass = (
+                                'CI_OI_ESTREMO' in self.ci._capsule_attive and
+                                self._oi_carica >= 0.95
+                            )
                             _st_top = self.signal_tracker.dump_top(3)
                             _st_edge = any(
                                 s.get('hit_60s', 0) >= 0.63 and s.get('n', 0) >= 300
                                 for s in _st_top
                             )
-                            if _ci_caps_forti and _st_edge:
+                            if _oi_estremo_bypass:
+                                _ci_override = True
+                                _motivo_ci = f"CI_OI_ESTREMO: carica={self._oi_carica:.3f} — dichiarazione fisica"
+                            elif _ci_caps_forti and _st_edge:
                                 _ci_override = True
                                 _motivo_ci = f"CI_OVERRIDE_VETO: ST_hit>63% + capsule={_ci_caps_forti}"
                         except Exception:
