@@ -54,6 +54,19 @@ logging.basicConfig(
     format='[%(asctime)s] %(message)s',
     datefmt='%H:%M:%S'
 )
+
+# ═══════════════════════════════════════════════
+# V16 ENGINES — integrati in V15
+# ═══════════════════════════════════════════════
+try:
+    from comparto_engine import CompartoEngine, COMPARTI
+    from nervosismo_engine import NervosismoEngine
+    from breath_engine import BreathEngine
+    _V16_ENGINES_OK = True
+except ImportError:
+    _V16_ENGINES_OK = False
+    log_placeholder = None
+
 log = logging.getLogger(__name__)
 
 # ===========================================================================
@@ -330,6 +343,19 @@ class StabilityTelemetry:
 # CAPSULE RUNTIME
 # ===========================================================================
 
+# ===========================================================================
+# CAPSULE MANAGER — Sistema Unificato
+# Sostituisce CapsuleRuntime + ConfigHotReloader + IntelligenzaAutonoma
+# + VETI_LONG/SHORT hardcodati. Asset-aware. SQLite. Dashboard-ready.
+# ===========================================================================
+try:
+    from capsule_manager import CapsuleManager
+    _CM_AVAILABLE = True
+    log.info("[CM] ✅ CapsuleManager disponibile")
+except ImportError:
+    _CM_AVAILABLE = False
+    log.warning("[CM] ⚠️ capsule_manager.py non trovato — uso fallback CapsuleRuntime")
+
 class CapsuleRuntime:
     """Valuta e applica capsule da capsule_attive.json - hot reload senza restart."""
 
@@ -514,7 +540,14 @@ class IntelligenzaAutonoma:
         """Cuore del motore. Osserva, misura, genera. Ritorna le capsule create."""
         nuove = []
         trades = list(self._trade_buffer)
+
+        # -- LIVELLO 2 da Signal Tracker — non aspetta trade reali --------
+        # Il Signal Tracker ha centinaia di osservazioni — usale subito
+        nuove += self._analisi_l2_signal_tracker()
+
         if len(trades) < self.MIN_SAMPLES_L3:
+            if nuove:
+                self._persisti(nuove)
             return nuove
 
         # -- LIVELLO 2: pattern statistici ---------------------------------
@@ -532,6 +565,77 @@ class IntelligenzaAutonoma:
 
         if nuove:
             self._persisti(nuove)
+        return nuove
+
+    def _analisi_l2_signal_tracker(self) -> list:
+        """
+        Genera capsule direttamente dal Signal Tracker.
+        Non aspetta trade reali — usa le osservazioni di mercato accumulate.
+        MIN 100 segnali chiusi per contesto.
+        """
+        nuove = []
+        if not hasattr(self, '_signal_tracker_ref') or not self._signal_tracker_ref:
+            return nuove
+
+        stats = self._signal_tracker_ref._stats
+        for context, s in stats.items():
+            n = s.get('n', 0)
+            if n < 100:
+                continue
+
+            hit = s.get('hit_60s', 0.5)
+            pnl = s.get('pnl_sim_avg', 0)
+
+            # Parsing context: "RANGING|LONG|DEBOLE_<58"
+            parts = context.split('|')
+            if len(parts) != 3:
+                continue
+            regime, direction, score_band = parts
+
+            cap_id = f"L2_ST_{context.replace('|','_').replace('<','lt').replace('>','gt')}"
+
+            # OPPORTUNITA: hit > 55% E pnl positivo → boost entry
+            if hit >= 0.55 and pnl > 0.05 and n >= 200:
+                if not any(c.get('id') == cap_id for c in self._auto_capsules):
+                    nuove.append({
+                        'id': cap_id,
+                        'livello': 'L2',
+                        'tipo': 'BOOST_ST',
+                        'descrizione': f"L2_ST OPP: {context} hit={hit:.0%} pnl={pnl:+.3f} n={n}",
+                        'trigger': [
+                            {'param': 'regime',    'op': '==', 'value': regime},
+                            {'param': 'direction', 'op': '==', 'value': direction},
+                        ],
+                        'azione': {'type': 'modifica_soglia', 'params': {'delta': -3}},
+                        'priority': 5,
+                        'enabled': True,
+                        'vita': 3600,
+                        'samples': n,
+                        'wr': hit,
+                        'pnl_avg': pnl,
+                    })
+
+            # TOSSICO: hit < 40% E pnl negativo → blocca
+            elif hit < 0.40 and pnl < -0.05 and n >= 100:
+                if not any(c.get('id') == cap_id for c in self._auto_capsules):
+                    nuove.append({
+                        'id': cap_id,
+                        'livello': 'L2',
+                        'tipo': 'BLOCCA_ST',
+                        'descrizione': f"L2_ST TOSSICO: {context} hit={hit:.0%} pnl={pnl:+.3f} n={n}",
+                        'trigger': [
+                            {'param': 'regime',    'op': '==', 'value': regime},
+                            {'param': 'direction', 'op': '==', 'value': direction},
+                        ],
+                        'azione': {'type': 'blocca_entry', 'params': {'reason': f'ST_TOSSICO_{context}'}},
+                        'priority': 8,
+                        'enabled': True,
+                        'vita': 7200,
+                        'samples': n,
+                        'wr': hit,
+                        'pnl_avg': pnl,
+                    })
+
         return nuove
 
     def _analisi_auto_correttive(self) -> list:
@@ -1131,6 +1235,493 @@ class IntelligenzaAutonoma:
 RealtimeLearningEngine = IntelligenzaAutonoma
 
 # ===========================================================================
+# CAPSULE INTELLIGENTE — Sistema Immunitario Predittivo
+# ===========================================================================
+
+class CapsuleIntelligente:
+    """
+    Sistema immunitario predittivo del bot.
+
+    NON reagisce al regime dichiarato — ANTICIPA il cambiamento leggendo
+    i precursori: breath, nervosismo, comparto, OI, drift, regime, momentum.
+
+    QUATTRO LIVELLI:
+      P1 - Predittivo:  legge precursori → prepara capsule PRIMA del cambio
+      P2 - Adattivo:    genera il set capsule giusto per QUESTO momento
+      P3 - Pervasivo:   ogni punto di decisione (entry/exit/size/soglia) sente le capsule
+      P4 - Evolutivo:   le capsule imparano dal Phantom → si rafforzano o muoiono
+
+    INTERFACCIA con il bot:
+      tick(ctx)         → aggiorna stato predittivo ad ogni tick
+      get_entry_mods()  → modifche da applicare all'entry (soglia delta, size mult, veto)
+      get_exit_signal() → segnale anticipato di uscita
+      get_narrative()   → testo vivo per la dashboard
+      register_outcome(capsule_id, was_win, pnl) → apprendimento post-trade
+    """
+
+    # Soglie precursori
+    NERV_RAIN_SOGLIA   = 0.60   # nervosismo sopra = RAIN in arrivo
+    NERV_SLICK_SOGLIA  = 0.25   # nervosismo sotto = pista asciutta
+    BREATH_ESALAZ      = "ESALAZIONE"
+    BREATH_INALAZ      = "INALAZIONE"
+    BREATH_PICCO       = "PICCO"
+    OI_FUOCO_MIN       = 0.75   # OI FUOCO da questa carica in su
+
+    def __init__(self):
+        self._stato_predittivo = "NEUTRO"   # ALLERTA / OFFENSIVO / DIFENSIVO / NEUTRO
+        self._capsule_attive: dict = {}      # {capsule_id: capsula_dict}
+        self._storia: list = []              # log ultimi 20 eventi per narrativa
+        self._outcome_memory: dict = {}      # {capsule_id: {'wins':0,'losses':0,'pnl':0}}
+        self._tick_count = 0
+        self._ultimo_cambio_stato = 0.0
+        self._precursori_storia: list = []   # rolling 10 tick per trend precursori
+        self._ctx_prev = {}
+
+    # ── TICK PRINCIPALE ──────────────────────────────────────────────────
+
+    def tick(self, ctx: dict):
+        """
+        Chiamato ad ogni tick del bot.
+        ctx contiene: breath_fase, breath_energia, nervosismo, gomme,
+                      comparto, oi_stato, oi_carica, regime, drift,
+                      momentum, volatility, trend, sc_pesi, phantom_stats
+        """
+        self._tick_count += 1
+        try:
+            # 1. Leggi precursori
+            precursori = self._leggi_precursori(ctx)
+
+            # 2. Aggiorna storico precursori (rolling 10)
+            self._precursori_storia.append(precursori)
+            if len(self._precursori_storia) > 10:
+                self._precursori_storia.pop(0)
+
+            # 3. Calcola stato predittivo
+            nuovo_stato = self._calcola_stato_predittivo(precursori)
+
+            # 4. Se cambio di stato → genera capsule appropriate
+            if nuovo_stato != self._stato_predittivo:
+                self._on_cambio_stato(self._stato_predittivo, nuovo_stato, precursori, ctx)
+                self._stato_predittivo = nuovo_stato
+                self._ultimo_cambio_stato = time.time()
+
+            # 5. Aggiorna capsule esistenti (vita, rinforzo)
+            self._aggiorna_capsule_attive(precursori, ctx)
+
+            # 6. Verifica se creare capsule di opportunità
+            self._verifica_opportunita(precursori, ctx)
+
+            # 7. Capsule di contesto persistente — attive anche senza cambio stato
+            self._verifica_contesto_persistente(precursori, ctx)
+
+            # 8. Apprendimento dal Phantom
+            if self._tick_count % 50 == 0:
+                self._apprendi_dal_phantom(ctx.get('phantom_stats', {}))
+
+        except Exception as e:
+            log.error(f"[CI_TICK] {e}")
+
+        self._ctx_prev = ctx.copy()
+
+    # ── LETTURA PRECURSORI ────────────────────────────────────────────────
+
+    def _leggi_precursori(self, ctx: dict) -> dict:
+        """Trasforma il contesto grezzo in segnali predittivi interpretati."""
+        nerv         = ctx.get('nervosismo', 0.3)
+        breath_fase  = ctx.get('breath_fase', 'NEUTRO')
+        breath_en    = ctx.get('breath_energia', 0.5)
+        comparto     = ctx.get('comparto', 'NEUTRO')
+        oi_stato     = ctx.get('oi_stato', 'ATTESA')
+        oi_carica    = ctx.get('oi_carica', 0.0)
+        regime       = ctx.get('regime', 'RANGING')
+        drift        = ctx.get('drift', 0.0)
+        gomme        = ctx.get('gomme', 'INTER')
+
+        # Segnale RAIN in arrivo: nervosismo sale + breath in esalazione
+        rain_precursore = (nerv > self.NERV_RAIN_SOGLIA * 0.8 and
+                           breath_fase in (self.BREATH_ESALAZ, self.BREATH_PICCO))
+
+        # Segnale ATTACCO: OI FUOCO + breath in inalazione + comparto offensivo
+        attacco_precursore = (oi_carica >= self.OI_FUOCO_MIN and
+                               breath_fase == self.BREATH_INALAZ and
+                               comparto in ('ATTACCO', 'TRENDING_BULL'))
+
+        # Segnale DIFESA: nervosismo alto + drift negativo + comparto difensivo
+        difesa_precursore = (nerv > self.NERV_RAIN_SOGLIA and
+                              drift < -0.02 and
+                              comparto in ('DIFENSIVO', 'NEUTRO'))
+
+        # Trend nervosismo: sta salendo o scendendo?
+        nerv_trend = 0.0
+        if len(self._precursori_storia) >= 3:
+            nerv_storia = [p.get('nervosismo', 0.3) for p in self._precursori_storia[-3:]]
+            nerv_trend = nerv_storia[-1] - nerv_storia[0]
+
+        return {
+            'nervosismo':       nerv,
+            'breath_fase':      breath_fase,
+            'breath_energia':   breath_en,
+            'comparto':         comparto,
+            'oi_stato':         oi_stato,
+            'oi_carica':        oi_carica,
+            'regime':           regime,
+            'drift':            drift,
+            'gomme':            gomme,
+            'rain_precursore':  rain_precursore,
+            'attacco_precursore': attacco_precursore,
+            'difesa_precursore':  difesa_precursore,
+            'nerv_trend':       round(nerv_trend, 3),
+        }
+
+    # ── STATO PREDITTIVO ─────────────────────────────────────────────────
+
+    def _calcola_stato_predittivo(self, prec: dict) -> str:
+        """
+        Determina lo stato predittivo del sistema PRIMA che il mercato si dichiari.
+        Priorità: ALLERTA > DIFENSIVO > OFFENSIVO > NEUTRO
+        """
+        # ALLERTA: RAIN imminente — segnali multipli concordi
+        if prec['rain_precursore'] and prec['nerv_trend'] > 0.05:
+            return "ALLERTA"
+
+        # DIFENSIVO: drift negativo + nervosismo alto
+        if prec['difesa_precursore']:
+            return "DIFENSIVO"
+
+        # OFFENSIVO: tutto verde — OI carico, breath in inalazione, comparto attacco
+        if prec['attacco_precursore'] and prec['drift'] > 0:
+            return "OFFENSIVO"
+
+        # NEUTRO: condizioni miste
+        return "NEUTRO"
+
+    # ── CAMBIO DI STATO ──────────────────────────────────────────────────
+
+    def _on_cambio_stato(self, stato_da: str, stato_a: str, prec: dict, ctx: dict):
+        """Quando lo stato predittivo cambia → genera le capsule appropriate."""
+        ts = time.time()
+        evento = f"{stato_da}→{stato_a}"
+
+        if stato_a == "ALLERTA":
+            # RAIN in arrivo — capsule difensive immediate
+            self._attiva_capsula("CI_RAIN_SIZE", {
+                'id': 'CI_RAIN_SIZE', 'tipo': 'DIFENSIVO',
+                'azione': 'RIDUCI_SIZE', 'params': {'mult': 0.20},
+                'motivo': f"RAIN precursore: nerv={prec['nervosismo']:.0%} breath={prec['breath_fase']}",
+                'vita': 600, 'ts_nato': ts, 'forza': 0.8,
+            })
+            self._attiva_capsula("CI_RAIN_SOGLIA", {
+                'id': 'CI_RAIN_SOGLIA', 'tipo': 'DIFENSIVO',
+                'azione': 'ALZA_SOGLIA', 'params': {'delta': +10},
+                'motivo': f"RAIN precursore: soglia alzata preventivamente",
+                'vita': 600, 'ts_nato': ts, 'forza': 0.7,
+            })
+            self._log_evento(f"🌧 ALLERTA RAIN — 2 capsule difensive attivate PRIMA del cambio regime")
+
+        elif stato_a == "OFFENSIVO":
+            # Siamo pronti ad attaccare — capsule offensive
+            self._attiva_capsula("CI_ATTACCO_SOGLIA", {
+                'id': 'CI_ATTACCO_SOGLIA', 'tipo': 'OFFENSIVO',
+                'azione': 'ABBASSA_SOGLIA', 'params': {'delta': -5},
+                'motivo': f"OI FUOCO carica={prec['oi_carica']:.2f} + breath={prec['breath_fase']}",
+                'vita': 300, 'ts_nato': ts, 'forza': 0.75,
+            })
+            self._attiva_capsula("CI_ATTACCO_SIZE", {
+                'id': 'CI_ATTACCO_SIZE', 'tipo': 'OFFENSIVO',
+                'azione': 'BOOST_SIZE', 'params': {'mult': 1.25},
+                'motivo': f"Comparto={prec['comparto']} + OI carica alta",
+                'vita': 300, 'ts_nato': ts, 'forza': 0.65,
+            })
+            self._log_evento(f"🚀 OFFENSIVO — 2 capsule offensive. OI={prec['oi_carica']:.2f} comparto={prec['comparto']}")
+
+        elif stato_a == "DIFENSIVO":
+            self._attiva_capsula("CI_DIFESA_SOGLIA", {
+                'id': 'CI_DIFESA_SOGLIA', 'tipo': 'DIFENSIVO',
+                'azione': 'ALZA_SOGLIA', 'params': {'delta': +7},
+                'motivo': f"drift={prec['drift']:.3f} + nerv={prec['nervosismo']:.0%}",
+                'vita': 480, 'ts_nato': ts, 'forza': 0.6,
+            })
+            self._log_evento(f"🛡 DIFENSIVO — soglia alzata +7. drift={prec['drift']:.3f}")
+
+        elif stato_a == "NEUTRO":
+            # Ritorno al neutro — rimuovi capsule più aggressive
+            self._disattiva_tipo("ALLERTA")
+            self._log_evento(f"⚖️ NEUTRO — capsule di allerta rimosse. Mercato si stabilizza.")
+
+    # ── CAPSULE OPPORTUNITÀ ───────────────────────────────────────────────
+
+    def _verifica_opportunita(self, prec: dict, ctx: dict):
+        """
+        Controlla se esistono condizioni di opportunità non ancora capsulate.
+        Genera capsule di boost se tutto è allineato.
+        """
+        # Allineamento perfetto: FUOCO + INALAZIONE + SLICK + ATTACCO
+        if (prec['oi_carica'] >= 0.85 and
+            prec['breath_fase'] == self.BREATH_INALAZ and
+            prec['gomme'] == 'SLICK' and
+            prec['comparto'] in ('ATTACCO', 'TRENDING_BULL') and
+            'CI_PERFETTO' not in self._capsule_attive):
+
+            self._attiva_capsula("CI_PERFETTO", {
+                'id': 'CI_PERFETTO', 'tipo': 'OPPORTUNITA',
+                'azione': 'BOOST_SIZE', 'params': {'mult': 1.40},
+                'motivo': f"Allineamento PERFETTO: OI={prec['oi_carica']:.2f} SLICK INALAZIONE ATTACCO",
+                'vita': 180, 'ts_nato': time.time(), 'forza': 0.95,
+            })
+            self._log_evento(f"⚡ ALLINEAMENTO PERFETTO — capsula boost max attivata")
+
+    def _verifica_contesto_persistente(self, prec: dict, ctx: dict):
+        """
+        Capsule attive anche senza cambio di stato — leggono il contesto
+        accumulato nel tempo, non solo i transitori.
+
+        CAPSULA 1 — RANGING_EDGE:
+        Signal Tracker ha hit_rate > 0.55 su 200+ osservazioni in RANGING
+        → abbassa soglia di 8 punti per catturare l'edge statistico.
+
+        CAPSULA 2 — FUOCO_WINDOW:
+        OI ha toccato FUOCO nell'ultimo minuto (anche se ora è sceso a CARICA)
+        → apre finestra di 30s con soglia abbassata di 6 punti.
+        """
+        ts = time.time()
+        signal_top = ctx.get('signal_top', [])
+        oi_stato   = prec.get('oi_stato', 'ATTESA')
+        oi_carica  = prec.get('oi_carica', 0.0)
+        regime     = prec.get('regime', 'RANGING')
+
+        # ── CAPSULA 1: RANGING_EDGE ─────────────────────────────────────────
+        # Signal Tracker dice che in RANGING c'è un edge reale > 55%
+        ranging_hit = 0.0
+        ranging_n   = 0
+        for st in signal_top:
+            if 'RANGING' in st.get('context', '') and st.get('n', 0) >= 200:
+                ranging_hit = st.get('hit_60s', 0.0)
+                ranging_n   = st.get('n', 0)
+                break
+
+        if (ranging_hit >= 0.55 and ranging_n >= 200 and
+            regime == 'RANGING' and
+            'CI_RANGING_EDGE' not in self._capsule_attive):
+            self._attiva_capsula("CI_RANGING_EDGE", {
+                'id': 'CI_RANGING_EDGE', 'tipo': 'OPPORTUNITA',
+                'azione': 'ABBASSA_SOGLIA', 'params': {'delta': -8},
+                'motivo': f"RANGING edge: hit={ranging_hit:.0%} n={ranging_n} — soglia abbassata",
+                'vita': 300, 'ts_nato': ts, 'forza': min(1.0, (ranging_hit - 0.55) * 10 + 0.5),
+            })
+            self._log_evento(f"📊 RANGING_EDGE — hit={ranging_hit:.0%} n={ranging_n} → soglia -8")
+
+        elif ranging_hit < 0.52 and 'CI_RANGING_EDGE' in self._capsule_attive:
+            # Edge è svanito — rimuovi la capsula
+            self._capsule_attive.pop('CI_RANGING_EDGE', None)
+            self._log_evento(f"📊 RANGING_EDGE rimossa — hit sceso a {ranging_hit:.0%}")
+
+        # ── CAPSULA 2: FUOCO_WINDOW ─────────────────────────────────────────
+        # Traccia l'ultimo momento in cui OI era FUOCO
+        if oi_stato == 'FUOCO' and oi_carica >= 0.80:
+            self._ultimo_fuoco_ts = ts
+
+        # Se FUOCO è stato visto negli ultimi 45 secondi → finestra aperta
+        _ultimo_fuoco = getattr(self, '_ultimo_fuoco_ts', 0.0)
+        _eta_fuoco    = ts - _ultimo_fuoco
+        if (_eta_fuoco < 45 and _ultimo_fuoco > 0 and
+            'CI_FUOCO_WINDOW' not in self._capsule_attive and
+            regime == 'RANGING'):
+            self._attiva_capsula("CI_FUOCO_WINDOW", {
+                'id': 'CI_FUOCO_WINDOW', 'tipo': 'OPPORTUNITA',
+                'azione': 'ABBASSA_SOGLIA', 'params': {'delta': -6},
+                'motivo': f"FUOCO visto {_eta_fuoco:.0f}s fa — finestra entry aperta",
+                'vita': 45, 'ts_nato': ts, 'forza': max(0.3, 1.0 - _eta_fuoco/45),
+            })
+            self._log_evento(f"🔥 FUOCO_WINDOW aperta — {_eta_fuoco:.0f}s dal FUOCO")
+
+        # ── CAPSULA 3: OI_ESTREMO ────────────────────────────────────────────
+        # OI >= 0.95 è una dichiarazione fisica del mercato — non un'opinione.
+        # Quando il mercato urla così forte, il VETO storico diventa irrilevante.
+        # Questa capsula bypassa il requisito hit_rate >= 0.63 nel CI_OVERRIDE.
+        _oi_estremo = oi_carica >= 0.95 and oi_stato == 'FUOCO'
+        if _oi_estremo and 'CI_OI_ESTREMO' not in self._capsule_attive:
+            self._attiva_capsula("CI_OI_ESTREMO", {
+                'id': 'CI_OI_ESTREMO', 'tipo': 'OPPORTUNITA',
+                'azione': 'ABBASSA_SOGLIA', 'params': {'delta': -12},
+                'motivo': f"OI ESTREMO carica={oi_carica:.3f} — dichiarazione fisica del mercato",
+                'vita': 60, 'ts_nato': ts, 'forza': min(1.0, (oi_carica - 0.95) * 20 + 0.5),
+            })
+            self._log_evento(f"⚡ OI_ESTREMO — carica={oi_carica:.3f} soglia -12 — il mercato urla")
+        elif not _oi_estremo and 'CI_OI_ESTREMO' in self._capsule_attive:
+            self._capsule_attive.pop('CI_OI_ESTREMO', None)
+            self._log_evento(f"⚡ OI_ESTREMO rimossa — carica scesa a {oi_carica:.3f}")
+
+
+
+    # ── AGGIORNAMENTO CAPSULE ─────────────────────────────────────────────
+
+    def _aggiorna_capsule_attive(self, prec: dict, ctx: dict):
+        """Rimuove capsule scadute, aggiorna forza in base a contesto corrente."""
+        ts = time.time()
+        scadute = []
+        for cid, cap in self._capsule_attive.items():
+            # Verifica scadenza
+            eta = ts - cap.get('ts_nato', ts)
+            if eta > cap.get('vita', 300):
+                scadute.append(cid)
+                continue
+            # Rafforza capsule DIFENSIVE se il nervosismo continua a salire
+            if cap['tipo'] == 'DIFENSIVO' and prec['nerv_trend'] > 0.03:
+                cap['forza'] = min(1.0, cap['forza'] + 0.05)
+            # Indebolisce capsule OFFENSIVE se il breath cade
+            if cap['tipo'] == 'OFFENSIVO' and prec['breath_fase'] == self.BREATH_ESALAZ:
+                cap['forza'] = max(0.0, cap['forza'] - 0.10)
+                if cap['forza'] < 0.2:
+                    scadute.append(cid)
+
+        for cid in scadute:
+            self._capsule_attive.pop(cid, None)
+            self._log_evento(f"💊 Capsula {cid} scaduta/rimossa")
+
+    # ── APPRENDIMENTO DAL PHANTOM ─────────────────────────────────────────
+
+    def _apprendi_dal_phantom(self, phantom_stats: dict):
+        """
+        Le capsule guardano il Phantom e imparano.
+        Se una capsula ha bloccato trade che il Phantom dice erano vincenti → si indebolisce.
+        Se ha bloccato perdenti → si rinforza.
+        """
+        for cid, cap in list(self._capsule_attive.items()):
+            mem = self._outcome_memory.get(cid, {})
+            wins   = mem.get('wins', 0)
+            losses = mem.get('losses', 0)
+            tot = wins + losses
+            if tot < 5:
+                continue
+            wr = wins / tot
+            # Capsula difensiva che blocca troppi vincenti → indeboliscila
+            if cap['tipo'] == 'DIFENSIVO' and wr > 0.55:
+                cap['forza'] = max(0.1, cap['forza'] - 0.15)
+                self._log_evento(f"📉 {cid} indebolita — stava bloccando troppi vincenti (wr={wr:.0%})")
+            # Capsula difensiva che blocca perdenti → rinforza
+            elif cap['tipo'] == 'DIFENSIVO' and wr < 0.30:
+                cap['forza'] = min(1.0, cap['forza'] + 0.10)
+                self._log_evento(f"📈 {cid} rafforzata — sta bloccando perdenti (wr={wr:.0%})")
+
+    def register_outcome(self, capsule_id: str, was_win: bool, pnl: float):
+        """Registra l'esito di un trade bloccato/modificato da una capsula."""
+        if capsule_id not in self._outcome_memory:
+            self._outcome_memory[capsule_id] = {'wins': 0, 'losses': 0, 'pnl': 0.0}
+        mem = self._outcome_memory[capsule_id]
+        if was_win:
+            mem['wins'] += 1
+        else:
+            mem['losses'] += 1
+        mem['pnl'] += pnl
+
+    # ── INTERFACCIA CON IL BOT ────────────────────────────────────────────
+
+    def get_entry_mods(self) -> dict:
+        """
+        Ritorna le modifiche da applicare all'entry.
+        Chiamato da _evaluate_shadow_entry prima di ogni decisione.
+        """
+        soglia_delta = 0.0
+        size_mult    = 1.0
+        veto         = None
+        motivi       = []
+
+        for cid, cap in self._capsule_attive.items():
+            forza = cap.get('forza', 0.5)
+            az    = cap.get('azione', '')
+            par   = cap.get('params', {})
+
+            if az == 'ALZA_SOGLIA':
+                delta = par.get('delta', 0) * forza
+                soglia_delta += delta
+                motivi.append(f"{cid}:+{delta:.1f}")
+
+            elif az == 'ABBASSA_SOGLIA':
+                delta = par.get('delta', 0) * forza
+                soglia_delta += delta
+                motivi.append(f"{cid}:{delta:.1f}")
+
+            elif az == 'RIDUCI_SIZE':
+                size_mult = min(size_mult, par.get('mult', 1.0) + (1.0 - par.get('mult', 1.0)) * (1 - forza))
+                motivi.append(f"{cid}:size={size_mult:.2f}")
+
+            elif az == 'BOOST_SIZE':
+                size_mult = max(size_mult, 1.0 + (par.get('mult', 1.0) - 1.0) * forza)
+                motivi.append(f"{cid}:size={size_mult:.2f}")
+
+        return {
+            'soglia_delta': round(soglia_delta, 2),
+            'size_mult':    round(size_mult, 3),
+            'veto':         veto,
+            'motivi':       motivi,
+            'n_capsule':    len(self._capsule_attive),
+            'stato':        self._stato_predittivo,
+        }
+
+    def get_exit_signal(self, ctx: dict) -> dict:
+        """
+        Segnale anticipato di uscita dalla posizione.
+        Ritorna {'esci': bool, 'motivo': str}
+        """
+        prec = self._leggi_precursori(ctx)
+        # Uscita anticipata se ALLERTA mentre siamo long + breath in esalazione + nerv esplode
+        if (self._stato_predittivo == "ALLERTA" and
+            prec['breath_fase'] == self.BREATH_ESALAZ and
+            prec['nervosismo'] > 0.70):
+            return {'esci': True, 'motivo': f"CI_EXIT_ANTICIPATA: ALLERTA+ESALAZ+nerv={prec['nervosismo']:.0%}"}
+        return {'esci': False, 'motivo': ''}
+
+    # ── NARRATIVA VIVA ───────────────────────────────────────────────────
+
+    def get_narrative(self) -> list:
+        """
+        Ritorna la storia viva delle ultime decisioni per la dashboard.
+        Non numeri — frasi che raccontano cosa sta succedendo.
+        """
+        return list(self._storia)
+
+    def get_status_dashboard(self) -> dict:
+        """Snapshot completo per heartbeat dashboard."""
+        caps_list = []
+        for cid, cap in self._capsule_attive.items():
+            eta = time.time() - cap.get('ts_nato', time.time())
+            vita_rim = max(0, cap.get('vita', 300) - eta)
+            caps_list.append({
+                'id':      cid,
+                'tipo':    cap.get('tipo', '?'),
+                'azione':  cap.get('azione', '?'),
+                'motivo':  cap.get('motivo', ''),
+                'forza':   round(cap.get('forza', 0), 2),
+                'ttl':     round(vita_rim),
+            })
+        return {
+            'stato':           self._stato_predittivo,
+            'capsule_attive':  caps_list,
+            'n_capsule':       len(self._capsule_attive),
+            'storia':          self._storia[-8:],
+            'tick':            self._tick_count,
+        }
+
+    # ── HELPER INTERNI ────────────────────────────────────────────────────
+
+    def _attiva_capsula(self, cid: str, cap: dict):
+        self._capsule_attive[cid] = cap
+
+    def _disattiva_tipo(self, tipo: str):
+        da_rimuovere = [cid for cid, c in self._capsule_attive.items() if c.get('tipo') == tipo]
+        for cid in da_rimuovere:
+            self._capsule_attive.pop(cid, None)
+
+    def _log_evento(self, msg: str):
+        ts_str = datetime.utcnow().strftime('%H:%M:%S')
+        entry = f"[{ts_str}] {msg}"
+        self._storia.append(entry)
+        if len(self._storia) > 20:
+            self._storia.pop(0)
+        log.info(f"[CI] {msg}")
+
+
+# ===========================================================================
 # LOG ANALYZER
 # ===========================================================================
 
@@ -1364,12 +1955,12 @@ class OracoloDinamico:
         
         # -- INTELLIGENZA REALE - dati da trade veri 23 marzo 2026 ------
         self._memory = {
-            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 13.0, 'samples': 24.0, 'pnl_sum': 15.0, 'real_samples': 0,
+            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 13.0, 'samples': 24.0, 'pnl_sum': 15.0, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0, 'pnl_sum': -15.0, 'real_samples': 0,
+            "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0, 'pnl_sum': -15.0, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
@@ -1394,6 +1985,26 @@ class OracoloDinamico:
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
+            "LONG|FORTE|BASSA|UP":        {'wins': 23.4, 'samples': 30.0, 'pnl_sum': 462.0, 'real_samples': 5,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
+            "LONG|FORTE|MEDIA|UP":        {'wins': 15.3, 'samples': 22.5, 'pnl_sum': 180.0, 'real_samples': 5,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
+            "LONG|MEDIO|BASSA|UP":        {'wins': 12.2, 'samples': 18.8, 'pnl_sum': 118.0, 'real_samples': 5,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
+            "LONG|FORTE|MEDIA|DOWN":      {'wins': 2.5,  'samples': 5.0,  'pnl_sum': 2.5,  'real_samples': 5,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
+            "SHORT|FORTE|ALTA|DOWN":      {'wins': 5.5,  'samples': 10.0, 'pnl_sum': 54.0, 'real_samples': 5,
+                                           'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
+                                           'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
+                                           'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
             "LONG|DEBOLE|BASSA|SIDEWAYS": {'wins': 1.9,  'samples': 2.9,  'pnl_sum': 2.0, 'real_samples': 0,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
@@ -1715,8 +2326,8 @@ class OracoloDinamico:
         if len(all_durs) >= 5:
             return (sum(all_durs) / len(all_durs)) * 0.60
 
-        # Livello 4: nessun dato → zero (l'exit energy decide tutto)
-        return 0.0
+        # Livello 4: nessun dato → 25 secondi minimi (evita EXIT_E15 prematuro)
+        return 25.0
 
     # -- SCRITTURA - registra trade completo ------------------------------
 
@@ -2077,11 +2688,12 @@ class PreTradeSignalTracker:
             # Solo vicini abbastanza simili
             if dist > 4.0: continue
 
-            h60 = sig.get('results', {}).get('hit_60', None)
-            d60 = sig.get('results', {}).get('delta_60', None)
+            h60  = sig.get('results', {}).get('hit_60',  None)
+            d60  = sig.get('results', {}).get('delta_60', None)
+            p60  = sig.get('results', {}).get('pnl_60',   None)
             if h60 is None: continue
 
-            vicini.append({'dist': dist, 'hit': h60, 'delta': d60 or 0})
+            vicini.append({'dist': dist, 'hit': h60, 'delta': d60 or 0, 'pnl': p60})
 
         if len(vicini) < 5:
             return {'confidence': 0, 'hit_rate': 0.5,
@@ -2096,12 +2708,32 @@ class PreTradeSignalTracker:
         # Confidence: cresce con n_vicini, max a 50
         confidence = min(1.0, len(vicini) / 50)
 
-        if hit_rate >= 0.65 and avg_delta > 5:
-            verdict = 'ENTRA'
-        elif hit_rate <= 0.40 or avg_delta < -5:
-            verdict = 'BLOCCA'
+        # CRITERIO ECONOMICO EMERGENTE — nessuna soglia fissa
+        # Fee simulata nella stessa scala di pnl_60: $250 * 0.02% * 2 = $0.10
+        # hit_economica = % vicini con pnl_60 > fee_sim (coprono davvero i costi)
+        # Il numero emerge dalla distribuzione storica dei vicini — non è inventato
+        FEE_SIM = 0.10  # fee nella scala simulata (size=$250)
+        pnl_vicini = [v['pnl'] for v in vicini if v.get('pnl') is not None]
+
+        if pnl_vicini:
+            hit_econ = sum(1 for p in pnl_vicini if p > FEE_SIM) / len(pnl_vicini)
+            pnl_medio = sum(pnl_vicini) / len(pnl_vicini)
+            # ENTRA: maggioranza dei vicini copre davvero le fee E hit direzionale ok
+            if hit_econ >= 0.50 and hit_rate >= 0.60:
+                verdict = 'ENTRA'
+            # BLOCCA: meno di 1/3 dei vicini copre le fee O hit direzionale basso
+            elif hit_econ < 0.30 or hit_rate <= 0.40:
+                verdict = 'BLOCCA'
+            else:
+                verdict = 'NEUTRO'
         else:
-            verdict = 'NEUTRO'
+            # Fallback senza pnl: solo hit_rate + delta conservativo
+            if hit_rate >= 0.65 and avg_delta > 20:
+                verdict = 'ENTRA'
+            elif hit_rate <= 0.40 or avg_delta < -5:
+                verdict = 'BLOCCA'
+            else:
+                verdict = 'NEUTRO'
 
         return {
             'confidence': round(confidence, 2),
@@ -2595,8 +3227,11 @@ class PersistenzaStato:
                         'oracolo_fp': 0.25, 'signal_tracker': 0.20,
                         'campo_carica': 0.30, 'matrimonio': 0.13, 'phantom_ratio': 0.12
                     }
+                if pesi_caricati.get('campo_carica', 0) > 0.45:
+                    log.warning("[RUNTIME_LOAD] ⚠️ Pesi degradati — reset default")
+                    pesi_caricati = dict(SuperCervello.PESI_DEFAULT)
                 bot.supercervello._pesi = pesi_caricati
-                log.info(f"[RUNTIME_LOAD] 🧠 Pesi SC ripristinati: {pesi_caricati}")
+                log.info(f"[RUNTIME_LOAD] 🧠 Pesi SC: {pesi_caricati}")
 
             # Ripristina Veritas
             if 'veritas_closed' in data and hasattr(bot, 'veritas'):
@@ -2779,7 +3414,7 @@ class RegimeDetector:
       EXPLOSIVE      - breakout improvviso, volume spike + range expansion
     """
 
-    WINDOW = 500   # tick per valutare il regime
+    WINDOW = 200   # tick per valutare il regime — finestra più reattiva
 
     # Moltiplicatori per ogni regime - applicati ai parametri del calibratore
     REGIME_PARAMS = {
@@ -2823,7 +3458,7 @@ class RegimeDetector:
         """
         Ritorna (regime: str, confidence: float, dettaglio: dict)
         """
-        if len(self.prices) < 100:
+        if len(self.prices) < 50:
             return 'RANGING', 0.0, {}
 
         prices  = list(self.prices)
@@ -2864,15 +3499,15 @@ class RegimeDetector:
             regime     = 'EXPLOSIVE'
             confidence = min(1.0, vol_accel / 3.0)
 
-        elif trend_pct > 0.5 and dir_ratio > 0.55:
-            # Trend rialzista strutturale
+        elif trend_pct > 0.3 and dir_ratio > 0.52:
+            # Trend rialzista strutturale — soglia abbassata per rilevare prima
             regime     = 'TRENDING_BULL'
-            confidence = min(1.0, (dir_ratio - 0.5) * 4)
+            confidence = min(1.0, (dir_ratio - 0.50) * 5)
 
-        elif trend_pct < -0.5 and dir_ratio < 0.45:
+        elif trend_pct < -0.3 and dir_ratio < 0.48:
             # Trend ribassista strutturale
             regime     = 'TRENDING_BEAR'
-            confidence = min(1.0, (0.5 - dir_ratio) * 4)
+            confidence = min(1.0, (0.50 - dir_ratio) * 5)
 
         else:
             # Laterale
@@ -3235,11 +3870,17 @@ class CampoGravitazionale:
     VETI_LONG = {
         ("DEBOLE", "ALTA", "DOWN"),    # TRAP - WR 5% per LONG
         ("FORTE",  "ALTA", "DOWN"),    # PANIC - WR 15% per LONG
+        ("DEBOLE", "ALTA", "SIDEWAYS"),# RANGE_VOL_W - WR 19% dati reali
+        ("FORTE",  "ALTA", "SIDEWAYS"),# RANGE_VOL_F - WR 34% dati reali Oracolo
+        ("MEDIO",  "ALTA", "SIDEWAYS"),# RANGE_VOL_M - WR 28% dati reali Oracolo
     }
     # SHORT: non entrare in mercato che esplode al rialzo
     VETI_SHORT = {
         ("FORTE",  "BASSA", "UP"),     # STRONG_BULL - WR 5% per SHORT
         ("FORTE",  "MEDIA", "UP"),     # STRONG_MED - pericoloso per SHORT
+        ("DEBOLE", "ALTA", "SIDEWAYS"),# RANGE_VOL_W - WR 10% in SHORT
+        ("FORTE",  "ALTA", "SIDEWAYS"),# RANGE_VOL_F - WR 12% in SHORT
+        ("MEDIO",  "ALTA", "SIDEWAYS"),# RANGE_VOL_M - WR 8% in SHORT
     }
     FANTASMA_VETO_MIN_SAMPLES = 20
     FANTASMA_VETO_MAX_WR      = 0.30
@@ -3305,9 +3946,9 @@ class CampoGravitazionale:
         self._seed_history = deque(maxlen=10)     # ultimi 10 seed per derivata
         self._volumes_short = deque(maxlen=50)    # ultimi 50 volumi per accelerazione
         # -- DRIFT DETECTOR ------------------------------------------------
-        self._prices_long = deque(maxlen=200)     # ultimi 200 prezzi per drift
+        self._prices_long = deque(maxlen=100)     # ultimi 100 prezzi per drift
         # -- RSI + MACD CONSIGLIERI ----------------------------------------
-        self._prices_ta = deque(maxlen=200)       # buffer prezzi CAMPIONATI per indicatori tecnici
+        self._prices_ta = deque(maxlen=50)        # buffer prezzi CAMPIONATI per indicatori tecnici
         self._ta_tick_counter = 0                  # conta tick per campionamento
         self._ta_sample_rate = 50                  # campiona ogni 50 tick (non ogni tick!)
         self._rsi_period = 14                     # RSI standard 14 periodi
@@ -3411,11 +4052,30 @@ class CampoGravitazionale:
           direction: "LONG" o "SHORT"
           breakdown: dict dettaglio per log
         """
-        # -- VETI ASSOLUTI -------------------------------------------------
+        # -- VETI ASSOLUTI — ora gestiti da CapsuleManager ----------------
+        # Se CapsuleManager disponibile: i veti sono nel DB, asset-aware,
+        # modificabili da dashboard senza deploy.
+        # Se non disponibile: fallback ai VETI_LONG/SHORT hardcodati.
         combo = (momentum, volatility, trend)
-        veti = self.VETI_SHORT if self._direction == "SHORT" else self.VETI_LONG
-        if combo in veti:
-            return self._veto(f"TOSSICO_{self._direction}_{momentum}_{volatility}_{trend}")
+        _bot = getattr(self, '_bot_ref', None)
+        _cm  = getattr(_bot, 'capsule_manager', None) if _bot else None
+        if _cm is not None:
+            _veto_ctx = {
+                'momentum':   momentum,
+                'volatility': volatility,
+                'trend':      trend,
+                'direction':  self._direction,
+                'regime':     getattr(self, '_regime_current', ''),
+                'drift_pct':  getattr(self, '_last_drift', 0.0),
+            }
+            _cm_result = _cm.valuta(_veto_ctx)
+            if _cm_result.get('blocca'):
+                return self._veto(_cm_result.get('reason', f"CM_TOSSICO_{self._direction}_{momentum}_{volatility}_{trend}"))
+        else:
+            # Fallback hardcodato
+            veti = self.VETI_SHORT if self._direction == "SHORT" else self.VETI_LONG
+            if combo in veti:
+                return self._veto(f"TOSSICO_{self._direction}_{momentum}_{volatility}_{trend}")
 
         if matrimonio_name in divorzio_set:
             return self._veto("DIVORZIO_PERMANENTE")
@@ -3442,7 +4102,7 @@ class CampoGravitazionale:
         warmup_checks = []
         if self._tick_count < 200:
             warmup_checks.append(f"tick={self._tick_count}/200")
-        if len(self._prices_long) < 100:
+        if len(self._prices_long) < 50:
             warmup_checks.append(f"drift={len(self._prices_long)}/100")
         if len(self._prices_ta) < 35:
             warmup_checks.append(f"RSI_MACD={len(self._prices_ta)}/35")
@@ -3473,6 +4133,7 @@ class CampoGravitazionale:
 
         # Fingerprint WR: normalizza [0.30, 0.80] → [0, 1]
         s_fp = min(1.0, max(0.0, (fingerprint_wr - 0.30) / 0.50)) * self.W_FINGERPRINT
+        self._last_fp_score = round(s_fp, 2)  # cached per heartbeat
 
         # Dimensioni categoriche - INVERTITE per SHORT
         if self._direction == "SHORT":
@@ -3527,6 +4188,7 @@ class CampoGravitazionale:
             loss_f = 1.0
 
         soglia_raw = self.SOGLIA_BASE * context_ratio * regime_f * vol_f * history_f * prebreak_f * drift_f * loss_f
+
         SOGLIA_FLOOR_ASSOLUTO = 48
         soglia_min_ctx = max(SOGLIA_FLOOR_ASSOLUTO, self.SOGLIA_MIN * context_ratio)
         
@@ -3628,9 +4290,9 @@ class CampoGravitazionale:
                 base = 72  # trend bear confermato
         
         elif regime == "EXPLOSIVE":
-            base = 65
+            base = 75   # EXPLOSIVE rischiosa — serve segnale forte
             if volatility == "ALTA":
-                base = 63  # esplosione vera, cattura subito
+                base = 72  # ancora alta — esplosione vera ma volatilità aumenta rischio
         
         else:
             base = 80
@@ -3788,7 +4450,7 @@ class CampoGravitazionale:
         
         TRENDING: il drift è un segnale reale. Fattore pieno.
         """
-        if len(self._prices_long) < 100:
+        if len(self._prices_long) < 50:
             return 1.0, ""
 
         prices = list(self._prices_long)
@@ -4150,6 +4812,52 @@ class VeritatisTracker:
             'n_open':    len(self._open),
         }
 
+    def save(self, db_path: str):
+        """Persiste _stats e _closed su SQLite — sopravvive al restart."""
+        try:
+            import sqlite3, json
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute("""CREATE TABLE IF NOT EXISTS veritas_stats
+                         (chiave TEXT PRIMARY KEY, data TEXT)""")
+            c.execute("""CREATE TABLE IF NOT EXISTS veritas_closed
+                         (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT)""")
+            # Salva stats
+            for k, s in self._stats.items():
+                c.execute("INSERT OR REPLACE INTO veritas_stats VALUES (?,?)",
+                          (k, json.dumps(s)))
+            # Salva ultimi 200 closed (non duplicare)
+            c.execute("DELETE FROM veritas_closed")
+            for sig in self._closed[-200:]:
+                c.execute("INSERT INTO veritas_closed (data) VALUES (?)",
+                          (json.dumps(sig),))
+            conn.commit(); conn.close()
+        except Exception as e:
+            log.error(f"[VERITAS_SAVE] {e}")
+
+    def load(self, db_path: str):
+        """Carica _stats e _closed da SQLite al boot."""
+        try:
+            import sqlite3, json, os
+            if not os.path.exists(db_path): return
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            # Stats
+            try:
+                for row in c.execute("SELECT chiave, data FROM veritas_stats"):
+                    self._stats[row[0]] = json.loads(row[1])
+            except: pass
+            # Closed
+            try:
+                for row in c.execute("SELECT data FROM veritas_closed ORDER BY id"):
+                    self._closed.append(json.loads(row[0]))
+            except: pass
+            conn.close()
+            if self._stats:
+                log.info(f"[VERITAS_LOAD] Caricati {len(self._stats)} stats, {len(self._closed)} closed")
+        except Exception as e:
+            log.error(f"[VERITAS_LOAD] {e}")
+
 
 class SuperCervello:
     """
@@ -4160,10 +4868,10 @@ class SuperCervello:
     """
     PESI_DEFAULT = {
         'oracolo_fp':    0.25,
-        'signal_tracker':0.25,
-        'campo_carica':  0.20,
-        'matrimonio':    0.15,
-        'phantom_ratio': 0.15,
+        'signal_tracker':0.20,
+        'campo_carica':  0.30,
+        'matrimonio':    0.13,
+        'phantom_ratio': 0.12,
     }
 
     def __init__(self):
@@ -4188,8 +4896,9 @@ class SuperCervello:
         # VERITAS: Oracolo FUOCO con carica alta — SC non blocca mai
         # 373 segnali: SC blocca $112 di guadagni reali quando Oracolo ha ragione
         # Carica 0.90 = fisica confermata — entra sempre
-        if oi_stato == "FUOCO" and oi_carica >= 0.75:
-            return self._out("ENTRA", 1.3, -5, f"VERITAS_FUOCO_c{oi_carica:.2f}", 0.90)
+        # ECCEZIONE: EXPLOSIVE è troppo volatile — FUOCO non affidabile
+        if oi_stato == "FUOCO" and oi_carica >= 0.75 and regime != "EXPLOSIVE":
+            return self._out("ENTRA", 1.3, -5, f"VERITAS_FUOCO_c{oi_carica:.2f}", oi_carica)
 
         # VETO ASSOLUTO FINGERPRINT TOSSICO
         # Se il fingerprint ha 20+ campioni con WR < 45% — blocca sempre
@@ -4319,9 +5028,26 @@ class OvertopBassanoV15Production:
         self.seed_scorer     = SeedScorer(window=50)
         self.oracolo         = OracoloDinamico()
         self.memoria         = MemoriaMatrimoni()
-        self.capsule_runtime = CapsuleRuntime(capsule_file="capsule_attive.json")
-        self.config_reloader = ConfigHotReloader(capsule_path="capsule_attive.json")
-        self.realtime_engine = IntelligenzaAutonoma(capsule_file="capsule_attive.json", db_path=DB_PATH)
+
+        # -- CAPSULE MANAGER UNIFICATO ------------------------------------
+        if _CM_AVAILABLE:
+            self.capsule_manager = CapsuleManager(db_path=DB_PATH, asset=SYMBOL)
+            # Alias per compatibilità con codice esistente
+            self.capsule_runtime = self.capsule_manager
+            self.config_reloader = self.capsule_manager
+            self.realtime_engine = self.capsule_manager
+            log.info(f"[CM] ✅ CapsuleManager attivo — asset={SYMBOL}")
+        else:
+            # Fallback ai sistemi originali
+            self.capsule_manager = None
+            self.capsule_runtime = CapsuleRuntime(capsule_file="capsule_attive.json")
+            self.config_reloader = ConfigHotReloader(capsule_path="capsule_attive.json")
+            self.realtime_engine = IntelligenzaAutonoma(capsule_file="capsule_attive.json", db_path=DB_PATH)
+            # Collega Signal Tracker all'IA — genera capsule L2 senza aspettare trade reali
+            self.realtime_engine._signal_tracker_ref = self.signal_tracker
+            log.warning("[CM] ⚠️ Fallback ai sistemi originali")
+        # -----------------------------------------------------------------
+
         self.log_analyzer    = LogAnalyzer()
         self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
         self.calibratore     = AutoCalibratore()
@@ -4330,6 +5056,10 @@ class OvertopBassanoV15Production:
         self.position_sizer  = PositionSizer()
         self.telemetry       = StabilityTelemetry()
         self.signal_tracker  = PreTradeSignalTracker()
+
+        # ── CAPSULE INTELLIGENTE — Sistema Immunitario Predittivo ──────────
+        self.ci = CapsuleIntelligente()
+        log.info("[CI] ✅ CapsuleIntelligente attiva — sistema immunitario predittivo")
 
         # -- Ripristina intelligenza accumulata ----------------------------
         self._persist.load_brain(self.oracolo, self.memoria, self.calibratore)
@@ -4374,6 +5104,7 @@ class OvertopBassanoV15Production:
 
         # -- MOTORE 2: CAMPO GRAVITAZIONALE (shadow trading) --------------
         self.campo = CampoGravitazionale()
+        self.campo._bot_ref = self  # riferimento al bot per CapsuleManager
         self._shadow = None          # shadow trade aperto (dict o None)
         self._shadow_entry_time = None
         self._shadow_entry_momentum = None
@@ -4426,6 +5157,7 @@ class OvertopBassanoV15Production:
         self._last_sc_dec   = None
         # -- VERITAS TRACKER: chi aveva ragione ───────────────────────────
         self.veritas        = VeritatisTracker(sc_ref=self.supercervello)
+        self.veritas.load(DB_PATH)  # carica statistiche dal disco al boot
 
         # -- ORACOLO INTERNO: sensore predittivo che vive ogni tick -------
         self._oi_carica     = 0.0        # energia accumulata 0→1
@@ -4459,10 +5191,22 @@ class OvertopBassanoV15Production:
         self._bridge_event_queue = []   # lista eventi: {name, payload, ts}
         self._bridge_last_event_check = 0
 
+        # ── V16 ENGINES ────────────────────────────────────────────
+        if _V16_ENGINES_OK:
+            self._comparto  = CompartoEngine()
+            self._nerv      = NervosismoEngine()
+            self._breath    = BreathEngine()
+            log.info("[V16] CompartoEngine + NervosismoEngine + BreathEngine attivi")
+        else:
+            self._comparto  = None
+            self._nerv      = None
+            self._breath    = None
+            log.warning("[V16] Engines non disponibili — modalità V15 pura")
+
         # -- Banner --------------------------------------------------------
         mode_label = "📄 PAPER TRADE" if self.paper_trade else "🔴 LIVE TRADING"
         log.info("=" * 80)
-        log.info(f"🚀 OVERTOP BASSANO V14 PRODUCTION - {mode_label}")
+        log.info(f"🚀 OVERTOP BASSANO V15 PRODUCTION - {mode_label}")
         log.info(f"   Capital: ${self.capital:,.2f}  |  Trades totali: {self.total_trades}")
         log.info(f"   SeedScorer threshold: {SEED_ENTRY_THRESHOLD}")
         log.info(f"   Divorce triggers minimi: {DIVORCE_MIN_TRIGGERS}/4")
@@ -4498,7 +5242,7 @@ class OvertopBassanoV15Production:
             self.connect_binance()
 
         def on_open(ws):
-            log.info("[WS] [OK] Connesso a Binance aggTrade BTCUSDC")
+            log.info("[WS] [OK] Connesso a Binance aggTrade SOLUSDC")
 
         self.ws = websocket.WebSocketApp(
             self.ws_url,
@@ -4547,6 +5291,7 @@ class OvertopBassanoV15Production:
                 self.heartbeat_data["last_price"] = round(price, 2)
                 self.heartbeat_data["last_tick"]  = datetime.utcnow().isoformat()
                 self.heartbeat_data["tick_count"] = self.heartbeat_data.get("tick_count", 0) + 1
+                self.heartbeat_data["symbol"]     = SYMBOL
         except Exception:
             pass
         finally:
@@ -4574,6 +5319,31 @@ class OvertopBassanoV15Production:
             self._regime_conf       = conf
             self._last_regime_check = now
 
+            # ── AUTOCORRETTORE REGIME ─────────────────────────────────────
+            # Se il rilevatore dice RANGING ma il prezzo si muove davvero
+            # → corregge il regime in tempo reale senza aspettare nessuno
+            if regime == 'RANGING' and len(self.regime_detector.prices) >= 50:
+                _prezzi = list(self.regime_detector.prices)
+                _p_start = _prezzi[0]
+                _p_end   = _prezzi[-1]
+                _move_pct = (_p_end - _p_start) / _p_start * 100
+                _changes  = [_prezzi[i+1] - _prezzi[i] for i in range(len(_prezzi)-1)]
+                _up       = sum(1 for c in _changes if c > 0)
+                _dir      = _up / len(_changes)
+
+                # Prezzo salito > 0.4% con dir_ratio > 0.54 → TRENDING_BULL reale
+                if _move_pct > 0.4 and _dir > 0.54:
+                    self._regime_current = 'TRENDING_BULL'
+                    self._regime_conf    = min(1.0, _move_pct / 1.0)
+                    self._log(f"🔄 AUTOCORRETTORE: RANGING→TRENDING_BULL "
+                             f"(move={_move_pct:+.2f}% dir={_dir:.2f})")
+                # Prezzo sceso > 0.4% con dir_ratio < 0.46 → TRENDING_BEAR reale
+                elif _move_pct < -0.4 and _dir < 0.46:
+                    self._regime_current = 'TRENDING_BEAR'
+                    self._regime_conf    = min(1.0, abs(_move_pct) / 1.0)
+                    self._log(f"🔄 AUTOCORRETTORE: RANGING→TRENDING_BEAR "
+                             f"(move={_move_pct:+.2f}% dir={_dir:.2f})")
+
         # Persistenza ogni 5 minuti
         if now - self.last_persist > 300:
             self._persist.save(self.capital, self.total_trades)
@@ -4583,8 +5353,151 @@ class OvertopBassanoV15Production:
             self.telemetry.persist_to_db(DB_PATH)
             self.last_persist = now
 
-        # AUTO-TUNE soglia - ciclo indipendente, il timer adattivo è interno
-        self._auto_tune_soglia()
+        # AUTO-TUNE soglia — DISABILITATO in V15+V16
+        # L'AutoCalibratore alzava la soglia fino a 83 — il CompartoEngine gestisce le soglie
+        # self._auto_tune_soglia()
+
+        # ── PHANTOM SUPERVISOR — loop chiuso ogni 60s ───────────────────
+        # Aggiorna _phantom_per_livello dal heartbeat
+        if self.heartbeat_data:
+            _ph = self.heartbeat_data.get('phantom', {})
+            if isinstance(_ph, dict):
+                self._phantom_per_livello = _ph.get('per_livello', {})
+        self._phantom_supervisor()
+
+        # ── V16: NervosismoEngine + CompartoEngine ad ogni tick ──────────
+        if _V16_ENGINES_OK and self._nerv and self._comparto:
+            _regime_now = self._regime_current
+            _vol_now    = self._last_volatility if hasattr(self, '_last_volatility') else "MEDIA"
+            _trend_now  = self._last_trend if hasattr(self, '_last_trend') else "SIDEWAYS"
+            _dir_now    = self.campo._direction if hasattr(self.campo, '_direction') else "LONG"
+
+            # NervosismoEngine — calcola tensione mercato
+            _nerv_skills = {}  # non abbiamo skill V16 qui, usa solo per calcolo
+            _nerv_stato  = self._nerv.on_tick(price, _regime_now, _dir_now, _nerv_skills)
+            _nerv_val    = _nerv_stato.get("nervosismo", 0.3)
+            _gomme       = _nerv_stato.get("gomme", "INTER")
+
+            # BreathEngine — fase dell'impulso
+            if self._breath:
+                self._breath.on_tick(price, self._last_volume if hasattr(self, '_last_volume') else 1.0)
+
+            # CompartoEngine — switcha assetto se il mercato si dichiara
+            _comp_skills = {
+                "ENTRY_SOGLIA": self.campo,   # il campo gestisce la soglia
+            }
+            _comp_nome = self._comparto.on_tick(_regime_now, _vol_now, _trend_now, {})
+
+            # Applica soglia del comparto attivo al CampoGravitazionale
+            _comp_attivo = COMPARTI.get(_comp_nome)
+            if _comp_attivo and hasattr(self.campo, 'SOGLIA_BASE'):
+                # Solo se il comparto suggerisce una soglia diversa da quella corrente
+                _soglia_comp = _comp_attivo.soglia_base
+                if self.campo.SOGLIA_BASE != _soglia_comp:
+                    self.campo.SOGLIA_BASE = _soglia_comp
+                    self.campo.SOGLIA_MIN  = _comp_attivo.soglia_min
+
+            # Aggiorna heartbeat con dati V16
+            if self.heartbeat_lock:
+                try:
+                    self.heartbeat_lock.acquire()
+                    if self.heartbeat_data is not None:
+                        self.heartbeat_data["comparto"]    = _comp_nome
+                        self.heartbeat_data["nervosismo"]  = _nerv_val
+                        self.heartbeat_data["gomme"]       = _gomme
+                        self.heartbeat_data["breath_fase"] = self._breath._fase if self._breath else "NEUTRO"
+                finally:
+                    self.heartbeat_lock.release()
+
+        # ── CAPSULE INTELLIGENTE — tick predittivo ad ogni ciclo ──────────
+        try:
+            _ci_ctx = {
+                'breath_fase':   (self._breath._fase    if _V16_ENGINES_OK and self._breath   else 'NEUTRO'),
+                'breath_energia':(self._breath._energia if _V16_ENGINES_OK and self._breath   else 0.5),
+                'nervosismo':    (self._nerv._nervosismo if _V16_ENGINES_OK and self._nerv    else 0.3),
+                'gomme':         (self._nerv._gomme_attuale if _V16_ENGINES_OK and self._nerv else 'INTER'),
+                'comparto':      (self._comparto._attivo if _V16_ENGINES_OK and self._comparto else 'NEUTRO'),
+                'oi_stato':      self._oi_stato,
+                'oi_carica':     self._oi_carica,
+                'regime':        self._regime_current,
+                'drift':         _drift_for_classify if '_drift_for_classify' in dir() else 0.0,
+                'momentum':      getattr(self, '_last_momentum', 'MEDIO'),
+                'phantom_stats': self._phantom_stats if hasattr(self, '_phantom_stats') else {},
+                'sc_pesi':       self.supercervello._pesi if hasattr(self, 'supercervello') else {},
+                'signal_top':    self.signal_tracker.dump_top(5) if hasattr(self, 'signal_tracker') else [],
+            }
+            self.ci.tick(_ci_ctx)
+
+            # ── CAPSULE DAL RAGIONATORE AI → CI ──────────────────────
+            # Legge capsule generate dal Narratore e le inietta nella CI
+            # Gerarchia: capsule CI esistenti hanno sempre precedenza
+            _ra_iniettate = []
+            _ra_bloccate  = []
+            try:
+                _caps_ra = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
+                _now_ra  = time.time()
+                for _cap in _caps_ra:
+                    _cid = _cap.get('id', '')
+                    if not _cid:
+                        continue
+                    # Non sovrascrive capsule CI già attive
+                    if _cid in self.ci._capsule_attive:
+                        _ra_bloccate.append(f"{_cid}(già_attiva)")
+                        continue
+                    # Verifica scadenza
+                    try:
+                        from datetime import datetime as _dt2
+                        _cap_ts = _dt2.fromisoformat(_cap.get('ts','')).timestamp()
+                        if _now_ra - _cap_ts > _cap.get('vita', 300):
+                            _ra_bloccate.append(f"{_cid}(scaduta)")
+                            continue
+                    except Exception:
+                        pass
+                    # Inietta con forza limitata
+                    _forza = min(0.65, _cap.get('forza', 0.5))
+                    self.ci._attiva_capsula(_cid, {
+                        'id':     _cid,
+                        'tipo':   'OPPORTUNITA',
+                        'azione': _cap.get('azione', 'ABBASSA_SOGLIA'),
+                        'params': _cap.get('params', {'delta': -5}),
+                        'motivo': f"[RA] {_cap.get('motivo','')[:60]}",
+                        'vita':   _cap.get('vita', 300),
+                        'ts_nato': _now_ra,
+                        'forza':  _forza,
+                    })
+                    _ra_iniettate.append(_cid)
+                    log.info(f"[CI] 🤖 RA capsula→CI: {_cid} forza={_forza:.2f}")
+            except Exception as _ra_e:
+                log.debug(f"[CI_RA_ERR] {_ra_e}")
+
+            # Aggiorna diagnostica nel heartbeat
+            if _ra_iniettate or _ra_bloccate:
+                try:
+                    _diag = (self.heartbeat_data or {}).get("narratore_diagnostica", {
+                        "iniettate_tot": 0, "bloccate_tot": 0,
+                        "ultima_iniettata": None, "storia": []
+                    })
+                    _diag["iniettate_tot"] += len(_ra_iniettate)
+                    _diag["bloccate_tot"]  += len(_ra_bloccate)
+                    if _ra_iniettate:
+                        _diag["ultima_iniettata"] = {
+                            "ids": _ra_iniettate,
+                            "ts":  datetime.utcnow().strftime("%H:%M:%S")
+                        }
+                        _storia = _diag.get("storia", [])
+                        _storia.append({
+                            "ts":       datetime.utcnow().strftime("%H:%M:%S"),
+                            "iniettate": _ra_iniettate,
+                            "bloccate":  _ra_bloccate,
+                        })
+                        _diag["storia"] = _storia[-20:]
+                    if self.heartbeat_data is not None:
+                        self.heartbeat_data["narratore_diagnostica"] = _diag
+                except Exception:
+                    pass
+
+        except Exception as _ci_e:
+            log.debug(f"[CI_TICK_ERR] {_ci_e}")
 
         # Calcola drift per il downgrade momentum in RANGING
         _drift_for_classify = 0.0
@@ -4610,6 +5523,12 @@ class OvertopBassanoV15Production:
         # Oracolo e Veritas girano sempre
         self._oracolo_interno_tick(price, _mom, _vol, _trd)
         self.veritas.aggiorna(price, time.time())
+        # Salva Veritas su disco ogni 60 secondi
+        if not hasattr(self, '_veritas_last_save'):
+            self._veritas_last_save = 0
+        if time.time() - self._veritas_last_save >= 60:
+            self.veritas.save(DB_PATH)
+            self._veritas_last_save = time.time()
 
         if not _contesto_ok:
             return
@@ -4646,6 +5565,14 @@ class OvertopBassanoV15Production:
                 self.campo._last_score  = _sn['score']
                 self.campo._last_soglia = _sn['soglia']
                 # Registra nel tracker se score >= 25
+                # Calcola drift reale — _last_drift non esiste su campo
+                _st_drift = 0.0
+                if len(self.campo._prices_long) >= 100:
+                    _st_p = list(self.campo._prices_long)
+                    _st_old = sum(_st_p[:50]) / 50
+                    _st_new = sum(_st_p[-50:]) / 50
+                    if _st_old > 0:
+                        _st_drift = (_st_new - _st_old) / _st_old * 100
                 self.signal_tracker.record_signal(
                     price=price,
                     direction=self.campo._direction,
@@ -4656,24 +5583,31 @@ class OvertopBassanoV15Production:
                     volatility=volatility,
                     trend=trend,
                     rsi=self.campo._last_rsi,
-                    macd_hist=getattr(self.campo, '_macd_hist', 0.0),
-                    drift=getattr(self.campo, '_last_drift', 0.0),
+                    macd_hist=self.campo._last_macd_hist,
+                    drift=round(_st_drift, 5),
                 )
         # Aggiorna segnali aperti
         if self.signal_tracker.get_open_count() > 0:
             self.signal_tracker.update(price)
 
-        # -- BRIDGE EVENTS: emetti su condizioni significative (B4) --------
+        # -- BRIDGE EVENTS: rate-limited — max 1 per tipo ogni 10s --------
+        _now_ev = time.time()
         if len(self.campo._prices_short) >= 30:
             _pb_f, _pb_d, _pb_sigs = self.campo._pre_breakout_factor()
             if _pb_sigs >= 2:
-                _pb_payload = {'signals': _pb_sigs, 'factor': round(_pb_f, 3), 'regime': self._regime_current}
-                self._emit_bridge_event("EVENT_PREBREAKOUT", _pb_payload)
-                self.telemetry.log_event_signal("PREBREAKOUT", _pb_payload)
+                _last_pb = getattr(self, '_last_pb_event_ts', 0)
+                if _now_ev - _last_pb >= 10:
+                    _pb_payload = {'signals': _pb_sigs, 'factor': round(_pb_f, 3), 'regime': self._regime_current}
+                    self._emit_bridge_event("EVENT_PREBREAKOUT", _pb_payload)
+                    self.telemetry.log_event_signal("PREBREAKOUT", _pb_payload)
+                    self._last_pb_event_ts = _now_ev
         if self._oi_stato == "FUOCO" and self._oi_carica >= 0.80:
-            _fuoco_payload = {'carica': round(self._oi_carica, 3), 'regime': self._regime_current}
-            self._emit_bridge_event("EVENT_FUOCO", _fuoco_payload)
-            self.telemetry.log_event_signal("FUOCO", _fuoco_payload)
+            _last_fuoco = getattr(self, '_last_fuoco_event_ts', 0)
+            if _now_ev - _last_fuoco >= 10:
+                _fuoco_payload = {'carica': round(self._oi_carica, 3), 'regime': self._regime_current}
+                self._emit_bridge_event("EVENT_FUOCO", _fuoco_payload)
+                self.telemetry.log_event_signal("FUOCO", _fuoco_payload)
+                self._last_fuoco_event_ts = _now_ev
 
         # -- HEARTBEAT M2 - ogni 60s conferma che M2 è vivo ---------------
         if now - self._last_m2_heartbeat > 60:
@@ -5049,7 +5983,9 @@ class OvertopBassanoV15Production:
 
         # Registra trade recente
         self._m2_recent_trades.append({
-            'ts': now, 'pnl': pnl, 'is_win': is_win, 'duration': duration
+            'ts': now, 'pnl': pnl, 'is_win': is_win, 'duration': duration,
+            'soglia': self._shadow.get('soglia', 60) if self._shadow else 60,
+            'regime': self._shadow.get('regime_entry', self._regime_current) if self._shadow else self._regime_current,
         })
 
         if is_win:
@@ -5174,6 +6110,23 @@ class OvertopBassanoV15Production:
             return
 
         stats = self._phantom_stats.get("SCORE_INSUFFICIENTE")
+
+        # FIX: AutoCalibratore guarda anche i trade reali persi consecutivi
+        recent = list(self._m2_recent_trades)[-5:] if self._m2_recent_trades else []
+        recent_losses = sum(1 for t in recent if not t.get('is_win', False))
+        if recent_losses >= 3 and len(recent) >= 3:
+            step = base_step
+            new_min  = min(52, self.campo.SOGLIA_MIN  + step)
+            new_base = min(55, self.campo.SOGLIA_BASE + step)
+            old_min  = self.campo.SOGLIA_MIN
+            old_base = self.campo.SOGLIA_BASE
+            self.campo.SOGLIA_MIN  = new_min
+            self.campo.SOGLIA_BASE = new_base
+            self._last_soglia_autotune = now
+            self._log_m2("🎯", f"AUTO-TUNE LOSS_REAL: {recent_losses}/5 loss reali → ALZA soglia "
+                              f"MIN {old_min}→{new_min} BASE {old_base}→{new_base}")
+            return
+
         if not stats:
             return
 
@@ -5208,12 +6161,8 @@ class OvertopBassanoV15Production:
             new_base = max(55, old_base - step)
             action = "ABBASSA"
         elif delta_wr < 0.40:
-            new_min = min(65, old_min + step)
-            new_base = min(70, old_base + step)
-            # Cap: senza trade reali la soglia non può salire oltre 55/52
-            if self._m2_trades < 3:
-                new_min  = min(new_min,  52)
-                new_base = min(new_base, 55)
+            new_min = min(52, old_min + step)
+            new_base = min(55, old_base + step)
             action = "ALZA"
         elif bilancio < -100:
             # WR nella zona morta (40-60%) MA bilancio molto negativo
@@ -5244,6 +6193,79 @@ class OvertopBassanoV15Production:
     # ========================================================================
     # MOTORE 2: CAMPO GRAVITAZIONALE - Shadow Entry/Exit/Close
     # ========================================================================
+
+    def _phantom_supervisor(self):
+        """
+        Loop chiuso Phantom → Capsule correttiva.
+
+        Ogni 60s analizza il Phantom per componente.
+        Se un componente blocca con WR anomalo → genera capsule correttiva.
+
+        WR blocco > 45% su 20+ casi → sta bloccando cose buone → AUTO_ALLENTA soglia
+        WR blocco < 25% su 20+ casi → sta lasciando passare cose cattive → AUTO_IRRIGIDISCE
+
+        Questo è il sistema che si autocorregge da solo.
+        """
+        now = time.time()
+        if now - getattr(self, '_last_phantom_sup', 0) < 60:
+            return
+        self._last_phantom_sup = now
+
+        per_livello = getattr(self, '_phantom_per_livello', {})
+        if not per_livello:
+            return
+
+        for blocco_id, dati in per_livello.items():
+            ww  = dati.get('would_win', 0)
+            wl  = dati.get('would_lose', 0)
+            blk = dati.get('blocked', 0)
+            tot = ww + wl
+            if tot < 20:
+                continue
+
+            wr_blocco = ww / tot
+
+            # Sta bloccando cose che avrebbero vinto — soglia troppo alta
+            if wr_blocco > 0.45 and blk > 20:
+                cap_id = f"AUTO_ALLENTA_{blocco_id[:30]}"
+                existing = [c for c in self.capsule_runtime.capsules
+                           if c.get('capsule_id') == cap_id and c.get('enabled')]
+                if not existing:
+                    # Abbassa soglia di 3 punti per 30 minuti
+                    old_base = self.campo.SOGLIA_BASE
+                    new_base = max(40, old_base - 3)
+                    self.campo.SOGLIA_BASE = new_base
+                    self._log_m2("🧠",
+                        f"PHANTOM_SUP: {blocco_id} WR={wr_blocco:.0%} blk={blk} "
+                        f"→ AUTO_ALLENTA soglia {old_base}→{new_base}")
+                    # Salva nella storia per apprendimento
+                    if not hasattr(self, '_phantom_sup_log'):
+                        self._phantom_sup_log = []
+                    self._phantom_sup_log.append({
+                        'ts':      time.strftime('%H:%M:%S'),
+                        'blocco':  blocco_id,
+                        'wr':      round(wr_blocco, 3),
+                        'azione':  f'ALLENTA {old_base}→{new_base}',
+                    })
+
+            # Sta lasciando passare cose che perdono — soglia troppo bassa
+            elif wr_blocco < 0.25 and blk > 20:
+                old_base = self.campo.SOGLIA_BASE
+                new_base = min(60, old_base + 3)
+                if new_base != old_base:
+                    self.campo.SOGLIA_BASE = new_base
+                    self._log_m2("🧠",
+                        f"PHANTOM_SUP: {blocco_id} WR={wr_blocco:.0%} blk={blk} "
+                        f"→ AUTO_IRRIGIDISCE soglia {old_base}→{new_base}")
+                    if not hasattr(self, '_phantom_sup_log'):
+                        self._phantom_sup_log = []
+                    self._phantom_sup_log.append({
+                        'ts':      time.strftime('%H:%M:%S'),
+                        'blocco':  blocco_id,
+                        'wr':      round(wr_blocco, 3),
+                        'azione':  f'IRRIGIDISCE {old_base}→{new_base}',
+                    })
+
 
     def _tele_ctx(self, trend_override=None, vol_override=None, bridge_reason=None):
         """Snapshot di contesto per telemetria. Zero logica, solo lettura."""
@@ -5382,25 +6404,55 @@ class OvertopBassanoV15Production:
         else:
             campo._direction_bearish_streak = 0
         
-        # Cooldown: minimo 120 secondi tra flip (non 60 - troppo nervoso)
+        # Cooldown: minimo 120 secondi tra flip normali
+        # MA: OI SHORT FUOCO >= 0.85 bypassa il cooldown — il mercato ha dichiarato
         now = time.time()
-        cooldown_ok = (now - campo._direction_last_change) >= 120
-        
+        _oi_short_fuoco = (getattr(self, '_oi_stato_short', '') == "FUOCO" and
+                           getattr(self, '_oi_carica_short', 0) >= 0.85)
+        cooldown_ok = (now - campo._direction_last_change) >= 120 or _oi_short_fuoco
+
         old_direction = campo._direction
-        
+
         # -- EXPLOSIVE GATE: in EXPLOSIVE flip SHORT con meno energia ------
         # Signal Tracker: SHORT EXPLOSIVE hit 89% su 36 segnali — gate permissivo
-        if self._regime_current == "EXPLOSIVE" and campo._direction == "LONG" and bearish_energy >= 2 and cooldown_ok:
+        # OI SHORT FUOCO bypassa anche lo streak — entra subito al primo tick
+        _short_streak_ok = campo._direction_bearish_streak >= 1 or _oi_short_fuoco
+        if self._regime_current == "EXPLOSIVE" and campo._direction == "LONG" and bearish_energy >= 2 and cooldown_ok and _short_streak_ok:
             campo._direction = "SHORT"
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
-            self._log_m2("🔄", f"FLIP → SHORT in EXPLOSIVE (bearish_energy={bearish_energy} drift={drift:+.3f}%)")
+            _motivo = "OI_SHORT_FUOCO" if _oi_short_fuoco else f"bearish_energy={bearish_energy}"
+            self._log_m2("🔄", f"FLIP → SHORT in EXPLOSIVE ({_motivo} drift={drift:+.3f}%)")
+
+        # FLIP LONG in EXPLOSIVE — speculare al SHORT
+        # OI LONG FUOCO >= 0.80 + momentum positivo → flippa a LONG
+        # LONG|FORTE|BASSA|UP WR=78%, LONG|FORTE|MEDIA|UP WR=68%
+        _oi_long_fuoco = (getattr(self, '_oi_stato', '') == "FUOCO" and
+                          getattr(self, '_oi_carica', 0) >= 0.65)
+        _bullish_energy = 0
+        if mom_fast > 0.5:  _bullish_energy += 1
+        if mom_fast > 1.0:  _bullish_energy += 1
+        if macd_hist > 2.0: _bullish_energy += 1
+        if drift > 0.08:    _bullish_energy += 1
+
+        if (self._regime_current == "EXPLOSIVE" and
+                campo._direction == "SHORT" and
+                _oi_long_fuoco and
+                _bullish_energy >= 2 and
+                cooldown_ok):
+            campo._direction = "LONG"
+            campo._direction_last_change = now
+            campo._direction_bearish_streak = 0
+            self._log_m2("🔄", f"FLIP → LONG in EXPLOSIVE (bullish_energy={_bullish_energy} drift={drift:+.3f}%)")
 
         # -- RANGING GATE: in laterale NON flippare a SHORT --------------
         # ECCEZIONE VERITAS: se il Veritas vede movimento ribassista reale
         # con delta_60s < -20 su almeno 5 segnali → lo SHORT è legittimo
+        # ECCEZIONE OI SHORT FUOCO: mercato ha dichiarato la direzione
         _veritas_short_ok = False
-        _drift_short_ok = drift < -0.02 and bearish_energy >= 3
+        _drift_short_ok = drift < -0.005 and bearish_energy >= 3
+        if _oi_short_fuoco:
+            _veritas_short_ok = True  # OI SHORT FUOCO = dichiarazione mercato
         if hasattr(self, 'veritas') and self.veritas._stats:
             for k, s in self.veritas._stats.items():
                 if 'FUOCO' in k or 'CARICA' in k:
@@ -5449,11 +6501,29 @@ class OvertopBassanoV15Production:
             campo._direction_bearish_streak = 0
             # Non flippa - resta LONG
         
-        # In NON-RANGING: flip normale LONG → SHORT
-        elif campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
-            campo._direction = "SHORT"
+        # RSI OVERRIDE: ipervenduto/ipercomprato sovrasta tutto
+        # RSI < 30 = mercato caduto troppo → LONG obbligatorio
+        # RSI > 75 = mercato salito troppo → SHORT permesso solo se già SHORT
+        _rsi_now = campo._last_rsi if hasattr(campo, '_last_rsi') else 50.0
+        if _rsi_now < 30 and campo._direction == "SHORT" and cooldown_ok:
+            campo._direction = "LONG"
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
+            self._log_m2("🔄", f"RSI OVERRIDE → LONG (RSI={_rsi_now:.0f} ipervenduto)")
+        elif _rsi_now < 30 and campo._direction == "LONG":
+            # Già LONG e ipervenduto — blocca qualsiasi flip a SHORT
+            campo._direction_bearish_streak = 0
+
+        # In NON-RANGING: flip normale LONG → SHORT
+        elif campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
+            # Non flippare SHORT se RSI ipervenduto
+            if _rsi_now < 35:
+                self._log_m2("🔇", f"SHORT BLOCCATO da RSI={_rsi_now:.0f} ipervenduto")
+                campo._direction_bearish_streak = 0
+            else:
+                campo._direction = "SHORT"
+                campo._direction_last_change = now
+                campo._direction_bearish_streak = 0
         # SHORT → LONG: energia bearish scesa sotto 2 + cooldown
         elif campo._direction == "SHORT" and bearish_energy < 2 and cooldown_ok:
             campo._direction = "LONG"
@@ -5576,16 +6646,30 @@ class OvertopBassanoV15Production:
         # Stato macchina LONG
         vecchio_stato = self._oi_stato
         if midzone:
-            self._oi_stato      = "ATTESA"
+            self._oi_stato       = "ATTESA"
             self._oi_tick_pronto = 0
+            self._oi_fuoco_ts    = 0
         elif self._oi_carica >= 0.65:
             self._oi_tick_pronto += 1
-            self._oi_stato = "FUOCO" if self._oi_tick_pronto >= 2 else "CARICA"
+            if self._oi_tick_pronto >= 2:
+                self._oi_stato   = "FUOCO"
+                if not getattr(self, '_oi_fuoco_ts', 0):
+                    self._oi_fuoco_ts = time.time()
+            else:
+                self._oi_stato   = "CARICA"
         elif self._oi_carica >= 0.40:
-            self._oi_stato      = "CARICA"
-            self._oi_tick_pronto = 0
+            # FUOCO sticky: se era FUOCO da meno di 30s e carica ancora > 0.40 → mantieni FUOCO
+            _fuoco_age = time.time() - getattr(self, '_oi_fuoco_ts', 0)
+            if getattr(self, '_oi_stato', '') == "FUOCO" and _fuoco_age < 30:
+                pass  # mantieni FUOCO — finestra di 30s
+            else:
+                self._oi_stato       = "CARICA"
+                self._oi_tick_pronto = 0
+                self._oi_fuoco_ts    = 0
         else:
-            self._oi_stato      = "ATTESA"
+            self._oi_stato       = "ATTESA"
+            self._oi_tick_pronto = 0
+            self._oi_fuoco_ts    = 0
             self._oi_tick_pronto = 0
 
         # ── CARICA SHORT speculare ────────────────────────────────────
@@ -5717,7 +6801,6 @@ class OvertopBassanoV15Production:
 
                 # Metriche predizione vs mercato reale
                 if len(_ph) >= 10 and len(_ch) >= 10:
-                    # Predizione = prezzo + (carica - 0.5) * 150
                     # Predizione dai delta reali del Veritas — non fattore inventato
                     # Usa il delta medio misurato per ogni livello di carica
                     _vt_stats = self.veritas._stats if hasattr(self.veritas, '_stats') else {}
@@ -5736,14 +6819,22 @@ class OvertopBassanoV15Production:
                                 _delta_carica += sum(deltas) / len(deltas)
                     if _n_fuoco > 0:
                         _delta_fuoco /= _n_fuoco
+                    # Fallback se Veritas non ha ancora dati sufficienti
+                    if _delta_fuoco == 0 and _ph:
+                        _vt_closed = self.veritas._closed[-200:] if self.veritas._closed else []
+                        _fuoco_d = [s['delta_60'] for s in _vt_closed if s.get('oi_carica',0)>=0.65 and 'delta_60' in s]
+                        _carica_d = [s['delta_60'] for s in _vt_closed if 0.40<=s.get('oi_carica',0)<0.65 and 'delta_60' in s]
+                        if len(_fuoco_d) >= 3: _delta_fuoco = sum(_fuoco_d) / len(_fuoco_d)
+                        if len(_carica_d) >= 3: _delta_carica = sum(_carica_d) / len(_carica_d)
                     # Predizione: prezzo + delta atteso in base alla carica
                     preds = []
                     for i in range(min(len(_ph), len(_ch))):
                         c = _ch[i]
+                        _price_ref = _ph[i] if _ph[i] > 0 else 100.0
                         if c >= 0.65:
-                            delta = _delta_fuoco if _delta_fuoco != 0 else 5.0
+                            delta = _delta_fuoco if _delta_fuoco != 0 else 0.0
                         elif c >= 0.40:
-                            delta = _delta_carica if _delta_carica != 0 else 2.0
+                            delta = _delta_carica if _delta_carica != 0 else 0.0
                         else:
                             delta = 0.0
                         preds.append(round(_ph[i] + delta, 2))
@@ -5753,10 +6844,14 @@ class OvertopBassanoV15Production:
                     # Conferme: predizione indicava direzione giusta?
                     conferme = 0
                     totale = 0
+                    # Soglia = 10% del delta medio della predizione
+                    # Se _delta_fuoco=0 (Veritas non ancora pronto) → soglia basata su movimento tick
+                    _pred_range = max(abs(preds[i] - preds[i-1]) for i in range(1, len(preds))) if len(preds) > 1 else 0
+                    _sig_threshold = max(_pred_range * 0.10, _ph[0] * 0.00005) if _ph and _pred_range > 0 else max(0.05, _ph[0] * 0.00005) if _ph else 0.05
                     for i in range(1, len(preds)):
-                        dir_pred   = preds[i] - preds[i-1]   # predizione sale o scende
-                        dir_reale  = _ph[i]   - _ph[i-1]     # mercato sale o scende
-                        if abs(dir_pred) > 0.5:               # solo segnali significativi
+                        dir_pred   = preds[i] - preds[i-1]
+                        dir_reale  = _ph[i]   - _ph[i-1]
+                        if abs(dir_pred) > _sig_threshold:    # solo segnali significativi
                             totale += 1
                             if (dir_pred > 0) == (dir_reale > 0):
                                 conferme += 1
@@ -5767,15 +6862,19 @@ class OvertopBassanoV15Production:
                     self.heartbeat_data["pred_score"]       = conf_pct
                     self.heartbeat_data["pred_trade_n"]     = self._pred_trade_n
                     self.heartbeat_data["pred_trade_pnl"]   = round(self._pred_trade_pnl, 2)
+                    self.heartbeat_data["pred_delta_fuoco"]  = round(_delta_fuoco, 4)
+                    self.heartbeat_data["pred_delta_carica"] = round(_delta_carica, 4)
 
                     # Ratio magnitudine: predizione vs movimento reale
                     # Misura quanto la predizione sovra/sottostima il mercato
                     movimenti_pred  = []
                     movimenti_reali = []
+                    # Soglia adattiva — proporzionale al movimento reale, non al prezzo assoluto
+                    _dp_thresh_mag = max(0.01, (_ph[0] * 0.00003)) if _ph else 0.01
                     for i in range(1, min(len(preds), len(_ph))):
                         dp = preds[i] - preds[i-1]
                         dr = _ph[i]   - _ph[i-1]
-                        if abs(dp) > 1.0 and abs(dr) > 0.1:
+                        if abs(dp) > _dp_thresh_mag and abs(dr) > 0.001:
                             movimenti_pred.append(abs(dp))
                             movimenti_reali.append(abs(dr))
 
@@ -5796,24 +6895,33 @@ class OvertopBassanoV15Production:
                             sum(self._pred_ratio_history) / len(self._pred_ratio_history), 1)
                         self.heartbeat_data["pred_ratio"]     = ratio_smooth
                         self.heartbeat_data["pred_ratio_raw"] = ratio
-                                # Aggiorna SC per boost predizione e Veritas stats
+                        # Aggiorna SC per boost predizione e Veritas stats
                         if hasattr(self, 'supercervello'):
                             self.supercervello._pred_score_ref = conf_pct
                             self.supercervello._pred_calib_ref = ratio_smooth
                             self.supercervello._veritas_stats_ref = self.veritas._stats
-                        # Passa contesto live all'IA per capsule auto-correttive
-                        # IA contesto — usa realtime_engine (nome corretto)
-                        self.realtime_engine._ctx = {
-                            'sc_pesi': self.supercervello._pesi.copy(),
-                            'oi_carica': self._oi_carica,
-                            'oi_stato': self._oi_stato,
-                            'drift': getattr(self.campo, '_last_drift', 0.0),
-                            'macd_hist': self.campo._last_macd_hist,
-                            'regime': self._regime_current,
-                            'signal_tracker_stats': self.signal_tracker._stats,
-                            'veritas_stats': self.veritas._stats,
-                            'phantom_stats': self._phantom_stats,
-                        }
+
+                # FIX: _ctx aggiornato SEMPRE ad ogni tick dell'Oracolo Interno,
+                # indipendentemente da movimenti_pred/supercervello.
+                # drift calcolato realmente da _prices_long (non _last_drift che non esiste).
+                _ia_drift_ctx = 0.0
+                if len(self.campo._prices_long) >= 100:
+                    _p_ctx = list(self.campo._prices_long)
+                    _avg_old_ctx = sum(_p_ctx[:50]) / 50
+                    _avg_new_ctx = sum(_p_ctx[-50:]) / 50
+                    if _avg_old_ctx > 0:
+                        _ia_drift_ctx = (_avg_new_ctx - _avg_old_ctx) / _avg_old_ctx * 100
+                self.realtime_engine._ctx = {
+                    'sc_pesi': self.supercervello._pesi.copy() if hasattr(self, 'supercervello') else {},
+                    'oi_carica': self._oi_carica,
+                    'oi_stato': self._oi_stato,
+                    'drift': round(_ia_drift_ctx, 5),
+                    'macd_hist': self.campo._last_macd_hist,
+                    'regime': self._regime_current,
+                    'signal_tracker_stats': self.signal_tracker._stats,
+                    'veritas_stats': self.veritas._stats,
+                    'phantom_stats': self._phantom_stats,
+                }
                 # Pesi SuperCervello
                 if hasattr(self,'supercervello'):
                     self.heartbeat_data["sc_pesi"] = self.supercervello._pesi
@@ -5861,375 +6969,307 @@ class OvertopBassanoV15Production:
         return ""
 
     def _evaluate_shadow_entry(self, price, momentum, volatility, trend):
-        """Motore 2 valuta entry con il Campo Gravitazionale."""
+        """
+        MOTORE ENTRY V15+V16
+        
+        Usa CampoGravitazionale V15 per lo score.
+        Usa CompartoEngine V16 per l'assetto.
+        Usa BreathEngine V16 per il timing.
+        
+        Zero gate silenziosi — ogni blocco ha motivo esplicito.
+        """
         try:
-            # -- STATE ENGINE GATE - PRIMA DI TUTTO -----------------------
+            # ── ANTI-DUPLICATE ─────────────────────────────────────────────
+            _now_tick = round(time.time(), 1)
+            if getattr(self, '_last_entry_tick', 0) == _now_tick:
+                self._log_m2("🔇", "ANTI_DUPLICATE tick")
+                return
+            self._last_entry_tick = _now_tick
+
+            # ── STATE ENGINE ────────────────────────────────────────────────
             can_enter, gate_reason = self._state_engine_can_enter()
             if not can_enter:
-                # Non logga phantom per cooldown - è silenzio voluto, non opportunita
+                self._log_m2("🔇", f"STATE_ENGINE: {gate_reason}")
                 return
 
-
+            # ── SEED ────────────────────────────────────────────────────────
             seed = self.seed_scorer.score()
             if seed.get('reason') == 'insufficient_data':
+                self._log_m2("🔇", f"SEED_INSUFFICIENTE score={seed.get('score',0):.2f}")
                 return
 
-            # -- CAPSULE 1-5: stessa protezione del Motore 1 --------------
-            # M2 usa le stesse capsule di M1 per non entrare in matrimoni tossici.
-            # Capsule2 blocca confidence < 0.50 → RANGE_DEAD (conf=0.30) bloccato.
-            _mat_m2   = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
-            _conf_m2  = _mat_m2.get('confidence', 0.5)
-            # Soglia abbassata a 0.35 — dati phantom: conf 0.40 ha net +$924
-            _cap2_soglia = getattr(self, '_cap2_soglia_override', 0.35)
-            _allow2, _reason2 = self.capsule2.riconosci(_conf_m2) if _conf_m2 >= _cap2_soglia else (True, "OK")
-            if not _allow2:
-                if len(self._phantoms_open) < 5:
-                    self._record_phantom(price, f"CAP2_M2_{_mat_m2['name']}_conf{_conf_m2:.2f}",
-                        seed['score'], momentum, volatility, trend)
-                return
-
-            # -- DECIDI DIREZIONE: LONG o SHORT -----------------------------
-            # Il mercato decide, non noi. Drift + MACD + Trend = verdetto.
-            self._auto_detect_direction(trend)
-
-            _dir = self.campo._direction
+            # ── CAMPO GRAVITAZIONALE: calcola score e soglia ─────────────────
+            _dir           = self.campo._direction
             fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend, _dir)
-            matrimonio     = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
-            matrimonio_name = matrimonio["name"]
-            fantasma_info  = self.oracolo.is_fantasma(momentum, volatility, trend, _dir)
+            self._last_fingerprint_wr = fingerprint_wr
+
+            matrimonio_name = MatrimonioIntelligente.get_marriage(
+                momentum, volatility, trend).get("name", "WEAK_NEUTRAL")
+            fantasma_info = self.oracolo.is_fantasma(momentum, volatility, trend, _dir)
 
             result = self.campo.evaluate(
-                seed_score=seed['score'],
-                fingerprint_wr=fingerprint_wr,
-                momentum=momentum,
-                volatility=volatility,
-                trend=trend,
-                regime=self._regime_current,
-                matrimonio_name=matrimonio_name,
-                divorzio_set=self.memoria.divorzio,
-                fantasma_info=fantasma_info,
-                loss_consecutivi=self._m2_loss_consecutivi(),
-                soglia_boost=self._get_ia_soglia_boost(momentum, volatility, trend),
+                seed_score        = seed['score'],
+                fingerprint_wr    = fingerprint_wr,
+                momentum          = momentum,
+                volatility        = volatility,
+                trend             = trend,
+                regime            = self._regime_current,
+                matrimonio_name   = matrimonio_name,
+                divorzio_set      = self.memoria.divorzio,
+                fantasma_info     = fantasma_info,
+                loss_consecutivi  = self._m2_loss_consecutivi(),
+                soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend),
             )
 
+            # ── CAPSULE STATIC — veto assoluto MA gestibile dalla CI ────────
             if result['veto']:
-                # -- PHANTOM: registra il trade bloccato (solo veti significativi) --
                 veto = result['veto']
-                if not veto.startswith("WARMUP") and len(self._phantoms_open) < 5:
-                    self._record_phantom(price, veto, seed['score'], momentum, volatility, trend)
-                return
+                is_tossico = (veto.startswith("TOSSICO") or
+                              veto.startswith("CM_TOSSICO") or
+                              veto.startswith("STATIC_TOSSICO") or
+                              veto.startswith("DIVORZIO"))
+
+                if is_tossico:
+                    # Controlla se OI FUOCO estremo può bypassare STATIC
+                    _fuoco_estremo = (self._oi_stato == "FUOCO" and
+                                      self._oi_carica >= 0.85)
+
+                    # ── CI OVERRIDE: le capsule possono ribaltare il VETO ────
+                    # Quando la CI ha evidenza live più forte del VETO storico,
+                    # la CI vince. Il VETO è una regola del passato — la CI
+                    # porta dati del presente.
+                    _ci_override = False
+                    if veto.startswith("STATIC_TOSSICO") and not veto.startswith("DIVORZIO"):
+                        try:
+                            _ci_mods_veto = self.ci.get_entry_mods()
+                            # CI può ribaltare il VETO se:
+                            # 1. Ha almeno una capsula OPPORTUNITA attiva
+                            # 2. Signal Tracker conferma hit_rate >= 0.63 su 300+ campioni
+                            # OPPURE: OI_ESTREMO >= 0.95 — il mercato urla, nessuna soglia regge
+                            _ci_caps_forti = [
+                                c for c in _ci_mods_veto.get('motivi', [])
+                                if 'RANGING_EDGE' in c or 'FUOCO_WINDOW' in c or 'OI_ESTREMO' in c
+                            ]
+                            _oi_estremo_bypass = (
+                                'CI_OI_ESTREMO' in self.ci._capsule_attive and
+                                self._oi_carica >= 0.95
+                            )
+                            _st_top = self.signal_tracker.dump_top(3)
+                            _st_edge = any(
+                                s.get('hit_60s', 0) >= 0.63 and s.get('n', 0) >= 300
+                                for s in _st_top
+                            )
+                            if _oi_estremo_bypass:
+                                _ci_override = True
+                                _motivo_ci = f"CI_OI_ESTREMO: carica={self._oi_carica:.3f} — dichiarazione fisica"
+                            elif _ci_caps_forti and _st_edge:
+                                _ci_override = True
+                                _motivo_ci = f"CI_OVERRIDE_VETO: ST_hit>63% + capsule={_ci_caps_forti}"
+                        except Exception:
+                            pass
+
+                    if veto.startswith("STATIC_TOSSICO") and (_fuoco_estremo or _ci_override):
+                        if _fuoco_estremo:
+                            self._log_m2("🔥", f"STATIC bypassed — FUOCO carica={self._oi_carica:.2f}")
+                        else:
+                            self._log_m2("💊", f"STATIC bypassed — CI ha autorità: {_motivo_ci}")
+                    else:
+                        self._log_m2("🚫", f"VETO_TOSSICO: {veto}")
+                        if len(self._phantoms_open) < 5:
+                            self._record_phantom(price, veto, seed['score'],
+                                                 momentum, volatility, trend)
+                        return
+                else:
+                    self._log_m2("🚫", f"VETO: {veto}")
+                    if len(self._phantoms_open) < 5:
+                        self._record_phantom(price, veto, seed['score'],
+                                             momentum, volatility, trend)
+                    return
+
+            # ── SCORE vs SOGLIA ──────────────────────────────────────────────
+            score  = result['score']
+            soglia = result['soglia']
 
             if not result['enter']:
-                # -- PHANTOM: score vicino alla soglia ma non abbastanza --
-                if result['score'] > 50 and len(self._phantoms_open) < 5:
-                    self._record_phantom(price, f"SCORE_SOTTO_{result['score']:.0f}_vs_{result['soglia']:.0f}",
-                                        seed['score'], momentum, volatility, trend)
-                return
+                # SHORT senza dati reali — blocca
+                if _dir == "SHORT":
+                    _short_key = f"SHORT|{momentum}|{volatility}|{trend}"
+                    _short_mem = self.oracolo._memory.get(_short_key, {})
+                    _short_real = _short_mem.get('real_samples', 0)
+                    _short_wr   = _short_mem.get('wr', 0)
+                    if _short_real < 5 or _short_wr < 0.40:
+                        self._log_m2("🔇",
+                            f"SHORT_NO_DATA: {_short_key} real={_short_real} wr={_short_wr:.0%}")
+                        return
 
-            # -- MIDZONE FILTER (regola del trader) ────────────────────────
-            # In RANGING centrale (40-60% del range) ZERO TRADE
-            # Il drift deve essere vero — non rumore
-            if self._regime_current == "RANGING":
-                prices_buf = list(self.campo._prices_short)[-20:] if len(self.campo._prices_short)>=20 else []
-                if prices_buf:
-                    r20 = max(prices_buf) - min(prices_buf)
-                    if r20 > 0:
-                        range_pos = (price - min(prices_buf)) / r20
+                # OI FUOCO può bypassare se il score è vicino
+                _fuoco_ok = (self._oi_stato == "FUOCO" and
+                             self._oi_carica >= 0.65 and
+                             self._regime_current != "EXPLOSIVE")
+                if not _fuoco_ok:
+                    self._log_m2("🔇",
+                        f"SCORE_SOTTO: {score:.1f} vs {soglia:.1f} gap={soglia-score:.1f}")
+                    if score > 50 and len(self._phantoms_open) < 5:
+                        self._record_phantom(price,
+                            f"SCORE_{score:.0f}_vs_{soglia:.0f}",
+                            seed['score'], momentum, volatility, trend)
+                    return
+                else:
+                    result['enter'] = True
+                    result['size']  = min(result.get('size', 1.0), 0.3)
+                    self._log_m2("🔥",
+                        f"FUOCO bypass score — carica={self._oi_carica:.2f}")
 
-                        # Midzone: prezzo nel 40-60% del range → STOP
-                        if 0.40 <= range_pos <= 0.60:
-                            if len(self._phantoms_open) < 5:
-                                self._record_phantom(price, f"MIDZONE_pos{range_pos:.2f}",
-                                    seed['score'], momentum, volatility, trend)
-                            self._log_m2("🚫", f"MIDZONE BLOCK pos={range_pos:.2f} — no trade in centro range")
-                            return
-                        # Drift troppo debole — rumore puro
-                        # MA: se Oracolo è in FUOCO/CARICA con carica alta → ignora drift debole
-                        drifts = [abs(getattr(self.campo, '_last_drift', 0.0))]
-                        drift_avg = drifts[0] if drifts else 0
-                        if drift_avg < 0.0001 and range_pos < 0.80:
-                            self._log_m2("🚫", f"DRIFT DEBOLE {drift_avg:.5f} — no trade")
-                            return
+            # ── BREATH ENGINE: conferma timing entry ─────────────────────────
+            # BYPASS: OI FUOCO >= 0.85 — Veritas dimostra FUOCO|BLOCCA sbagliato
+            # nel 65% dei casi. Quando l'energia di mercato è dichiarata al 85%+
+            # il breath non ha autorità di bloccare.
+            _fuoco_bypass_breath = (self._oi_stato == "FUOCO" and
+                                    self._oi_carica >= 0.85)
+            if _V16_ENGINES_OK and self._breath and not _fuoco_bypass_breath:
+                _nerv_val = getattr(self._nerv, '_nervosismo', 0.3) if self._nerv else 0.3
+                b_entry = self._breath.segnale_entry(_dir, _nerv_val)
+                if not b_entry["ok"]:
+                    self._log_m2("🌬",
+                        f"BREATH_BLOCCA: {b_entry['motivo']}")
+                    if len(self._phantoms_open) < 5:
+                        self._record_phantom(price, f"BREATH_{b_entry['fase']}",
+                                             seed['score'], momentum, volatility, trend)
+                    return
+                else:
+                    self._log_m2("🌬",
+                        f"BREATH_OK: {b_entry['motivo']} energia={b_entry.get('energia',0):.1f}")
+            elif _fuoco_bypass_breath:
+                self._log_m2("🔥",
+                    f"BREATH_BYPASS — FUOCO carica={self._oi_carica:.2f} prevale")
 
-            # -- HARD GUARD: doppio check anti-bug --------------------------
-            if result['score'] < result['soglia']:
-                self._log_m2("🛑", f"HARD GUARD: score={result['score']:.1f} < soglia={result['soglia']:.1f} - BLOCCATO")
-                return
+            # ── COMPARTO: dimensiona la size in base all'assetto ─────────────
+            if _V16_ENGINES_OK and self._comparto:
+                _comp_nome   = self._comparto._attivo
+                _comp_attivo = COMPARTI.get(_comp_nome)
+                if _comp_attivo:
+                    result['size'] = min(
+                        result.get('size', 1.0),
+                        _comp_attivo.size_default
+                    )
 
-            # -- SUPERCERVELLO: decisione unificata da tutti gli organi ────
-            # Legge simultaneamente tutti i sistemi e decide una volta sola.
-            _mat_wr    = self.memoria.get_wr(matrimonio_name) if hasattr(self.memoria,'get_wr') else 0.55
-            _mat_trust = self.memoria.get_trust(matrimonio_name) if hasattr(self.memoria,'get_trust') else 0.6
-            _ph_prot   = self._phantom_stats.get('total_saved', 0.0)
-            _ph_zav    = self._phantom_stats.get('total_missed', 0.0)
-            _st_data   = self._get_signal_tracker_context(self._regime_current, result['score'])
-
-            _sc_dec = self.supercervello.decide(
-                fp_wr=fingerprint_wr, fp_samples=int(self.oracolo._memory.get(
-                    f"{momentum}|{volatility}|{trend}|{self.campo._direction}",{}).get('samples',0)),
-                st_hit_rate=_st_data.get('hit_rate', 0.5),
-                st_n=_st_data.get('n', 0),
-                st_pnl=_st_data.get('pnl_sim', 0.0),
-                oi_carica=self._oi_carica,
-                oi_stato=self._oi_stato,
-                score=result['score'], soglia=result['soglia'],
-                matrimonio_wr=_mat_wr, matrimonio_trust=_mat_trust,
-                ph_protezione=_ph_prot, ph_zavorra=_ph_zav,
-                regime=self._regime_current,
-                midzone=False,  # midzone già gestito sopra
-                loss_streak=self._m2_loss_streak,
-            )
-
-            # Applica azioni capsule auto-correttive prima della decisione SC
-            _m2_caps = self.capsule_runtime.valuta({
-                'regime': self._regime_current,
-                'direction': self.campo._direction,
-                'oi_carica': self._oi_carica,
-                'oi_stato': self._oi_stato,
-                'drift': getattr(self.campo, '_last_drift', 0.0),
-                'loss_streak': self._m2_loss_streak,
-            })
-            if _m2_caps.get('ripristina_pesi_sc'):
-                pesi = _m2_caps['ripristina_pesi_sc']
-                if pesi:
-                    self.supercervello._pesi.update(pesi)
-                    self._log_m2("🔧", f"[CAPSULA] Pesi SC ripristinati")
-            if _m2_caps.get('sblocca_short_ranging'):
-                if getattr(self.campo, '_last_drift', 0) < -0.02:
-                    self.campo._direction = "SHORT"
-                    self._log_m2("🔧", f"[CAPSULA] SHORT sbloccato in RANGING")
-            if _m2_caps.get('cap2_soglia') is not None:
-                self._cap2_soglia_override = _m2_caps['cap2_soglia']
-                self._log_m2("🔧", f"[CAPSULA] Capsule2 soglia auto-calibrata: {_m2_caps['cap2_soglia']:.2f}")
-
-            # Applica decisione supercervello
-            if _sc_dec['azione'] == 'BLOCCA':
-                self._log_m2("🧠", f"SC BLOCCA — {_sc_dec['motivo']}")
-                # Veritas: registra FUOCO|BLOCCA o CARICA|BLOCCA — la verità arriverà a 60s
-                self.veritas.registra(price, self._oi_stato, self._oi_carica,
-                    "BLOCCA", _sc_dec['confidenza'], self._regime_current, time.time())
-                if len(self._phantoms_open) < 5:
-                    self._record_phantom(price, f"SC_BLOCCA_c{_sc_dec['confidenza']:.2f}",
-                        seed['score'], momentum, volatility, trend)
-                return
-
-            # Aggiusta size e soglia in base alla confidenza
-            if _sc_dec['azione'] == 'ENTRA':
-                result['size'] = round(result['size'] * _sc_dec['size_mult'], 3)
-                # soglia_adj negativo = abbassa soglia = più facile entrare
-                if _sc_dec['soglia_adj'] != 0:
-                    result['soglia'] = max(self.campo.SOGLIA_MIN,
-                                          result['soglia'] + _sc_dec['soglia_adj'])
-                self._log_m2("🧠", f"SC ENTRA — {_sc_dec['motivo']} size×{_sc_dec['size_mult']}")
-                self._last_sc_dec = _sc_dec
-                # Veritas: registra FUOCO|ENTRA
-                self.veritas.registra(price, self._oi_stato, self._oi_carica,
-                    "ENTRA", _sc_dec['confidenza'], self._regime_current, time.time())
-
-            # -- PREDIZIONE DALL'ORACOLO DEI SEGNALI ───────────────────────
-            # Usa i 3320+ segnali storici per predire se questo contesto vince.
-            # Se la predizione è BLOCCA con alta confidence → non entrare.
-            # Se la predizione è ENTRA → abbassa la soglia effettiva del 10%.
-            # Questo è l'anticipo — non reagisce, predice.
-            _pred = self.signal_tracker.predict_from_signals(
-                regime    = self._regime_current,
-                direction = self.campo._direction,
-                score     = result['score'],
-                drift     = getattr(self.campo, '_last_drift', 0.0),
-                rsi       = self.campo._last_rsi,
-            )
-            if _pred['confidence'] >= 0.3 and _pred['verdict'] == 'BLOCCA':
-                self._log_m2("🔮", f"PREDIZIONE BLOCCA: hit={_pred['hit_rate']:.0%} "
-                                   f"delta={_pred['avg_delta']:+.1f} n={_pred['n_vicini']}")
-                if not hasattr(self, '_phantoms_open'):
+            # ── NERVOSISMO: size ridotta in RAIN ─────────────────────────────
+            if _V16_ENGINES_OK and self._nerv:
+                _gomme = getattr(self._nerv, '_gomme_attuale', 'INTER')
+                if _gomme == "RAIN":
+                    result['size'] = min(result.get('size', 1.0), 0.15)
+                    self._log_m2("🌧", "RAIN — size ridotta a 0.15x")
+                elif _gomme == "SLICK":
+                    # Pista asciutta — size piena
                     pass
-                elif len(self._phantoms_open) < 5:
-                    self._record_phantom(price,
-                        f"PRED_BLOCCA_hr{_pred['hit_rate']:.0f}",
-                        seed['score'], momentum, volatility, trend)
-                return
-            if _pred['confidence'] >= 0.3 and _pred['verdict'] == 'ENTRA':
-                self._log_m2("🔮", f"PREDIZIONE ENTRA: hit={_pred['hit_rate']:.0%} "
-                                   f"delta={_pred['avg_delta']:+.1f} n={_pred['n_vicini']}")
 
-
-
-            # ===============================================================
-            # ENERGY FILTER - la volpe caccia solo prede che valgono
-            #
-            # Non basta passare la soglia. Il trade deve avere ENERGIA
-            # sufficiente a produrre un delta che copra le fee.
-            #
-            # 1. Score >= MIN_SCORE_ECONOMICO (58)
-            #    Solo trade con eccedenza alta producono delta > $30
-            #
-            # 2. SEED_TREND crescente (3 su 5 ultimi seed crescenti)
-            #    L'impulso deve essere in NASCITA, non un picco isolato
-            #
-            # Calibrato su 500+ trade reali:
-            #   score < 58: delta medio $15-25, pnl NEGATIVO dopo fee
-            #   score >= 58: delta medio $60+, pnl POSITIVO
-            # ===============================================================
-            
-            # MIN_SCORE_ECONOMICO calibrato dinamicamente su SOGLIA_MIN
-            # Non fisso — segue la calibrazione del mercato reale.
-            # Storico: 58 su mercato trending. Oggi: 48 su RANGING (Signal Tracker 3320 campioni)
-            MIN_SCORE_ECONOMICO = self.campo.SOGLIA_MIN
-
-            # Valuta ENTRAMBE le condizioni prima di decidere
-            score_ok = result['score'] >= MIN_SCORE_ECONOMICO
-            
-            seed_history = list(self.campo._seed_history)
-            if len(seed_history) >= 5:
-                last5 = seed_history[-5:]
-                rising_count = sum(1 for i in range(1, len(last5)) if last5[i] >= last5[i-1])
-                trend_ok = rising_count >= 3
-            else:
-                trend_ok = True  # non abbastanza dati → lascia passare
-                rising_count = -1
-            
-            # Classifica il rifiuto
-            if not score_ok and not trend_ok:
-                rejection = "ENERGY_BOTH"
-            elif not score_ok:
-                rejection = "ENERGY_SCORE"
-            elif not trend_ok:
-                rejection = "ENERGY_TREND"
-            else:
-                rejection = None  # passa il filtro
-            
-            if rejection:
-                if len(self._phantoms_open) < 5:
-                    detail = f"{rejection}_s{result['score']:.0f}_min{MIN_SCORE_ECONOMICO}_t{rising_count}/3"
-                    self._record_phantom(price, detail,
-                        seed['score'], momentum, volatility, trend)
-                return
-
-            # ===============================================================
-            # REGIME-AWARE BEHAVIOR - il laterale è un altro mestiere
-            #
-            # RANGING: no-trade zone al centro, min hold lungo, più selettivo
-            # TRENDING: fluido, comportamento quasi invariato
-            # EXPLOSIVE: lascia correre, min hold corto
-            # ===============================================================
-            
-            if self._regime_current == "RANGING":
-                # -- NO-TRADE ZONE: non tradare al centro del range ----
-                regime_prices = list(self.regime_detector.prices)
-                if len(regime_prices) >= 200:
-                    recent = regime_prices[-200:]
-                    range_high = max(recent)
-                    range_low = min(recent)
-                    range_size = range_high - range_low
-                    
-                    if range_size > 0:
-                        position_in_range = (price - range_low) / range_size
-                        if 0.40 <= position_in_range <= 0.60:
-                            if len(self._phantoms_open) < 5:
-                                self._record_phantom(price,
-                                    f"RANGE_MIDZONE_{position_in_range:.0%}",
-                                    seed['score'], momentum, volatility, trend)
-                            return
-
-            # ===============================================================
-            # ORACOLO 2.0 - CAPSULE STATICHE + CONTEXT-MATCHING
-            # Il cervello della volpe decide se QUESTA situazione vale
-            # ===============================================================
-            
-            # Calcola contesto per Oracolo
-            _oc_rsi = getattr(self.campo, '_last_rsi', 50)
-            _oc_drift = 0.0
-            _oc_rpos = 0.5
-            if len(self.campo._prices_long) >= 100:
-                _p = list(self.campo._prices_long)
-                _oc_drift = (sum(_p[-50:])/50 - sum(_p[:50])/50) / (sum(_p[:50])/50) * 100
-            if len(self.campo._prices_long) >= 200:
-                _r = list(self.campo._prices_long)[-200:]
-                _rh, _rl = max(_r), min(_r)
-                if _rh > _rl:
-                    _oc_rpos = (price - _rl) / (_rh - _rl)
-            
-            # Capsule OC1-OC5
-            oc_block, oc_reason = self.oracolo.check_capsules(
-                self._regime_current, self.campo._direction, _oc_rsi,
-                _oc_drift, _oc_rpos, momentum, self._m2_loss_streak)
-            if oc_block:
-                if len(self._phantoms_open) < 5:
-                    self._record_phantom(price, oc_reason, seed['score'], momentum, volatility, trend)
-                return
-
-            # Context-matching: cerca trade simili passati
-            ctx = self.oracolo.context_match(
-                self._regime_current, momentum, volatility, trend,
-                self.campo._direction, _oc_rsi, _oc_drift, _oc_rpos)
-            if ctx['verdict'] == 'BLOCCA' and ctx['confidence'] > 0.4:
-                if len(self._phantoms_open) < 5:
-                    self._record_phantom(price,
-                        f"CTX_MATCH_BLOCK_pnl{ctx['pnl_predicted']:+.1f}_w{ctx['wins']}/5",
-                        seed['score'], momentum, volatility, trend)
-                return
-
-            self._log_m2("🎯", f"ENTRY {self.campo._direction} {matrimonio_name} | score={result['score']:.1f} "
-                              f"soglia={result['soglia']:.1f} size={result['size']:.2f}x "
-                              f"| {result['breakdown']} @ ${price:.1f}")
-
-            self._shadow = {
-                "price_entry":   price,
-                "matrimonio":    matrimonio_name,
-                "duration_avg":  matrimonio["duration_avg"],
-                "size":          result['size'],
-                "score":         result['score'],
-                "soglia":        result['soglia'],
-                "pb_signals":    result.get('pb_signals', 0),
-                "direction":     self.campo._direction,
-            }
-            self._shadow_entry_time        = time.time()
-            self._shadow_entry_momentum    = momentum
-            self._shadow_entry_volatility  = volatility
-            self._shadow_entry_trend       = trend
-            self._shadow_entry_fingerprint = fingerprint_wr
-            self._shadow_max_price         = price
-            self._shadow_min_price         = price
-            self._shadow_matrimonio        = matrimonio_name
-            self._m2_trades += 1
-
-            # -- TELEMETRY: registra entry ---------------------------------
-            self.telemetry.log_trade_entry(
-                trade_direction=self.campo._direction,
-                score=result['score'], soglia=result['soglia'],
-                matrimonio=matrimonio_name,
-                regime=self._regime_current, direction=self.campo._direction,
-                open_position=True
-            )
-
-            # -- SCRIVI ENTRY NEL DATABASE ---------------------------------
+            # ── CAPSULE INTELLIGENTE: modifiche predittive ───────────────────
             try:
-                conn = sqlite3.connect(DB_PATH)
-                conn.execute("""
-                    INSERT INTO trades (event_type, asset, price, size, pnl, direction, reason, data_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, ("M2_ENTRY", SYMBOL, price, result['size'], 0.0,
-                      f"{self.campo._direction}_SHADOW", f"score={result['score']:.1f} soglia={result['soglia']:.1f}",
-                      json.dumps({
-                          "motore": "M2", "matrimonio": matrimonio_name,
-                          "score": result['score'], "soglia": result['soglia'],
-                          "momentum": momentum, "volatility": volatility,
-                          "trend": trend, "regime": self._regime_current,
-                          "breakdown": result['breakdown'],
-                          "direction": self.campo._direction,
-                      })))
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                log.error(f"[M2_DB] Entry save: {e}")
+                _ci_mods = self.ci.get_entry_mods()
+                if _ci_mods['n_capsule'] > 0:
+                    # Applica soglia_delta: riduce o aumenta il gap score/soglia
+                    if _ci_mods['soglia_delta'] != 0:
+                        soglia_adj = soglia + _ci_mods['soglia_delta']
+                        # Rispetta sempre il floor assoluto
+                        soglia_adj = max(48.0, soglia_adj)
+                        if not result.get('enter') and score >= soglia_adj:
+                            result['enter'] = True
+                            self._log_m2("💊", f"CI_ENTRY_UNLOCK: soglia {soglia:.1f}→{soglia_adj:.1f} "
+                                             f"motivi={_ci_mods['motivi']}")
+                        elif result.get('enter') and score < soglia_adj:
+                            result['enter'] = False
+                            self._log_m2("💊", f"CI_ENTRY_BLOCK: soglia alzata {soglia:.1f}→{soglia_adj:.1f} "
+                                             f"motivi={_ci_mods['motivi']}")
+                    # Applica size_mult
+                    if _ci_mods['size_mult'] != 1.0 and result.get('enter'):
+                        old_size = result.get('size', 0.3)
+                        result['size'] = round(
+                            min(1.0, max(0.05, old_size * _ci_mods['size_mult'])), 3
+                        )
+                        self._log_m2("💊", f"CI_SIZE: {old_size:.2f}→{result['size']:.2f} "
+                                         f"stato={_ci_mods['stato']}")
+            except Exception as _ci_e:
+                log.debug(f"[CI_ENTRY_ERR] {_ci_e}")
+
+            # ── ENTRA ────────────────────────────────────────────────────────
+            size = result.get('size', 0.3)
+            self._log_m2("🚀",
+                f"ENTRY {_dir} score={score:.1f}/{soglia:.1f} "
+                f"size={size:.2f} regime={self._regime_current}")
+
+            if _V16_ENGINES_OK and self._breath:
+                self._breath.on_trade_open()
+            if _V16_ENGINES_OK and self._comparto:
+                self._comparto._attivo  # registra trade nel comparto
+
+            self._open_shadow_position(price, score, soglia, seed, size,
+                                        momentum, volatility, trend,
+                                        matrimonio_name, fingerprint_wr)
 
         except Exception as e:
             import traceback
             self._log_m2("💥", f"ERRORE shadow_entry: {e}")
             log.error(f"[M2_ENTRY_ERROR] {e}\n{traceback.format_exc()}")
+            try:
+                self._last_entry_tick = 0
+                if self._shadow:
+                    self._shadow = None
+            except Exception:
+                pass
+
+
+    def _open_shadow_position(self, price, score, soglia, seed, size,
+                               momentum, volatility, trend,
+                               matrimonio_name, fingerprint_wr):
+        """
+        Apre una shadow position (paper trade M2).
+        Registra tutti i dati necessari per l'exit e il tracking.
+        """
+        try:
+            matrimonio = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
+            pb_signals = self.campo._pre_breakout_factor()[2] \
+                         if len(self.campo._prices_short) >= 30 else 0
+
+            self._shadow = {
+                "price_entry":   price,
+                "direction":     self.campo._direction,
+                "duration_avg":  matrimonio.get("duration_avg", 20),
+                "score":         round(score, 2),
+                "soglia":        round(soglia, 2),
+                "size":          round(size, 3),
+                "pb_signals":    pb_signals,
+                "regime_entry":  self._regime_current,
+                "matrimonio":    matrimonio_name,
+                "fingerprint_wr": round(fingerprint_wr, 3),
+                "seed":          round(seed.get('score', 0), 3),
+                "ts_entry":      time.time(),
+            }
+            self._shadow_entry_time = time.time()
+            self._shadow_max_price  = price
+            self._shadow_min_price  = price
+            self._shadow_matrimonio = matrimonio_name
+
+            self._m2_trades += 1
+            self._log_m2("📈", f"SHADOW APERTA {self.campo._direction} "
+                              f"price={price:.2f} size={size:.3f} "
+                              f"score={score:.1f}/{soglia:.1f} "
+                              f"matrimonio={matrimonio_name}")
+
+            # Telemetry
+            ctx = self._tele_ctx()
+            self.telemetry.log_trade_open(
+                trade_direction=self.campo._direction,
+                **{k: ctx[k] for k in ('regime','direction','open_position',
+                   'active_threshold','drift','macd','trend','volatility')}
+            )
+
+        except Exception as e:
+            log.error(f"[OPEN_SHADOW_ERROR] {e}")
+            self._shadow = None
+
 
     def _evaluate_shadow_exit(self, price, momentum, volatility, trend):
-        """Stessa logica di uscita del Motore 1 applicata al shadow trade."""
+        """Stessa logica di uscita V15 + BreathEngine V16 per timing ottimale."""
         try:
             if not self._shadow:
                 return
@@ -6240,50 +7280,101 @@ class OvertopBassanoV15Production:
 
             duration     = time.time() - self._shadow_entry_time
             duration_avg = self._shadow["duration_avg"]
-            
+
             # CRITICO: direzione al momento dell'ENTRY, non quella attuale
             entry_direction = self._shadow.get("direction", "LONG")
 
-            # -- HARD STOP LOSS 2% SUL MARGINE --------------------------
+            # ── CAPSULE INTELLIGENTE EXIT — uscita anticipata predittiva ────
+            if duration > 5:
+                try:
+                    _ci_exit_ctx = {
+                        'breath_fase':    (self._breath._fase    if _V16_ENGINES_OK and self._breath else 'NEUTRO'),
+                        'nervosismo':     (self._nerv._nervosismo if _V16_ENGINES_OK and self._nerv  else 0.3),
+                        'comparto':       (self._comparto._attivo if _V16_ENGINES_OK and self._comparto else 'NEUTRO'),
+                        'oi_stato':       self._oi_stato,
+                        'oi_carica':      self._oi_carica,
+                        'regime':         self._regime_current,
+                        'drift':          0.0,
+                        'gomme':          (self._nerv._gomme_attuale if _V16_ENGINES_OK and self._nerv else 'INTER'),
+                    }
+                    _ci_exit = self.ci.get_exit_signal(_ci_exit_ctx)
+                    if _ci_exit['esci']:
+                        self._log_m2("💊", f"CI_EXIT: {_ci_exit['motivo']}")
+                        self._close_shadow_position(
+                            price, momentum, volatility, trend,
+                            reason="CI_EXIT_ANTICIPATA"
+                        )
+                        return
+                except Exception as _ci_ex:
+                    log.debug(f"[CI_EXIT_ERR] {_ci_ex}")
+
+            # ── BREATH EXIT — priorità alta ─────────────────────────────────
+            if _V16_ENGINES_OK and self._breath and duration > 10:
+                _nerv_val = getattr(self._nerv, '_nervosismo', 0.3) if self._nerv else 0.3
+
+                class _FakePos:
+                    direction   = entry_direction
+                    entry_price = self._shadow.get("entry_price", price)
+                    entry_time  = self._shadow_entry_time
+
+                b_exit = self._breath.segnale_exit(_FakePos(), _nerv_val)
+                if b_exit["ok"] and b_exit.get("urgenza") in ("ALTA", "CRITICA"):
+                    self._log_m2("🌬", f"BREATH_EXIT: {b_exit['motivo']}")
+                    self._close_shadow_position(
+                        price, momentum, volatility, trend,
+                        reason=f"BREATH_{b_exit.get('urgenza','')}"
+                    )
+                    return
+
+            # -- HARD STOP LOSS 2% SUL PNL REALE --------------------------
+            # Stop sul PnL della posizione, non sul prezzo.
+            # Formula: delta% × esposizione
+            # 2% di $5000 esposizione = $100 max loss
+            # Su SOL $130: $100 / 38.46 = $2.60 movimento — ragionevole
             exposure_sl = self.TRADE_SIZE_USD * self.LEVERAGE
             btc_qty_sl = exposure_sl / self._shadow["price_entry"]
             if entry_direction == "SHORT":
                 current_pnl_real = (self._shadow["price_entry"] - price) * btc_qty_sl
             else:
                 current_pnl_real = (price - self._shadow["price_entry"]) * btc_qty_sl
-            
-            HARD_STOP_USD = self.TRADE_SIZE_USD * 0.01  # 1% del margine = $10 max loss per trade
+
+            HARD_STOP_USD = exposure_sl * 0.02  # 2% dell'esposizione = $100 su $5000
             if current_pnl_real < -HARD_STOP_USD:
                 self._close_shadow_trade(price, f"HARD_STOP_${abs(current_pnl_real):.1f}_max${HARD_STOP_USD:.0f}")
                 return
 
             # -- MINIMUM HOLD TIME ---------------------------------------------
+            # FIX: MIN_HOLD_SECONDS era dichiarato ma mai applicato.
+            # Nessun divorzio nei primi 10 secondi — il trade deve respirare.
             MIN_HOLD_SECONDS = 10
 
-            # -- 4 DIVORCE TRIGGERS (SEMPRE ATTIVI - sicurezza) ---------------
-            triggers = []
-            if self._shadow_entry_volatility == "BASSA" and volatility == "ALTA":
-                triggers.append("T1_VOL")
-            # T2: trend inverte CONTRO la nostra direzione
-            if entry_direction == "LONG" and self._shadow_entry_trend == "UP" and trend == "DOWN":
-                triggers.append("T2_TREND")
-            elif entry_direction == "SHORT" and self._shadow_entry_trend == "DOWN" and trend == "UP":
-                triggers.append("T2_TREND")
-            # T3: drawdown dal migliore raggiunto
+            # FIX: drawdown_pct calcolato sempre — serve anche per TIMEOUT_DD
             if entry_direction == "SHORT":
-                # SHORT: drawdown = prezzo sale dal minimo
                 drawdown_pct = ((price - self._shadow_min_price) / self._shadow["price_entry"]) * 100
             else:
                 drawdown_pct = ((self._shadow_max_price - price) / self._shadow["price_entry"]) * 100
-            if drawdown_pct > DIVORCE_DRAWDOWN_PCT:
-                triggers.append("T3_DD")
-            current_fp = self.oracolo.get_wr(momentum, volatility, trend, entry_direction)
-            fp_div = abs(current_fp - self._shadow_entry_fingerprint) / max(self._shadow_entry_fingerprint, 0.001)
-            if fp_div > DIVORCE_FP_DIVERGE_PCT:
-                triggers.append("T4_FP")
-            if len(triggers) >= DIVORCE_MIN_TRIGGERS:
-                self._close_shadow_trade(price, f"DIVORZIO|{'|'.join(triggers)}")
-                return
+
+            if duration >= MIN_HOLD_SECONDS:
+                # -- 4 DIVORCE TRIGGERS (attivi solo dopo MIN_HOLD) ---------------
+                triggers = []
+                if self._shadow_entry_volatility == "BASSA" and volatility == "ALTA" and current_pnl_real < 0:
+                    triggers.append("T1_VOL")
+                # T2: trend inverte CONTRO la nostra direzione
+                if entry_direction == "LONG" and self._shadow_entry_trend == "UP" and trend == "DOWN":
+                    triggers.append("T2_TREND")
+                elif entry_direction == "SHORT" and self._shadow_entry_trend == "DOWN" and trend == "UP":
+                    triggers.append("T2_TREND")
+                # T3: drawdown dal migliore raggiunto
+                if drawdown_pct > DIVORCE_DRAWDOWN_PCT:
+                    triggers.append("T3_DD")
+                # T4: FIX — scatta solo se in perdita, non se stai guadagnando
+                current_fp = self.oracolo.get_wr(momentum, volatility, trend, entry_direction)
+                fp_div = abs(current_fp - self._shadow_entry_fingerprint) / max(self._shadow_entry_fingerprint, 0.001)
+                if fp_div > DIVORCE_FP_DIVERGE_PCT and current_pnl_real < 0:
+                    triggers.append("T4_FP")
+                if len(triggers) >= DIVORCE_MIN_TRIGGERS:
+                    self._close_shadow_trade(price, f"DIVORZIO|{'|'.join(triggers)}")
+                    return
 
             # ===============================================================
             # EXIT INTELLIGENTE - CAMPO GRAVITAZIONALE DI USCITA
@@ -6581,6 +7672,17 @@ class OvertopBassanoV15Production:
             else:
                 self._m2_losses += 1
             self._m2_pnl += pnl
+
+            # FIX: aggiorna _m2_recent_trades — usato dal gate CESPUGLIO_AVVELENATO
+            # Senza questo il gate non ha mai dati e non funziona
+            self._m2_recent_trades.append({
+                'ts':       time.time(),
+                'pnl':      pnl,
+                'is_win':   is_win,
+                'duration': trade_duration,
+                'regime':   self._regime_current,
+                'soglia':   self._shadow.get('soglia', 60) if self._shadow else 60,
+            })
 
             m2_tot = self._m2_wins + self._m2_losses
             m2_wr  = (self._m2_wins / m2_tot * 100) if m2_tot > 0 else 0
@@ -7092,6 +8194,117 @@ class OvertopBassanoV15Production:
     # HEARTBEAT → app.py (Mission Control)
     # ========================================================================
 
+    def _build_diagnosis(self) -> dict:
+        """Catena causale completa — pronta per DeepSeek."""
+        sc        = getattr(self, 'm2_score_components', {})
+        score     = getattr(self, '_last_score', self.m2_last_score if hasattr(self,'m2_last_score') else 0)
+        soglia    = getattr(self, '_last_soglia', self.m2_last_soglia if hasattr(self,'m2_last_soglia') else 48)
+        regime    = self._regime_current
+        direction = self.campo._direction if hasattr(self.campo, '_direction') else '?'
+
+        warmup_rsi    = len(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else 0
+        fp_score      = sc.get('fp', 0)
+        rsi_score     = sc.get('rsi', 0)
+        seed_score    = sc.get('seed', 0)
+        macd_score    = sc.get('macd', 0)
+        gap           = round(soglia - score, 1) if score and soglia else None
+
+        blocco = None
+        motivo = None
+        azione = None
+
+        # Controlla gate post-soglia — quelli silenziosi
+        oi_carica   = getattr(self, '_oi_carica', 0)
+        oi_stato    = getattr(self, '_oi_stato', '')
+        last_fp_wr  = getattr(self, '_last_fingerprint_wr', 0)
+        fuoco_ok    = (oi_stato == 'FUOCO' and oi_carica >= 0.65)
+
+        if warmup_rsi < 50:
+            blocco = 'WARMUP_RSI_INCOMPLETO'
+            motivo = (f"RSI buffer {warmup_rsi}/50 — contribuisce {rsi_score:.0f}/10 "
+                      f"invece di 10 — perdo {10-rsi_score:.0f} punti score")
+            azione = f"Attendere {50-warmup_rsi} campioni (~{max(1,(50-warmup_rsi)//10)} min)"
+
+        elif gap is not None and gap <= 0 and fp_score == 0 and not fuoco_ok:
+            # Score sopra soglia MA FP=0 e no FUOCO → gate post-soglia attivi
+            blocco = 'GATE_POST_SOGLIA_FP_ZERO'
+            motivo = (f"Score {score:.1f} > soglia {soglia:.1f} MA FP=0 e OI={oi_stato} carica={oi_carica:.2f}. "
+                      f"MIDZONE/DRIFT bloccano silenziosamente perché _fuoco_ok=False (FP_WR basso)")
+            azione = "Fix: _fuoco_ok non deve richiedere FP_WR — OI FUOCO è sufficiente"
+
+        elif gap is not None and gap <= 0 and fp_score == 0 and fuoco_ok:
+            # Score sopra soglia, FUOCO ok, FP=0 → dovrebbe entrare ma non lo fa
+            blocco = 'GATE_SILENZIOSO_SCONOSCIUTO'
+            motivo = (f"Score {score:.1f} > soglia {soglia:.1f}, OI FUOCO {oi_carica:.2f} — "
+                      f"sistema non entra. Gate silenzioso non identificato.")
+            azione = "Controllare MIDZONE, DRIFT DEBOLE, HARD GUARD nel log M2"
+
+        elif fp_score == 0 and gap and gap > 0:
+            blocco = 'FINGERPRINT_ZERO'
+            motivo = (f"FP=0 — fingerprint {direction} senza real_samples. "
+                      f"Score {score:.1f} vs soglia {soglia:.1f} gap={gap}")
+            azione = "real_samples=5 già iniettati — verificare se regime è EXPLOSIVE"
+
+        elif gap and gap > 0 and gap <= 8:
+            blocco = 'SCORE_VICINO_SOGLIA'
+            motivo = (f"Score {score:.1f} vs soglia {soglia:.1f} — gap={gap} punti. "
+                      f"seed={seed_score:.1f} fp={fp_score:.1f} rsi={rsi_score:.1f} macd={macd_score:.1f}")
+            azione = "In EXPLOSIVE il gap si chiude — attendere regime favorevole"
+
+        elif regime == 'RANGING':
+            blocco = 'RANGING_NO_EDGE'
+            motivo = f"RANGING — score {score:.1f} correttamente sotto soglia. Mercato senza direzionalità."
+            azione = "Attendere EXPLOSIVE o TRENDING_BULL"
+
+        # Veritas: chi sbaglia sistematicamente
+        veritas_err = None
+        if hasattr(self, 'veritas'):
+            for k, s in self.veritas._stats.items():
+                if s.get('verdetto') == 'SBAGLIATO' and s.get('n',0) > 200 and s.get('pnl_avg',0) < -1.5:
+                    veritas_err = {'chiave': k, 'n': s['n'],
+                                   'pnl_avg': round(s['pnl_avg'],2),
+                                   'diagnosi': f"SC sistematicamente sbagliato in {k}"}
+                    break
+
+        # Phantom: bilancio economico decisioni
+        phantom_summary = None
+        if hasattr(self, '_phantom_per_livello'):
+            missed  = sum(v.get('pnl_missed',0) for v in self._phantom_per_livello.values())
+            saved   = sum(v.get('pnl_saved',0)  for v in self._phantom_per_livello.values())
+            phantom_summary = {
+                'mancati':  round(missed,0),
+                'salvati':  round(saved,0),
+                'bilancio': round(saved-missed,0),
+                'alert':    'TROPPO DIFENSIVO' if missed > saved*0.25 else 'OK'
+            }
+
+        # Controlla errori critici nel log M2 — visibili a DeepSeek
+        m2_log = getattr(self, '_m2_log', [])
+        errori_recenti = [l for l in list(m2_log)[-20:] if 'ERRORE' in str(l) or 'ERROR' in str(l)]
+        if errori_recenti:
+            blocco = 'CRASH_M2'
+            motivo = f"CRASH in _evaluate_shadow_entry: {errori_recenti[-1]}"
+            azione = "STOP — sistema in crash, non valuta entry. Deploy immediato richiesto."
+
+        return {
+            'blocco':           blocco,
+            'motivo':           motivo,
+            'azione':           azione,
+            'score':            round(score,1),
+            'soglia':           round(soglia,1),
+            'gap':              gap,
+            'regime':           regime,
+            'direction':        direction,
+            'warmup_rsi':       f"{warmup_rsi}/50",
+            'warmup_pronto':    warmup_rsi >= 50,
+            'veritas_errore':   veritas_err,
+            'phantom':          phantom_summary,
+            'pronto_entry':     warmup_rsi >= 50 and (not gap or gap <= 0),
+            'crash_attivo':     len(errori_recenti) > 0,
+            'errori_recenti':   errori_recenti[-3:] if errori_recenti else [],
+        }
+
+
     def _update_heartbeat(self):
         if self.heartbeat_lock:
             self.heartbeat_lock.acquire()
@@ -7123,6 +8336,7 @@ class OvertopBassanoV15Production:
                     "m2_pnl":             round(self._m2_pnl, 4),
                     "m2_shadow_open":     self._shadow is not None,
                     "m2_direction":       self.campo._direction,
+                    "m2_entry_price":     round(self._shadow["price_entry"], 4) if self._shadow else 0,
                     "m2_state":           self._state,
                     "m2_loss_streak":     self._m2_loss_streak,
                     "m2_cooldown":        max(0, self._m2_cooldown_until - time.time()),
@@ -7130,13 +8344,25 @@ class OvertopBassanoV15Production:
                     "m2_campo_stats":     self.campo.get_stats(),
                     "m2_last_score":      round(getattr(self.campo, '_last_score', 0), 1),
                     "m2_last_soglia":     round(getattr(self.campo, '_last_soglia', 60), 1),
+                    "m2_buy_distance":    round(getattr(self.campo, '_last_soglia', 60) - getattr(self.campo, '_last_score', 0), 1),
+                    "m2_score_components": {
+                        "seed":   round(min(1.0,max(0.0,(self.seed_scorer.score().get('score',0)-0.20)/0.60))*25, 1),
+                        "fp":     round(getattr(self.campo, '_last_fp_score', 0), 1),
+                        "rsi":    round(self.campo._rsi_score()*10, 1),
+                        "macd":   round(self.campo._macd_score()*10, 1),
+                        "regime": self._regime_current,
+                        "warmup_rsi": len(self.campo._prices_ta),
+                        "warmup_needed": 35,
+                    },
                     "oi_stato":           self._oi_stato,
                     "oi_carica":          round(self._oi_carica, 3),
                     "veritas":            self.veritas.dump_dashboard(),
                     # -- PHANTOM TRACKER - zavorra o protezione? -------
                     "phantom":            self._get_phantom_summary(),
                     # -- INTELLIGENZA AUTONOMA - capsule vive -----------
-                    "ia_stats":           self.realtime_engine.get_stats(),
+                    "ia_stats":           (self.capsule_manager.get_stats()
+                                           if self.capsule_manager
+                                           else self.realtime_engine.get_stats()),
                     # -- PRE-TRADE SIGNAL TRACKER ---------------------------
                     "signal_tracker": {
                         "open":      self.signal_tracker.get_open_count(),
@@ -7148,6 +8374,7 @@ class OvertopBassanoV15Production:
                     # -- SOGLIA DINAMICA MONITOR -----------------------
                     "m2_soglia_min":      self.campo.SOGLIA_MIN,
                     "m2_soglia_base":     self.campo.SOGLIA_BASE,
+                    "diagnosis":          self._build_diagnosis(),
                     # -- SHORT EVITATI IN RANGING ----------------------
                     "shadow_short_ranging": self._get_shadow_short_report(),
                     # -- DATI GRANULARI PER BRIDGE (B3) -------------
@@ -7176,7 +8403,76 @@ class OvertopBassanoV15Production:
             log.error(f"[HEARTBEAT_ERROR] {e}")
         finally:
             if self.heartbeat_lock:
-                self.heartbeat_lock.release()
+                
+                # ── Phantom Supervisor log ──────────────────────────────
+                _sup_log = getattr(self, '_phantom_sup_log', [])
+                self.heartbeat_data["phantom_sup_log"] = _sup_log[-10:]
+
+                # ── V16 data ────────────────────────────────────────────
+                if _V16_ENGINES_OK:
+                    if self._nerv:
+                        self.heartbeat_data["nervosismo"] = round(self._nerv._nervosismo, 3)
+                        self.heartbeat_data["gomme"]      = self._nerv._gomme_attuale
+                    if self._comparto:
+                        self.heartbeat_data["comparto"]   = self._comparto._attivo
+                        try:
+                            _sw_log = getattr(self._comparto, '_switch_log', [])
+                            self.heartbeat_data["switch_log"] = list(_sw_log)[-10:]
+                        except Exception:
+                            self.heartbeat_data["switch_log"] = []
+                        try:
+                            _tutti = getattr(self._comparto, '_comparti_stats', {})
+                            if not _tutti and hasattr(self._comparto, '_attivo'):
+                                _nomi = ['DIFENSIVO','NEUTRO','ATTACCO','TRENDING_BULL','TRENDING_BEAR']
+                                _tutti = {n: {'attivo': n == self._comparto._attivo} for n in _nomi}
+                            self.heartbeat_data["comparti_tutti"] = _tutti
+                        except Exception:
+                            self.heartbeat_data["comparti_tutti"] = {}
+                    if self._breath:
+                        self.heartbeat_data["breath"] = {
+                            "fase":    self._breath._fase,
+                            "energia": round(self._breath._energia, 2),
+                        }
+
+                # ── CapsuleIntelligente — stato predittivo live ──────────
+                try:
+                    _ci_dash = self.ci.get_status_dashboard()
+                    self.heartbeat_data["ci_stato"]   = _ci_dash["stato"]
+                    self.heartbeat_data["ci_capsule"] = _ci_dash["capsule_attive"]
+                    self.heartbeat_data["ci_storia"]  = _ci_dash["storia"]
+                    self.heartbeat_data["ci_n"]       = _ci_dash["n_capsule"]
+                except Exception:
+                    pass
+
+                # ── ia_capsule_attive — lista capsule vive per dashboard ──
+                try:
+                    _cm = self.capsule_manager
+                    if _cm and hasattr(_cm, 'get_active_capsules'):
+                        self.heartbeat_data["ia_capsule_attive"] = _cm.get_active_capsules()
+                    elif _cm and hasattr(_cm, 'capsule_file'):
+                        import json as _json
+                        if os.path.exists(_cm.capsule_file):
+                            with open(_cm.capsule_file) as _f:
+                                _caps = _json.load(_f)
+                            _now_ts = time.time()
+                            self.heartbeat_data["ia_capsule_attive"] = [
+                                {
+                                    'id':          c.get('id', c.get('capsule_id', '?')),
+                                    'tipo':        c.get('tipo', c.get('type', '?')),
+                                    'ttl_seconds': max(0, int(c.get('scade_ts', _now_ts) - _now_ts))
+                                                   if c.get('scade_ts') else 0,
+                                    'enabled':     c.get('enabled', True),
+                                }
+                                for c in _caps if c.get('enabled', True)
+                            ]
+                        else:
+                            self.heartbeat_data["ia_capsule_attive"] = []
+                    else:
+                        self.heartbeat_data["ia_capsule_attive"] = []
+                except Exception:
+                    self.heartbeat_data["ia_capsule_attive"] = []
+
+            self.heartbeat_lock.release()
 
     def _get_shadow_short_report(self):
         """Report aggregato degli SHORT evitati in RANGING."""
@@ -7237,12 +8533,127 @@ class OvertopBassanoV15Production:
                 break
         return count
 
+    def _read_deepseek_commands(self):
+        """Legge e applica i comandi DeepSeek da heartbeat_data ogni tick."""
+        if not self.heartbeat_data:
+            return
+        try:
+            # heartbeat_lock potrebbe essere None se non inizializzato — usa fallback
+            if self.heartbeat_lock is not None:
+                with self.heartbeat_lock:
+                    hb = dict(self.heartbeat_data)
+            else:
+                hb = dict(self.heartbeat_data)
+
+            now = time.time()
+
+            # ABBASSA_SOGLIA — valida per 60 secondi
+            if hb.get("ds_soglia_override"):
+                ts = hb.get("ds_soglia_ts", 0)
+                if now - ts < 60:
+                    val = float(hb["ds_soglia_override"])
+                    self.campo._soglia_min_override = val
+                    self.campo._soglia_base_override = val
+                else:
+                    with self.heartbeat_lock:
+                        self.heartbeat_data.pop("ds_soglia_override", None)
+                        self.heartbeat_data.pop("ds_soglia_ts", None)
+                    self.campo._soglia_min_override = None
+                    self.campo._soglia_base_override = None
+
+            # RESET_PESI
+            if hb.get("ds_reset_pesi"):
+                self.supercervello._pesi = dict(self.supercervello.PESI_DEFAULT)
+                log.info("[DS] ✅ Pesi SC resettati ai default")
+                with self.heartbeat_lock:
+                    self.heartbeat_data["ds_reset_pesi"] = False
+
+            # FORZA_ENTRY — valido per 30 secondi
+            if hb.get("ds_forza_entry"):
+                ts = hb.get("ds_forza_ts", 0)
+                if now - ts < 30:
+                    self._ds_forza_entry = True
+                else:
+                    with self.heartbeat_lock:
+                        self.heartbeat_data["ds_forza_entry"] = False
+                    self._ds_forza_entry = False
+
+            # BLOCCA_SC — valido per 180 secondi (3 minuti)
+            if hb.get("ds_blocca_sc"):
+                ts = hb.get("ds_blocca_sc_ts", 0)
+                if now - ts < 180:
+                    self._ds_blocca_sc = True
+                else:
+                    with self.heartbeat_lock:
+                        self.heartbeat_data["ds_blocca_sc"] = False
+                    self._ds_blocca_sc = False
+
+        except Exception as e:
+            log.warning(f"[DS_CMD] Errore lettura comandi: {e}")
+
+
+    def _watchdog_autorepair(self):
+        """
+        Watchdog autonomo — controlla e ripara errori senza fermare il bot.
+        Gira ogni 30 secondi nel loop principale.
+        """
+        try:
+            m2_log = list(getattr(self, '_m2_log', []))
+            errori = [l for l in m2_log[-10:] if 'ERRORE' in str(l)]
+            if not errori:
+                return
+
+            ultimo_errore = errori[-1]
+            log.warning(f"[WATCHDOG] Errore rilevato: {ultimo_errore}")
+
+            # REPAIR 1: _fuoco_ok non definita → reset closure
+            if '_fuoco_ok' in ultimo_errore:
+                # Forza reset dello stato interno per far ricreare la closure
+                self._last_entry_tick = 0
+                log.info("[WATCHDOG] ✅ REPAIR: reset _last_entry_tick per forzare nuova closure")
+
+            # REPAIR 2: heartbeat_lock None → ricrea il lock
+            if 'heartbeat_lock' in ultimo_errore or 'NoneType' in ultimo_errore:
+                import threading
+                if self.heartbeat_lock is None:
+                    self.heartbeat_lock = threading.RLock()
+                    log.info("[WATCHDOG] ✅ REPAIR: heartbeat_lock ricreato")
+
+            # REPAIR 3: shadow corrotto → chiudi posizione aperta
+            if 'shadow' in ultimo_errore.lower() and self._shadow:
+                self._shadow = None
+                self._shadow_entry_time = None
+                log.info("[WATCHDOG] ✅ REPAIR: shadow position resettata")
+
+            # REPAIR 4: errore generico → reset stato entry
+            if errori and len(errori) >= 3:
+                # 3+ errori consecutivi → reset completo stato entry
+                self._last_entry_tick = 0
+                self._m2_loss_consecutivi_cache = 0
+                if hasattr(self, '_phantoms_open'):
+                    self._phantoms_open.clear()
+                log.info("[WATCHDOG] ✅ REPAIR: reset completo stato entry dopo 3+ errori")
+
+            # Svuota gli errori dal log per evitare loop infiniti
+            if hasattr(self, '_m2_log'):
+                cleaned = [l for l in self._m2_log if 'ERRORE' not in str(l)]
+                self._m2_log = type(self._m2_log)(cleaned, maxlen=getattr(self._m2_log, 'maxlen', 200))
+
+        except Exception as e:
+            log.error(f"[WATCHDOG] Errore nel watchdog stesso: {e}")
+
     def run(self):
         log.info("[START] Bot avviato - connessione Binance WS...")
         self.connect_binance()
+        _watchdog_last = time.time()
         try:
             while True:
                 time.sleep(1)
+                self._read_deepseek_commands()
+                # Watchdog ogni 30 secondi
+                if time.time() - _watchdog_last >= 30:
+                    self._watchdog_autorepair()
+                    _watchdog_last = time.time()
         except KeyboardInterrupt:
             log.info("[STOP] Bot fermato da utente")
             self._persist.save(self.capital, self.total_trades)
