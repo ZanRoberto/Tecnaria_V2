@@ -638,6 +638,162 @@ threading.Thread(target=bot_thread_launcher, daemon=True, name='bot_v15').start(
 log("[MAIN] ✅ Bot thread + AI Bridge avviati")
 
 # ═══════════════════════════════════════════════════════════════════════════
+# NARRATORE AI — Dialogo tra due AI ogni 60 secondi
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# LIVELLO 1 — OSSERVATORE: legge lo status completo, trova la domanda giusta
+# LIVELLO 2 — RAGIONATORE: riceve solo la domanda, ragiona senza pregiudizi
+# Il dialogo produce una narrativa viva che racconta cosa sta pensando il sistema
+#
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+NARRATORE_INTERVAL = 60  # secondi tra ogni ciclo narrativo
+
+PROMPT_OSSERVATORE = """Sei l'Osservatore di un sistema di trading algoritmico su BTC/USDC.
+Hai accesso allo status completo del sistema in questo momento.
+Il tuo compito NON è descrivere i numeri. È trovare LA DOMANDA più importante che emerge dai dati.
+Una sola domanda — quella che, se risposta, spiega meglio cosa sta succedendo.
+Cerca discrepanze, tensioni tra componenti, segnali contrastanti.
+Rispondi SOLO con la domanda, in italiano, senza spiegazioni aggiuntive.
+Esempio: "Perché l'OI è a FUOCO ma il sistema non entra nonostante il Signal Tracker mostri 87% di hit rate?"
+"""
+
+PROMPT_RAGIONATORE = """Sei il Ragionatore di un sistema di trading algoritmico.
+Non conosci i dati del sistema — conosci solo la domanda che ti viene posta.
+Il tuo compito è ragionare liberamente, generare ipotesi, trovare possibili spiegazioni.
+Non devi essere certo — devi essere perspicace.
+Parla in prima persona, come se stessi pensando ad alta voce.
+Usa frasi come "Forse...", "Potrebbe essere che...", "Mi chiedo se...", "Una spiegazione è..."
+Rispondi in italiano, massimo 3-4 frasi. Sii diretto e curioso.
+"""
+
+def _chiama_deepseek(prompt_sistema: str, messaggio: str, max_tokens: int = 200) -> str:
+    """Chiama DeepSeek con il prompt dato. Ritorna la risposta o stringa vuota."""
+    if not DEEPSEEK_API_KEY:
+        return ""
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": prompt_sistema},
+                {"role": "user",   "content": messaggio}
+            ],
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+        }).encode()
+        req = urllib.request.Request(
+            "https://api.deepseek.com/v1/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+            return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        log(f"[NARRATORE] Errore DeepSeek: {e}")
+        return ""
+
+def _build_status_summary(hb: dict) -> str:
+    """Costruisce un riassunto sintetico dello status per l'Osservatore."""
+    try:
+        ph = hb.get("phantom", {})
+        ci = hb.get("ci_capsule", [])
+        sig = hb.get("signal_tracker", {}).get("top", [{}])
+        vr  = hb.get("veritas", {}).get("rows", [])
+        sc_pesi = hb.get("sc_pesi", {})
+
+        ci_str = ", ".join([f"{c['id']}(forza={c['forza']:.0%})" for c in ci]) or "nessuna"
+        sig_str = ", ".join([f"{s.get('context','?')} hit={s.get('hit_60s',0):.0%} n={s.get('n',0)}"
+                             for s in sig[:2]]) or "nessuno"
+        vr_str  = ", ".join([f"{r.get('chiave','?')} hit={r.get('hit_rate',0):.0%} n={r.get('n',0)}"
+                             for r in vr[:3]]) or "nessuno"
+
+        return f"""STATUS OVERTOP — {hb.get('last_seen','?')}
+MERCATO: regime={hb.get('regime','?')} conf={hb.get('regime_conf',0):.0%} | BTC={hb.get('last_price',0):.0f}
+OI LONG: stato={hb.get('oi_stato','?')} carica={hb.get('oi_carica',0):.2f}
+OI SHORT: stato={hb.get('oi_stato_short','?')} carica={hb.get('oi_carica_short',0):.2f}
+MOTORE: score={hb.get('m2_last_score',0):.1f} soglia={hb.get('m2_last_soglia',0):.1f} direction={hb.get('m2_direction','?')} state={hb.get('m2_state','?')}
+COMPARTO: {hb.get('comparto','?')} | nervosismo={hb.get('nervosismo',0):.0%} | gomme={hb.get('gomme','?')}
+CI: stato={hb.get('ci_stato','?')} capsule=[{ci_str}]
+SIGNAL TRACKER: {sig_str}
+PHANTOM: bilancio=+${ph.get('bilancio',0):.0f} protezione={ph.get('protezione',0)} zavorra={ph.get('zavorra',0)} mancati=${ph.get('pnl_missed',0):.1f}
+VERITAS: {vr_str}
+SC PESI: campo={sc_pesi.get('campo_carica',0):.2f} oracolo={sc_pesi.get('oracolo_fp',0):.2f} signal={sc_pesi.get('signal_tracker',0):.2f}
+TRADES: n={hb.get('m2_trades',0)} wins={hb.get('m2_wins',0)} pnl=${hb.get('m2_pnl',0):.2f}"""
+    except Exception as e:
+        return f"Errore costruzione summary: {e}"
+
+def narratore_thread():
+    """Thread del Narratore AI — ciclo ogni 60 secondi."""
+    log("[NARRATORE] 🎭 Narratore AI avviato — dialogo tra due AI ogni 60s")
+    time.sleep(30)  # aspetta warmup iniziale
+
+    while True:
+        try:
+            with heartbeat_lock:
+                hb = dict(heartbeat_data)
+
+            if hb.get("status") != "RUNNING":
+                time.sleep(30)
+                continue
+
+            # ── LIVELLO 1: OSSERVATORE ────────────────────────────────
+            summary = _build_status_summary(hb)
+            domanda = _chiama_deepseek(
+                PROMPT_OSSERVATORE,
+                f"Analizza questo status e trova la domanda più importante:\n\n{summary}",
+                max_tokens=120
+            )
+
+            if not domanda:
+                time.sleep(NARRATORE_INTERVAL)
+                continue
+
+            # ── LIVELLO 2: RAGIONATORE ────────────────────────────────
+            risposta = _chiama_deepseek(
+                PROMPT_RAGIONATORE,
+                domanda,
+                max_tokens=180
+            )
+
+            if not risposta:
+                time.sleep(NARRATORE_INTERVAL)
+                continue
+
+            # ── SALVA NELLA NARRATIVA ─────────────────────────────────
+            ts = datetime.utcnow().strftime("%H:%M")
+            narrativa_entry = {
+                "ts":       ts,
+                "domanda":  domanda,
+                "risposta": risposta,
+            }
+
+            with heartbeat_lock:
+                storico = heartbeat_data.get("narrativa_ds", [])
+                storico.append(narrativa_entry)
+                if len(storico) > 10:
+                    storico = storico[-10:]
+                heartbeat_data["narrativa_ds"] = storico
+
+            log(f"[NARRATORE] 💬 {ts} | Q: {domanda[:60]}...")
+
+        except Exception as e:
+            log(f"[NARRATORE] Errore: {e}")
+
+        time.sleep(NARRATORE_INTERVAL)
+
+# Avvia narratore solo se DeepSeek è configurato
+if DEEPSEEK_API_KEY:
+    threading.Thread(target=narratore_thread, daemon=True, name='narratore_ai').start()
+    log("[MAIN] ✅ Narratore AI avviato")
+else:
+    log("[MAIN] ⚠️ DEEPSEEK_API_KEY mancante — Narratore AI disabilitato")
+
+# ═══════════════════════════════════════════════════════════════════════════
 # DASHBOARD HTML
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -977,27 +1133,16 @@ canvas.spark { width:100%; height:40px; }
     </div>
 
     
-    <!-- CAPSULE INTELLIGENTE — Sistema Immunitario Predittivo -->
-    <div class="panel" style="margin-bottom:10px;border-color:#a855f7;border-width:2px;">
+    <!-- NARRATORE AI — Dialogo tra due AI -->
+    <div class="panel" style="margin-bottom:10px;border-color:#a855f7;border-width:2px;" id="narratore-panel">
       <div class="panel-head" style="background:linear-gradient(90deg,#1a0a2e,#2d1060);border-left:3px solid #a855f7;color:#a855f7;">
-        🧬 SISTEMA IMMUNITARIO — Capsule Predittive
-        <span id="ci-stato-badge" style="float:right;font-size:9px;padding:2px 8px;border-radius:10px;background:rgba(168,85,247,0.15);border:1px solid #a855f7">NEUTRO</span>
+        🎭 NARRATORE AI — Dialogo tra due intelligenze
+        <span id="narratore-ts" style="float:right;font-size:9px;color:#6b21a8">--:--</span>
       </div>
-      <div class="panel-body">
-        <!-- STATO + CAPSULE ATTIVE -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
-          <div>
-            <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:4px">CAPSULE ATTIVE</div>
-            <div id="ci-capsule-list" style="max-height:120px;overflow-y:auto;font-size:10px"></div>
-          </div>
-          <div>
-            <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:4px">EFFETTI LIVE</div>
-            <div id="ci-effetti" style="font-size:10px;line-height:1.8"></div>
-          </div>
+      <div class="panel-body" id="narratore-body">
+        <div style="color:#3d1a6e;font-size:10px;font-family:monospace;text-align:center;padding:16px 0">
+          In ascolto del mercato...
         </div>
-        <!-- NARRATIVA VIVA -->
-        <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:4px">NARRATIVA VIVA</div>
-        <div id="ci-storia" style="max-height:100px;overflow-y:auto;font-size:10px;font-family:monospace;line-height:1.7;background:rgba(168,85,247,0.05);border-radius:4px;padding:6px"></div>
       </div>
     </div>
 
@@ -1668,91 +1813,43 @@ const SCPanel = (() => {
     }
     // ── FINE V16 ─────────────────────────────────────────────
 
-    // ── CAPSULE INTELLIGENTE — Sistema Immunitario Predittivo ─
-    const ciStato   = hb.ci_stato   || 'NEUTRO';
-    const ciCapsule = hb.ci_capsule || [];
-    const ciStoria  = hb.ci_storia  || [];
-    const ciN       = hb.ci_n       || 0;
+    // ── NARRATORE AI ──────────────────────────────────────────
+    const narrativa = hb.narrativa_ds || [];
+    const narratoreBody = $('narratore-body');
+    const narratoreTs   = $('narratore-ts');
 
-    const CI_STATO_COL = {
-      'ALLERTA':   '#ef4444',
-      'OFFENSIVO': '#00d97a',
-      'DIFENSIVO': '#3b82f6',
-      'NEUTRO':    '#6b7280',
-    };
-    const CI_TIPO_ICON = {
-      'DIFENSIVO':   '🛡',
-      'OFFENSIVO':   '🚀',
-      'ALLERTA':     '⚠️',
-      'OPPORTUNITA': '⚡',
-    };
+    if (narrativa.length && narratoreBody) {
+      const ultimo = narrativa[narrativa.length - 1];
+      narratoreTs.textContent = ultimo.ts || '--:--';
 
-    // Badge stato
-    const ciStatoEl = $('ci-stato-badge');
-    if (ciStatoEl) {
-      ciStatoEl.textContent = ciStato + (ciN > 0 ? ` (${ciN})` : '');
-      ciStatoEl.style.background = (CI_STATO_COL[ciStato] || '#6b7280') + '22';
-      ciStatoEl.style.borderColor = CI_STATO_COL[ciStato] || '#6b7280';
-      ciStatoEl.style.color       = CI_STATO_COL[ciStato] || '#6b7280';
+      // Mostra il dialogo completo — dal più recente
+      narratoreBody.innerHTML = narrativa.slice().reverse().map((n, i) => {
+        const isUltimo = i === 0;
+        const opacita = isUltimo ? '1' : '0.5';
+        return `<div style="margin-bottom:${isUltimo ? '12' : '8'}px;opacity:${opacita};
+          border-left:2px solid ${isUltimo ? '#a855f7' : '#4c1d95'};
+          padding-left:10px;">
+          <div style="font-size:9px;color:#7c3aed;margin-bottom:4px;letter-spacing:1px">
+            🔍 OSSERVATORE · ${n.ts}
+          </div>
+          <div style="font-size:11px;color:#c4b5fd;font-style:italic;margin-bottom:6px;line-height:1.5">
+            "${n.domanda}"
+          </div>
+          <div style="font-size:9px;color:#9333ea;margin-bottom:4px;letter-spacing:1px">
+            💭 RAGIONATORE
+          </div>
+          <div style="font-size:11px;color:#e9d5ff;line-height:1.6">
+            ${n.risposta}
+          </div>
+        </div>`;
+      }).join('<hr style="border:none;border-top:1px solid #2d1060;margin:8px 0">');
+    } else if (narratoreBody && !narrativa.length) {
+      const hasDsKey = typeof hb.narrativa_ds !== 'undefined';
+      narratoreBody.innerHTML = hasDsKey
+        ? '<div style="color:#4c1d95;font-size:10px;text-align:center;padding:12px">Primo ciclo in arrivo tra 30s...</div>'
+        : '<div style="color:#4c1d95;font-size:10px;text-align:center;padding:12px">DEEPSEEK_API_KEY non configurata — Narratore disabilitato</div>';
     }
-
-    // Lista capsule attive
-    const ciListEl = $('ci-capsule-list');
-    if (ciListEl) {
-      if (ciCapsule.length) {
-        ciListEl.innerHTML = ciCapsule.map(c => {
-          const col  = CI_STATO_COL[c.tipo] || '#a855f7';
-          const icon = CI_TIPO_ICON[c.tipo] || '💊';
-          const ttl  = c.ttl > 60 ? Math.round(c.ttl/60)+'m' : c.ttl+'s';
-          const forza = Math.round((c.forza||0)*100);
-          return `<div style="display:flex;justify-content:space-between;align-items:center;
-            padding:3px 6px;margin-bottom:3px;border-radius:3px;
-            background:${col}11;border-left:2px solid ${col}">
-            <span style="color:${col}">${icon} ${c.id.replace('CI_','')}</span>
-            <span style="color:var(--dim);font-size:9px">${forza}% · ${ttl}</span>
-          </div>`;
-        }).join('');
-
-        // Effetti live: calcola soglia_delta e size_mult aggregati
-        let deltaTot = 0, sizeMult = 1.0;
-        ciCapsule.forEach(c => {
-          if (c.azione === 'ALZA_SOGLIA')    deltaTot += (c.params?.delta||0) * (c.forza||0.5);
-          if (c.azione === 'ABBASSA_SOGLIA') deltaTot += (c.params?.delta||0) * (c.forza||0.5);
-          if (c.azione === 'RIDUCI_SIZE')    sizeMult  = Math.min(sizeMult, c.params?.mult||1);
-          if (c.azione === 'BOOST_SIZE')     sizeMult  = Math.max(sizeMult, c.params?.mult||1);
-        });
-        const effEl = $('ci-effetti');
-        if (effEl) {
-          const dCol = deltaTot > 0 ? '#ef4444' : deltaTot < 0 ? '#00d97a' : '#6b7280';
-          const sCol = sizeMult < 1 ? '#3b82f6' : sizeMult > 1 ? '#00d97a' : '#6b7280';
-          effEl.innerHTML = `
-            <div style="color:${dCol}">Soglia: ${deltaTot>=0?'+':''}${deltaTot.toFixed(1)}</div>
-            <div style="color:${sCol}">Size mult: ×${sizeMult.toFixed(2)}</div>
-            <div style="color:#6b7280">Stato: ${ciStato}</div>`;
-        }
-      } else {
-        ciListEl.innerHTML = '<div style="color:#1e3a5f;font-size:10px;padding:8px 0">Nessuna capsula attiva — mercato neutro</div>';
-        const effEl = $('ci-effetti');
-        if (effEl) effEl.innerHTML = '<div style="color:#1e3a5f">Nessun effetto attivo</div>';
-      }
-    }
-
-    // Narrativa viva
-    const ciStoriaEl = $('ci-storia');
-    if (ciStoriaEl) {
-      if (ciStoria.length) {
-        ciStoriaEl.innerHTML = ciStoria.slice().reverse().map(s => {
-          const col = s.includes('ALLERTA')||s.includes('🌧') ? '#ef4444' :
-                      s.includes('OFFENSIVO')||s.includes('🚀') ? '#00d97a' :
-                      s.includes('DIFENSIVO')||s.includes('🛡') ? '#3b82f6' :
-                      s.includes('PERFETTO')||s.includes('⚡') ? '#a855f7' : '#4b6a8a';
-          return `<div style="color:${col};margin-bottom:2px">${s}</div>`;
-        }).join('');
-      } else {
-        ciStoriaEl.innerHTML = '<div style="color:#1e3a5f">In ascolto del mercato...</div>';
-      }
-    }
-    // ── FINE CAPSULE INTELLIGENTE ─────────────────────────────
+    // ── FINE NARRATORE AI ─────────────────────────────────────
 
 }
 
