@@ -708,8 +708,32 @@ REGOLE FORMATO:
 - ANALISI in italiano, JSON in inglese
 """
 
+PROMPT_CAPSULA_JSON = """Sei il generatore di capsule del sistema OVERTOP BASSANO.
+Ricevi una domanda su un'anomalia del sistema e devi rispondere SOLO con un oggetto JSON valido.
+
+ARCHITETTURA:
+- CampoGravitazionale: score 0-100. seed(25pt)+fingerprint(25pt)+RSI(10pt)+MACD(10pt)+regime(15pt)+prebreakout(15pt). Soglia 48-55.
+- VETO_TOSSICO: blocca DEBOLE+ALTA+SIDEWAYS (WR 19%). Bypassabile da CI.
+- CapsuleIntelligente: CI_RANGING_EDGE(-8), CI_FUOCO_WINDOW(-6), CI_OI_ESTREMO(-12).
+- Phantom zavorra > 15% = stiamo bloccando troppo. zavorra < 5% = blocco corretto.
+- Signal Tracker hit > 55% = segnale solido. hit < 50% = segnale debole.
+- Regime EXPLOSIVE stabile > 90s = breakout reale. < 90s = falso.
+
+REGOLE:
+- hit < 50% → forza max 0.55, delta max -6
+- hit > 55% + regime stabile → forza 0.65-0.75, delta -8/-12
+- seed=0 e fingerprint=0 → azione BOOST_SEED, delta +15
+- RANGING instabile → vita 180, delta -4 (preparatoria)
+- zavorra < 5% → null (il blocco funziona)
+
+Rispondi SOLO con questo JSON, nient'altro:
+{"id": "RA_NOME", "azione": "ABBASSA_SOGLIA", "params": {"delta": -8}, "motivo": "spiegazione breve", "vita": 300, "forza": 0.65}
+
+Se non serve capsula rispondi: {"id": null}
+"""
+
 def _chiama_deepseek(prompt_sistema: str, messaggio: str, max_tokens: int = 200) -> str:
-    """Chiama DeepSeek con il prompt dato. Ritorna la risposta o stringa vuota."""
+    """Chiama DeepSeek — risposta libera in prosa."""
     if not DEEPSEEK_API_KEY:
         return ""
     try:
@@ -738,6 +762,40 @@ def _chiama_deepseek(prompt_sistema: str, messaggio: str, max_tokens: int = 200)
     except Exception as e:
         log(f"[NARRATORE] Errore DeepSeek: {e}")
         return ""
+
+
+def _chiama_deepseek_json(prompt_sistema: str, messaggio: str) -> dict:
+    """Chiama DeepSeek con response_format JSON forzato. Ritorna dict o {}."""
+    if not DEEPSEEK_API_KEY:
+        return {}
+    try:
+        import urllib.request
+        payload = json.dumps({
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": prompt_sistema},
+                {"role": "user",   "content": messaggio}
+            ],
+            "max_tokens": 300,
+            "temperature": 0.3,
+            "response_format": {"type": "json_object"},
+        }).encode()
+        req = urllib.request.Request(
+            "https://api.deepseek.com/v1/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            },
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+            content = data["choices"][0]["message"]["content"].strip()
+            return json.loads(content)
+    except Exception as e:
+        log(f"[NARRATORE] Errore DeepSeek JSON: {e}")
+        return {}
 
 def _build_status_summary(hb: dict) -> str:
     """Costruisce un riassunto con storia temporale per il Ragionatore."""
@@ -831,74 +889,63 @@ def narratore_thread():
                 time.sleep(NARRATORE_INTERVAL)
                 continue
 
-            # ── LIVELLO 2: RAGIONATORE con architettura ───────────────
+            # ── LIVELLO 2: RAGIONATORE — analisi narrativa ────────────
             risposta = _chiama_deepseek(
                 PROMPT_RAGIONATORE,
-                domanda,
-                max_tokens=300
+                f"STATUS:\n{summary}\n\nDOMANDA:\n{domanda}",
+                max_tokens=200
             )
 
             if not risposta:
                 time.sleep(NARRATORE_INTERVAL)
                 continue
 
-            # ── ESTRAI CAPSULA DAL RAGIONATORE ────────────────────────
+            # ── LIVELLO 3: GENERATORE CAPSULA — JSON forzato ──────────
             capsula_iniettata = None
             try:
-                if "CAPSULA:" in risposta:
-                    import re as _re
-                    # Cerca JSON dopo "CAPSULA:" — gestisce anche multiriga
-                    cap_section = risposta.split("CAPSULA:")[-1].strip()
-                    if cap_section.lower().startswith("null"):
-                        log(f"[NARRATORE] 💭 Ragionatore: nessuna capsula necessaria")
+                cap_data = _chiama_deepseek_json(
+                    PROMPT_CAPSULA_JSON,
+                    f"STATUS:\n{summary}\n\nANOMALIA:\n{domanda}"
+                )
+
+                if cap_data and cap_data.get('id'):
+                    # ID null = nessuna capsula necessaria
+                    cap_id = cap_data['id']
+
+                    if all(k in cap_data for k in ['azione', 'params', 'motivo']):
+                        cap_data['fonte'] = 'RAGIONATORE_AI'
+                        cap_data['ts']    = datetime.utcnow().isoformat()
+                        cap_data.setdefault('vita',  300)
+                        cap_data.setdefault('forza', 0.65)
+                        if not cap_id.startswith('RA_'):
+                            cap_data['id'] = 'RA_' + cap_id
+
+                        with heartbeat_lock:
+                            capsule_ra = heartbeat_data.get("capsule_ragionatore", [])
+                            capsule_ra = [c for c in capsule_ra
+                                          if c.get('id') != cap_data['id']]
+                            capsule_ra.append(cap_data)
+                            if len(capsule_ra) > 5:
+                                capsule_ra = capsule_ra[-5:]
+                            heartbeat_data["capsule_ragionatore"] = capsule_ra
+                            heartbeat_data["narratore_ultima_capsula"] = {
+                                "id":     cap_data['id'],
+                                "ts":     cap_data['ts'],
+                                "forza":  cap_data['forza'],
+                                "motivo": cap_data['motivo'][:80],
+                            }
+
+                        capsula_iniettata = cap_data['id']
+                        log(f"[NARRATORE] 💊 Capsula JSON: {cap_data['id']} "
+                            f"forza={cap_data['forza']} vita={cap_data['vita']}s "
+                            f"— {cap_data['motivo'][:50]}")
                     else:
-                        # Regex robusta che cattura oggetti JSON anche con spazi
-                        json_match = _re.search(r'\{.*?\}', cap_section, _re.DOTALL)
-                        if json_match:
-                            cap_raw = json_match.group(0)
-                            cap_data = json.loads(cap_raw)
-                            # Valida campi minimi
-                            if all(k in cap_data for k in ['id', 'azione', 'params', 'motivo']):
-                                # Forza e vita dalla risposta, con default ragionevoli
-                                cap_data['fonte']  = 'RAGIONATORE_AI'
-                                cap_data['ts']     = datetime.utcnow().isoformat()
-                                cap_data.setdefault('vita',  300)
-                                cap_data.setdefault('forza', 0.65)
-                                # ID deve iniziare con RA_
-                                if not cap_data['id'].startswith('RA_'):
-                                    cap_data['id'] = 'RA_' + cap_data['id']
+                        log(f"[NARRATORE] ⚠️ JSON incompleto: {cap_data}")
+                else:
+                    log(f"[NARRATORE] 💭 Nessuna capsula necessaria")
 
-                                with heartbeat_lock:
-                                    capsule_ra = heartbeat_data.get("capsule_ragionatore", [])
-                                    capsule_ra = [c for c in capsule_ra
-                                                  if c.get('id') != cap_data['id']]
-                                    capsule_ra.append(cap_data)
-                                    if len(capsule_ra) > 5:
-                                        capsule_ra = capsule_ra[-5:]
-                                    heartbeat_data["capsule_ragionatore"] = capsule_ra
-                                    # Log visibile nel status
-                                    heartbeat_data["narratore_ultima_capsula"] = {
-                                        "id":    cap_data['id'],
-                                        "ts":    cap_data['ts'],
-                                        "forza": cap_data['forza'],
-                                        "motivo": cap_data['motivo'][:80],
-                                    }
-
-                                capsula_iniettata = cap_data['id']
-                                log(f"[NARRATORE] 💊 Capsula iniettata: {cap_data['id']} "
-                                    f"forza={cap_data['forza']} vita={cap_data['vita']}s "
-                                    f"— {cap_data['motivo'][:50]}")
-                            else:
-                                log(f"[NARRATORE] ⚠️ JSON capsula incompleto: {cap_raw[:80]}")
-                        else:
-                            log(f"[NARRATORE] ⚠️ Capsula non parsabile: {cap_section[:80]}")
             except Exception as _ce:
-                log(f"[NARRATORE] Capsula parse error: {_ce} | raw: {risposta[-100:]}")
-
-            # ── SEPARA ANALISI DA CAPSULA per la narrativa ────────────
-            analisi_testo = risposta
-            if "CAPSULA:" in risposta:
-                analisi_testo = risposta.split("CAPSULA:")[0].replace("ANALISI:", "").strip()
+                log(f"[NARRATORE] Capsula JSON error: {_ce}")
 
             # ── SALVA NELLA NARRATIVA ─────────────────────────────────
             ts = datetime.utcnow().strftime("%H:%M")
