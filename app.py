@@ -664,28 +664,48 @@ ARCHITETTURA:
 - SuperCervello: pesi su campo(0.3), oracolo(0.22), signal_tracker(0.25), phantom(0.11), matrimonio(0.12).
 - PhantomTracker: simula trade bloccati. zavorra alta = stiamo bloccando troppo. bilancio alto = stiamo proteggendo bene.
 - CapsuleIntelligente (CI): capsule predittive. CI_RANGING_EDGE soglia -8, CI_FUOCO_WINDOW soglia -6, CI_OI_ESTREMO soglia -12.
-- VETO_TOSSICO: blocca DEBOLE+ALTA+SIDEWAYS (WR 19%). Bypassabile da CI.
-- IntelligenzaAutonoma: genera capsule solo con trade reali nel buffer. Con zero trade = paralizzata.
-- PARADOSSO: zero trade → nessuna capsula → nessun trade. Tu sei l'unico che può rompere questo ciclo.
+- VETO_TOSSICO: blocca DEBOLE+ALTA+SIDEWAYS (WR 19%). Bypassabile da CI se evidenza contraria.
+- IntelligenzaAutonoma: genera capsule solo con trade reali. Con zero trade = paralizzata.
+- PARADOSSO: zero trade → nessuna capsula → nessun trade. Tu rompi questo ciclo.
+
+COME LEGGERE LA STORIA:
+- REGIME_STORIA mostra gli ultimi switch di assetto — se oscilla ATTACCO→DIFENSIVO ogni minuto, il mercato è indeciso
+- REGIME_LOG mostra gli ultimi cambi EXPLOSIVE/RANGING — se EXPLOSIVE dura solo 60s è falso breakout
+- OI_trend mostra se l'energia sta salendo o scendendo negli ultimi 10 tick
+- CI_STORIA mostra cosa ha fatto la CapsuleIntelligente negli ultimi minuti
+- Signal Tracker hit rate: <50% = segnale debole, 50-60% = discreto, >60% = solido
+
+REGOLE DI GIUDIZIO — LEGGILE BENE:
+1. Regime RANGING da più di 10 minuti senza EXPLOSIVE stabile → NON generare capsule offensive, solo preparatorie
+2. EXPLOSIVE che dura meno di 90s poi torna RANGING → falso breakout, NON entrare
+3. OI FUOCO con hit rate Signal Tracker < 50% → segnale parziale, capsula leggera (delta max -6)
+4. OI FUOCO con hit rate > 55% + regime stabile → segnale solido, capsula forte (delta -10/-12)
+5. Phantom zavorra < 5% dei blocchi → il VETO sta lavorando bene, non forzare bypass
+6. Phantom zavorra > 15% dei blocchi → stiamo bloccando troppo, bypass giustificato
+7. seed=0 e fingerprint=0 nel score → il CampoGravitazionale è cieco, serve capsula BOOST_SEED non abbassare soglia
 
 IL TUO COMPITO — OBBLIGATORIO:
-Ricevi una domanda. Devi rispondere ESATTAMENTE in questo formato, senza deviazioni:
+Ricevi una domanda con lo status completo inclusa la storia.
+Ragiona sul FILM non sulla fotografia.
+Rispondi ESATTAMENTE in questo formato:
 
-ANALISI: [una sola frase che spiega il problema usando i componenti reali]
-CAPSULA: {"id": "RA_NOME", "azione": "ABBASSA_SOGLIA", "params": {"delta": -8}, "motivo": "motivazione breve", "vita": 300, "forza": 0.65}
+ANALISI: [una frase che spiega il problema considerando la storia recente]
+CAPSULA: {"id": "RA_NOME", "azione": "ABBASSA_SOGLIA", "params": {"delta": -8}, "motivo": "motivazione", "vita": 300, "forza": 0.65}
 
-ESEMPIO RISPOSTA CORRETTA:
-ANALISI: Il VETO_TOSSICO blocca con WR 1.7% su 663 campioni mentre il Signal Tracker mostra hit 53% — il blocco è sproporzionato rispetto all'evidenza attuale.
-CAPSULA: {"id": "RA_VETO_OVERRIDE", "azione": "ABBASSA_SOGLIA", "params": {"delta": -10}, "motivo": "VETO blocca con WR troppo basso rispetto a Signal Tracker", "vita": 300, "forza": 0.65}
+ESEMPIO CON STORIA:
+Domanda: "Perché non entra nonostante OI FUOCO?"
+Storia: regime oscilla EXPLOSIVE→RANGING ogni 60s da 15 minuti, hit rate 48%
+ANALISI: Il regime non è stabile — EXPLOSIVE dura meno di 90s e ritorna RANGING, il segnale OI FUOCO è in un mercato indeciso con hit rate sotto soglia.
+CAPSULA: {"id": "RA_ATTENDI_BREAKOUT", "azione": "ABBASSA_SOGLIA", "params": {"delta": -4}, "motivo": "regime instabile, capsula preparatoria leggera in attesa di EXPLOSIVE stabile", "vita": 180, "forza": 0.55}
 
-REGOLE ASSOLUTE:
-- Rispondi SEMPRE con ANALISI: poi CAPSULA: su righe separate
-- Il JSON deve essere su una sola riga, valido, senza caratteri extra
-- id SEMPRE inizia con RA_ seguito da nome maiuscolo senza spazi
-- azione SOLO uno di: ABBASSA_SOGLIA, ALZA_SOGLIA, RIDUCI_SIZE, BOOST_SIZE
-- delta tra -15 e +15, forza tra 0.5 e 0.8, vita tra 120 e 600
-- Se davvero non serve capsula: CAPSULA: null
-- Rispondi in italiano solo nell'ANALISI, il JSON sempre in inglese
+REGOLE FORMATO:
+- SEMPRE ANALISI: poi CAPSULA: su righe separate
+- JSON su una sola riga, valido, senza caratteri extra
+- id SEMPRE inizia con RA_
+- azione: ABBASSA_SOGLIA, ALZA_SOGLIA, RIDUCI_SIZE, BOOST_SIZE
+- delta tra -15 e +15, forza 0.5-0.8, vita 120-600
+- Se non serve capsula: CAPSULA: null
+- ANALISI in italiano, JSON in inglese
 """
 
 def _chiama_deepseek(prompt_sistema: str, messaggio: str, max_tokens: int = 200) -> str:
@@ -720,31 +740,67 @@ def _chiama_deepseek(prompt_sistema: str, messaggio: str, max_tokens: int = 200)
         return ""
 
 def _build_status_summary(hb: dict) -> str:
-    """Costruisce un riassunto sintetico dello status per l'Osservatore."""
+    """Costruisce un riassunto con storia temporale per il Ragionatore."""
     try:
-        ph = hb.get("phantom", {})
-        ci = hb.get("ci_capsule", [])
-        sig = hb.get("signal_tracker", {}).get("top", [{}])
-        vr  = hb.get("veritas", {}).get("rows", [])
+        ph      = hb.get("phantom", {})
+        ci      = hb.get("ci_capsule", [])
+        sig     = hb.get("signal_tracker", {}).get("top", [{}])
+        vr      = hb.get("veritas", {}).get("rows", [])
         sc_pesi = hb.get("sc_pesi", {})
 
-        ci_str = ", ".join([f"{c['id']}(forza={c['forza']:.0%})" for c in ci]) or "nessuna"
+        ci_str  = ", ".join([f"{c['id']}(forza={c['forza']:.0%})" for c in ci]) or "nessuna"
         sig_str = ", ".join([f"{s.get('context','?')} hit={s.get('hit_60s',0):.0%} n={s.get('n',0)}"
-                             for s in sig[:2]]) or "nessuno"
+                             for s in sig[:3]]) or "nessuno"
         vr_str  = ", ".join([f"{r.get('chiave','?')} hit={r.get('hit_rate',0):.0%} n={r.get('n',0)}"
                              for r in vr[:3]]) or "nessuno"
 
+        # ── STORIA REGIME — ultimi 10 switch ─────────────────────────
+        switch_log = hb.get("switch_log", [])[-8:]
+        regime_storia = " → ".join([
+            f"{s.get('da','?')}→{s.get('a','?')}({s.get('ts','?')[-5:]})"
+            for s in switch_log
+        ]) or "nessuna storia"
+
+        # ── STORIA LIVE LOG — ultimi 8 cambi regime ──────────────────
+        live_log = hb.get("live_log", [])[-6:]
+        regime_log = " | ".join(live_log) or "nessuno"
+
+        # ── TREND OI — storia carica recente ─────────────────────────
+        sc_history = hb.get("sc_carica_history", [])
+        oi_trend = ""
+        if len(sc_history) >= 10:
+            recent = sc_history[-10:]
+            delta = recent[-1] - recent[0]
+            oi_trend = f"trend_10tick={'↑' if delta > 0.02 else '↓' if delta < -0.02 else '→'} delta={delta:+.3f}"
+
+        # ── CI STORIA — ultimi 5 eventi ───────────────────────────────
+        ci_storia = hb.get("ci_storia", [])[-5:]
+        ci_storia_str = " | ".join(ci_storia) or "nessuna"
+
+        # ── NARRATIVA OI — ultimi 3 tick ─────────────────────────────
+        oi_narrativa = hb.get("oi_narrativa", [])[-3:]
+        oi_narr_str = " | ".join(oi_narrativa) or "nessuna"
+
+        # ── SCORE COMPONENTI ─────────────────────────────────────────
+        score_comp = hb.get("m2_score_components", {})
+        score_str = f"seed={score_comp.get('seed',0):.1f} fp={score_comp.get('fp',0):.1f} rsi={score_comp.get('rsi',0):.1f} macd={score_comp.get('macd',0):.1f}"
+
         return f"""STATUS OVERTOP — {hb.get('last_seen','?')}
-MERCATO: regime={hb.get('regime','?')} conf={hb.get('regime_conf',0):.0%} | BTC={hb.get('last_price',0):.0f}
-OI LONG: stato={hb.get('oi_stato','?')} carica={hb.get('oi_carica',0):.2f}
-OI SHORT: stato={hb.get('oi_stato_short','?')} carica={hb.get('oi_carica_short',0):.2f}
+MERCATO_ORA: regime={hb.get('regime','?')} conf={hb.get('regime_conf',0):.0%} | BTC={hb.get('last_price',0):.0f}
+REGIME_STORIA: {regime_log}
+ASSETTO_STORIA: {regime_storia}
+OI_LONG: stato={hb.get('oi_stato','?')} carica={hb.get('oi_carica',0):.3f} | {oi_trend}
+OI_SHORT: stato={hb.get('oi_stato_short','?')} carica={hb.get('oi_carica_short',0):.3f}
+OI_NARRATIVA: {oi_narr_str}
 MOTORE: score={hb.get('m2_last_score',0):.1f} soglia={hb.get('m2_last_soglia',0):.1f} direction={hb.get('m2_direction','?')} state={hb.get('m2_state','?')}
+SCORE_DETTAGLIO: {score_str}
 COMPARTO: {hb.get('comparto','?')} | nervosismo={hb.get('nervosismo',0):.0%} | gomme={hb.get('gomme','?')}
-CI: stato={hb.get('ci_stato','?')} capsule=[{ci_str}]
-SIGNAL TRACKER: {sig_str}
+CI_CAPSULE: [{ci_str}]
+CI_STORIA: {ci_storia_str}
+SIGNAL_TRACKER: {sig_str}
 PHANTOM: bilancio=+${ph.get('bilancio',0):.0f} protezione={ph.get('protezione',0)} zavorra={ph.get('zavorra',0)} mancati=${ph.get('pnl_missed',0):.1f}
 VERITAS: {vr_str}
-SC PESI: campo={sc_pesi.get('campo_carica',0):.2f} oracolo={sc_pesi.get('oracolo_fp',0):.2f} signal={sc_pesi.get('signal_tracker',0):.2f}
+SC_PESI: campo={sc_pesi.get('campo_carica',0):.2f} oracolo={sc_pesi.get('oracolo_fp',0):.2f} signal={sc_pesi.get('signal_tracker',0):.2f}
 TRADES: n={hb.get('m2_trades',0)} wins={hb.get('m2_wins',0)} pnl=${hb.get('m2_pnl',0):.2f}"""
     except Exception as e:
         return f"Errore costruzione summary: {e}"
