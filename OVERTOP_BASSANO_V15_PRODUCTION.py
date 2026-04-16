@@ -6318,19 +6318,25 @@ class OvertopBassanoV15Production:
         else:
             campo._direction_bearish_streak = 0
         
-        # Cooldown: minimo 120 secondi tra flip (non 60 - troppo nervoso)
+        # Cooldown: minimo 120 secondi tra flip normali
+        # MA: OI SHORT FUOCO >= 0.85 bypassa il cooldown — il mercato ha dichiarato
         now = time.time()
-        cooldown_ok = (now - campo._direction_last_change) >= 120
-        
+        _oi_short_fuoco = (getattr(self, '_oi_stato_short', '') == "FUOCO" and
+                           getattr(self, '_oi_carica_short', 0) >= 0.85)
+        cooldown_ok = (now - campo._direction_last_change) >= 120 or _oi_short_fuoco
+
         old_direction = campo._direction
-        
+
         # -- EXPLOSIVE GATE: in EXPLOSIVE flip SHORT con meno energia ------
         # Signal Tracker: SHORT EXPLOSIVE hit 89% su 36 segnali — gate permissivo
-        if self._regime_current == "EXPLOSIVE" and campo._direction == "LONG" and bearish_energy >= 2 and cooldown_ok:
+        # OI SHORT FUOCO bypassa anche lo streak — entra subito al primo tick
+        _short_streak_ok = campo._direction_bearish_streak >= 1 or _oi_short_fuoco
+        if self._regime_current == "EXPLOSIVE" and campo._direction == "LONG" and bearish_energy >= 2 and cooldown_ok and _short_streak_ok:
             campo._direction = "SHORT"
             campo._direction_last_change = now
             campo._direction_bearish_streak = 0
-            self._log_m2("🔄", f"FLIP → SHORT in EXPLOSIVE (bearish_energy={bearish_energy} drift={drift:+.3f}%)")
+            _motivo = "OI_SHORT_FUOCO" if _oi_short_fuoco else f"bearish_energy={bearish_energy}"
+            self._log_m2("🔄", f"FLIP → SHORT in EXPLOSIVE ({_motivo} drift={drift:+.3f}%)")
 
         # FLIP LONG in EXPLOSIVE — speculare al SHORT
         # OI LONG FUOCO >= 0.80 + momentum positivo → flippa a LONG
@@ -6356,8 +6362,11 @@ class OvertopBassanoV15Production:
         # -- RANGING GATE: in laterale NON flippare a SHORT --------------
         # ECCEZIONE VERITAS: se il Veritas vede movimento ribassista reale
         # con delta_60s < -20 su almeno 5 segnali → lo SHORT è legittimo
+        # ECCEZIONE OI SHORT FUOCO: mercato ha dichiarato la direzione
         _veritas_short_ok = False
         _drift_short_ok = drift < -0.005 and bearish_energy >= 3
+        if _oi_short_fuoco:
+            _veritas_short_ok = True  # OI SHORT FUOCO = dichiarazione mercato
         if hasattr(self, 'veritas') and self.veritas._stats:
             for k, s in self.veritas._stats.items():
                 if 'FUOCO' in k or 'CARICA' in k:
