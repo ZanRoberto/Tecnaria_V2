@@ -657,42 +657,35 @@ Rispondi SOLO con la domanda, in italiano, senza spiegazioni aggiuntive.
 Esempio: "Perché l'OI è a FUOCO ma il sistema non entra nonostante il Signal Tracker mostri 87% di hit rate?"
 """
 
-PROMPT_RAGIONATORE = """Sei il Ragionatore del sistema OVERTOP BASSANO — un trading bot su BTC/USDC.
+PROMPT_RAGIONATORE = """Sei il Ragionatore del sistema OVERTOP BASSANO — trading bot BTC/USDC.
 
-CONOSCI L'ARCHITETTURA COMPLETA:
+ARCHITETTURA:
+- CampoGravitazionale: score entry 0-100. seed(25pt) + fingerprint_wr(25pt) + RSI(10pt) + MACD(10pt) + regime(15pt) + prebreakout(15pt). Soglia 48-55.
+- SuperCervello: pesi su campo(0.3), oracolo(0.22), signal_tracker(0.25), phantom(0.11), matrimonio(0.12).
+- PhantomTracker: simula trade bloccati. zavorra alta = stiamo bloccando troppo. bilancio alto = stiamo proteggendo bene.
+- CapsuleIntelligente (CI): capsule predittive. CI_RANGING_EDGE soglia -8, CI_FUOCO_WINDOW soglia -6, CI_OI_ESTREMO soglia -12.
+- VETO_TOSSICO: blocca DEBOLE+ALTA+SIDEWAYS (WR 19%). Bypassabile da CI.
+- IntelligenzaAutonoma: genera capsule solo con trade reali nel buffer. Con zero trade = paralizzata.
+- PARADOSSO: zero trade → nessuna capsula → nessun trade. Tu sei l'unico che può rompere questo ciclo.
 
-COMPONENTI PRINCIPALI:
-- CampoGravitazionale: calcola lo score di entry (0-100). Componenti: seed(25pt), fingerprint_wr(25pt), RSI(10pt), MACD(10pt), regime(15pt), prebreakout(15pt). Soglia default 48-55.
-- OracoloDinamico: memoria fingerprint WR per contesto (momentum|volatility|trend|direction). Impara da trade reali con decay 0.95.
-- SuperCervello: pesi adattativi su 5 organi. campo_carica(0.3), oracolo_fp(0.22), signal_tracker(0.25), phantom_ratio(0.11), matrimonio(0.12).
-- PhantomTracker: simula ogni trade bloccato. Se bilancio positivo = sistema protegge bene. Se zavorra alta = stiamo bloccando troppo.
-- VeritatisTracker: confronta predizioni SC con outcome reali. SBAGLIATO = il SC blocca quando dovrebbe entrare.
-- CapsuleIntelligente (CI): sistema immunitario predittivo. Legge precursori (breath, nervosismo, OI, comparto) e genera capsule PRIMA del cambio regime. Capsule attive: CI_RANGING_EDGE (abbassa soglia -8 se hit>55%), CI_FUOCO_WINDOW (abbassa -6 se OI FUOCO recente), CI_OI_ESTREMO (abbassa -12 se OI>=0.95).
-- VETO_TOSSICO: blocca entry in contesti storicamente perdenti (DEBOLE+ALTA+SIDEWAYS WR 19%, ecc). Può essere bypassato da CI se ha evidenza contraria.
-- IntelligenzaAutonoma: genera capsule L2/L3 da trade reali. PROBLEMA: richiede trade nel buffer — con zero trade non genera nulla.
+IL TUO COMPITO — OBBLIGATORIO:
+Ricevi una domanda. Devi rispondere ESATTAMENTE in questo formato, senza deviazioni:
 
-IL PARADOSSO ATTUALE:
-Il sistema ha zero trade reali → IntelligenzaAutonoma non può generare capsule → senza capsule il sistema non entra → nessun trade reale.
+ANALISI: [una sola frase che spiega il problema usando i componenti reali]
+CAPSULA: {"id": "RA_NOME", "azione": "ABBASSA_SOGLIA", "params": {"delta": -8}, "motivo": "motivazione breve", "vita": 300, "forza": 0.65}
 
-IL TUO RUOLO:
-Ricevi una domanda sull'anomalia rilevata dall'Osservatore.
-Devi fare DUE cose:
-1. Spiegare in 2 frasi cosa sta succedendo nel sistema (usa la tua conoscenza dell'architettura)
-2. Se esiste una capsula che risolverebbe l'anomalia, generarla in JSON
+ESEMPIO RISPOSTA CORRETTA:
+ANALISI: Il VETO_TOSSICO blocca con WR 1.7% su 663 campioni mentre il Signal Tracker mostra hit 53% — il blocco è sproporzionato rispetto all'evidenza attuale.
+CAPSULA: {"id": "RA_VETO_OVERRIDE", "azione": "ABBASSA_SOGLIA", "params": {"delta": -10}, "motivo": "VETO blocca con WR troppo basso rispetto a Signal Tracker", "vita": 300, "forza": 0.65}
 
-FORMATO RISPOSTA (sempre questo schema):
-ANALISI: [2 frasi che spiegano l'anomalia usando i componenti reali del sistema]
-CAPSULA: [JSON capsula oppure "nessuna capsula necessaria"]
-
-Il JSON capsula deve avere questa struttura:
-{"id": "NOME_CAPSULA", "azione": "ABBASSA_SOGLIA|ALZA_SOGLIA|RIDUCI_SIZE|BOOST_SIZE", "params": {"delta": N oppure "mult": N}, "motivo": "spiegazione", "vita": secondi, "forza": 0.0-1.0, "priorita": 1-10}
-
-REGOLE:
-- Non inventare dati — ragiona solo su quello che c'è nella domanda
-- Le capsule devono essere proporzionate — non abbassare soglie oltre -15
-- Se il Phantom bilancio è molto positivo e zavorra bassa → il sistema protegge bene, non serve capsula aggressiva
-- Se VETO blocca con WR < 5% su 500+ → è giusto bloccare, non serve capsula
-- Rispondi in italiano
+REGOLE ASSOLUTE:
+- Rispondi SEMPRE con ANALISI: poi CAPSULA: su righe separate
+- Il JSON deve essere su una sola riga, valido, senza caratteri extra
+- id SEMPRE inizia con RA_ seguito da nome maiuscolo senza spazi
+- azione SOLO uno di: ABBASSA_SOGLIA, ALZA_SOGLIA, RIDUCI_SIZE, BOOST_SIZE
+- delta tra -15 e +15, forza tra 0.5 e 0.8, vita tra 120 e 600
+- Se davvero non serve capsula: CAPSULA: null
+- Rispondi in italiano solo nell'ANALISI, il JSON sempre in inglese
 """
 
 def _chiama_deepseek(prompt_sistema: str, messaggio: str, max_tokens: int = 200) -> str:
@@ -796,37 +789,55 @@ def narratore_thread():
             # ── ESTRAI CAPSULA DAL RAGIONATORE ────────────────────────
             capsula_iniettata = None
             try:
-                if "CAPSULA:" in risposta and "{" in risposta:
-                    # Estrae il JSON dalla risposta
+                if "CAPSULA:" in risposta:
                     import re as _re
-                    json_match = _re.search(r'\{[^}]+\}', risposta)
-                    if json_match:
-                        cap_raw = json_match.group(0)
-                        cap_data = json.loads(cap_raw)
-                        # Valida campi minimi
-                        if all(k in cap_data for k in ['id', 'azione', 'params', 'motivo']):
-                            # Gerarchia autorità: Ragionatore = priorità 3 (bassa)
-                            # Non sovrascrive capsule CI (priorità 1-2)
-                            cap_data['fonte'] = 'RAGIONATORE_AI'
-                            cap_data['ts'] = datetime.utcnow().isoformat()
-                            cap_data.setdefault('vita', 120)
-                            cap_data.setdefault('forza', 0.4)
-                            cap_data.setdefault('priorita', 3)
+                    # Cerca JSON dopo "CAPSULA:" — gestisce anche multiriga
+                    cap_section = risposta.split("CAPSULA:")[-1].strip()
+                    if cap_section.lower().startswith("null"):
+                        log(f"[NARRATORE] 💭 Ragionatore: nessuna capsula necessaria")
+                    else:
+                        # Regex robusta che cattura oggetti JSON anche con spazi
+                        json_match = _re.search(r'\{.*?\}', cap_section, _re.DOTALL)
+                        if json_match:
+                            cap_raw = json_match.group(0)
+                            cap_data = json.loads(cap_raw)
+                            # Valida campi minimi
+                            if all(k in cap_data for k in ['id', 'azione', 'params', 'motivo']):
+                                # Forza e vita dalla risposta, con default ragionevoli
+                                cap_data['fonte']  = 'RAGIONATORE_AI'
+                                cap_data['ts']     = datetime.utcnow().isoformat()
+                                cap_data.setdefault('vita',  300)
+                                cap_data.setdefault('forza', 0.65)
+                                # ID deve iniziare con RA_
+                                if not cap_data['id'].startswith('RA_'):
+                                    cap_data['id'] = 'RA_' + cap_data['id']
 
-                            # Inietta nel heartbeat — il bot la leggerà al prossimo ciclo CI
-                            with heartbeat_lock:
-                                capsule_ra = heartbeat_data.get("capsule_ragionatore", [])
-                                # Rimuovi eventuale capsula precedente con stesso ID
-                                capsule_ra = [c for c in capsule_ra if c.get('id') != cap_data['id']]
-                                capsule_ra.append(cap_data)
-                                if len(capsule_ra) > 5:
-                                    capsule_ra = capsule_ra[-5:]
-                                heartbeat_data["capsule_ragionatore"] = capsule_ra
+                                with heartbeat_lock:
+                                    capsule_ra = heartbeat_data.get("capsule_ragionatore", [])
+                                    capsule_ra = [c for c in capsule_ra
+                                                  if c.get('id') != cap_data['id']]
+                                    capsule_ra.append(cap_data)
+                                    if len(capsule_ra) > 5:
+                                        capsule_ra = capsule_ra[-5:]
+                                    heartbeat_data["capsule_ragionatore"] = capsule_ra
+                                    # Log visibile nel status
+                                    heartbeat_data["narratore_ultima_capsula"] = {
+                                        "id":    cap_data['id'],
+                                        "ts":    cap_data['ts'],
+                                        "forza": cap_data['forza'],
+                                        "motivo": cap_data['motivo'][:80],
+                                    }
 
-                            capsula_iniettata = cap_data['id']
-                            log(f"[NARRATORE] 💊 Capsula iniettata: {cap_data['id']} — {cap_data['motivo'][:50]}")
+                                capsula_iniettata = cap_data['id']
+                                log(f"[NARRATORE] 💊 Capsula iniettata: {cap_data['id']} "
+                                    f"forza={cap_data['forza']} vita={cap_data['vita']}s "
+                                    f"— {cap_data['motivo'][:50]}")
+                            else:
+                                log(f"[NARRATORE] ⚠️ JSON capsula incompleto: {cap_raw[:80]}")
+                        else:
+                            log(f"[NARRATORE] ⚠️ Capsula non parsabile: {cap_section[:80]}")
             except Exception as _ce:
-                log(f"[NARRATORE] Capsula parse error: {_ce}")
+                log(f"[NARRATORE] Capsula parse error: {_ce} | raw: {risposta[-100:]}")
 
             # ── SEPARA ANALISI DA CAPSULA per la narrativa ────────────
             analisi_testo = risposta
@@ -1208,6 +1219,13 @@ canvas.spark { width:100%; height:40px; }
       <div class="panel-head" style="background:linear-gradient(90deg,#1a0a2e,#2d1060);border-left:3px solid #a855f7;color:#a855f7;">
         🎭 NARRATORE AI — Dialogo tra due intelligenze
         <span id="narratore-ts" style="float:right;font-size:9px;color:#6b21a8">--:--</span>
+      </div>
+      <div id="narratore-capsula-bar" style="display:none;padding:6px 12px;background:#1a0a2e;border-bottom:1px solid #3b0764;font-size:10px;font-family:monospace;">
+        <span style="color:#a855f7">💊 ULTIMA CAPSULA:</span>
+        <span id="narratore-cap-id" style="color:#c4b5fd;margin-left:6px;font-weight:bold"></span>
+        <span id="narratore-cap-forza" style="color:#7c3aed;margin-left:8px"></span>
+        <span id="narratore-cap-ts" style="color:#4c1d95;margin-left:8px;float:right"></span>
+        <div id="narratore-cap-motivo" style="color:#6b21a8;margin-top:2px;font-size:9px"></div>
       </div>
       <div class="panel-body" id="narratore-body">
         <div style="color:#3d1a6e;font-size:10px;font-family:monospace;text-align:center;padding:16px 0">
@@ -1888,19 +1906,33 @@ const SCPanel = (() => {
     const narratoreBody = $('narratore-body');
     const narratoreTs   = $('narratore-ts');
 
+    // Barra ultima capsula generata
+    const ultCap = hb.narratore_ultima_capsula;
+    const capBar = $('narratore-capsula-bar');
+    if (ultCap && capBar) {
+      capBar.style.display = 'block';
+      const el = id => document.getElementById(id);
+      if (el('narratore-cap-id'))     el('narratore-cap-id').textContent    = ultCap.id || '';
+      if (el('narratore-cap-forza'))  el('narratore-cap-forza').textContent = `forza=${ultCap.forza?.toFixed(2) || '?'}`;
+      if (el('narratore-cap-ts'))     el('narratore-cap-ts').textContent    = (ultCap.ts || '').slice(11,16);
+      if (el('narratore-cap-motivo')) el('narratore-cap-motivo').textContent = ultCap.motivo || '';
+    }
+
     if (narrativa.length && narratoreBody) {
       const ultimo = narrativa[narrativa.length - 1];
       narratoreTs.textContent = ultimo.ts || '--:--';
 
-      // Mostra il dialogo completo — dal più recente
       narratoreBody.innerHTML = narrativa.slice().reverse().map((n, i) => {
         const isUltimo = i === 0;
         const opacita = isUltimo ? '1' : '0.5';
+        const capBadge = n.capsula
+          ? `<span style="background:#3b0764;color:#c4b5fd;padding:2px 6px;border-radius:3px;font-size:9px;margin-left:6px">💊 ${n.capsula}</span>`
+          : '';
         return `<div style="margin-bottom:${isUltimo ? '12' : '8'}px;opacity:${opacita};
           border-left:2px solid ${isUltimo ? '#a855f7' : '#4c1d95'};
           padding-left:10px;">
           <div style="font-size:9px;color:#7c3aed;margin-bottom:4px;letter-spacing:1px">
-            🔍 OSSERVATORE · ${n.ts}
+            🔍 OSSERVATORE · ${n.ts}${capBadge}
           </div>
           <div style="font-size:11px;color:#c4b5fd;font-style:italic;margin-bottom:6px;line-height:1.5">
             "${n.domanda}"
