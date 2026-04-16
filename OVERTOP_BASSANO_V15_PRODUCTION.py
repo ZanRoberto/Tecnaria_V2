@@ -7115,6 +7115,56 @@ class OvertopBassanoV15Production:
                 pass
 
 
+    def _open_shadow_position(self, price, score, soglia, seed, size,
+                               momentum, volatility, trend,
+                               matrimonio_name, fingerprint_wr):
+        """
+        Apre una shadow position (paper trade M2).
+        Registra tutti i dati necessari per l'exit e il tracking.
+        """
+        try:
+            matrimonio = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
+            pb_signals = self.campo._pre_breakout_factor()[2] \
+                         if len(self.campo._prices_short) >= 30 else 0
+
+            self._shadow = {
+                "price_entry":   price,
+                "direction":     self.campo._direction,
+                "duration_avg":  matrimonio.get("duration_avg", 20),
+                "score":         round(score, 2),
+                "soglia":        round(soglia, 2),
+                "size":          round(size, 3),
+                "pb_signals":    pb_signals,
+                "regime_entry":  self._regime_current,
+                "matrimonio":    matrimonio_name,
+                "fingerprint_wr": round(fingerprint_wr, 3),
+                "seed":          round(seed.get('score', 0), 3),
+                "ts_entry":      time.time(),
+            }
+            self._shadow_entry_time = time.time()
+            self._shadow_max_price  = price
+            self._shadow_min_price  = price
+            self._shadow_matrimonio = matrimonio_name
+
+            self._m2_trades += 1
+            self._log_m2("📈", f"SHADOW APERTA {self.campo._direction} "
+                              f"price={price:.2f} size={size:.3f} "
+                              f"score={score:.1f}/{soglia:.1f} "
+                              f"matrimonio={matrimonio_name}")
+
+            # Telemetry
+            ctx = self._tele_ctx()
+            self.telemetry.log_trade_open(
+                trade_direction=self.campo._direction,
+                **{k: ctx[k] for k in ('regime','direction','open_position',
+                   'active_threshold','drift','macd','trend','volatility')}
+            )
+
+        except Exception as e:
+            log.error(f"[OPEN_SHADOW_ERROR] {e}")
+            self._shadow = None
+
+
     def _evaluate_shadow_exit(self, price, momentum, volatility, trend):
         """Stessa logica di uscita V15 + BreathEngine V16 per timing ottimale."""
         try:
