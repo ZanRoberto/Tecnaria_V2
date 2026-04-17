@@ -948,6 +948,7 @@ def narratore_thread():
                 log(f"[NARRATORE] Capsula JSON error: {_ce}")
 
             # ── SALVA NELLA NARRATIVA ─────────────────────────────────
+            analisi_testo = risposta  # testo narrativo del Ragionatore
             ts = datetime.utcnow().strftime("%H:%M")
             narrativa_entry = {
                 "ts":              ts,
