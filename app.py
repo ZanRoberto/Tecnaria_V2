@@ -3462,7 +3462,8 @@ function update() {
         var bg  = isWin ? 'rgba(0,255,136,0.04)' : 'rgba(255,51,85,0.04)';
         var pnlStr = (a.pnl >= 0 ? '+' : '') + '$' + (a.pnl ? parseFloat(a.pnl).toFixed(2) : '?');
         var scoreStr = a.score ? parseFloat(a.score).toFixed(1) : '?';
-        var testo = (a.analisi || '').replace(/\n/g, '<br>');
+        var testo = (a.analisi || '').split('
+').join('<br>');
         html += '<div style="padding:8px 10px;margin-bottom:6px;border-radius:4px;background:' + bg + ';border-left:3px solid ' + col + '">';
         html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px">';
         html += '<span style="font-size:10px;font-weight:bold;color:' + col + '">' + (isWin ? 'WIN' : 'LOSS') + ' ' + (a.ts||'') + ' score=' + scoreStr + ' ' + (a.ctx||'') + '</span>';
