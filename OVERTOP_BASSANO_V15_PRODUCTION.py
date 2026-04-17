@@ -5114,6 +5114,27 @@ class OvertopBassanoV15Production:
         self._shadow_max_price = None
         self._shadow_min_price = None
         self._shadow_matrimonio = None
+
+        # -- LATENCY TRACKER — misura slippage decisione→esecuzione -------
+        # Registra la differenza tra prezzo al momento della DECISIONE
+        # e prezzo al momento dell'APERTURA EFFETTIVA della shadow.
+        # In EXPLOSIVE questa differenza rivela quanto la latenza ci costa.
+        # Quando slippage_medio_explosive > 0.05% → serve VPS Frankfurt.
+        self._latency_stats = {
+            'n_total':          0,
+            'n_explosive':      0,
+            'slippage_sum':     0.0,
+            'slippage_sum_exp': 0.0,
+            'slippage_max':     0.0,
+            'slippage_max_exp': 0.0,
+            'costo_usd_tot':    0.0,
+            'costo_usd_exp':    0.0,
+            'storia':           [],
+        }
+        self._decision_price  = 0.0
+        self._decision_ts     = 0.0
+        self._decision_regime = ''
+
         # -- STATE ENGINE - AGGRESSIVO / NEUTRO / DIFENSIVO ----------------
         # Il tempismo. Non solo COSA fare, ma QUANDO NON FARLO.
         self._state = "NEUTRO"                   # AGGRESSIVO | NEUTRO | DIFENSIVO
@@ -7289,6 +7310,11 @@ class OvertopBassanoV15Production:
             if _V16_ENGINES_OK and self._comparto:
                 self._comparto._attivo  # registra trade nel comparto
 
+            # ── LATENCY TRACKER: registra prezzo decisione ───────────────
+            self._decision_price  = price
+            self._decision_ts     = time.time()
+            self._decision_regime = self._regime_current
+
             self._open_shadow_position(price, score, soglia, seed, size,
                                         momentum, volatility, trend,
                                         matrimonio_name, fingerprint_wr)
@@ -7335,6 +7361,60 @@ class OvertopBassanoV15Production:
             self._shadow_max_price         = price
             self._shadow_min_price         = price
             self._shadow_matrimonio        = matrimonio_name
+
+            # ── LATENCY TRACKER: misura slippage decisione→esecuzione ────
+            # Il prezzo della decisione è stato registrato in _decision_price.
+            # Il prezzo qui è quello effettivo dell'apertura.
+            # La differenza è il costo della latenza.
+            try:
+                if self._decision_price > 0:
+                    _lat_elapsed  = time.time() - self._decision_ts
+                    _slip_abs     = abs(price - self._decision_price)
+                    _slip_pct     = _slip_abs / self._decision_price * 100
+                    _is_explosive = self._decision_regime == "EXPLOSIVE"
+                    _exposure     = self.TRADE_SIZE_USD * self.LEVERAGE
+                    _btc_qty      = _exposure / self._decision_price
+                    _costo_usd    = _slip_abs * _btc_qty
+
+                    # Aggiorna stats
+                    ls = self._latency_stats
+                    ls['n_total']       += 1
+                    ls['slippage_sum']  += _slip_pct
+                    ls['costo_usd_tot'] += _costo_usd
+                    if _slip_pct > ls['slippage_max']:
+                        ls['slippage_max'] = round(_slip_pct, 4)
+
+                    if _is_explosive:
+                        ls['n_explosive']      += 1
+                        ls['slippage_sum_exp'] += _slip_pct
+                        ls['costo_usd_exp']    += _costo_usd
+                        if _slip_pct > ls['slippage_max_exp']:
+                            ls['slippage_max_exp'] = round(_slip_pct, 4)
+
+                    # Log evento
+                    _avg_slip = ls['slippage_sum'] / ls['n_total']
+                    _evento = {
+                        'ts':        time.strftime('%H:%M:%S'),
+                        'regime':    self._decision_regime,
+                        'slip_pct':  round(_slip_pct, 4),
+                        'costo_usd': round(_costo_usd, 3),
+                        'elapsed_ms':round(_lat_elapsed * 1000, 1),
+                        'allarme':   _slip_pct > 0.05,
+                    }
+                    ls['storia'].append(_evento)
+                    if len(ls['storia']) > 20:
+                        ls['storia'] = ls['storia'][-20:]
+
+                    # Log visibile se slippage significativo
+                    if _slip_pct > 0.02:
+                        _tag = "🔴 LATENZA CRITICA" if _slip_pct > 0.05 else "🟡 LATENZA"
+                        self._log_m2("⏱", f"{_tag}: slip={_slip_pct:.3f}% "
+                                         f"costo=${_costo_usd:.2f} "
+                                         f"elapsed={_lat_elapsed*1000:.0f}ms "
+                                         f"regime={self._decision_regime}")
+            except Exception as _lt_e:
+                log.debug(f"[LATENCY_TRACK] {_lt_e}")
+
             # FIX CRITICO: setta contesto entry per Oracolo e divorzi
             self._shadow_entry_momentum    = momentum
             self._shadow_entry_volatility  = volatility
@@ -7884,6 +7964,29 @@ class OvertopBassanoV15Production:
                     self.heartbeat_data['narratore_trade_stats'] = _ns
             except Exception as _nr_e:
                 log.debug(f"[NARRATORE_TRADE] {_nr_e}")
+
+            # -- EXPORT LATENCY STATS all'heartbeat ----------------------
+            try:
+                if self.heartbeat_data is not None:
+                    ls = self._latency_stats
+                    _avg_tot = round(ls['slippage_sum'] / ls['n_total'], 4) if ls['n_total'] > 0 else 0
+                    _avg_exp = round(ls['slippage_sum_exp'] / ls['n_explosive'], 4) if ls['n_explosive'] > 0 else 0
+                    _allarme = _avg_exp > 0.05 or _avg_tot > 0.03
+                    self.heartbeat_data['latency_stats'] = {
+                        'n_total':          ls['n_total'],
+                        'n_explosive':      ls['n_explosive'],
+                        'slippage_medio':   _avg_tot,
+                        'slippage_medio_exp': _avg_exp,
+                        'slippage_max':     ls['slippage_max'],
+                        'slippage_max_exp': ls['slippage_max_exp'],
+                        'costo_usd_tot':    round(ls['costo_usd_tot'], 2),
+                        'costo_usd_exp':    round(ls['costo_usd_exp'], 2),
+                        'allarme':          _allarme,
+                        'storia':           ls['storia'][-5:],
+                        'verdetto':         '🔴 SERVE VPS' if _allarme else '🟢 LATENZA OK',
+                    }
+            except Exception as _lte:
+                log.debug(f"[LATENCY_EXPORT] {_lte}")
 
         except Exception as e:
             import traceback
