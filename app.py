@@ -987,7 +987,8 @@ VERITAS: {vr_str}
 SC_PESI: campo={sc_pesi.get('campo_carica',0):.2f} oracolo={sc_pesi.get('oracolo_fp',0):.2f} signal={sc_pesi.get('signal_tracker',0):.2f}
 TRADES_TOTALI: n={hb.get('m2_trades',0)} wins={hb.get('m2_wins',0)} pnl=${hb.get('m2_pnl',0):.2f}
 TRADES_STATS: {trade_str}
-ULTIMI_TRADE: {ultimi_trade}"""
+ULTIMI_TRADE: {ultimi_trade}
+LATENCY: slip_medio={hb.get('latency_stats',{}).get('slippage_medio',0):.3f}% slip_explosive={hb.get('latency_stats',{}).get('slippage_medio_exp',0):.3f}% costo_usd=${hb.get('latency_stats',{}).get('costo_usd_tot',0):.2f} verdetto={hb.get('latency_stats',{}).get('verdetto','N/A')}"""
     except Exception as e:
         return f"Errore costruzione summary: {e}"
 
@@ -1445,7 +1446,50 @@ canvas.spark { width:100%; height:40px; }
       </div>
     </div>
 
-    
+
+    <!-- LATENCY TRACKER -->
+    <div class="panel" id="latency-panel" style="margin-bottom:10px;">
+      <div class="panel-head" id="latency-head" style="background:linear-gradient(90deg,#0a1628,#0d1f3c);border-left:3px solid var(--green);">
+        ⏱ LATENCY TRACKER — Slippage decisione→esecuzione
+        <span id="latency-verdetto" style="float:right;font-size:9px;color:var(--green)">IN ATTESA DATI</span>
+      </div>
+      <div class="panel-body">
+        <div style="font-size:9px;color:var(--dim);margin-bottom:8px">
+          Misura il costo della latenza Render. Quando slippage EXPLOSIVE > 0.05% → serve VPS Frankfurt (€6/mese).
+        </div>
+        <!-- KPI principali -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px">
+          <div style="background:#0a1628;border-radius:4px;padding:6px;text-align:center">
+            <div style="font-size:9px;color:var(--dim)">SLIP MEDIO</div>
+            <div id="lat-slip-medio" style="font-size:16px;font-weight:bold;color:var(--green)">—</div>
+            <div style="font-size:8px;color:var(--dim)">tutti i trade</div>
+          </div>
+          <div style="background:#0a1628;border-radius:4px;padding:6px;text-align:center">
+            <div style="font-size:9px;color:var(--dim)">SLIP EXPLOSIVE</div>
+            <div id="lat-slip-exp" style="font-size:16px;font-weight:bold;color:var(--green)">—</div>
+            <div style="font-size:8px;color:var(--dim)">contesto critico</div>
+          </div>
+          <div style="background:#0a1628;border-radius:4px;padding:6px;text-align:center">
+            <div style="font-size:9px;color:var(--dim)">COSTO USD</div>
+            <div id="lat-costo" style="font-size:16px;font-weight:bold;color:var(--orange)">—</div>
+            <div style="font-size:8px;color:var(--dim)">perso per latenza</div>
+          </div>
+          <div style="background:#0a1628;border-radius:4px;padding:6px;text-align:center">
+            <div style="font-size:9px;color:var(--dim)">COSTO EXPLOSIVE</div>
+            <div id="lat-costo-exp" style="font-size:16px;font-weight:bold;color:var(--orange)">—</div>
+            <div style="font-size:8px;color:var(--dim)">dove conta di più</div>
+          </div>
+        </div>
+        <!-- Barra allarme VPS -->
+        <div id="lat-allarme-bar" style="display:none;background:#ff3355;color:#fff;font-size:10px;font-weight:bold;padding:8px 12px;border-radius:4px;text-align:center;margin-bottom:8px;letter-spacing:1px;animation:pulse 1s infinite">
+          🔴 SLIPPAGE CRITICO — SERVE VPS FRANKFURT — €6/MESE RISOLVE IL PROBLEMA
+        </div>
+        <!-- Storia ultimi eventi -->
+        <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:4px">ULTIMI EVENTI LATENZA</div>
+        <div id="lat-storia" style="font-size:10px;max-height:100px;overflow-y:auto"></div>
+      </div>
+    </div>
+
     <!-- NARRATORE AI — Dialogo tra due AI -->
     <div class="panel" style="margin-bottom:10px;border-color:#a855f7;border-width:2px;" id="narratore-panel">
       <div class="panel-head" style="background:linear-gradient(90deg,#1a0a2e,#2d1060);border-left:3px solid #a855f7;color:#a855f7;">
@@ -2145,6 +2189,54 @@ const SCPanel = (() => {
     const narrativa = hb.narrativa_ds || [];
     const narratoreBody = $('narratore-body');
     const narratoreTs   = $('narratore-ts');
+
+    // ── LATENCY TRACKER ─────────────────────────────────────────────────
+    const lt = hb.latency_stats || {};
+    if (lt.n_total > 0) {
+      const slipMedio   = lt.slippage_medio || 0;
+      const slipExp     = lt.slippage_medio_exp || 0;
+      const costoTot    = lt.costo_usd_tot || 0;
+      const costoExp    = lt.costo_usd_exp || 0;
+      const allarme     = lt.allarme || false;
+
+      // Colore in base al valore
+      const colorSlip = v => v > 0.05 ? '#ff3355' : v > 0.02 ? '#ffd700' : '#00d97a';
+
+      const elSlipM = document.getElementById('lat-slip-medio');
+      const elSlipE = document.getElementById('lat-slip-exp');
+      const elCosto = document.getElementById('lat-costo');
+      const elCostoE = document.getElementById('lat-costo-exp');
+      const elHead  = document.getElementById('latency-head');
+      const elVerd  = document.getElementById('latency-verdetto');
+      const elAllar = document.getElementById('lat-allarme-bar');
+      const elStoria = document.getElementById('lat-storia');
+
+      if (elSlipM) { elSlipM.textContent = slipMedio.toFixed(3) + '%'; elSlipM.style.color = colorSlip(slipMedio); }
+      if (elSlipE) { elSlipE.textContent = slipExp.toFixed(3) + '%';   elSlipE.style.color = colorSlip(slipExp); }
+      if (elCosto) { elCosto.textContent  = '$' + costoTot.toFixed(2); }
+      if (elCostoE) { elCostoE.textContent = '$' + costoExp.toFixed(2); }
+
+      if (allarme) {
+        if (elHead) { elHead.style.borderLeftColor = '#ff3355'; elHead.style.background = 'linear-gradient(90deg,#2a0a10,#3d0d1a)'; }
+        if (elVerd) { elVerd.textContent = '🔴 SERVE VPS'; elVerd.style.color = '#ff3355'; }
+        if (elAllar) elAllar.style.display = 'block';
+      } else {
+        if (elHead) { elHead.style.borderLeftColor = '#00d97a'; }
+        if (elVerd) { elVerd.textContent = lt.verdetto || '🟢 OK'; elVerd.style.color = '#00d97a'; }
+        if (elAllar) elAllar.style.display = 'none';
+      }
+
+      // Storia ultimi eventi
+      if (elStoria && lt.storia) {
+        elStoria.innerHTML = lt.storia.slice(-5).reverse().map(e => {
+          const col = e.allarme ? '#ff3355' : e.slip_pct > 0.02 ? '#ffd700' : '#00d97a';
+          const tag = e.allarme ? '🔴' : e.slip_pct > 0.02 ? '🟡' : '🟢';
+          return `<div style="padding:2px 0;border-bottom:1px solid #1a2030;color:${col}">
+            ${tag} ${e.ts} [${e.regime}] slip=${e.slip_pct.toFixed(3)}% costo=$${e.costo_usd.toFixed(3)} elapsed=${e.elapsed_ms}ms
+          </div>`;
+        }).join('');
+      }
+    }
 
     // Barra ultima capsula generata
     const ultCap = hb.narratore_ultima_capsula;
