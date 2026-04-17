@@ -3221,13 +3221,13 @@ function update() {
     // Rileva nuovi eventi dal log M2
     const m2log = hb.m2_log || [];
     m2log.forEach(line => {
-      const tsMatch = line.match(/^(\\d{2}:\\d{2}:\\d{2})/);
+      var tsPart = line.substring(0,8); var tsMatch = (tsPart.length===8 && tsPart[2]===':') ? [tsPart,tsPart] : null;
       if (!tsMatch) return;
       const lineTs = new Date().toDateString() + ' ' + tsMatch[1];
       const ts = new Date(lineTs).getTime();
       if (line.includes('ENTRY')) {
         const dir = line.includes('SHORT') ? 'SHORT' : 'LONG';
-        const scoreM = line.match(/score=([\\d.]+)/);
+        var scoreIdx2 = line.indexOf('score='); var scoreM = scoreIdx2>=0 ? [null, line.substring(scoreIdx2+6).split(' ')[0].split('/')[0]] : null;
         const score = scoreM ? parseFloat(scoreM[1]) : 0;
         LiveChart.addEvent('entry', dir, score, ts);
       } else if (line.includes('EXIT') && (line.includes('WIN') || line.includes('LOSS'))) {
