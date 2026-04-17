@@ -3914,7 +3914,7 @@ class CampoGravitazionale:
     VOL_SCORE       = {"BASSA": 1.0,  "MEDIA": 0.60, "ALTA": 0.20}
 
     # -- SOGLIA DINAMICA ---------------------------------------------------
-    SOGLIA_BASE = 52
+    SOGLIA_BASE = 50
     REGIME_FACTOR = {"TRENDING_BULL": 0.80, "EXPLOSIVE": 0.85,
                      "RANGING": 1.00, "TRENDING_BEAR": 1.10}
     # RANGING: era 1.10, ora 1.00 - soglia formula 75.9 irraggiungibile, score max realistico 64
@@ -3922,7 +3922,7 @@ class CampoGravitazionale:
     VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.00}
     # ALTA: era 1.05, ora 1.00 - phantom SCORE_INSUFF WR 65% R/R 2.04, profittevoli
     # Soglia RANGING+ALTA: 60 × 1.00 × 1.00 = 60.0 (trade score 58-63 passano)
-    SOGLIA_MIN    = 48    # PAVIMENTO calibrato su dati reali Signal Tracker
+    SOGLIA_MIN    = 44    # Abbassato da 48 — calibrato sulla sessione 3 aprile WR 58.5%
     SOGLIA_MAX    = 80    # era 90 - phantom SCORE_INSUFFICIENTE dice -$3871, troppo alto in RANGING
 
     # -- SIZE CONTINUA -----------------------------------------------------
@@ -7073,6 +7073,23 @@ class OvertopBassanoV15Production:
                             self._log_m2("🔥", f"STATIC bypassed — FUOCO carica={self._oi_carica:.2f}")
                         else:
                             self._log_m2("💊", f"STATIC bypassed — CI ha autorità: {_motivo_ci}")
+
+                        # FIX: evaluate si è fermato al veto → score=0, size=0
+                        # Ricalcola score dai componenti che abbiamo già
+                        _rsi_now = getattr(self.campo, '_last_rsi', 50.0)
+                        _macd_now = getattr(self.campo, '_last_macd_hist', 0.0)
+                        _score_bypass = round(
+                            seed['score'] * 25 +
+                            fingerprint_wr * 25 +
+                            (10.0 if 40 < _rsi_now < 70 else 4.0) +
+                            (10.0 if abs(_macd_now) > 1 else 0.0),
+                            1
+                        ) if seed.get('score', 0) > 0 else 20.0
+
+                        result['enter'] = True
+                        result['score'] = _score_bypass
+                        result['size']  = max(result.get('size', 0), 0.15)
+                        self._log_m2("📊", f"Score bypass: {_score_bypass:.1f} size={result['size']:.2f}")
                     else:
                         self._log_m2("🚫", f"VETO_TOSSICO: {veto}")
                         if len(self._phantoms_open) < 5:
