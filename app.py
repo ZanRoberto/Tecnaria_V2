@@ -3453,31 +3453,26 @@ function update() {
     const analisiList = hb.trade_analisi || [];
     const analisiEl = $('trade-analisi-body');
     if (analisiEl && analisiList.length > 0) {
-      analisiEl.innerHTML = analisiList.slice().reverse().slice(0, 8).map(a => {
-        const isWin = a.esito === 'WIN';
-        const col   = isWin ? '#00ff88' : '#ff3355';
-        const bg    = isWin ? 'rgba(0,255,136,0.04)' : 'rgba(255,51,85,0.04)';
-        const icon  = isWin ? '' : '';
-        const lines = (a.analisi || '').split('\n').filter(l => l.trim());
-        return `<div style="padding:8px 10px;margin-bottom:6px;border-radius:4px;
-          background:${bg};border-left:3px solid ${col}">
-          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-            <span style="font-size:10px;font-weight:bold;color:${col}">
-              ${icon} ${a.esito} ${a.ts} - score ${a.score?.toFixed(1)||'?'} - ${a.ctx}
-            </span>
-            <span style="font-size:10px;color:${col};font-weight:bold">
-              ${a.pnl >= 0 ? '+' : ''}$${a.pnl?.toFixed(2)||'?'}
-            </span>
-          </div>
-          <div style="font-size:9px;color:var(--dim);margin-bottom:4px">${a.motivo||''}</div>
-          ${lines.map(l => {
-            const isEsito = l.startsWith('ESITO:');
-            const isLez   = l.startsWith('LEZIONE:');
-            const lCol    = isEsito ? col : isLez ? '#ffd700' : 'var(--text)';
-            return `<div style="font-size:10px;color:${lCol};line-height:1.6">${l}</div>`;
-          }).join('')}
-        </div>`;
-      }).join('');
+      var html = '';
+      var items = analisiList.slice().reverse().slice(0, 8);
+      for (var i = 0; i < items.length; i++) {
+        var a = items[i];
+        var isWin = a.esito === 'WIN';
+        var col = isWin ? '#00ff88' : '#ff3355';
+        var bg  = isWin ? 'rgba(0,255,136,0.04)' : 'rgba(255,51,85,0.04)';
+        var pnlStr = (a.pnl >= 0 ? '+' : '') + '$' + (a.pnl ? parseFloat(a.pnl).toFixed(2) : '?');
+        var scoreStr = a.score ? parseFloat(a.score).toFixed(1) : '?';
+        var testo = (a.analisi || '').replace(/\n/g, '<br>');
+        html += '<div style="padding:8px 10px;margin-bottom:6px;border-radius:4px;background:' + bg + ';border-left:3px solid ' + col + '">';
+        html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px">';
+        html += '<span style="font-size:10px;font-weight:bold;color:' + col + '">' + (isWin ? 'WIN' : 'LOSS') + ' ' + (a.ts||'') + ' score=' + scoreStr + ' ' + (a.ctx||'') + '</span>';
+        html += '<span style="font-size:10px;color:' + col + ';font-weight:bold">' + pnlStr + '</span>';
+        html += '</div>';
+        html += '<div style="font-size:9px;color:var(--dim);margin-bottom:4px">' + (a.motivo||'') + '</div>';
+        html += '<div style="font-size:10px;color:var(--text);line-height:1.7">' + testo + '</div>';
+        html += '</div>';
+      }
+      analisiEl.innerHTML = html;
     }
 
   }).catch(()=>{
