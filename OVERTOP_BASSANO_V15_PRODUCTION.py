@@ -7180,6 +7180,41 @@ class OvertopBassanoV15Production:
                     # Pista asciutta — size piena
                     pass
 
+            # ── BOOST_SEED dalle capsule RA_ del Ragionatore ────────────────
+            # Quando il sistema è cieco (seed basso, fp=0) il Ragionatore
+            # genera BOOST_SEED per rompere il paradosso zero-trade.
+            # Il boost viene applicato allo score direttamente.
+            try:
+                _caps_ra = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
+                _now_ra  = time.time()
+                _boost_seed_delta = 0.0
+                for _cap in _caps_ra:
+                    if _cap.get('azione') != 'BOOST_SEED':
+                        continue
+                    # Verifica scadenza
+                    try:
+                        from datetime import datetime as _dt3
+                        _cap_ts = _dt3.fromisoformat(_cap.get('ts', '')).timestamp()
+                        if _now_ra - _cap_ts > _cap.get('vita', 300):
+                            continue
+                    except Exception:
+                        pass
+                    _delta = _cap.get('params', {}).get('delta', 0)
+                    _forza = min(0.65, _cap.get('forza', 0.5))
+                    _boost_seed_delta += _delta * _forza
+                if _boost_seed_delta > 0:
+                    _score_prima = result.get('score', score)
+                    result['score'] = round(_score_prima + _boost_seed_delta, 1)
+                    score = result['score']
+                    # Se ora supera la soglia → entra
+                    if not result.get('enter') and score >= soglia:
+                        result['enter'] = True
+                        result['size']  = max(result.get('size', 0), 0.15)
+                    self._log_m2("🤖", f"RA_BOOST_SEED: score {_score_prima:.1f}→{score:.1f} "
+                                      f"(delta={_boost_seed_delta:.1f}) soglia={soglia:.1f}")
+            except Exception as _bs_e:
+                log.debug(f"[BOOST_SEED_ERR] {_bs_e}")
+
             # ── CAPSULE INTELLIGENTE: modifiche predittive ───────────────────
             try:
                 _ci_mods = self.ci.get_entry_mods()
