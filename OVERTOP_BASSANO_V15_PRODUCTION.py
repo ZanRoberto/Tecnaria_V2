@@ -7163,6 +7163,12 @@ class OvertopBassanoV15Production:
                                              momentum, volatility, trend)
                     return
 
+            # ── BOOT GUARD — nessuna entry nei primi 60 secondi ─────────────
+            _boot_elapsed = time.time() - getattr(self, '_boot_time', time.time())
+            if _boot_elapsed < 60:
+                self._log_m2("⏳", f"BOOT_GUARD: {60 - _boot_elapsed:.0f}s al via")
+                return
+
             # ── SCORE vs SOGLIA ──────────────────────────────────────────────
             score  = result['score']
             soglia = result['soglia']
@@ -8996,6 +9002,7 @@ class OvertopBassanoV15Production:
     def run(self):
         log.info("[START] Bot avviato - connessione Binance WS...")
         self._carica_storia_dal_db()
+        self._boot_time = time.time()
         self.connect_binance()
         _watchdog_last = time.time()
         try:
