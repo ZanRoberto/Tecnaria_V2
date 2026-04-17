@@ -873,6 +873,55 @@ COME LEGGERE ZAVORRA_ANALISI:
 - BLOCCO_CORRETTO (< 7%) → sistema protegge bene, capsule funzionano
 - Quando BLOCCO_ECCESSIVO: generare ABBASSA_SOGLIA leggero invece di BLOCCA_CONTESTO
 
+FISICA DEL SEME — LA LEGGE FONDAMENTALE:
+Il CampoGravitazionale misura l'energia del seme all'entry. seed score = fino a 25 punti.
+Un seme debole in un campo instabile muore prima di generare profitto sufficiente a coprire le fee.
+
+REGOLA FISICA:
+- seed < 15 punti + RANGING + volatilità ALTA = seme senza energia = movimento collassa in EXIT_E15/E20
+- Questo non è probabilistico — è fisico. Il seme non ha carburante per svilupparsi.
+- EXIT_E15_S46 ripetuto = conferma che il seme muore sempre prima della soglia
+- EXIT_E20_S46 ripetuto = il seme sopravvive poco più ma non abbastanza
+
+CAPSULA CORRETTA per seme debole:
+Quando vedi seed < 15 nei SCORE_DETTAGLIO + RANGING + EXIT_E15/E20 negli ULTIMI_TRADE:
+{"id": "RA_SEME_DEBOLE", "azione": "ALZA_SOGLIA", "params": {"delta": 8},
+ "motivo": "seed<15 in RANGING|ALTA = seme senza energia, EXIT_E15 garantito", "vita": 600, "forza": 0.75}
+
+Con soglia più alta il sistema aspetta un seme con abbastanza energia — seed >= 20 — che ha
+carburante sufficiente per sviluppare un movimento che copre le fee e genera profitto reale.
+
+COME LEGGERE L'ENERGIA DEL SEME:
+- seed 20-25 = seme forte, movimento atteso > 50 tick, copre fee con margine
+- seed 15-20 = seme medio, movimento atteso 30-50 tick, borderline
+- seed < 15 = seme debole, movimento atteso < 30 tick, fee mangiano tutto
+- seed = 0 = sistema cieco, non valutare
+
+EDGE ECONOMICO — LA REGOLA PIU' IMPORTANTE:
+Un trade che vince in tick ma perde in dollari NON è una vittoria. È un dissanguamento lento.
+Fee Binance su size 0.15 BTC = circa $0.15-0.20 per trade completo (entry + exit).
+Se WIN_+N nel motivo ma PnL negativo o < $0.10 = le fee hanno mangiato tutto.
+Questo si chiama EDGE ECONOMICO NEGATIVO — il sistema trova la direzione giusta ma il movimento è troppo piccolo.
+
+COME RICONOSCERLO:
+- WIN_+12 con PnL=-$0.50 → movimento 12 tick non copre le fee
+- WIN_+27 con PnL=+$0.24 → appena sopra zero, non sostenibile
+- WIN_+35 con PnL=+$0.78 → borderline
+- WIN_+60 con PnL=+$1.90 → questo è edge economico reale
+
+SOGLIA MINIMA DI PROFITTO ATTESO:
+- In RANGING con volatilità ALTA → movimento medio < 30 tick → edge economico negativo → ALZA_SOGLIA
+- In EXPLOSIVE → movimento medio > 60 tick → edge positivo → soglia normale
+- Se ULTIMI_TRADE mostrano 3+ trade con WIN_+N ma PnL < $0.30 → genera ALZA_SOGLIA delta +6/+8
+  per filtrare i trade con movimento insufficiente a coprire le fee
+
+CAPSULA CORRETTA quando vedi edge economico negativo:
+{"id": "RA_EDGE_ECONOMICO", "azione": "ALZA_SOGLIA", "params": {"delta": 6}, 
+ "motivo": "WIN_+N con PnL negativo = fee mangiano profitto, soglia insufficiente", "vita": 600, "forza": 0.7}
+
+NON generare BLOCCA_CONTESTO per questo problema — il contesto non è tossico, è la soglia troppo bassa.
+La soglia più alta filtra i segnali deboli e lascia passare solo i movimenti abbastanza grandi da coprire le fee.
+
 QUANDO PASSARE AL LIVE:
 - WR > 55% su 200+ trade paper
 - PnL positivo su 7 giorni consecutivi
@@ -1311,11 +1360,16 @@ def analizzatore_trade_thread():
             """, fetch=True)
 
             if not rows:
+                log("[ANALIZZATORE] DB vuoto o errore — attendo")
                 time.sleep(20)
                 continue
 
             r = rows[0] if isinstance(rows, list) else rows
-            trade_id = str(r[0])  # usa l'id DB come chiave univoca
+            if not r or r[0] is None:
+                time.sleep(20)
+                continue
+            trade_id = str(r[0])
+            log(f"[ANALIZZATORE] Ultimo trade DB: id={trade_id} pnl={r[3]}")  # usa l'id DB come chiave univoca
 
             if trade_id == str(_ultimo_trade_id_analizzato):
                 time.sleep(15)
