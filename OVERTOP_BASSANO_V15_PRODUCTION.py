@@ -7051,6 +7051,37 @@ class OvertopBassanoV15Production:
                               veto.startswith("DIVORZIO"))
 
                 if is_tossico:
+                    # ── BLOCCA_CONTESTO RA_ ha priorità assoluta sul FUOCO bypass ──
+                    # Il Ragionatore genera BLOCCA_CONTESTO quando vede perdite sistematiche.
+                    # Questa capsula deve prevalere anche sul FUOCO bypass — altrimenti
+                    # il sistema entra cieco ignorando la decisione del Ragionatore.
+                    try:
+                        _caps_ra_blocca = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
+                        _now_ra_blocca = time.time()
+                        for _cap_b in _caps_ra_blocca:
+                            if _cap_b.get('azione') != 'BLOCCA_CONTESTO':
+                                continue
+                            try:
+                                from datetime import datetime as _dt5
+                                _cap_ts_b = _dt5.fromisoformat(_cap_b.get('ts', '')).timestamp()
+                                if _now_ra_blocca - _cap_ts_b > _cap_b.get('vita', 600):
+                                    continue
+                            except Exception:
+                                pass
+                            _pb = _cap_b.get('params', {})
+                            if (_pb.get('momentum','') == momentum and
+                                _pb.get('volatility','') == volatility and
+                                _pb.get('trend','') == trend):
+                                self._log_m2("🤖", f"RA_BLOCCA_CONTESTO_PRIORITY: {_cap_b.get('id','')} "
+                                                   f"blocca {momentum}|{volatility}|{trend} "
+                                                   f"PRIMA del FUOCO bypass")
+                                if len(self._phantoms_open) < 5:
+                                    self._record_phantom(price, f"RA_BLOCCA_{momentum}_{volatility}_{trend}",
+                                                         seed['score'], momentum, volatility, trend)
+                                return
+                    except Exception as _bcp_e:
+                        log.debug(f"[BLOCCA_PRIORITY] {_bcp_e}")
+
                     # Controlla se OI FUOCO estremo può bypassare STATIC
                     _fuoco_estremo = (self._oi_stato == "FUOCO" and
                                       self._oi_carica >= 0.85)
@@ -7111,6 +7142,14 @@ class OvertopBassanoV15Production:
                         result['score'] = _score_bypass
                         result['size']  = max(result.get('size', 0), 0.15)
                         self._log_m2("📊", f"Score bypass: {_score_bypass:.1f} size={result['size']:.2f}")
+
+                        # SOGLIA MINIMA ASSOLUTA nel bypass FUOCO
+                        # Quando il campo restituisce soglia=0 (VETO prima del calcolo)
+                        # non permettere entry sotto score 40 — sistema non può essere cieco
+                        _soglia_bypass_min = 40.0
+                        if _score_bypass < _soglia_bypass_min:
+                            result['enter'] = False
+                            self._log_m2("🛑", f"BYPASS BLOCCATO: score {_score_bypass:.1f} < soglia_min {_soglia_bypass_min:.1f}")
                     else:
                         self._log_m2("🚫", f"VETO_TOSSICO: {veto}")
                         if len(self._phantoms_open) < 5:
@@ -7228,11 +7267,14 @@ class OvertopBassanoV15Production:
                     result['score'] = round(_score_prima + _boost_seed_delta, 1)
                     score = result['score']
                     # Se ora supera la soglia → entra
-                    if not result.get('enter') and score >= soglia:
+                    # SOGLIA MINIMA ASSOLUTA: mai entrare sotto 40 anche con BOOST_SEED
+                    # Evita entry cieche quando soglia=0 (sistema non ancora calibrato)
+                    _soglia_eff = max(soglia, 40.0)
+                    if not result.get('enter') and score >= _soglia_eff:
                         result['enter'] = True
                         result['size']  = max(result.get('size', 0), 0.15)
                     self._log_m2("🤖", f"RA_BOOST_SEED: score {_score_prima:.1f}→{score:.1f} "
-                                      f"(delta={_boost_seed_delta:.1f}) soglia={soglia:.1f}")
+                                      f"(delta={_boost_seed_delta:.1f}) soglia_eff={_soglia_eff:.1f}")
             except Exception as _bs_e:
                 log.debug(f"[BOOST_SEED_ERR] {_bs_e}")
 
