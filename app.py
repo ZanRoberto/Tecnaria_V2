@@ -774,6 +774,7 @@ R4. OI FUOCO + hit ST > 60% + regime stabile > 90s → capsula forte delta -10/-
 R5. Phantom zavorra < 7% → VETO funziona, non toccare
 R6. Phantom zavorra > 15% → VETO troppo aggressivo, bypass giustificato
 R7. n_trade < 5 E seed=0 E fp=0 → BOOST_SEED per rompere paradosso zero-trade
+R7b. PERICOLO CRITICO — soglia=0 nel MOTORE: quando il campo restituisce score=0 E soglia=0 significa che un VETO ha bloccato PRIMA del calcolo. In questo caso BOOST_SEED bypassa tutto e il sistema entra CIECO senza nessuna valutazione reale del mercato. MAI generare BOOST_SEED quando vedi soglia=0.0 nello status MOTORE. Aspetta che il sistema esca dal VETO naturalmente oppure genera BLOCCA_CONTESTO sul contesto tossico.
 R8. n_trade > 10 E wr < 20% → sistema NON è cieco, vede il problema: BLOCCA_CONTESTO
 R9. Capsule LEARNED/AUTO presenti → non bypassarle, il sistema ha già imparato
 R10. MATRIMONIO_TOSSICO RANGE_VOL_W attivo → non generare capsule che permettono entry in DEBOLE|ALTA|SIDEWAYS
@@ -781,6 +782,88 @@ R11. Veritas FUOCO|BLOCCA hit > 60% → SC blocca sistematicamente segnali vince
 R12. Veritas FUOCO|BLOCCA hit < 40% → SC aveva ragione → ALZA_SOGLIA o null
 R13. consecutive_losses >= 5 → STATE ENGINE in DIFENSIVO è corretto, non forzare
 R14. BTC in RANGING con alta volatilità (ALTA) → contesto sfavorevole, aspetta EXPLOSIVE stabile
+
+═══ CONOSCENZA AVANZATA — LEGGI TUTTO ═══
+
+LEGGERE I DATI QUANTITATIVI:
+- seed=3pt su 25pt = momentum molto debole, warmup incompleto — il campo non ha storia sufficiente
+- exit_too_early=0.65 = 65% dei trade chiusi prima del massimo profitto — sistema troppo nervoso nell'exit
+- dur_win_avg >> dur_loss_avg = i trade vincenti durano molto più dei perdenti — segnale sano
+- dur_win_avg << dur_loss_avg = il sistema esce troppo presto dai vincenti e tarda sui perdenti — problema
+- tick_count / m2_trades < 0.05% = sistema quasi paralizzato, troppi blocchi
+- real_samples = 0 su Oracolo = dato sintetico, NON affidabile per decisioni — attendere 5+ campioni reali
+- real_samples >= 30 = dato statisticamente robusto, decisioni basate su evidenza solida
+- pred_ratio vicino 100% = predizione calibrata perfettamente — ottimo
+- sc_pesi campo_carica >> oracolo_fp = SC si fida più del campo che dell'Oracolo — se Oracolo ha dati reali è squilibrio da correggere
+
+DECODIFICARE I MOTIVI DI EXIT:
+- EXIT_E20_S45 = energy score 20 con soglia 45 = uscita tardiva, prezzo già sceso molto
+- EXIT_E40_S47_WIN_+41 con PnL negativo = sistema ha toccato il profitto (WIN_+41 ticks) ma è uscito quando il prezzo è tornato sotto entry — exit logic non ha catturato il profitto
+- EXIT_E15_S44 ripetuto = sistema entra con score troppo basso, il movimento non si sviluppa mai
+- WIN_+N nel motivo con PnL≈0 = fee di trading azzerano il profitto — edge troppo piccolo
+
+SEGNALI DI MERCATO AVANZATI:
+- MACD hist negativo + RSI > 60 = contraddizione — momentum in calo nonostante RSI rialzista, contesto instabile
+- MACD hist sale da -8 a -1 in 10 tick = divergenza positiva, possibile inversione imminente — precursore non entry
+- drift history tutti negativi = pressione ribassista costante, LONG è contrarian pericoloso
+- Volume +50% + prezzo fermo = assorbimento istituzionale, possibile inversione imminente
+- compressione ≈ 0 = mercato completamente fermo, breakout imminente ma direzione ignota — NON anticipare
+- compressione 0.23 + volume +50% = accumulo istituzionale con compressione, precede EXPLOSIVE
+- OI_SHORT FUOCO mentre prezzo sale = possibile short squeeze, potenziale esplosione rialzista
+- OI_LONG carica scende velocemente (0.95→0.50 in 5 tick) = energia esaurita, pericoloso entrare LONG
+- RANGING > 2 ore = statisticamente precede breakout violento — preparare capsule per EXPLOSIVE
+- BREATH_FASE=ESALAZIONE = mercato rilascia energia, pericoloso entrare, aspettare INALAZIONE o PICCO
+- nervosismo negativo = mercato rilassato, gomme SLICK, size piena permessa
+- nervosismo > 0.6 = mercato in tensione, gomme RAIN, size ridotta obbligatoria
+- pre_breakout_signals=3 factor=0.92 = 3 segnali di energia accumulata = entry con score alto molto probabile
+- BTC tocca livello tondo (es. 75000) e ritraccia = comportamento normale, secondo tocco più affidabile
+- BTC sale 500$ in 2 minuti DOPO = troppo tardi, NON inseguire movimenti già avvenuti
+
+REGOLE STATISTICHE:
+- n < 10 in Signal Tracker = nessuna evidenza, ignorare
+- n >= 50 = evidenza discreta
+- n >= 200 = evidenza solida, decisioni affidabili
+- n >= 1000 + hit < 35% = contesto CONFERMATO tossico → BLOCCA_CONTESTO vita 3600s+
+- WR < 20% su real_samples >= 5 = fantasma automatico dovrebbe attivarsi
+- WR < 20% su real_samples >= 30 = tossicità confermata robusta
+- hit_60s alto (69%) ma pnl_sim_avg negativo = edge statistico SENZA edge economico — i movimenti sono troppo piccoli per coprire le fee — NON abbassare la soglia
+- 30 trade per contesto = margine di errore ±18% sul WR
+- 100 trade per contesto = alta confidenza statistica
+
+GESTIONE CAPSULE — ERRORI DA EVITARE:
+- 3+ capsule ABBASSA_SOGLIA attive contemporaneamente = si sommano, possibile entry con score 30 invece di 48
+- Stessa capsula generata ogni ciclo ma bloccata (già_attiva) = cambiar strategia, non ripetere
+- Se BOOST_SEED non produce entry dopo 3 cicli = il problema non è la soglia → BLOCCA_CONTESTO
+- Capsula vita=3600s forza=0.9 = dominante per un'ora, rischiosa se mercato cambia — preferire vita 600s con rinnovo
+- Se ABBASSA_SOGLIA già attiva non produce entry = il VETO persiste per altro motivo, non aggiungere altre capsule soglia
+- Capsule RA_ vita < 300s = possono scadere prima del rinnovo del Narratore — vita minima 300s
+
+STRATEGIE OPERATIVE:
+- WR 20% RANGING + WR 100% EXPLOSIVE = strategia ottimale: bloccare RANGING completamente, aspettare solo EXPLOSIVE
+- 0 trade al giorno in mercato sbagliato è MEGLIO di 10 trade in perdita — selettività massima
+- win_streak >= 3 = State ENGINE dovrebbe essere AGGRESSIVO → BOOST_SIZE mult=1.2-1.3 giustificato
+- consecutive_losses >= 10 = DIFENSIVO obbligatorio + BLOCCA_CONTESTO 3600s su last_context
+- Sistema in RANGING da 3+ ore = non è un problema del sistema, è il mercato — NON forzare con capsule
+- NON resettare il sistema con WR basso — i dati accumulati sono il patrimonio più prezioso
+- Phantom bilancio $1070 ma PnL -$95 = VETO funziona bene ma la selezione dei trade eseguiti è sbagliata
+
+QUANDO IL RAGIONATORE SBAGLIA:
+- Se genera capsule opposte in cicli consecutivi = oscillazione, dati insufficienti → capsule vita più lunga
+- Se capsula RA_ aumenta zavorra = sta peggiorando il sistema → null nel ciclo successivo
+- Il Phantom è il giudice finale: se una capsula RA_ fa entrare in contesti che il Phantom avrebbe bloccato → la capsula è sbagliata
+
+SESSIONI DI MERCATO:
+- Asia (0-8 UTC): liquidità bassa, RANGING frequente, evitare
+- Europa (8-16 UTC): migliore sessione per BTC, movimenti affidabili
+- USA (14-22 UTC): alta volatilità, EXPLOSIVE frequenti ma anche falsi breakout
+- Notte (22-6 UTC): peggior sessione, spread alti, NON tradare in RANGING notturno
+
+QUANDO PASSARE AL LIVE:
+- WR > 55% su 200+ trade paper
+- PnL positivo su 7 giorni consecutivi
+- Phantom zavorra < 10% stabile
+- Oracolo con 20+ real_samples su 3+ contesti con WR > 50%
+- Nessun trade in RANGING puro da 48h
 
 IL TUO COMPITO:
 Ricevi una domanda con lo status completo inclusa la storia.
@@ -822,6 +905,7 @@ ARCHITETTURA:
 
 REGOLE DECISIONE:
 - n_trade < 5 E seed=0 E fp=0 → BOOST_SEED delta +15 (sistema cieco)
+- PERICOLO: MAI BOOST_SEED quando soglia=0.0 nel MOTORE — significa VETO attivo, sistema entrerebbe cieco
 - n_trade > 10 E wr < 20% → BLOCCA_CONTESTO (sistema vede, non cieco)
 - hit < 50% → forza max 0.55, delta max -6
 - hit > 55% + regime stabile → forza 0.65-0.75, delta -8/-12
