@@ -843,6 +843,21 @@ def _build_status_summary(hb: dict) -> str:
         score_comp = hb.get("m2_score_components", {})
         score_str = f"seed={score_comp.get('seed',0):.1f} fp={score_comp.get('fp',0):.1f} rsi={score_comp.get('rsi',0):.1f} macd={score_comp.get('macd',0):.1f}"
 
+        # ── RISULTATI TRADE REALI — il Narratore impara dal dissanguamento ──
+        trade_stats = hb.get('narratore_trade_stats', {})
+        trade_storia = hb.get('narratore_trade_storia', [])[-5:]
+        trade_str = ""
+        if trade_stats.get('n', 0) > 0:
+            trade_str = (f"n={trade_stats['n']} wr={trade_stats.get('wr',0):.0%} "
+                        f"pnl_tot=${trade_stats.get('pnl_tot',0):.2f} "
+                        f"loss_consecutivi={trade_stats.get('consecutive_losses',0)} "
+                        f"ultimo_contesto={trade_stats.get('last_context','?')}")
+        ultimi_trade = " | ".join([
+            f"{t.get('ts','?')} {t.get('momentum','?')}|{t.get('volatility','?')}|{t.get('trend','?')} "
+            f"pnl=${t.get('pnl',0):.2f} {'WIN' if t.get('is_win') else 'LOSS'} [{t.get('reason','?')}]"
+            for t in trade_storia
+        ]) or "nessun trade ancora"
+
         return f"""STATUS OVERTOP — {hb.get('last_seen','?')}
 MERCATO_ORA: regime={hb.get('regime','?')} conf={hb.get('regime_conf',0):.0%} | BTC={hb.get('last_price',0):.0f}
 REGIME_STORIA: {regime_log}
@@ -859,7 +874,9 @@ SIGNAL_TRACKER: {sig_str}
 PHANTOM: bilancio=+${ph.get('bilancio',0):.0f} protezione={ph.get('protezione',0)} zavorra={ph.get('zavorra',0)} mancati=${ph.get('pnl_missed',0):.1f}
 VERITAS: {vr_str}
 SC_PESI: campo={sc_pesi.get('campo_carica',0):.2f} oracolo={sc_pesi.get('oracolo_fp',0):.2f} signal={sc_pesi.get('signal_tracker',0):.2f}
-TRADES: n={hb.get('m2_trades',0)} wins={hb.get('m2_wins',0)} pnl=${hb.get('m2_pnl',0):.2f}"""
+TRADES_TOTALI: n={hb.get('m2_trades',0)} wins={hb.get('m2_wins',0)} pnl=${hb.get('m2_pnl',0):.2f}
+TRADES_STATS: {trade_str}
+ULTIMI_TRADE: {ultimi_trade}"""
     except Exception as e:
         return f"Errore costruzione summary: {e}"
 
