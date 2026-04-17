@@ -1296,28 +1296,52 @@ LEZIONE: [cosa imparare da questo trade]
 _ultimo_trade_id_analizzato = 0
 
 def analizzatore_trade_thread():
-    """Analizza ogni trade chiuso e spiega perché ha vinto o perso."""
+    """Analizza ogni trade chiuso e spiega perche ha vinto o perso."""
     global _ultimo_trade_id_analizzato
-    log("[ANALIZZATORE] 🔬 Analizzatore trade avviato")
+    log("[ANALIZZATORE] Analizzatore trade avviato")
     time.sleep(45)
 
     while True:
         try:
-            with heartbeat_lock:
-                storia = list(heartbeat_data.get('narratore_trade_storia', []))
+            # Legge dal DB direttamente — funziona anche dopo restart
+            rows = db_execute("""
+                SELECT id, timestamp, direction, pnl, reason, data_json
+                FROM trades WHERE event_type='M2_EXIT'
+                ORDER BY id DESC LIMIT 1
+            """, fetch=True)
 
-            if not storia:
+            if not rows:
                 time.sleep(20)
                 continue
 
-            ultimo = storia[-1]
-            trade_id = ultimo.get('ts', '') + str(ultimo.get('pnl', 0))
+            r = rows[0] if isinstance(rows, list) else rows
+            trade_id = str(r[0])  # usa l'id DB come chiave univoca
 
-            if trade_id == _ultimo_trade_id_analizzato:
+            if trade_id == str(_ultimo_trade_id_analizzato):
                 time.sleep(15)
                 continue
 
             _ultimo_trade_id_analizzato = trade_id
+
+            import json as _json2
+            try:
+                dj = _json2.loads(r[5]) if r[5] else {}
+            except Exception:
+                dj = {}
+
+            pnl = float(r[3] or 0)
+            ultimo = {
+                'ts':        str(r[1] or '')[-8:][:5],
+                'is_win':    pnl > 0,
+                'pnl':       round(pnl, 2),
+                'reason':    r[4] or '',
+                'momentum':  dj.get('momentum', '?'),
+                'volatility':dj.get('volatility', '?'),
+                'trend':     dj.get('trend', '?'),
+                'regime':    dj.get('regime', '?'),
+                'score':     float(dj.get('score', 0)),
+                'matrimonio':dj.get('matrimonio', '?'),
+            }
 
             # Costruisce il contesto del trade
             esito     = "WIN" if ultimo.get('is_win') else "LOSS"
