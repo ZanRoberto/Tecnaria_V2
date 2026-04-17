@@ -1410,7 +1410,7 @@ body::before { content:''; position:fixed; inset:0; background:
 
 .wrap { max-width:1300px; margin:0 auto; padding:14px; position:relative; z-index:1; }
 
-/* ── HEADER ── */
+/* -- HEADER -- */
 .hdr { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;
        border-bottom:1px solid var(--border); padding-bottom:12px; flex-wrap:wrap; gap:10px; }
 .hdr-title { font-family:'Orbitron',monospace; font-size:18px; font-weight:900;
@@ -1424,17 +1424,17 @@ body::before { content:''; position:fixed; inset:0; background:
 .dot-run { background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s infinite; }
 .dot-off { background:var(--red); }
 
-/* ── TICKER BAR ── */
+/* -- TICKER BAR -- */
 .ticker { background:var(--bg2); border:1px solid var(--border); border-left:3px solid var(--green);
           padding:8px 14px; margin-bottom:14px; border-radius:2px;
           display:flex; gap:24px; align-items:center; flex-wrap:wrap; font-size:12px; }
 .price-big { font-family:'Orbitron',monospace; font-size:22px; font-weight:700; color:var(--green); }
 
-/* ── ALERT BAR ── */
+/* -- ALERT BAR -- */
 .alert-bar { padding:8px 14px; margin-bottom:14px; border-radius:2px; font-size:12px;
              display:none; border-left:3px solid var(--red); background:rgba(255,51,85,0.08); color:var(--red); }
 
-/* ── KPI GRID ── */
+/* -- KPI GRID -- */
 .kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:8px; margin-bottom:14px; }
 .kpi { background:var(--bg2); border:1px solid var(--border); padding:10px 12px; border-radius:2px;
        position:relative; overflow:hidden; transition:border-color .2s; }
@@ -1447,14 +1447,14 @@ body::before { content:''; position:fixed; inset:0; background:
 .kpi-val.neu { color:var(--text); }
 .kpi-sub { font-size:9px; color:var(--dim); margin-top:2px; }
 
-/* ── TWO COLUMN LAYOUT ── */
+/* -- TWO COLUMN LAYOUT -- */
 .two-col { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
 @media(max-width:800px){ .two-col { grid-template-columns:1fr; } }
 .three-col { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:10px; }
 @media(max-width:900px){ .three-col { grid-template-columns:1fr 1fr; } }
 @media(max-width:600px){ .three-col { grid-template-columns:1fr; } }
 
-/* ── PANEL ── */
+/* -- PANEL -- */
 .panel { background:var(--bg2); border:1px solid var(--border); border-radius:2px; overflow:hidden; }
 .panel-head { padding:8px 12px; font-size:10px; letter-spacing:2px; text-transform:uppercase;
               display:flex; align-items:center; justify-content:space-between;
@@ -1467,7 +1467,7 @@ body::before { content:''; position:fixed; inset:0; background:
 .panel-head.red    { border-left:3px solid var(--red);    color:var(--red); }
 .panel-body { padding:10px 12px; }
 
-/* ── M2 DIRECTION BOX ── */
+/* -- M2 DIRECTION BOX -- */
 .dir-box { margin:8px 0; padding:12px; border-radius:2px; text-align:center;
            font-family:'Orbitron',monospace; font-size:20px; font-weight:900; letter-spacing:4px;
            transition:all .3s; }
@@ -1476,14 +1476,14 @@ body::before { content:''; position:fixed; inset:0; background:
 .dir-short { background:linear-gradient(135deg,rgba(255,51,85,0.08),rgba(200,0,40,0.04));
              border:1px solid var(--red); color:var(--red); text-shadow:0 0 15px rgba(255,51,85,0.5); }
 
-/* ── MINI STATS ROW ── */
+/* -- MINI STATS ROW -- */
 .stat-row { display:flex; flex-wrap:wrap; gap:10px; font-size:11px; padding:6px 0; border-bottom:1px solid var(--border); }
 .stat-row:last-child { border-bottom:none; }
 .stat-item { display:flex; gap:4px; align-items:center; }
 .stat-lbl { color:var(--dim); }
 .stat-val { font-weight:700; }
 
-/* ── ORACOLO TABLE ── */
+/* -- ORACOLO TABLE -- */
 .oracolo-table { width:100%; border-collapse:collapse; font-size:10px; }
 .oracolo-table th { color:var(--dim); font-size:9px; letter-spacing:1px; padding:4px 6px;
                     text-transform:uppercase; border-bottom:1px solid var(--border); text-align:left; }
@@ -1491,7 +1491,7 @@ body::before { content:''; position:fixed; inset:0; background:
 .oracolo-table tr:hover td { background:rgba(255,255,255,0.02); }
 .wr-bar { display:inline-block; height:3px; border-radius:1px; vertical-align:middle; margin-left:4px; }
 
-/* ── IA CAPSULE ── */
+/* -- IA CAPSULE -- */
 .capsule-item { padding:5px 8px; margin-bottom:4px; border-radius:1px; font-size:10px;
                 display:flex; justify-content:space-between; align-items:center; }
 .cap-l2-blk  { background:rgba(255,51,85,0.08);   border-left:2px solid var(--red); }
@@ -1501,14 +1501,14 @@ body::before { content:''; position:fixed; inset:0; background:
 .cap-l3-opp  { background:rgba(0,170,255,0.08);   border-left:2px solid var(--blue); }
 .ttl-bar { font-size:9px; color:var(--dim); }
 
-/* ── LOG FEED ── */
+/* -- LOG FEED -- */
 .log-feed { font-size:10px; line-height:1.9; max-height:180px; overflow-y:auto;
             scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
 .log-feed::-webkit-scrollbar { width:3px; }
 .log-feed::-webkit-scrollbar-thumb { background:var(--border); }
 .log-line { padding:1px 0; border-bottom:1px solid rgba(255,255,255,0.02); }
 
-/* ── PHANTOM ── */
+/* -- PHANTOM -- */
 .phantom-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-bottom:8px; }
 .ph-kpi { background:var(--bg3); padding:8px; border-radius:1px; text-align:center; }
 .ph-kpi-lbl { font-size:9px; color:var(--dim); }
@@ -1519,7 +1519,7 @@ body::before { content:''; position:fixed; inset:0; background:
 .verdict-red    { background:rgba(255,51,85,0.08);  border:1px solid var(--red);   color:var(--red); }
 .verdict-yellow { background:rgba(255,215,0,0.08);  border:1px solid var(--yellow); color:var(--yellow); }
 
-/* ── TRADES TABLE ── */
+/* -- TRADES TABLE -- */
 .trade-tbl { width:100%; border-collapse:collapse; font-size:10px; }
 .trade-tbl th { color:var(--dim); font-size:9px; letter-spacing:1px; padding:5px 6px;
                 border-bottom:1px solid var(--border); text-align:left; text-transform:uppercase; }
@@ -1528,7 +1528,7 @@ body::before { content:''; position:fixed; inset:0; background:
 .pnl-pos { color:var(--green); font-weight:700; }
 .pnl-neg { color:var(--red); font-weight:700; }
 
-/* ── CONTROLS ── */
+/* -- CONTROLS -- */
 .controls { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
 .btn { background:transparent; border:1px solid var(--green); color:var(--green); padding:7px 14px;
        border-radius:2px; cursor:pointer; font-family:'Share Tech Mono',monospace; font-size:11px;
@@ -1537,7 +1537,7 @@ body::before { content:''; position:fixed; inset:0; background:
 .btn-red   { border-color:var(--red); color:var(--red); }
 .btn-red:hover { background:rgba(255,51,85,0.1); }
 
-/* ── REGIME INDICATOR ── */
+/* -- REGIME INDICATOR -- */
 .regime-badge { display:inline-block; padding:2px 8px; border-radius:1px; font-size:10px;
                 font-weight:700; letter-spacing:1px; }
 .regime-trending-bull  { background:rgba(0,255,136,0.12); color:var(--green); border:1px solid var(--green2); }
@@ -1545,15 +1545,15 @@ body::before { content:''; position:fixed; inset:0; background:
 .regime-explosive      { background:rgba(255,215,0,0.12);  color:var(--yellow); border:1px solid var(--yellow); }
 .regime-ranging        { background:rgba(0,170,255,0.12);  color:var(--blue);   border:1px solid var(--blue); }
 
-/* ── DRIFT INDICATOR ── */
+/* -- DRIFT INDICATOR -- */
 .drift-bar-wrap { height:4px; background:var(--bg3); border-radius:2px; overflow:hidden; margin-top:4px; }
 .drift-bar-fill { height:100%; border-radius:2px; transition:width .5s,background .5s; }
 
-/* ── SPARKLINE AREA ── */
+/* -- SPARKLINE AREA -- */
 .sparkline-wrap { height:40px; margin-top:6px; position:relative; }
 canvas.spark { width:100%; height:40px; }
 
-/* ── SECTION SEPARATOR ── */
+/* -- SECTION SEPARATOR -- */
 .sep { height:1px; background:linear-gradient(90deg,transparent,var(--border),transparent); margin:10px 0; }
 </style>
 </head>
@@ -1562,12 +1562,12 @@ canvas.spark { width:100%; height:40px; }
 
   <!-- HEADER -->
   <div class="hdr">
-    <div class="hdr-title">⚡ MISSION CONTROL V6.0</div>
+    <div class="hdr-title"> MISSION CONTROL V6.0</div>
     <div class="hdr-right">
       <span><span class="status-dot" id="status-dot"></span><span id="status-txt" style="font-size:11px">OFFLINE</span></span>
       <span id="mode-badge" class="badge badge-paper">PAPER</span>
-      <a href="/supervisor" style="background:rgba(139,92,246,0.3); border:1px solid rgba(139,92,246,0.6); color:#a78bfa; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; letter-spacing:1px;">⚡ COMMAND CENTER</a>
-      <a href="/health" style="background:rgba(0,201,122,0.15); border:1px solid rgba(0,201,122,0.4); color:#00c97a; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; letter-spacing:1px;">🩺 HEALTH</a>
+      <a href="/supervisor" style="background:rgba(139,92,246,0.3); border:1px solid rgba(139,92,246,0.6); color:#a78bfa; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; letter-spacing:1px;"> COMMAND CENTER</a>
+      <a href="/health" style="background:rgba(0,201,122,0.15); border:1px solid rgba(0,201,122,0.4); color:#00c97a; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; letter-spacing:1px;"> HEALTH</a>
       <span style="font-size:10px; color:var(--dim)" id="last-seen">--</span>
     </div>
   </div>
@@ -1579,9 +1579,9 @@ canvas.spark { width:100%; height:40px; }
   <div class="ticker">
     <span class="price-big" id="btc-price">--</span>
     <span style="color:var(--dim)">BTC/USDC</span>
-    <span>⚡ <span id="tick-n" style="color:var(--yellow)">0</span></span>
-    <span>🕐 <span id="last-tick" style="color:var(--dim)">--</span></span>
-    <span id="trade-status-txt" style="color:var(--dim)">🔍 Analizzando...</span>
+    <span> <span id="tick-n" style="color:var(--yellow)">0</span></span>
+    <span> <span id="last-tick" style="color:var(--dim)">--</span></span>
+    <span id="trade-status-txt" style="color:var(--dim)"> Analizzando...</span>
     <span style="margin-left:auto; font-size:10px;" id="regime-badge-ticker"></span>
   </div>
 
@@ -1633,11 +1633,11 @@ canvas.spark { width:100%; height:40px; }
 
     <!-- M2 CAMPO GRAVITAZIONALE -->
     <div class="panel">
-      <div class="panel-head blue">🎯 MOTORE 2 — CAMPO GRAVITAZIONALE
+      <div class="panel-head blue"> MOTORE 2 - CAMPO GRAVITAZIONALE
         <span id="m2-shadow-badge" style="font-size:9px; color:var(--dim)">shadow chiuso</span>
       </div>
       <div class="panel-body">
-        <div class="dir-box dir-long" id="dir-box"><span id="dir-txt">⏳ ATTESA</span></div>
+        <div class="dir-box dir-long" id="dir-box"><span id="dir-txt"> ATTESA</span></div>
         <div class="stat-row">
           <div class="stat-item"><span class="stat-lbl">WR</span><span class="stat-val" id="m2-wr-detail">0%</span></div>
           <div class="stat-item"><span class="stat-lbl">PnL</span><span class="stat-val" id="m2-pnl-detail">$0</span></div>
@@ -1659,11 +1659,11 @@ canvas.spark { width:100%; height:40px; }
 
     <!-- ORACOLO DINAMICO -->
     <div class="panel">
-      <div class="panel-head purple">🔮 ORACOLO DINAMICO — Fingerprint Memory</div>
+      <div class="panel-head purple"> ORACOLO DINAMICO - Fingerprint Memory</div>
       <div class="panel-body">
         <div style="font-size:9px; color:var(--dim); margin-bottom:6px;">
-          Fingerprint = (momentum × volatilità × trend × direction). WR pesato con decay 0.95.
-          🟢 ≥60% vincente  🟡 45-60% neutro  🔴 &lt;45% tossico
+          Fingerprint = (momentum x volatilita x trend x direction). WR pesato con decay 0.95.
+           &gt;=60% vincente   45-60% neutro   &lt;45% tossico
         </div>
         <table class="oracolo-table" id="oracolo-tbl">
           <thead>
@@ -1692,7 +1692,7 @@ canvas.spark { width:100%; height:40px; }
 
     <!-- INTELLIGENZA AUTONOMA -->
     <div class="panel">
-      <div class="panel-head orange">🧠 INTELLIGENZA AUTONOMA — Capsule Vive
+      <div class="panel-head orange"> INTELLIGENZA AUTONOMA - Capsule Vive
         <span id="ia-gen-count" style="font-size:9px; color:var(--dim)">gen: 0 / exp: 0</span>
       </div>
       <div class="panel-body">
@@ -1715,39 +1715,39 @@ canvas.spark { width:100%; height:40px; }
     <!-- LATENCY TRACKER -->
     <div class="panel" id="latency-panel" style="margin-bottom:10px;">
       <div class="panel-head" id="latency-head" style="background:linear-gradient(90deg,#0a1628,#0d1f3c);border-left:3px solid var(--green);">
-        ⏱ LATENCY TRACKER — Slippage decisione→esecuzione
+         LATENCY TRACKER - Slippage decisione-&gt;esecuzione
         <span id="latency-verdetto" style="float:right;font-size:9px;color:var(--green)">IN ATTESA DATI</span>
       </div>
       <div class="panel-body">
         <div style="font-size:9px;color:var(--dim);margin-bottom:8px">
-          Misura il costo della latenza Render. Quando slippage EXPLOSIVE > 0.05% → serve VPS Frankfurt (€6/mese).
+          Misura il costo della latenza Render. Quando slippage EXPLOSIVE > 0.05% -&gt; serve VPS Frankfurt (EUR6/mese).
         </div>
         <!-- KPI principali -->
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px">
           <div style="background:#0a1628;border-radius:4px;padding:6px;text-align:center">
             <div style="font-size:9px;color:var(--dim)">SLIP MEDIO</div>
-            <div id="lat-slip-medio" style="font-size:16px;font-weight:bold;color:var(--green)">—</div>
+            <div id="lat-slip-medio" style="font-size:16px;font-weight:bold;color:var(--green)">-</div>
             <div style="font-size:8px;color:var(--dim)">tutti i trade</div>
           </div>
           <div style="background:#0a1628;border-radius:4px;padding:6px;text-align:center">
             <div style="font-size:9px;color:var(--dim)">SLIP EXPLOSIVE</div>
-            <div id="lat-slip-exp" style="font-size:16px;font-weight:bold;color:var(--green)">—</div>
+            <div id="lat-slip-exp" style="font-size:16px;font-weight:bold;color:var(--green)">-</div>
             <div style="font-size:8px;color:var(--dim)">contesto critico</div>
           </div>
           <div style="background:#0a1628;border-radius:4px;padding:6px;text-align:center">
             <div style="font-size:9px;color:var(--dim)">COSTO USD</div>
-            <div id="lat-costo" style="font-size:16px;font-weight:bold;color:var(--orange)">—</div>
+            <div id="lat-costo" style="font-size:16px;font-weight:bold;color:var(--orange)">-</div>
             <div style="font-size:8px;color:var(--dim)">perso per latenza</div>
           </div>
           <div style="background:#0a1628;border-radius:4px;padding:6px;text-align:center">
             <div style="font-size:9px;color:var(--dim)">COSTO EXPLOSIVE</div>
-            <div id="lat-costo-exp" style="font-size:16px;font-weight:bold;color:var(--orange)">—</div>
-            <div style="font-size:8px;color:var(--dim)">dove conta di più</div>
+            <div id="lat-costo-exp" style="font-size:16px;font-weight:bold;color:var(--orange)">-</div>
+            <div style="font-size:8px;color:var(--dim)">dove conta di piu</div>
           </div>
         </div>
         <!-- Barra allarme VPS -->
         <div id="lat-allarme-bar" style="display:none;background:#ff3355;color:#fff;font-size:10px;font-weight:bold;padding:8px 12px;border-radius:4px;text-align:center;margin-bottom:8px;letter-spacing:1px;animation:pulse 1s infinite">
-          🔴 SLIPPAGE CRITICO — SERVE VPS FRANKFURT — €6/MESE RISOLVE IL PROBLEMA
+           SLIPPAGE CRITICO - SERVE VPS FRANKFURT - EUR6/MESE RISOLVE IL PROBLEMA
         </div>
         <!-- Storia ultimi eventi -->
         <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:4px">ULTIMI EVENTI LATENZA</div>
@@ -1755,22 +1755,22 @@ canvas.spark { width:100%; height:40px; }
       </div>
     </div>
 
-    <!-- NARRATORE AI — Dialogo tra due AI -->
+    <!-- NARRATORE AI - Dialogo tra due AI -->
     <div class="panel" style="margin-bottom:10px;border-color:#a855f7;border-width:2px;" id="narratore-panel">
       <div class="panel-head" style="background:linear-gradient(90deg,#1a0a2e,#2d1060);border-left:3px solid #a855f7;color:#a855f7;">
-        🎭 NARRATORE AI — Dialogo tra due intelligenze
+         NARRATORE AI - Dialogo tra due intelligenze
         <span id="narratore-ts" style="float:right;font-size:9px;color:#6b21a8">--:--</span>
       </div>
       <div id="narratore-capsula-bar" style="display:none;padding:6px 12px;background:#1a0a2e;border-bottom:1px solid #3b0764;font-size:10px;font-family:monospace;">
-        <span style="color:#a855f7">💊 ULTIMA CAPSULA:</span>
+        <span style="color:#a855f7"> ULTIMA CAPSULA:</span>
         <span id="narratore-cap-id" style="color:#c4b5fd;margin-left:6px;font-weight:bold"></span>
         <span id="narratore-cap-forza" style="color:#7c3aed;margin-left:8px"></span>
         <span id="narratore-cap-ts" style="color:#4c1d95;margin-left:8px;float:right"></span>
         <div id="narratore-cap-motivo" style="color:#6b21a8;margin-top:2px;font-size:9px"></div>
       </div>
-      <!-- Pannello diagnostica canale Narratore→Bot -->
+      <!-- Pannello diagnostica canale Narratore-&gt;Bot -->
       <div id="narratore-diag" style="padding:6px 12px;background:#0d0519;border-bottom:1px solid #2d1060;font-size:10px;font-family:monospace;">
-        <span style="color:#6b21a8;letter-spacing:1px;font-size:9px">📡 CANALE NARRATORE→BOT</span>
+        <span style="color:#6b21a8;letter-spacing:1px;font-size:9px"> CANALE NARRATORE-&gt;BOT</span>
         <span id="nd-iniettate" style="color:#00d97a;margin-left:12px">iniettate: 0</span>
         <span id="nd-bloccate" style="color:#f59e0b;margin-left:12px">bloccate: 0</span>
         <span id="nd-ultima" style="color:#4c1d95;margin-left:12px">ultima: mai</span>
@@ -1786,8 +1786,8 @@ canvas.spark { width:100%; height:40px; }
     <!-- V16 MOTORI -->
     <div class="panel">
       <div class="panel-head" style="background:linear-gradient(90deg,#0a1628,#0d1f3c);border-left:3px solid var(--green)">
-        🏎️ V16 — ASSETTO MERCATO
-        <span id="v16-comparto-nome" style="float:right;font-size:10px;color:var(--green)">—</span>
+         V16 - ASSETTO MERCATO
+        <span id="v16-comparto-nome" style="float:right;font-size:10px;color:var(--green)">-</span>
       </div>
       <div class="panel-body">
         <!-- COMPARTO -->
@@ -1799,15 +1799,15 @@ canvas.spark { width:100%; height:40px; }
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
           <div class="stat-item">
             <span class="stat-lbl">GOMME</span>
-            <span class="stat-val" id="v16-gomme" style="font-size:14px">—</span>
+            <span class="stat-val" id="v16-gomme" style="font-size:14px">-</span>
           </div>
           <div class="stat-item">
             <span class="stat-lbl">NERVOSISMO</span>
-            <span class="stat-val" id="v16-nerv" style="font-size:14px">—</span>
+            <span class="stat-val" id="v16-nerv" style="font-size:14px">-</span>
           </div>
           <div class="stat-item">
             <span class="stat-lbl">BREATH FASE</span>
-            <span class="stat-val" id="v16-breath" style="font-size:14px">—</span>
+            <span class="stat-val" id="v16-breath" style="font-size:14px">-</span>
           </div>
         </div>
         <!-- BARRA NERVOSISMO -->
@@ -1832,7 +1832,7 @@ canvas.spark { width:100%; height:40px; }
     <!-- PHANTOM SUPERVISOR -->
     <div class="panel">
       <div class="panel-head" style="background:linear-gradient(90deg,#0a1628,#0d1f3c);border-left:3px solid var(--orange)">
-        🧠 PHANTOM SUPERVISOR — Autocorrezione
+         PHANTOM SUPERVISOR - Autocorrezione
         <span id="v16-sup-interventi" style="float:right;font-size:9px;color:var(--orange)">0 interventi</span>
       </div>
       <div class="panel-body">
@@ -1848,7 +1848,7 @@ canvas.spark { width:100%; height:40px; }
 
 <!-- PHANTOM TRACKER -->
     <div class="panel">
-      <div class="panel-head yellow">👻 PHANTOM — Se avessi fatto...
+      <div class="panel-head yellow"> PHANTOM - Se avessi fatto...
         <span style="font-size:9px; color:var(--dim)">Zavorra o Protezione?</span>
       </div>
       <div class="panel-body">
@@ -1858,23 +1858,23 @@ canvas.spark { width:100%; height:40px; }
             <div class="ph-kpi-val" id="ph-tot" style="color:var(--yellow)">0</div>
           </div>
           <div class="ph-kpi">
-            <div class="ph-kpi-lbl">🛡️ PROTETTI</div>
+            <div class="ph-kpi-lbl"> PROTETTI</div>
             <div class="ph-kpi-val" id="ph-prot" style="color:var(--green)">0</div>
           </div>
           <div class="ph-kpi">
-            <div class="ph-kpi-lbl">⚠️ MANCATI</div>
+            <div class="ph-kpi-lbl"> MANCATI</div>
             <div class="ph-kpi-val" id="ph-zav" style="color:var(--red)">0</div>
           </div>
           <div class="ph-kpi">
-            <div class="ph-kpi-lbl">💰 SALVATI</div>
+            <div class="ph-kpi-lbl"> SALVATI</div>
             <div class="ph-kpi-val" id="ph-saved" style="color:var(--green)">$0</div>
           </div>
           <div class="ph-kpi">
-            <div class="ph-kpi-lbl">💸 PERSI</div>
+            <div class="ph-kpi-lbl"> PERSI</div>
             <div class="ph-kpi-val" id="ph-miss" style="color:var(--red)">$0</div>
           </div>
           <div class="ph-kpi">
-            <div class="ph-kpi-lbl">⚖️ BILANCIO</div>
+            <div class="ph-kpi-lbl"> BILANCIO</div>
             <div class="ph-kpi-val" id="ph-bil">$0</div>
           </div>
         </div>
@@ -1885,22 +1885,22 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
-  <!-- AI BRIDGE — IL GENERALE -->
+  <!-- AI BRIDGE - IL GENERALE -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--purple); border-width:2px;">
-    <div class="panel-head purple" style="font-size:11px;">🌉 IL GENERALE — AI BRIDGE
-      <span id="bridge-ts" style="font-size:9px; color:var(--dim)">—</span>
+    <div class="panel-head purple" style="font-size:11px;"> IL GENERALE - AI BRIDGE
+      <span id="bridge-ts" style="font-size:9px; color:var(--dim)">-</span>
     </div>
     <div class="panel-body">
       <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
         <div id="bridge-mercato-badge" style="font-family:'Orbitron',monospace; font-size:12px; font-weight:700;
              padding:5px 14px; border-radius:2px; letter-spacing:2px; border:1px solid var(--dim); color:var(--dim)">
-          — MERCATO —
+          - MERCATO -
         </div>
         <div id="bridge-alert-badge" style="font-size:10px; padding:3px 10px; border-radius:2px;
-             border:1px solid var(--dim); color:var(--dim)">● ATTESA</div>
-        <div style="font-size:9px; color:var(--dim)">ultima analisi: <span id="bridge-last-ts">—</span></div>
+             border:1px solid var(--dim); color:var(--dim)">* ATTESA</div>
+        <div style="font-size:9px; color:var(--dim)">ultima analisi: <span id="bridge-last-ts">-</span></div>
         <div style="margin-left:auto; font-size:9px; color:var(--dim)">
-          <span id="bridge-active-dot">⚫</span> <span id="bridge-active-txt">offline</span>
+          <span id="bridge-active-dot">o</span> <span id="bridge-active-txt">offline</span>
           &nbsp;|&nbsp; err: <span id="bridge-errors">0</span>
         </div>
       </div>
@@ -1910,40 +1910,40 @@ canvas.spark { width:100%; height:40px; }
           <div id="bridge-analisi" style="font-size:11px; color:var(--text); line-height:1.5">In attesa...</div>
         </div>
         <div style="background:rgba(0,255,136,0.04); border-left:3px solid var(--green); padding:8px 12px; border-radius:1px;">
-          <div style="font-size:9px; color:var(--green); margin-bottom:3px; letter-spacing:1px">🎯 PROSSIMO SETUP</div>
-          <div id="bridge-prossimo" style="font-size:11px; color:var(--text); line-height:1.5">—</div>
+          <div style="font-size:9px; color:var(--green); margin-bottom:3px; letter-spacing:1px"> PROSSIMO SETUP</div>
+          <div id="bridge-prossimo" style="font-size:11px; color:var(--text); line-height:1.5">-</div>
         </div>
       </div>
       <div id="bridge-note-box" style="background:rgba(255,215,0,0.04); border-left:3px solid var(--yellow);
            padding:6px 12px; margin-bottom:8px; border-radius:1px; display:none;">
-        <div style="font-size:9px; color:var(--yellow); margin-bottom:2px;">📝 NOTA PER TE</div>
-        <div id="bridge-note" style="font-size:11px; color:var(--text)">—</div>
+        <div style="font-size:9px; color:var(--yellow); margin-bottom:2px;"> NOTA PER TE</div>
+        <div id="bridge-note" style="font-size:11px; color:var(--text)">-</div>
       </div>
       <div class="log-feed" id="bridge-log" style="max-height:100px; font-size:10px;">Bridge non ancora attivo...</div>
     </div>
   </div>
 
-  <!-- GRAFICO LIVE — PREZZO + SEGNALI -->
+  <!-- GRAFICO LIVE - PREZZO + SEGNALI -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--green); border-width:2px;">
-    <div class="panel-head green">📈 GRAFICO LIVE — BTC/USDC
-      <span id="chart-info" style="font-size:9px; color:var(--dim)">ultimi 120 tick · 30s window</span>
+    <div class="panel-head green"> GRAFICO LIVE - BTC/USDC
+      <span id="chart-info" style="font-size:9px; color:var(--dim)">ultimi 120 tick . 30s window</span>
     </div>
     <div class="panel-body" style="padding:8px;">
       <canvas id="priceChart" style="width:100%; height:220px; display:block;"></canvas>
       <div style="display:flex; gap:16px; margin-top:6px; font-size:9px; color:var(--dim); flex-wrap:wrap;">
-        <span><span style="color:var(--green)">━</span> Prezzo</span>
-        <span><span style="color:var(--yellow); font-size:11px">◆</span> Segnale (score≥soglia)</span>
-        <span><span style="color:var(--green); font-size:12px">▲</span> Entry LONG</span>
-        <span><span style="color:var(--red); font-size:12px">▼</span> Entry SHORT</span>
-        <span><span style="color:#888; font-size:11px">✕</span> Exit</span>
+        <span><span style="color:var(--green)">-</span> Prezzo</span>
+        <span><span style="color:var(--yellow); font-size:11px">*</span> Segnale (score&gt;=soglia)</span>
+        <span><span style="color:var(--green); font-size:12px">^</span> Entry LONG</span>
+        <span><span style="color:var(--red); font-size:12px">v</span> Entry SHORT</span>
+        <span><span style="color:#888; font-size:11px">x</span> Exit</span>
         <span id="chart-score-live" style="margin-left:auto; color:var(--text)"></span>
       </div>
     </div>
   </div>
 
-  <!-- SUPERCERVELLO — DUE LINEE: MERCATO vs PREDIZIONE -->
+  <!-- SUPERCERVELLO - DUE LINEE: MERCATO vs PREDIZIONE -->
   <div class="panel" style="margin-bottom:10px; border-color:#aa44ff; border-width:2px;">
-    <div class="panel-head" style="color:#aa44ff;">🧠 SUPERCERVELLO — Mercato vs Predizione
+    <div class="panel-head" style="color:#aa44ff;"> SUPERCERVELLO - Mercato vs Predizione
       <span id="sc-updated" style="font-size:9px; color:var(--dim)">in attesa dati...</span>
     </div>
     <div class="panel-body" style="padding:8px;">
@@ -1955,16 +1955,16 @@ canvas.spark { width:100%; height:40px; }
           <div id="sc-stato" style="font-size:14px;font-weight:500;color:var(--yellow)">ATTESA</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
-          <div style="font-size:9px;color:var(--dim)">⬆ LONG</div>
+          <div style="font-size:9px;color:var(--dim)"> LONG</div>
           <div id="sc-carica" style="font-size:14px;font-weight:500;">0.00</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
-          <div style="font-size:9px;color:var(--dim)">⬇ SHORT</div>
+          <div style="font-size:9px;color:var(--dim)"> SHORT</div>
           <div id="sc-carica-short" style="font-size:14px;font-weight:500;">0.00</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">WR REALE</div>
-          <div id="sc-wr" style="font-size:14px;font-weight:500;color:var(--green)">—</div>
+          <div id="sc-wr" style="font-size:14px;font-weight:500;color:var(--green)">-</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">P&L</div>
@@ -1972,22 +1972,22 @@ canvas.spark { width:100%; height:40px; }
         </div>
       </div>
 
-      <!-- Grafico due linee — canvas puro -->
+      <!-- Grafico due linee - canvas puro -->
       <canvas id="scChart" style="width:100%;height:180px;display:block;"></canvas>
 
       <!-- Legenda -->
       <div style="display:flex;gap:12px;margin-top:6px;font-size:9px;color:var(--dim);flex-wrap:wrap;">
-        <span><span style="color:#378ADD">━</span> Mercato reale</span>
-        <span><span style="color:#639922">╌</span> Predizione SC</span>
-        <span><span style="color:#639922;font-size:11px">▲</span> BUY</span>
-        <span><span style="color:#E24B4A;font-size:11px">▼</span> SELL loss</span>
-        <span><span style="color:#639922;font-size:11px">✓</span> SELL win</span>
-        <span><span style="color:#EF9F27;font-size:11px">◆</span> BLOCCA</span>
+        <span><span style="color:#378ADD">-</span> Mercato reale</span>
+        <span><span style="color:#639922"></span> Predizione SC</span>
+        <span><span style="color:#639922;font-size:11px">^</span> BUY</span>
+        <span><span style="color:#E24B4A;font-size:11px">v</span> SELL loss</span>
+        <span><span style="color:#639922;font-size:11px"></span> SELL win</span>
+        <span><span style="color:#EF9F27;font-size:11px">*</span> BLOCCA</span>
       </div>
 
       <!-- Carica bar -->
       <div style="margin-top:8px;">
-        <div style="font-size:9px;color:var(--dim);margin-bottom:2px;">Carica SC (0→1)</div>
+        <div style="font-size:9px;color:var(--dim);margin-bottom:2px;">Carica SC (0-&gt;1)</div>
         <canvas id="scCaricaChart" style="width:100%;height:50px;display:block;"></canvas>
       </div>
 
@@ -1995,28 +1995,28 @@ canvas.spark { width:100%; height:40px; }
       <div style="margin-top:8px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;">
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">SCOSTAMENTO</div>
-          <div id="pred-scost" style="font-size:14px;font-weight:500;color:var(--yellow)">—</div>
+          <div id="pred-scost" style="font-size:14px;font-weight:500;color:var(--yellow)">-</div>
           <div style="font-size:8px;color:var(--dim)">$ medio</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">CONFERMATE</div>
-          <div id="pred-conf" style="font-size:14px;font-weight:500;color:var(--green)">—</div>
+          <div id="pred-conf" style="font-size:14px;font-weight:500;color:var(--green)">-</div>
           <div style="font-size:8px;color:var(--dim)">su totale</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">SCORE PRED.</div>
-          <div id="pred-score" style="font-size:14px;font-weight:500;">—</div>
+          <div id="pred-score" style="font-size:14px;font-weight:500;">-</div>
           <div style="font-size:8px;color:var(--dim)">% corrette</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;grid-column:span 3;">
-          <div style="font-size:9px;color:var(--dim)">PRED → TRADE → PnL</div>
-          <div id="pred-trade" style="font-size:14px;font-weight:500;">—</div>
+          <div style="font-size:9px;color:var(--dim)">PRED -&gt; TRADE -&gt; PnL</div>
+          <div id="pred-trade" style="font-size:14px;font-weight:500;">-</div>
           <div style="font-size:8px;color:var(--dim)">trade da predizione / PnL cumulativo</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;grid-column:span 3;border:1px solid rgba(100,200,100,0.2);">
           <div style="font-size:9px;color:var(--dim)">CALIBRAZIONE MAGNITUDINE</div>
-          <div id="pred-ratio" style="font-size:18px;font-weight:500;">—</div>
-          <div style="font-size:8px;color:var(--dim)">100% = perfetto · &lt;100% troppo aggressiva · &gt;100% troppo conservativa</div>
+          <div id="pred-ratio" style="font-size:18px;font-weight:500;">-</div>
+          <div style="font-size:8px;color:var(--dim)">100% = perfetto . &lt;100% troppo aggressiva . &gt;100% troppo conservativa</div>
         </div>
       </div>
 
@@ -2037,14 +2037,14 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
-  <!-- VERITAS TRACKER — CHI AVEVA RAGIONE -->
+  <!-- VERITAS TRACKER - CHI AVEVA RAGIONE -->
   <div class="panel" style="margin-bottom:10px; border-color:#ff8800; border-width:2px;">
-    <div class="panel-head" style="color:#ff8800;">⚖️ VERITAS — Chi aveva ragione?
+    <div class="panel-head" style="color:#ff8800;"> VERITAS - Chi aveva ragione?
       <span id="vt-counts" style="font-size:9px; color:var(--dim)">in attesa segnali...</span>
     </div>
     <div class="panel-body">
       <div style="font-size:9px; color:var(--dim); margin-bottom:8px;">
-        Ogni decisione SC viene verificata 60s dopo. La verità emerge dai dati reali.
+        Ogni decisione SC viene verificata 60s dopo. La verita emerge dai dati reali.
       </div>
 
       <!-- Conflitto principale -->
@@ -2066,21 +2066,21 @@ canvas.spark { width:100%; height:40px; }
         </thead>
         <tbody id="vt-body">
           <tr><td colspan="6" style="color:var(--dim);text-align:center;padding:16px">
-            In attesa... (serve score ≥ soglia con decisione SC)
+            In attesa... (serve score &gt;= soglia con decisione SC)
           </td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
-  <!-- SIGNAL TRACKER — MOTORE PREVISIONALE -->
+  <!-- SIGNAL TRACKER - MOTORE PREVISIONALE -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--blue); border-width:2px;">
-    <div class="panel-head blue">🔭 MOTORE PREVISIONALE — Signal Tracker
+    <div class="panel-head blue"> MOTORE PREVISIONALE - Signal Tracker
       <span id="st-counts" style="font-size:9px; color:var(--dim)">open:0 / chiusi:0</span>
     </div>
     <div class="panel-body">
       <div style="font-size:9px; color:var(--dim); margin-bottom:8px;">
-        Ogni volta che score ≥ soglia il sistema registra il segnale e misura il movimento reale
+        Ogni volta che score &gt;= soglia il sistema registra il segnale e misura il movimento reale
         nei successivi 30s/60s/120s. Dopo 50 segnali emerge la distribuzione previsionale.
       </div>
       <table style="width:100%; border-collapse:collapse; font-size:10px;" id="st-table">
@@ -2089,13 +2089,13 @@ canvas.spark { width:100%; height:40px; }
             <th style="color:var(--dim);padding:4px 6px;text-align:left;border-bottom:1px solid var(--border);font-size:9px;letter-spacing:1px">CONTESTO</th>
             <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px">N</th>
             <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px">HIT 60s</th>
-            <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px">Δ avg 60s</th>
+            <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px"> avg 60s</th>
             <th style="color:var(--dim);padding:4px 6px;text-align:center;border-bottom:1px solid var(--border);font-size:9px">PnL sim</th>
           </tr>
         </thead>
         <tbody id="st-body">
           <tr><td colspan="5" style="color:var(--dim);text-align:center;padding:16px">
-            In attesa segnali... (serve score ≥ soglia)
+            In attesa segnali... (serve score &gt;= soglia)
           </td></tr>
         </tbody>
       </table>
@@ -2103,14 +2103,14 @@ canvas.spark { width:100%; height:40px; }
   </div>
 
 
-  <!-- ECONOMIC EDGE — QUANDO PRENDO SOLDI -->
+  <!-- ECONOMIC EDGE - QUANDO PRENDO SOLDI -->
   <div class="panel" style="margin-bottom:10px; border-color:#00ff88; border-width:2px;">
-    <div class="panel-head" style="color:#00ff88;">💰 ECONOMIC EDGE — Quando prendo soldi veri?
+    <div class="panel-head" style="color:#00ff88;"> ECONOMIC EDGE - Quando prendo soldi veri?
       <span style="font-size:9px; color:var(--dim); margin-left:8px;">hit_economica = % casi che coprono le fee reali</span>
     </div>
     <div class="panel-body">
       <div style="font-size:9px; color:var(--dim); margin-bottom:8px;">
-        🟢 ≥50% = prendi soldi &nbsp;|&nbsp; 🟡 30-50% = vicino &nbsp;|&nbsp; 🔴 &lt;30% = sterile
+         &gt;=50% = prendi soldi &nbsp;|&nbsp;  30-50% = vicino &nbsp;|&nbsp;  &lt;30% = sterile
         &nbsp;|&nbsp; Fee simulata: $0.10 per trade
       </div>
       <div id="edge-body">
@@ -2124,28 +2124,28 @@ canvas.spark { width:100%; height:40px; }
   <!-- ROW 3: LOG DECISIONI + LIVE LOG M2 -->
   <div class="two-col">
     <div class="panel">
-      <div class="panel-head green">📋 DECISIONI BOT — Live Log</div>
+      <div class="panel-head green"> DECISIONI BOT - Live Log</div>
       <div class="panel-body">
         <div style="display:flex; flex-wrap:wrap; gap:8px; font-size:9px; margin-bottom:8px; color:var(--dim)">
-          <span style="color:var(--green)">🚀 ENTRY</span>
-          <span style="color:var(--green)">🟢 WIN</span>
-          <span style="color:var(--red)">🔴 LOSS</span>
-          <span>⚡ SEED</span>
-          <span style="color:#aa44ff">👻 FANTASMA</span>
-          <span style="color:var(--orange)">🚫 MEM</span>
-          <span style="color:var(--yellow)">💊 CAPSULE</span>
-          <span style="color:var(--red)">💔 DIVORZIO</span>
-          <span style="color:#aaaaff">🌙 SMORZ</span>
-          <span style="color:var(--blue)">🌉 BRIDGE</span>
-          <span style="color:var(--orange)">🧭 OC3</span>
-          <span style="color:var(--purple)">🛑 STOP</span>
+          <span style="color:var(--green)"> ENTRY</span>
+          <span style="color:var(--green)"> WIN</span>
+          <span style="color:var(--red)"> LOSS</span>
+          <span> SEED</span>
+          <span style="color:#aa44ff"> FANTASMA</span>
+          <span style="color:var(--orange)"> MEM</span>
+          <span style="color:var(--yellow)"> CAPSULE</span>
+          <span style="color:var(--red)"> DIVORZIO</span>
+          <span style="color:#aaaaff"> SMORZ</span>
+          <span style="color:var(--blue)"> BRIDGE</span>
+          <span style="color:var(--orange)"> OC3</span>
+          <span style="color:var(--purple)"> STOP</span>
         </div>
         <div class="log-feed" id="live-log" style="max-height:280px">In attesa...</div>
       </div>
     </div>
 
     <div class="panel">
-      <div class="panel-head blue">🎯 LOG M2 — Campo Gravitazionale</div>
+      <div class="panel-head blue"> LOG M2 - Campo Gravitazionale</div>
       <div class="panel-body">
         <div class="log-feed" id="m2-log-full" style="max-height:330px">In attesa M2...</div>
       </div>
@@ -2154,7 +2154,7 @@ canvas.spark { width:100%; height:40px; }
 
   <!-- ROW 4: TRADES TABLE -->
   <div class="panel" style="margin-bottom:10px">
-    <div class="panel-head green">📊 ULTIMI TRADE</div>
+    <div class="panel-head green"> ULTIMI TRADE</div>
     <div class="panel-body" style="overflow-x:auto">
       <table class="trade-tbl">
         <thead>
@@ -2170,9 +2170,9 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
-  <!-- ANALISI TRADE — Perché abbiamo vinto o perso -->
+  <!-- ANALISI TRADE - Perch abbiamo vinto o perso -->
   <div class="panel" style="margin-bottom:10px; border-color:#00aaff; border-width:2px;">
-    <div class="panel-head blue">🔬 ANALISI TRADE — Perché abbiamo vinto o perso?
+    <div class="panel-head blue"> ANALISI TRADE - Perch abbiamo vinto o perso?
       <span style="font-size:9px;color:var(--dim)">Analisi AI di ogni trade chiuso</span>
     </div>
     <div class="panel-body" id="trade-analisi-body">
@@ -2184,9 +2184,9 @@ canvas.spark { width:100%; height:40px; }
 
   <!-- CONTROLS + ALERTS -->
   <div class="controls">
-    <button class="btn" onclick="sendCmd('RESUME')">▶ RESUME</button>
-    <button class="btn btn-red" onclick="sendCmd('STOP')">■ STOP</button>
-    <button class="btn" onclick="sendCmd('RESET_LOSSES')">↺ RESET</button>
+    <button class="btn" onclick="sendCmd('RESUME')"> RESUME</button>
+    <button class="btn btn-red" onclick="sendCmd('STOP')"> STOP</button>
+    <button class="btn" onclick="sendCmd('RESET_LOSSES')"> RESET</button>
   </div>
   <div id="suggestions-box" style="font-size:11px; color:var(--dim); padding:6px 0;"></div>
 
