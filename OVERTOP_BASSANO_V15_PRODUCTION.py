@@ -7273,12 +7273,17 @@ class OvertopBassanoV15Production:
                               f"matrimonio={matrimonio_name}")
 
             # Telemetry
-            ctx = self._tele_ctx()
-            self.telemetry.log_trade_open(
-                trade_direction=self.campo._direction,
-                **{k: ctx[k] for k in ('regime','direction','open_position',
-                   'active_threshold','drift','macd','trend','volatility')}
-            )
+            try:
+                ctx = self._tele_ctx()
+                self.telemetry.log_trade_entry(
+                    trade_direction=self.campo._direction,
+                    score=score, soglia=soglia,
+                    matrimonio=matrimonio_name,
+                    **{k: ctx[k] for k in ('regime','direction','open_position',
+                       'active_threshold','drift','macd','trend','volatility')}
+                )
+            except Exception as _te:
+                log.debug(f"[TELEMETRY_OPEN] {_te}")
 
         except Exception as e:
             log.error(f"[OPEN_SHADOW_ERROR] {e}")
