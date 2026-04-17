@@ -922,6 +922,47 @@ CAPSULA CORRETTA quando vedi edge economico negativo:
 NON generare BLOCCA_CONTESTO per questo problema — il contesto non è tossico, è la soglia troppo bassa.
 La soglia più alta filtra i segnali deboli e lascia passare solo i movimenti abbastanza grandi da coprire le fee.
 
+CONOSCENZA OPERATIVA AVANZATA — LEGGILA TUTTA:
+
+GAP 0 — REGOLA ASSOLUTA: NESSUNA ENTRY NEI PRIMI 60 SECONDI DAL BOOT:
+Il sistema al boot è cieco — RSI buffer vuoto, Oracolo senza campioni reali, seed=0.
+Qualsiasi entry nei primi 60 secondi è una scommessa cieca senza nessuna base statistica.
+Se vedi tick_count < 60 o uptime_hours < 0.02 = genera BLOCCA_CONTESTO vita=120s su tutto.
+Questa è la regola più semplice e più importante — nessuna eccezione, nessun bypass FUOCO.
+
+GAP 3 — RIENTRO IMMEDIATO DOPO LOSS:
+Dopo EXIT_E15 o EXIT_E20 NON rientrare nello stesso contesto per tempo — aspetta che cambino le condizioni.
+Condizioni di sblocco: regime diventa EXPLOSIVE, OPPURE momentum passa da DEBOLE a FORTE, OPPURE OI carica > 0.85 con seed >= 20.
+Se vedi due trade consecutivi a < 2 minuti di distanza con stesso contesto e stessa perdita = genera BLOCCA_CONTESTO vita=600s.
+NON è una questione di timer — è una questione di condizioni cambiate.
+
+GAP 4 — VERITAS: QUANDO IL SC SBAGLIA SISTEMATICAMENTE:
+Se FUOCO|BLOCCA hit_rate > 60% SBAGLIATO su n > 200 = il SuperCervello blocca sistematicamente segnali vincenti.
+In questo caso genera ABBASSA_SOGLIA forte delta -10/-12 vita=600s.
+Se hit_rate > 70% SBAGLIATO = è una certezza statistica — il SC è calibrato male per questo regime.
+Questa è una delle capsule più potenti che puoi generare.
+
+GAP 5 — ORACOLO dur_win vs dur_loss:
+dur_win_avg >> dur_loss_avg = i trade vincenti durano molto più di quelli perdenti = segnale sano.
+dur_win_avg < 25s = il seme non sviluppa abbastanza energia = fee mangiano tutto.
+Se dur_win_avg per il contesto corrente < 25s = stesso problema del seme debole = ALZA_SOGLIA.
+
+GAP 7 — SESSIONE ORARIA:
+Europa (8-16 UTC) = sessione migliore per movimenti affidabili.
+USA (14-22 UTC) = alta volatilità, EXPLOSIVE frequenti ma anche falsi breakout.
+Se sono le 11-18 ora italiana e il mercato è in RANGING da più di 30 minuti = normale per questa sessione.
+NON forzare entry — aspetta EXPLOSIVE che arriverà con l'apertura USA.
+
+GAP 8 — CAPSULA DI SBLOCCO ATTIVO:
+Quando il sistema è bloccato da BLOCCA_CONTESTO ma le condizioni cambiano (regime→EXPLOSIVE, momentum→FORTE, OI carica > 0.90) genera una capsula ABBASSA_SOGLIA leggera delta -4 vita=120s per segnalare che le condizioni sono cambiate.
+Non aspettare che le capsule di blocco scadano — intervieni attivamente quando il mercato cambia.
+
+GAP 9 — CORRELAZIONE SCORE-DURATA:
+score < 35 = durata attesa < 20s = fee garantite = NON entrare mai
+score 35-42 = durata attesa 20-30s = borderline = solo in EXPLOSIVE
+score 43-48 = durata attesa 30-40s = accettabile in condizioni giuste
+score > 48 = durata attesa > 40s = trade di qualità = lascia passare
+
 QUANDO PASSARE AL LIVE:
 - WR > 55% su 200+ trade paper
 - PnL positivo su 7 giorni consecutivi
