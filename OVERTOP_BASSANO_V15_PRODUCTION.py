@@ -7296,10 +7296,18 @@ class OvertopBassanoV15Production:
                 "seed":          round(seed.get('score', 0), 3),
                 "ts_entry":      time.time(),
             }
-            self._shadow_entry_time = time.time()
-            self._shadow_max_price  = price
-            self._shadow_min_price  = price
-            self._shadow_matrimonio = matrimonio_name
+            self._shadow_entry_time        = time.time()
+            self._shadow_max_price         = price
+            self._shadow_min_price         = price
+            self._shadow_matrimonio        = matrimonio_name
+            # FIX CRITICO: setta contesto entry per Oracolo e divorzi
+            self._shadow_entry_momentum    = momentum
+            self._shadow_entry_volatility  = volatility
+            self._shadow_entry_trend       = trend
+            self._shadow_entry_fingerprint = fingerprint_wr
+
+
+
 
             self._m2_trades += 1
             self._log_m2("📈", f"SHADOW APERTA {self.campo._direction} "
@@ -7798,6 +7806,49 @@ class OvertopBassanoV15Production:
                 f"M2 shadow {self._shadow_matrimonio} | PnL=${pnl:+.4f} | {reason}",
                 {'pnl': pnl, 'is_win': is_win, 'reason': reason,
                  'score': self._shadow.get('score', 0), 'soglia': self._shadow.get('soglia', 0)})
+
+            # -- PASSA RISULTATO AL NARRATORE — impara dal dissanguamento ----
+            # Il Narratore riceve ogni trade chiuso con contesto completo.
+            # Questo rompe il secondo paradosso: il Ragionatore non può
+            # imparare se non vede i risultati reali delle sue capsule.
+            try:
+                _trade_result = {
+                    'ts':         datetime.utcnow().strftime('%H:%M:%S'),
+                    'pnl':        round(pnl, 2),
+                    'is_win':     is_win,
+                    'reason':     reason,
+                    'matrimonio': self._shadow_matrimonio,
+                    'momentum':   self._shadow_entry_momentum,
+                    'volatility': self._shadow_entry_volatility,
+                    'trend':      self._shadow_entry_trend,
+                    'regime':     self._regime_current,
+                    'score':      self._shadow.get('score', 0) if self._shadow else 0,
+                    'soglia':     self._shadow.get('soglia', 0) if self._shadow else 0,
+                    'direction':  entry_direction,
+                }
+                if self.heartbeat_data is not None:
+                    _storia = self.heartbeat_data.get('narratore_trade_storia', [])
+                    _storia.append(_trade_result)
+                    if len(_storia) > 20:
+                        _storia = _storia[-20:]
+                    self.heartbeat_data['narratore_trade_storia'] = _storia
+                    # Aggiorna anche stats aggregate per il Narratore
+                    _ns = self.heartbeat_data.get('narratore_trade_stats', {
+                        'n': 0, 'wins': 0, 'pnl_tot': 0.0,
+                        'last_context': '', 'consecutive_losses': 0
+                    })
+                    _ns['n'] += 1
+                    _ns['pnl_tot'] = round(_ns['pnl_tot'] + pnl, 2)
+                    if is_win:
+                        _ns['wins'] += 1
+                        _ns['consecutive_losses'] = 0
+                    else:
+                        _ns['consecutive_losses'] = _ns.get('consecutive_losses', 0) + 1
+                    _ns['last_context'] = f"{self._shadow_entry_momentum}|{self._shadow_entry_volatility}|{self._shadow_entry_trend}"
+                    _ns['wr'] = round(_ns['wins'] / _ns['n'], 3)
+                    self.heartbeat_data['narratore_trade_stats'] = _ns
+            except Exception as _nr_e:
+                log.debug(f"[NARRATORE_TRADE] {_nr_e}")
 
         except Exception as e:
             import traceback
