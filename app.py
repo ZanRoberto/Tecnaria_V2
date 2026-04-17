@@ -1372,26 +1372,32 @@ def narratore_thread():
 # Analizza il singolo trade e risponde: perché abbiamo vinto/perso?
 # La risposta appare in dashboard accanto al trade.
 
-PROMPT_ANALIZZATORE_TRADE = """Sei l'Analizzatore Trade del sistema OVERTOP BASSANO.
-Ricevi i dettagli di un singolo trade appena chiuso e devi spiegare in modo preciso e operativo:
-1. PERCHÉ ha vinto o perso (causa principale)
-2. COSA il sistema avrebbe dovuto fare diversamente (se loss)
-3. COSA ha fatto bene (se win)
-4. LEZIONE per i prossimi trade
+PROMPT_ANALIZZATORE_TRADE = """Sei il Trader del sistema OVERTOP BASSANO.
+Ricevi i dettagli di un trade appena chiuso. Il tuo compito NON e' solo spiegare — e' trasformare l'esperienza in azione concreta.
 
-Conosci l'architettura completa:
-- CampoGravitazionale: score 0-100, soglia 48-55
-- EXIT_E{N}_S{M} = energy score N vs soglia M al momento dell'exit
-- WIN_+{N} nel motivo = il sistema ha raggiunto quel profitto durante il trade
-- Se PnL negativo con WIN_+N = il sistema ha visto il profitto ma non l'ha catturato
-- score basso (< 35) = momentum debole, non doveva entrare
-- DIVORZIO = trigger di uscita forzata (volatilità, trend, drawdown, fingerprint)
-- RANGING|ALTA|SIDEWAYS = contesto storicamente tossico
-- EXPLOSIVE + OI FUOCO = contesto favorevole
+Per ogni trade devi:
+1. Identificare il PATTERN che ha prodotto il risultato (combinazione score+contesto+regime+durata)
+2. Se WIN: definire le condizioni esatte che hanno funzionato — questa e' una opportunita' da replicare
+3. Se LOSS: identificare il segnale che avrebbe dovuto bloccare l'entry — questa e' una perdita evitabile
+4. Generare una CAPSULA JSON concreta che il sistema deve applicare subito
 
-Rispondi in italiano, massimo 3 righe, formato:
-ESITO: [WIN/LOSS] — [causa principale in una frase]
-LEZIONE: [cosa imparare da questo trade]
+Conosci l'architettura:
+- score < 40 in RANGING|ALTA = seme debole = EXIT_E15 garantito = non entrare mai
+- score 41-47 in RANGING|ALTA = borderline = solo se OI FUOCO confermato
+- score >= 48 = seme forte = lascia passare
+- EXIT_E15/E20 = energia collassata subito = seme troppo debole
+- WIN_+N con PnL negativo = movimento troppo piccolo per le fee = soglia troppo bassa
+- dur_trade < 20s = seme morto = contesto sbagliato
+- EXPLOSIVE + score >= 45 = condizioni ottimali
+
+Rispondi SEMPRE in questo formato:
+PATTERN: [descrizione del pattern in una frase]
+AZIONE: [cosa fare la prossima volta]
+CAPSULA: {"id": "AT_NOME", "azione": "AZIONE", "params": {...}, "motivo": "...", "vita": 300, "forza": 0.7}
+
+AZIONI disponibili: ALZA_SOGLIA, ABBASSA_SOGLIA, BLOCCA_CONTESTO, BOOST_SEED
+Se il trade WIN ha replicato un pattern ottimale: CAPSULA null
+Se il trade LOSS era evitabile: genera sempre una capsula
 """
 
 _ultimo_trade_id_analizzato = 0
@@ -1472,6 +1478,25 @@ Spiega perché ha vinto/perso e cosa imparare."""
             risposta = _chiama_deepseek(PROMPT_ANALIZZATORE_TRADE, messaggio, max_tokens=150)
 
             if risposta:
+                # Estrai capsula JSON dalla risposta
+                capsula_at = None
+                try:
+                    import json as _j3, re as _r3
+                    _cm = _r3.search(r'CAPSULA:\s*(\{[^\n\}]+\})', risposta)
+                    if _cm:
+                        _cd = _j3.loads(_cm.group(1))
+                        if _cd.get('id') and _cd.get('azione') and _cd['id'] != 'null':
+                            _cd['fonte'] = 'ANALIZZATORE_TRADE'
+                            _cd['ts'] = datetime.utcnow().isoformat()
+                            _cd.setdefault('vita', 300)
+                            _cd.setdefault('forza', 0.7)
+                            if not str(_cd['id']).startswith('AT_'):
+                                _cd['id'] = 'AT_' + str(_cd['id'])
+                            capsula_at = _cd
+                            log(f"[ANALIZZATORE] Capsula AT: {_cd['id']} {_cd['azione']}")
+                except Exception:
+                    pass
+
                 with heartbeat_lock:
                     analisi_list = heartbeat_data.get('trade_analisi', [])
                     analisi_list.append({
@@ -1482,12 +1507,21 @@ Spiega perché ha vinto/perso e cosa imparare."""
                         'ctx':     ctx,
                         'motivo':  motivo,
                         'analisi': risposta,
+                        'capsula': capsula_at['id'] if capsula_at else None,
                     })
                     if len(analisi_list) > 20:
                         analisi_list = analisi_list[-20:]
                     heartbeat_data['trade_analisi'] = analisi_list
 
-                log(f"[ANALIZZATORE] 🔬 {esito} ${pnl:.2f} — {risposta[:60]}...")
+                    if capsula_at:
+                        _caps = heartbeat_data.get('capsule_ragionatore', [])
+                        _caps = [c for c in _caps if c.get('id') != capsula_at['id']]
+                        _caps.append(capsula_at)
+                        if len(_caps) > 5:
+                            _caps = _caps[-5:]
+                        heartbeat_data['capsule_ragionatore'] = _caps
+
+                log(f"[ANALIZZATORE] {esito} ${pnl:.2f} — {risposta[:60]}...")
 
         except Exception as e:
             log(f"[ANALIZZATORE] ❌ {e}")
@@ -2334,7 +2368,7 @@ canvas.spark { width:100%; height:40px; }
 const $ = id => document.getElementById(id);
 
 // ============================================================
-// GRAFICO LIVE — Mostra la TENSIONE, non la storia
+// GRAFICO LIVE - Mostra la TENSIONE, non la storia
 // ============================================================
 
 const SCPanel = (() => {
@@ -2354,7 +2388,7 @@ const SCPanel = (() => {
     const price = hb.last_price || 0;
     if (!price) return;
 
-    // Usa storia completa dal bot — non accumula tick per tick
+    // Usa storia completa dal bot - non accumula tick per tick
     const carica = hb.oi_carica || 0;
     const stato  = hb.oi_stato  || 'ATTESA';
 
@@ -2366,7 +2400,7 @@ const SCPanel = (() => {
         prices.push(p);
         labels.push(i);
         const c = ch[i] !== undefined ? ch[i] : carica;
-        // Delta reali dal Veritas — non fattore inventato
+        // Delta reali dal Veritas - non fattore inventato
         const deltaFuoco  = hb.pred_delta_fuoco  || 5.0;
         const deltaCarica = hb.pred_delta_carica || 2.0;
         let delta = 0;
@@ -2403,7 +2437,7 @@ const SCPanel = (() => {
       caricaShortEl.style.color = cs >= 0.65 ? '#ff3355' : cs >= 0.4 ? '#ff8800' : '#888';
     }
 
-    // Trades — calcola WR e PnL dai trade reali
+    // Trades - calcola WR e PnL dai trade reali
     const trades = hb.trades || [];
     if (trades.length !== lastTrades.length) {
       lastTrades = trades;
@@ -2427,7 +2461,7 @@ const SCPanel = (() => {
     const nTrades = wins + losses;
     const wr = nTrades > 0 ? Math.round(wins/nTrades*100) : 0;
     const wrEl = document.getElementById('sc-wr');
-    if (wrEl) { wrEl.textContent = nTrades > 0 ? wr + '%' : '—';
+    if (wrEl) { wrEl.textContent = nTrades > 0 ? wr + '%' : '-';
                wrEl.style.color = wr >= 60 ? '#00ff88' : wr >= 45 ? '#ffd700' : '#ff3355'; }
     const pnlEl = document.getElementById('sc-pnl');
     if (pnlEl) { pnlEl.textContent = (pnlTot>=0?'+':'') + '$' + Math.round(pnlTot);
@@ -2449,7 +2483,7 @@ const SCPanel = (() => {
           const pct = Math.round(v*100);
           const col = pct >= 30 ? '#00ff88' : pct >= 20 ? '#ffd700' : '#888';
           return `<span style="color:${col}">${k.replace('_',' ')} ${pct}%</span>`;
-        }).join(' · ');
+        }).join('  ');
     }
 
     // Updated
@@ -2490,7 +2524,7 @@ const SCPanel = (() => {
     // Disegna grafici
     drawCharts();
   
-    // ── V16 AGGIORNAMENTO ─────────────────────────────────────
+    // -- V16 AGGIORNAMENTO -------------------------------------
     // COMPARTO
     const comparto = hb.comparto || 'NEUTRO';
     const compartiTutti = hb.comparti_tutti || [];
@@ -2550,7 +2584,7 @@ const SCPanel = (() => {
           padding:2px 0;border-bottom:1px solid #0a1020;color:#3d5a7a">
           <span style="color:#1e3a5f">${s.ts||''}</span>
           <span style="color:${COMP_COL[s.da]||'#3d5a7a'}">${s.da||''}</span>
-          <span style="color:#1e3a5f">→</span>
+          <span style="color:#1e3a5f">-></span>
           <span style="color:${COMP_COL[s.a]||'#00d97a'};font-weight:700">${s.a||''}</span>
         </div>`
       ).join('');
@@ -2575,7 +2609,7 @@ const SCPanel = (() => {
           </div>`;
         }).join('');
       } else {
-        supEl.innerHTML = '<div style="color:#1e3a5f;font-size:10px">Sistema in osservazione — nessun intervento ancora</div>';
+        supEl.innerHTML = '<div style="color:#1e3a5f;font-size:10px">Sistema in osservazione - nessun intervento ancora</div>';
       }
     }
 
@@ -2587,7 +2621,7 @@ const SCPanel = (() => {
         const tot = (d.would_win||0) + (d.would_lose||0);
         const wr  = tot > 0 ? Math.round(d.would_win/tot*100) : 0;
         const col = wr > 45 ? '#f59e0b' : wr < 25 ? '#ff3355' : '#3d5a7a';
-        const alert = wr > 45 ? '⚠️ ALLENTA' : wr < 25 ? '🛡️ OK' : '';
+        const alert = wr > 45 ? ' ALLENTA' : wr < 25 ? ' OK' : '';
         return `<div style="display:grid;grid-template-columns:1fr 40px 40px 40px 70px;
           gap:4px;padding:3px 0;border-bottom:1px solid #0a1020;align-items:center">
           <span style="color:#3d5a7a;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${id}</span>
@@ -2598,9 +2632,9 @@ const SCPanel = (() => {
         </div>`;
       }).join('');
     }
-    // ── FINE V16 ─────────────────────────────────────────────
+    // -- FINE V16 ---------------------------------------------
 
-    // ── NARRATORE AI ──────────────────────────────────────────
+    // -- NARRATORE AI ------------------------------------------
     const narrativa = hb.narrativa_ds || [];
     const narratoreBody = $('narratore-body');
     const narratoreTs   = $('narratore-ts');
@@ -2617,7 +2651,7 @@ const SCPanel = (() => {
       if (el('narratore-cap-motivo')) el('narratore-cap-motivo').textContent = ultCap.motivo || '';
     }
 
-    // Diagnostica canale Narratore→Bot
+    // Diagnostica canale Narratore->Bot
     const diag = hb.narratore_diagnostica || {};
     const ndI = document.getElementById('nd-iniettate');
     const ndB = document.getElementById('nd-bloccate');
@@ -2639,39 +2673,52 @@ const SCPanel = (() => {
       ndS.innerHTML = storia.map(s =>
         `<span style="color:#6b21a8">${s.ts}</span> ` +
         `<span style="color:#00d97a">+[${s.iniettate?.join(',')||''}]</span>` +
-        (s.bloccate?.length ? ` <span style="color:#f59e0b">✗[${s.bloccate.join(',')}]</span>` : '')
-      ).join(' &nbsp;·&nbsp; ');
+        (s.bloccate?.length ? ` <span style="color:#f59e0b">[${s.bloccate.join(',')}]</span>` : '')
+      ).join(' &nbsp;&nbsp; ');
     }
 
     if (narrativa.length && narratoreBody) {
       const ultimo = narrativa[narrativa.length - 1];
       narratoreTs.textContent = ultimo.ts || '--:--';
 
-      // Max 5 dialoghi, dal più recente
-      narratoreBody.innerHTML = narrativa.slice(-5).reverse().map((n, i) => {
-        const isUltimo = i === 0;
-        const opacita = isUltimo ? '1' : `${0.85 - i * 0.15}`;
+      var narrHtml = '';
 
-        // Badge capsula con dettaglio azione
-        const capBadge = n.capsula
-          ? `<span style="background:#3b0764;color:#c4b5fd;padding:2px 8px;border-radius:3px;font-size:9px;margin-left:6px;font-weight:bold">💊 ${n.capsula} → BOT</span>`
-          : `<span style="color:#4c1d95;font-size:9px;margin-left:6px">○ nessuna capsula</span>`;
+      // ANALISI TRADE - colore verde/rosso per ogni trade analizzato
+      var analisiTrade = hb.trade_analisi || [];
+      if (analisiTrade.length > 0) {
+        narrHtml += '<div style="margin-bottom:8px;padding:6px 8px;background:#0a1a0a;border-left:3px solid #00ff88;border-radius:3px">';
+        narrHtml += '<div style="font-size:9px;color:#00ff88;letter-spacing:1px;margin-bottom:4px"> ANALIZZATORE TRADE - Perche abbiamo vinto o perso</div>';
+        var ultimi3 = analisiTrade.slice(-3).reverse();
+        for (var ai = 0; ai < ultimi3.length; ai++) {
+          var at = ultimi3[ai];
+          var atWin = at.esito === 'WIN';
+          var atCol = atWin ? '#00ff88' : '#ff3355';
+          var atPnl = (at.pnl >= 0 ? '+' : '') + '$' + parseFloat(at.pnl||0).toFixed(2);
+          narrHtml += '<div style="margin-bottom:6px;padding:4px 6px;border-left:2px solid ' + atCol + ';background:rgba(0,0,0,0.2)">';
+          narrHtml += '<div style="font-size:9px;color:' + atCol + ';font-weight:bold">' + at.esito + ' ' + (at.ts||'') + ' score=' + parseFloat(at.score||0).toFixed(1) + ' ' + atPnl + '</div>';
+          narrHtml += '<div style="font-size:10px;color:#ccc;line-height:1.5;margin-top:2px">' + (at.analisi||'').split('\n').join('<br>') + '</div>';
+          narrHtml += '</div>';
+        }
+        narrHtml += '</div>';
+        narrHtml += '<hr style="border:none;border-top:1px solid #1a2a1a;margin:6px 0">';
+      }
 
-        return `<div style="margin-bottom:10px;opacity:${opacita};
-          border-left:2px solid ${isUltimo ? '#a855f7' : '#3b0764'};
-          padding-left:8px;">
-          <div style="font-size:9px;color:#7c3aed;margin-bottom:3px;letter-spacing:1px;display:flex;align-items:center;flex-wrap:wrap;gap:4px">
-            🔍 OSSERVATORE · ${n.ts} ${capBadge}
-          </div>
-          <div style="font-size:10px;color:#c4b5fd;font-style:italic;margin-bottom:4px;line-height:1.4">
-            "${n.domanda}"
-          </div>
-          <div style="font-size:9px;color:#9333ea;margin-bottom:2px;letter-spacing:1px">💭 RAGIONATORE</div>
-          <div style="font-size:10px;color:#e9d5ff;line-height:1.5">
-            ${n.risposta}
-          </div>
-        </div>`;
+      // NARRATORE/RAGIONATORE - colore viola originale
+      narrHtml += narrativa.slice(-3).reverse().map(function(n, i) {
+        var isUltimo = i === 0;
+        var opacita = isUltimo ? '1' : (0.85 - i * 0.15).toString();
+        var capBadge = n.capsula
+          ? '<span style="background:#3b0764;color:#c4b5fd;padding:2px 8px;border-radius:3px;font-size:9px;margin-left:6px;font-weight:bold">C ' + n.capsula + ' BOT</span>'
+          : '<span style="color:#4c1d95;font-size:9px;margin-left:6px">nessuna capsula</span>';
+        return '<div style="margin-bottom:10px;opacity:' + opacita + ';border-left:2px solid ' + (isUltimo ? '#a855f7' : '#3b0764') + ';padding-left:8px">' +
+          '<div style="font-size:9px;color:#7c3aed;margin-bottom:3px;letter-spacing:1px">OSSERVATORE ' + (n.ts||'') + capBadge + '</div>' +
+          '<div style="font-size:10px;color:#c4b5fd;font-style:italic;margin-bottom:4px;line-height:1.4">"' + (n.domanda||'') + '"</div>' +
+          '<div style="font-size:9px;color:#9333ea;margin-bottom:2px;letter-spacing:1px">RAGIONATORE</div>' +
+          '<div style="font-size:10px;color:#e9d5ff;line-height:1.5">' + (n.risposta||'') + '</div>' +
+          '</div>';
       }).join('<hr style="border:none;border-top:1px solid #1a0a2e;margin:6px 0">');
+
+      narratoreBody.innerHTML = narrHtml;
 
     } else if (narratoreBody && !narrativa.length) {
       const hasDsKey = typeof hb.narrativa_ds !== 'undefined';
@@ -2679,12 +2726,12 @@ const SCPanel = (() => {
         ? '<div style="color:#4c1d95;font-size:10px;text-align:center;padding:12px">Primo ciclo in arrivo tra 30s...</div>'
         : '<div style="color:#4c1d95;font-size:10px;text-align:center;padding:12px">DEEPSEEK_API_KEY non configurata</div>';
     }
-    // ── FINE NARRATORE AI ─────────────────────────────────────
+    // -- FINE NARRATORE AI -------------------------------------
 
 }
 
   function drawCharts() {
-    // Canvas puro — zero dipendenze Chart.js
+    // Canvas puro - zero dipendenze Chart.js
     const c1 = document.getElementById('scChart');
     const c2 = document.getElementById('scCaricaChart');
     if (!c1 || !c2 || prices.length < 2) return;
@@ -2729,7 +2776,7 @@ const SCPanel = (() => {
       const xi=Math.min(prices.length-1,Math.max(0,m.x));
       const xp=xOf(xi), yp=yOf(m.y||prices[xi]||minP);
       ctx1.fillStyle='#00ff88'; ctx1.font='12px sans-serif'; ctx1.textAlign='center';
-      ctx1.fillText('▲',xp,yp+14);
+      ctx1.fillText('',xp,yp+14);
     });
 
     // SELL markers
@@ -2738,7 +2785,7 @@ const SCPanel = (() => {
       const xp=xOf(xi), yp=yOf(m.y||prices[xi]||minP);
       ctx1.fillStyle=m.loss?'#ff3355':'#00ff88';
       ctx1.font='12px sans-serif'; ctx1.textAlign='center';
-      ctx1.fillText('▼',xp,yp-4);
+      ctx1.fillText('',xp,yp-4);
     });
 
     // Label prezzo live
@@ -2747,7 +2794,7 @@ const SCPanel = (() => {
     ctx1.fillStyle='#378ADD';
     ctx1.fillText('$'+Math.round(lp),PAD.left+w1+2,yOf(lp)+4);
 
-    // ── Grafico carica ────────────────────────────────────────
+    // -- Grafico carica ----------------------------------------
     const W2=c2.offsetWidth||600, H2=50;
     c2.width=W2; c2.height=H2;
     const ctx2=c2.getContext('2d');
@@ -2799,8 +2846,8 @@ const VeritatisPanel = (() => {
       const col = chi === 'ORACOLO' ? '#00ff88' : '#ff8800';
       const pnl = conf.pnl_perso_bloccando || conf.pnl_salvato_bloccando || 0;
       const msg = chi === 'ORACOLO'
-        ? `🔥 ORACOLO aveva ragione — SC ha bloccato $${Math.abs(pnl).toFixed(0)} di guadagni`
-        : `🛡️ SC aveva ragione — ha salvato $${Math.abs(pnl).toFixed(0)} bloccando perdite`;
+        ? ` ORACOLO aveva ragione - SC ha bloccato $${Math.abs(pnl).toFixed(0)} di guadagni`
+        : ` SC aveva ragione - ha salvato $${Math.abs(pnl).toFixed(0)} bloccando perdite`;
       confEl.innerHTML = `<span style="color:${col};font-weight:500">${msg}</span>`;
     }
 
@@ -2870,8 +2917,8 @@ const LiveChart = (() => {
     // Sfondo
     ctx.fillStyle='#060810'; ctx.fillRect(0,0,W,H);
 
-    // ── BARRA DI TENSIONE ─────────────────────────────────────
-    // Mostra quanto il sistema è vicino alla soglia
+    // -- BARRA DI TENSIONE -------------------------------------
+    // Mostra quanto il sistema  vicino alla soglia
     // 0% = lontano | 100% = ENTRA
     const tension = curSoglia > 0 ? Math.min(1, curScore/curSoglia) : 0;
     const tensionW = w * tension;
@@ -2912,20 +2959,20 @@ const LiveChart = (() => {
     ctx.textAlign = 'left';
     if (tension >= 1.0) {
       ctx.fillStyle = '#00ff88';
-      ctx.fillText('⚡ PRONTO — score ' + curScore.toFixed(0) + ' / ' + curSoglia, PAD.left+4, 20);
+      ctx.fillText(' PRONTO - score ' + curScore.toFixed(0) + ' / ' + curSoglia, PAD.left+4, 20);
     } else if (tension >= 0.85) {
       ctx.fillStyle = '#ffd700';
-      ctx.fillText('⚠ IN AVVICINAMENTO — ' + (tension*100).toFixed(0) + '% soglia', PAD.left+4, 20);
+      ctx.fillText(' IN AVVICINAMENTO - ' + (tension*100).toFixed(0) + '% soglia', PAD.left+4, 20);
     } else {
       ctx.fillStyle = '#334455';
-      ctx.fillText('· in attesa  score ' + curScore.toFixed(0) + ' / soglia ' + curSoglia, PAD.left+4, 20);
+      ctx.fillText(' in attesa  score ' + curScore.toFixed(0) + ' / soglia ' + curSoglia, PAD.left+4, 20);
     }
     // Direzione attesa
     ctx.textAlign = 'right';
     ctx.fillStyle = shadowDir==='LONG' ? '#00ff88' : '#ff3355';
-    ctx.fillText(shadowDir==='LONG' ? '↑ LONG' : '↓ SHORT', PAD.left+w-2, 20);
+    ctx.fillText(shadowDir==='LONG' ? ' LONG' : ' SHORT', PAD.left+w-2, 20);
 
-    // ── GRAFICO PREZZO ────────────────────────────────────────
+    // -- GRAFICO PREZZO ----------------------------------------
     const vals = prices.map(p=>p.v);
     let mn=Math.min(...vals), mx=Math.max(...vals);
     const sp=mx-mn;
@@ -3000,7 +3047,7 @@ const LiveChart = (() => {
     ctx.fillStyle=lCol;
     ctx.shadowColor=lCol; ctx.shadowBlur=12; ctx.fill(); ctx.shadowBlur=0;
 
-    // ── MARKER EVENTI ─────────────────────────────────────────
+    // -- MARKER EVENTI -----------------------------------------
     const tMin=prices[0].ts, tMax=prices[prices.length-1].ts, tRng=tMax-tMin||1;
     events.forEach(ev=>{
       if(ev.ts<tMin||ev.ts>tMax) return;
@@ -3019,9 +3066,9 @@ const LiveChart = (() => {
         ctx.font='bold 16px Share Tech Mono'; ctx.textAlign='center';
         ctx.fillStyle=col;
         ctx.shadowColor=col; ctx.shadowBlur=10;
-        ctx.fillText(ev.dir==='LONG'?'▲':'▼', xp, ev.dir==='LONG'?yp+18:yp-8);
+        ctx.fillText(ev.dir==='LONG'?'':'', xp, ev.dir==='LONG'?yp+18:yp-8);
         ctx.shadowBlur=0;
-        // Score badge — solo se non sovrapposto
+        // Score badge - solo se non sovrapposto
         const others = events.filter(e => e !== ev && Math.abs((e.ts-tMin)/(tRng||1)*w - (xp-PAD.left)) < 20);
         if (others.length === 0) {
           ctx.font='bold 9px Share Tech Mono';
@@ -3035,7 +3082,7 @@ const LiveChart = (() => {
         ctx.beginPath(); ctx.moveTo(xp,PAD.top); ctx.lineTo(xp,PAD.top+h); ctx.stroke();
         ctx.setLineDash([]);
         ctx.font='11px Share Tech Mono'; ctx.textAlign='center';
-        ctx.fillStyle='#667788'; ctx.fillText('✕', xp, yp-6);
+        ctx.fillStyle='#667788'; ctx.fillText('', xp, yp-6);
       }
     });
 
@@ -3068,11 +3115,11 @@ function renderLog(lines, elId, maxH) {
   const el = $(elId);
   if(!lines||lines.length===0) return;
   const LOG_COLORS = {
-    '🚀':'var(--green)','🟢':'var(--green)','🔴':'var(--red)','💔':'var(--red)',
-    '🛑':'var(--red)','⚡':'var(--dim)','👻':'#aa44ff','🚫':'var(--orange)',
-    '💊':'var(--yellow)','🌙':'#aaaaff','🌉':'var(--blue)','🎯':'var(--blue)',
-    '🧭':'var(--orange)','🌍':'var(--purple)','💓':'var(--dim)','🔄':'var(--blue)',
-    '🧠':'var(--orange)','🗑️':'var(--dim)','⚡':'var(--yellow)',
+    '':'var(--green)','':'var(--green)','':'var(--red)','':'var(--red)',
+    '':'var(--red)','':'var(--dim)','':'#aa44ff','':'var(--orange)',
+    '':'var(--yellow)','':'#aaaaff','':'var(--blue)','':'var(--blue)',
+    '':'var(--orange)','':'var(--purple)','':'var(--dim)','':'var(--blue)',
+    '':'var(--orange)','':'var(--dim)','':'var(--yellow)',
   };
   el.innerHTML = [...lines].reverse().map(line => {
     let col = 'var(--text)';
@@ -3101,7 +3148,7 @@ function update() {
     $('status-txt').textContent = hb.status||'OFFLINE';
     $('status-txt').style.color = running?'var(--green)':'var(--red)';
     const mode = hb.mode||'PAPER';
-    $('mode-badge').textContent = mode==='LIVE'?'🔴 LIVE':'📄 PAPER';
+    $('mode-badge').textContent = mode==='LIVE'?' LIVE':' PAPER';
     $('mode-badge').className = 'badge '+(mode==='LIVE'?'badge-live':'badge-paper');
     $('last-seen').textContent = hb.last_seen ? new Date(hb.last_seen).toLocaleTimeString() : '--';
 
@@ -3117,10 +3164,10 @@ function update() {
 
     // Trade status
     const ts = $('trade-status-txt');
-    if(hb.posizione_aperta){ts.textContent='🟢 M1 APERTO';ts.style.color='var(--green)';}
-    else if(hb.m2_shadow_open){ts.textContent='🎯 M2 SHADOW APERTO';ts.style.color='var(--blue)';}
-    else if((hb.tick_count||0)<200){ts.textContent='⏳ Warmup';ts.style.color='var(--yellow)';}
-    else{ts.textContent='🔍 In attesa setup';ts.style.color='var(--dim)';}
+    if(hb.posizione_aperta){ts.textContent=' M1 APERTO';ts.style.color='var(--green)';}
+    else if(hb.m2_shadow_open){ts.textContent=' M2 SHADOW APERTO';ts.style.color='var(--blue)';}
+    else if((hb.tick_count||0)<200){ts.textContent=' Warmup';ts.style.color='var(--yellow)';}
+    else{ts.textContent=' In attesa setup';ts.style.color='var(--dim)';}
 
     // KPI
     const m2pnl = hb.m2_pnl||0;
@@ -3166,10 +3213,10 @@ function update() {
 
     // ALERT BAR
     const alerts=[];
-    if((hb.m2_loss_streak||0)>=3) alerts.push('⚠️ LOSS STREAK '+hb.m2_loss_streak);
-    if(m2wr<40 && m2t>5) alerts.push('⚠️ WR BASSO '+m2wr.toFixed(0)+'%');
-    if(m2pnl<-50) alerts.push('🔴 DRAWDOWN '+fmtUSD(m2pnl));
-    if((hb.m2_cooldown||0)>0) alerts.push('⏳ COOLDOWN '+(hb.m2_cooldown||0).toFixed(0)+'s');
+    if((hb.m2_loss_streak||0)>=3) alerts.push(' LOSS STREAK '+hb.m2_loss_streak);
+    if(m2wr<40 && m2t>5) alerts.push(' WR BASSO '+m2wr.toFixed(0)+'%');
+    if(m2pnl<-50) alerts.push(' DRAWDOWN '+fmtUSD(m2pnl));
+    if((hb.m2_cooldown||0)>0) alerts.push(' COOLDOWN '+(hb.m2_cooldown||0).toFixed(0)+'s');
     const ab = $('alert-bar');
     if(alerts.length>0){ ab.style.display='block'; ab.innerHTML=alerts.join('  &nbsp;|&nbsp;  '); }
     else { ab.style.display='none'; }
@@ -3177,9 +3224,9 @@ function update() {
     // M2 DIRECTION
     const dir = hb.m2_direction||'LONG';
     const db = $('dir-box'), dt = $('dir-txt');
-    dt.textContent = dir==='SHORT'?'🔴 SHORT ↓':'🟢 LONG ↑';
+    dt.textContent = dir==='SHORT'?' SHORT ':' LONG ';
     db.className = 'dir-box '+(dir==='SHORT'?'dir-short':'dir-long');
-    $('m2-shadow-badge').textContent = hb.m2_shadow_open?'🟢 SHADOW APERTO':'⚪ shadow chiuso';
+    $('m2-shadow-badge').textContent = hb.m2_shadow_open?' SHADOW APERTO':' shadow chiuso';
     $('m2-shadow-badge').style.color = hb.m2_shadow_open?'var(--green)':'var(--dim)';
 
     $('m2-wr-detail').textContent = m2wr.toFixed(1)+'%';
@@ -3190,7 +3237,7 @@ function update() {
     $('m2-streak').textContent = hb.m2_loss_streak||0;
     $('m2-streak').style.color = (hb.m2_loss_streak||0)>=2?'var(--red)':'var(--text)';
     const cd = hb.m2_cooldown||0;
-    $('m2-cooldown').textContent = cd>0?cd.toFixed(0)+'s':'—';
+    $('m2-cooldown').textContent = cd>0?cd.toFixed(0)+'s':'-';
     $('m2-cooldown').style.color = cd>0?'var(--yellow)':'var(--dim)';
 
     const rsi = cs.rsi||50, macd_h = cs.macd_hist||0;
@@ -3226,12 +3273,12 @@ function update() {
           const wr100 = (v.wr*100);
           const wrCol = colorWR(wr100);
           const pnlA = v.pnl_avg||0;
-          const earlyPct = v.exit_too_early ? (v.exit_too_early*100).toFixed(0)+'%' : '—';
+          const earlyPct = v.exit_too_early ? (v.exit_too_early*100).toFixed(0)+'%' : '-';
           const barW = Math.round(wr100)+'px';
-          const realTag = v.real>0?`<span style="color:var(--green);font-size:9px"> ★${v.real}</span>`:'';
-          const status = wr100>=60?'<span style="color:var(--green)">●</span>':
-                         wr100>=45?'<span style="color:var(--yellow)">◐</span>':
-                         '<span style="color:var(--red)">○</span>';
+          const realTag = v.real>0?`<span style="color:var(--green);font-size:9px"> ${v.real}</span>`:'';
+          const status = wr100>=60?'<span style="color:var(--green)"></span>':
+                         wr100>=45?'<span style="color:var(--yellow)"></span>':
+                         '<span style="color:var(--red)"></span>';
           return `<tr>
             <td style="font-size:9px;color:var(--dim)">${fp.replace('LONG|','').replace('SHORT|','<span style="color:var(--red)">S</span> ')}${realTag}</td>
             <td><span style="color:${wrCol};font-weight:700">${wr100.toFixed(0)}%</span>
@@ -3249,7 +3296,7 @@ function update() {
 
     const cp = hb.calibra_params||{};
     $('calib-params').textContent = cp.seed_threshold?
-      `seed≥${cp.seed_threshold} cap1≥${cp.cap1_soglia_buona} cap3≥${cp.cap3_fp_minimo}`:'--';
+      `seed>=${cp.seed_threshold} cap1>=${cp.cap1_soglia_buona} cap3>=${cp.cap3_fp_minimo}`:'--';
 
     // IA CAPSULE LIST
     $('ia-l2').textContent = ia.l2||0;
@@ -3269,9 +3316,9 @@ function update() {
           'L2_BLK':'cap-l2-blk','L2_BST':'cap-l2-bst',
           'L3_STK':'cap-l3-stk','L3_RBLO':'cap-l3-reg','L3_OPP':'cap-l3-opp'
         }[c.tipo]||'cap-l3-stk';
-        const icon = c.tipo?.includes('BLK')||c.tipo?.includes('RBLO')?'🚫':
-                     c.tipo?.includes('BST')||c.tipo?.includes('OPP')?'🚀':
-                     c.tipo?.includes('STK')?'⚡':'💊';
+        const icon = c.tipo?.includes('BLK')||c.tipo?.includes('RBLO')?'':
+                     c.tipo?.includes('BST')||c.tipo?.includes('OPP')?'':
+                     c.tipo?.includes('STK')?'':'';
         return `<div class="capsule-item ${typeClass}">
           <span>${icon} ${c.id||c.capsule_id||'?'}</span>
           <span class="ttl-bar">TTL ${ttlStr} | ${c.tipo||'?'}</span>
@@ -3335,7 +3382,7 @@ function update() {
       }).join('');
     }
 
-    // GRAFICO LIVE — feed dati e disegno
+    // GRAFICO LIVE - feed dati e disegno
     const nowTs = Date.now();
     if (hb.last_price) {
       LiveChart.addPrice(hb.last_price, nowTs);
@@ -3367,7 +3414,7 @@ function update() {
     });
 
     // Aggiorna info chart
-    $('chart-info').textContent = `ultimi 180 tick · aggiornato ${new Date().toLocaleTimeString()}`;
+    $('chart-info').textContent = `ultimi 180 tick  aggiornato ${new Date().toLocaleTimeString()}`;
     const m2cs = hb.m2_campo_stats || {};
     const scoreNow = m2cs.last_score || 0;
     const soglNow  = hb.m2_soglia_base || 60;
@@ -3383,14 +3430,14 @@ function update() {
 
     // AI BRIDGE PANEL
     const ba = hb.bridge_active;
-    $('bridge-active-dot').textContent = ba ? '🟢' : '⚫';
+    $('bridge-active-dot').textContent = ba ? '' : '';
     $('bridge-active-txt').textContent = ba ? 'attivo' : 'offline';
     $('bridge-active-txt').style.color = ba ? 'var(--green)' : 'var(--dim)';
     $('bridge-errors').textContent = hb.bridge_errors || 0;
     $('bridge-errors').style.color = (hb.bridge_errors||0) > 0 ? 'var(--red)' : 'var(--dim)';
 
     const bts = hb.bridge_last_ts || hb.bridge_last_call;
-    $('bridge-last-ts').textContent = bts ? (bts.length > 8 ? new Date(bts).toLocaleTimeString() : bts) : '—';
+    $('bridge-last-ts').textContent = bts ? (bts.length > 8 ? new Date(bts).toLocaleTimeString() : bts) : '-';
 
     // Analisi testuale
     const analisi = hb.bridge_analisi || '';
@@ -3399,7 +3446,7 @@ function update() {
 
     // Prossimo setup
     const setup = hb.bridge_prossimo || '';
-    $('bridge-prossimo').textContent = setup || '—';
+    $('bridge-prossimo').textContent = setup || '-';
     $('bridge-prossimo').style.color = setup ? 'var(--green)' : 'var(--dim)';
 
     // Nota per Roberto
@@ -3421,7 +3468,7 @@ function update() {
       'NEUTRO':      {bg:'rgba(0,170,255,0.08)',  border:'var(--blue)',   color:'var(--blue)'},
     };
     const ms = mercatoStyles[mercato] || {bg:'transparent',border:'var(--dim)',color:'var(--dim)'};
-    mbadge.textContent = mercato || '— MERCATO —';
+    mbadge.textContent = mercato || '- MERCATO -';
     mbadge.style.background = ms.bg;
     mbadge.style.borderColor = ms.border;
     mbadge.style.color = ms.color;
@@ -3430,11 +3477,11 @@ function update() {
     const alert = hb.bridge_alert || '';
     const abadge = $('bridge-alert-badge');
     const alertStyles = {
-      'green':  {border:'var(--green)',  color:'var(--green)',  txt:'● OK'},
-      'yellow': {border:'var(--yellow)', color:'var(--yellow)', txt:'⚠ ATTENZIONE'},
-      'red':    {border:'var(--red)',    color:'var(--red)',    txt:'🔴 ALERT'},
+      'green':  {border:'var(--green)',  color:'var(--green)',  txt:' OK'},
+      'yellow': {border:'var(--yellow)', color:'var(--yellow)', txt:' ATTENZIONE'},
+      'red':    {border:'var(--red)',    color:'var(--red)',    txt:' ALERT'},
     };
-    const as = alertStyles[alert] || {border:'var(--dim)', color:'var(--dim)', txt:'● —'};
+    const as = alertStyles[alert] || {border:'var(--dim)', color:'var(--dim)', txt:' -'};
     abadge.textContent = as.txt;
     abadge.style.borderColor = as.border;
     abadge.style.color = as.color;
@@ -3445,7 +3492,7 @@ function update() {
     // SIGNAL TRACKER
     const st = hb.signal_tracker || {};
 
-      // ── ECONOMIC EDGE ──────────────────────────────────────────────
+      // -- ECONOMIC EDGE ----------------------------------------------
       // Calcola hit_economica per ogni contesto dal Signal Tracker
       // hit_economica = % segnali chiusi con pnl_sim > FEE_SIM ($0.10)
       const FEE_SIM = 0.10;
@@ -3462,9 +3509,9 @@ function update() {
         const delta  = row.avg_delta_60s || 0;
 
         // Stima hit_economica dal pnl_sim_avg
-        // Se pnl_sim_avg > FEE_SIM → contesto mediamente profittevole
+        // Se pnl_sim_avg > FEE_SIM -> contesto mediamente profittevole
         // hit_economica stimata: proporzionale al rapporto pnl/fee
-        // (approssimazione finché non abbiamo distribuzione completa)
+        // (approssimazione finch non abbiamo distribuzione completa)
         let hitEcon;
         if (pnlAvg > FEE_SIM * 3)       hitEcon = 0.75;   // chiaramente profittevole
         else if (pnlAvg > FEE_SIM)       hitEcon = 0.55;   // sopra fee
@@ -3480,8 +3527,8 @@ function update() {
         const pct  = Math.round(d.hitEcon * 100);
         const color = d.hitEcon >= 0.50 ? '#00ff88' :
                       d.hitEcon >= 0.30 ? '#ffaa00' : '#ff4444';
-        const emoji = d.hitEcon >= 0.50 ? '🟢' :
-                      d.hitEcon >= 0.30 ? '🟡' : '🔴';
+        const emoji = d.hitEcon >= 0.50 ? '' :
+                      d.hitEcon >= 0.30 ? '' : '';
         const barW = Math.round(d.hitEcon * 100);
         const [dir, reg, band] = d.ctx.split('|');
         const dirColor = dir === 'LONG' ? 'var(--green)' : 'var(--red)';
@@ -3502,14 +3549,14 @@ function update() {
               <span>n=${d.n}</span>
               <span>hit=${Math.round(d.hit60*100)}%</span>
               <span>PnL sim <span style="color:${d.pnlAvg>0?'var(--green)':'var(--red)'}">${d.pnlAvg>0?'+':''}${d.pnlAvg.toFixed(2)}$</span></span>
-              <span>Δ ${d.delta>0?'+':''}${d.delta.toFixed(1)}</span>
+              <span> ${d.delta>0?'+':''}${d.delta.toFixed(1)}</span>
             </div>
           </div>`;
       });
 
       document.getElementById('edge-body').innerHTML =
         edgeRows || '<div style="color:var(--dim);text-align:center;padding:16px;font-size:10px;">In attesa segnali...</div>';
-      // ── END ECONOMIC EDGE ──────────────────────────────────────────
+      // -- END ECONOMIC EDGE ------------------------------------------
     $('st-counts').textContent = `open:${st.open||0} / chiusi:${st.closed||0}`;
     const stTopRows = st.top || [];
     if (stTopRows.length > 0) {
@@ -3548,7 +3595,7 @@ function update() {
 
 function sendCmd(cmd){
   fetch('/trading/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd})})
-  .then(r=>r.json()).then(()=>{ const ab=$('alert-bar'); ab.style.display='block'; ab.innerHTML='✅ Comando inviato: '+cmd; setTimeout(()=>{ab.style.display='none'},3000); });
+  .then(r=>r.json()).then(()=>{ const ab=$('alert-bar'); ab.style.display='block'; ab.innerHTML=' Comando inviato: '+cmd; setTimeout(()=>{ab.style.display='none'},3000); });
 }
 
 update();
