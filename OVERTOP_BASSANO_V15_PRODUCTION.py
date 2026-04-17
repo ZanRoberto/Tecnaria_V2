@@ -7163,10 +7163,23 @@ class OvertopBassanoV15Production:
                                              momentum, volatility, trend)
                     return
 
-            # ── BOOT GUARD — nessuna entry nei primi 60 secondi ─────────────
+            # ── BOOT GUARD — warmup completo + 60 secondi aggiuntivi ──────
             _boot_elapsed = time.time() - getattr(self, '_boot_time', time.time())
-            if _boot_elapsed < 60:
-                self._log_m2("⏳", f"BOOT_GUARD: {60 - _boot_elapsed:.0f}s al via")
+            _warmup_rsi = len(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else 0
+            _warmup_ok = _warmup_rsi >= 20
+
+            if not _warmup_ok:
+                self._log_m2("⏳", f"BOOT_GUARD: warmup RSI {_warmup_rsi}/20 — in attesa")
+                return
+
+            # Warmup completato — aspetta ancora 60 secondi
+            if not hasattr(self, '_warmup_done_time'):
+                self._warmup_done_time = time.time()
+                self._log_m2("✅", "BOOT_GUARD: warmup RSI completato — aspetto 60s prima di partire")
+
+            _post_warmup = time.time() - self._warmup_done_time
+            if _post_warmup < 60:
+                self._log_m2("⏳", f"BOOT_GUARD: warmup OK — {60 - _post_warmup:.0f}s al via")
                 return
 
             # ── SCORE vs SOGLIA ──────────────────────────────────────────────
