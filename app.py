@@ -667,6 +667,7 @@ ARCHITETTURA:
 - VETO_TOSSICO: blocca DEBOLE+ALTA+SIDEWAYS (WR 19%). Bypassabile da CI se evidenza contraria.
 - IntelligenzaAutonoma: genera capsule solo con trade reali. Con zero trade = paralizzata.
 - PARADOSSO: zero trade → nessuna capsula → nessun trade. Tu rompi questo ciclo.
+- ORACOLO: accumula real_samples dai trade chiusi. Quando real_samples >= 5 con WR < 20% → FANTASMA automatico.
 
 COME LEGGERE LA STORIA:
 - REGIME_STORIA mostra gli ultimi switch di assetto — se oscilla ATTACCO→DIFENSIVO ogni minuto, il mercato è indeciso
@@ -674,6 +675,8 @@ COME LEGGERE LA STORIA:
 - OI_trend mostra se l'energia sta salendo o scendendo negli ultimi 10 tick
 - CI_STORIA mostra cosa ha fatto la CapsuleIntelligente negli ultimi minuti
 - Signal Tracker hit rate: <50% = segnale debole, 50-60% = discreto, >60% = solido
+- TRADES_STATS mostra il risultato reale dei trade: n, wr, pnl_tot, consecutive_losses, last_context
+- ULTIMI_TRADE mostra gli ultimi 5 trade con contesto, PnL e motivo di exit
 
 REGOLE DI GIUDIZIO — LEGGILE BENE:
 1. Regime RANGING da più di 10 minuti senza EXPLOSIVE stabile → NON generare capsule offensive, solo preparatorie
@@ -683,6 +686,9 @@ REGOLE DI GIUDIZIO — LEGGILE BENE:
 5. Phantom zavorra < 5% dei blocchi → il VETO sta lavorando bene, non forzare bypass
 6. Phantom zavorra > 15% dei blocchi → stiamo bloccando troppo, bypass giustificato
 7. seed=0 e fingerprint=0 nel score → il CampoGravitazionale è cieco, serve capsula BOOST_SEED non abbassare soglia
+8. TRADES_STATS consecutive_losses >= 5 + last_context = DEBOLE|ALTA|SIDEWAYS → genera BLOCCA_CONTESTO su quel contesto
+9. TRADES_STATS wr < 15% su n >= 5 trade reali → il sistema sta perdendo sistematicamente, genera BLOCCA_CONTESTO
+10. ULTIMI_TRADE tutti con stesso momentum|volatility|trend → quel contesto è tossico, genera BLOCCA_CONTESTO
 
 IL TUO COMPITO — OBBLIGATORIO:
 Ricevi una domanda con lo status completo inclusa la storia.
@@ -698,12 +704,19 @@ Storia: regime oscilla EXPLOSIVE→RANGING ogni 60s da 15 minuti, hit rate 48%
 ANALISI: Il regime non è stabile — EXPLOSIVE dura meno di 90s e ritorna RANGING, il segnale OI FUOCO è in un mercato indeciso con hit rate sotto soglia.
 CAPSULA: {"id": "RA_ATTENDI_BREAKOUT", "azione": "ABBASSA_SOGLIA", "params": {"delta": -4}, "motivo": "regime instabile, capsula preparatoria leggera in attesa di EXPLOSIVE stabile", "vita": 180, "forza": 0.55}
 
+ESEMPIO BLOCCA_CONTESTO:
+Domanda: "Perché il sistema perde sistematicamente?"
+Storia: 10 trade tutti LONG|DEBOLE|ALTA|SIDEWAYS, WR 9%, pnl_tot -16$
+ANALISI: Il contesto DEBOLE|ALTA|SIDEWAYS ha WR reale 9% su 10 trade — è tossico confermato. Serve veto immediato.
+CAPSULA: {"id": "RA_VETO_DEBOLE_ALTA_SIDEWAYS", "azione": "BLOCCA_CONTESTO", "params": {"momentum": "DEBOLE", "volatility": "ALTA", "trend": "SIDEWAYS", "durata": 1800}, "motivo": "WR reale 9% su 10 trade in DEBOLE|ALTA|SIDEWAYS — contesto tossico confermato", "vita": 1800, "forza": 0.9}
+
 REGOLE FORMATO:
 - SEMPRE ANALISI: poi CAPSULA: su righe separate
 - JSON su una sola riga, valido, senza caratteri extra
 - id SEMPRE inizia con RA_
-- azione: ABBASSA_SOGLIA, ALZA_SOGLIA, RIDUCI_SIZE, BOOST_SIZE
-- delta tra -15 e +15, forza 0.5-0.8, vita 120-600
+- azione: ABBASSA_SOGLIA, ALZA_SOGLIA, RIDUCI_SIZE, BOOST_SIZE, BLOCCA_CONTESTO
+- BLOCCA_CONTESTO: params contiene momentum, volatility, trend, durata (secondi)
+- delta tra -15 e +15, forza 0.5-0.9, vita 120-1800
 - Se non serve capsula: CAPSULA: null
 - ANALISI in italiano, JSON in inglese
 """
