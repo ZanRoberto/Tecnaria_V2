@@ -1410,7 +1410,7 @@ body::before { content:''; position:fixed; inset:0; background:
 
 .wrap { max-width:1300px; margin:0 auto; padding:14px; position:relative; z-index:1; }
 
-/* -- HEADER -- */
+/* ── HEADER ── */
 .hdr { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;
        border-bottom:1px solid var(--border); padding-bottom:12px; flex-wrap:wrap; gap:10px; }
 .hdr-title { font-family:'Orbitron',monospace; font-size:18px; font-weight:900;
@@ -1424,17 +1424,17 @@ body::before { content:''; position:fixed; inset:0; background:
 .dot-run { background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s infinite; }
 .dot-off { background:var(--red); }
 
-/* -- TICKER BAR -- */
+/* ── TICKER BAR ── */
 .ticker { background:var(--bg2); border:1px solid var(--border); border-left:3px solid var(--green);
           padding:8px 14px; margin-bottom:14px; border-radius:2px;
           display:flex; gap:24px; align-items:center; flex-wrap:wrap; font-size:12px; }
 .price-big { font-family:'Orbitron',monospace; font-size:22px; font-weight:700; color:var(--green); }
 
-/* -- ALERT BAR -- */
+/* ── ALERT BAR ── */
 .alert-bar { padding:8px 14px; margin-bottom:14px; border-radius:2px; font-size:12px;
              display:none; border-left:3px solid var(--red); background:rgba(255,51,85,0.08); color:var(--red); }
 
-/* -- KPI GRID -- */
+/* ── KPI GRID ── */
 .kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:8px; margin-bottom:14px; }
 .kpi { background:var(--bg2); border:1px solid var(--border); padding:10px 12px; border-radius:2px;
        position:relative; overflow:hidden; transition:border-color .2s; }
@@ -1447,14 +1447,14 @@ body::before { content:''; position:fixed; inset:0; background:
 .kpi-val.neu { color:var(--text); }
 .kpi-sub { font-size:9px; color:var(--dim); margin-top:2px; }
 
-/* -- TWO COLUMN LAYOUT -- */
+/* ── TWO COLUMN LAYOUT ── */
 .two-col { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
 @media(max-width:800px){ .two-col { grid-template-columns:1fr; } }
 .three-col { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:10px; }
 @media(max-width:900px){ .three-col { grid-template-columns:1fr 1fr; } }
 @media(max-width:600px){ .three-col { grid-template-columns:1fr; } }
 
-/* -- PANEL -- */
+/* ── PANEL ── */
 .panel { background:var(--bg2); border:1px solid var(--border); border-radius:2px; overflow:hidden; }
 .panel-head { padding:8px 12px; font-size:10px; letter-spacing:2px; text-transform:uppercase;
               display:flex; align-items:center; justify-content:space-between;
@@ -1467,7 +1467,7 @@ body::before { content:''; position:fixed; inset:0; background:
 .panel-head.red    { border-left:3px solid var(--red);    color:var(--red); }
 .panel-body { padding:10px 12px; }
 
-/* -- M2 DIRECTION BOX -- */
+/* ── M2 DIRECTION BOX ── */
 .dir-box { margin:8px 0; padding:12px; border-radius:2px; text-align:center;
            font-family:'Orbitron',monospace; font-size:20px; font-weight:900; letter-spacing:4px;
            transition:all .3s; }
@@ -1476,14 +1476,14 @@ body::before { content:''; position:fixed; inset:0; background:
 .dir-short { background:linear-gradient(135deg,rgba(255,51,85,0.08),rgba(200,0,40,0.04));
              border:1px solid var(--red); color:var(--red); text-shadow:0 0 15px rgba(255,51,85,0.5); }
 
-/* -- MINI STATS ROW -- */
+/* ── MINI STATS ROW ── */
 .stat-row { display:flex; flex-wrap:wrap; gap:10px; font-size:11px; padding:6px 0; border-bottom:1px solid var(--border); }
 .stat-row:last-child { border-bottom:none; }
 .stat-item { display:flex; gap:4px; align-items:center; }
 .stat-lbl { color:var(--dim); }
 .stat-val { font-weight:700; }
 
-/* -- ORACOLO TABLE -- */
+/* ── ORACOLO TABLE ── */
 .oracolo-table { width:100%; border-collapse:collapse; font-size:10px; }
 .oracolo-table th { color:var(--dim); font-size:9px; letter-spacing:1px; padding:4px 6px;
                     text-transform:uppercase; border-bottom:1px solid var(--border); text-align:left; }
@@ -1491,7 +1491,7 @@ body::before { content:''; position:fixed; inset:0; background:
 .oracolo-table tr:hover td { background:rgba(255,255,255,0.02); }
 .wr-bar { display:inline-block; height:3px; border-radius:1px; vertical-align:middle; margin-left:4px; }
 
-/* -- IA CAPSULE -- */
+/* ── IA CAPSULE ── */
 .capsule-item { padding:5px 8px; margin-bottom:4px; border-radius:1px; font-size:10px;
                 display:flex; justify-content:space-between; align-items:center; }
 .cap-l2-blk  { background:rgba(255,51,85,0.08);   border-left:2px solid var(--red); }
@@ -1501,14 +1501,14 @@ body::before { content:''; position:fixed; inset:0; background:
 .cap-l3-opp  { background:rgba(0,170,255,0.08);   border-left:2px solid var(--blue); }
 .ttl-bar { font-size:9px; color:var(--dim); }
 
-/* -- LOG FEED -- */
+/* ── LOG FEED ── */
 .log-feed { font-size:10px; line-height:1.9; max-height:180px; overflow-y:auto;
             scrollbar-width:thin; scrollbar-color:var(--border) transparent; }
 .log-feed::-webkit-scrollbar { width:3px; }
 .log-feed::-webkit-scrollbar-thumb { background:var(--border); }
 .log-line { padding:1px 0; border-bottom:1px solid rgba(255,255,255,0.02); }
 
-/* -- PHANTOM -- */
+/* ── PHANTOM ── */
 .phantom-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-bottom:8px; }
 .ph-kpi { background:var(--bg3); padding:8px; border-radius:1px; text-align:center; }
 .ph-kpi-lbl { font-size:9px; color:var(--dim); }
@@ -1519,7 +1519,7 @@ body::before { content:''; position:fixed; inset:0; background:
 .verdict-red    { background:rgba(255,51,85,0.08);  border:1px solid var(--red);   color:var(--red); }
 .verdict-yellow { background:rgba(255,215,0,0.08);  border:1px solid var(--yellow); color:var(--yellow); }
 
-/* -- TRADES TABLE -- */
+/* ── TRADES TABLE ── */
 .trade-tbl { width:100%; border-collapse:collapse; font-size:10px; }
 .trade-tbl th { color:var(--dim); font-size:9px; letter-spacing:1px; padding:5px 6px;
                 border-bottom:1px solid var(--border); text-align:left; text-transform:uppercase; }
@@ -1528,7 +1528,7 @@ body::before { content:''; position:fixed; inset:0; background:
 .pnl-pos { color:var(--green); font-weight:700; }
 .pnl-neg { color:var(--red); font-weight:700; }
 
-/* -- CONTROLS -- */
+/* ── CONTROLS ── */
 .controls { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
 .btn { background:transparent; border:1px solid var(--green); color:var(--green); padding:7px 14px;
        border-radius:2px; cursor:pointer; font-family:'Share Tech Mono',monospace; font-size:11px;
@@ -1537,7 +1537,7 @@ body::before { content:''; position:fixed; inset:0; background:
 .btn-red   { border-color:var(--red); color:var(--red); }
 .btn-red:hover { background:rgba(255,51,85,0.1); }
 
-/* -- REGIME INDICATOR -- */
+/* ── REGIME INDICATOR ── */
 .regime-badge { display:inline-block; padding:2px 8px; border-radius:1px; font-size:10px;
                 font-weight:700; letter-spacing:1px; }
 .regime-trending-bull  { background:rgba(0,255,136,0.12); color:var(--green); border:1px solid var(--green2); }
@@ -1545,15 +1545,15 @@ body::before { content:''; position:fixed; inset:0; background:
 .regime-explosive      { background:rgba(255,215,0,0.12);  color:var(--yellow); border:1px solid var(--yellow); }
 .regime-ranging        { background:rgba(0,170,255,0.12);  color:var(--blue);   border:1px solid var(--blue); }
 
-/* -- DRIFT INDICATOR -- */
+/* ── DRIFT INDICATOR ── */
 .drift-bar-wrap { height:4px; background:var(--bg3); border-radius:2px; overflow:hidden; margin-top:4px; }
 .drift-bar-fill { height:100%; border-radius:2px; transition:width .5s,background .5s; }
 
-/* -- SPARKLINE AREA -- */
+/* ── SPARKLINE AREA ── */
 .sparkline-wrap { height:40px; margin-top:6px; position:relative; }
 canvas.spark { width:100%; height:40px; }
 
-/* -- SECTION SEPARATOR -- */
+/* ── SECTION SEPARATOR ── */
 .sep { height:1px; background:linear-gradient(90deg,transparent,var(--border),transparent); margin:10px 0; }
 </style>
 </head>
@@ -1562,11 +1562,11 @@ canvas.spark { width:100%; height:40px; }
 
   <!-- HEADER -->
   <div class="hdr">
-    <div class="hdr-title">* MISSION CONTROL V6.0</div>
+    <div class="hdr-title">⚡ MISSION CONTROL V6.0</div>
     <div class="hdr-right">
       <span><span class="status-dot" id="status-dot"></span><span id="status-txt" style="font-size:11px">OFFLINE</span></span>
       <span id="mode-badge" class="badge badge-paper">PAPER</span>
-      <a href="/supervisor" style="background:rgba(139,92,246,0.3); border:1px solid rgba(139,92,246,0.6); color:#a78bfa; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; letter-spacing:1px;">* COMMAND CENTER</a>
+      <a href="/supervisor" style="background:rgba(139,92,246,0.3); border:1px solid rgba(139,92,246,0.6); color:#a78bfa; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; letter-spacing:1px;">⚡ COMMAND CENTER</a>
       <a href="/health" style="background:rgba(0,201,122,0.15); border:1px solid rgba(0,201,122,0.4); color:#00c97a; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; letter-spacing:1px;">🩺 HEALTH</a>
       <span style="font-size:10px; color:var(--dim)" id="last-seen">--</span>
     </div>
@@ -1579,7 +1579,7 @@ canvas.spark { width:100%; height:40px; }
   <div class="ticker">
     <span class="price-big" id="btc-price">--</span>
     <span style="color:var(--dim)">BTC/USDC</span>
-    <span>* <span id="tick-n" style="color:var(--yellow)">0</span></span>
+    <span>⚡ <span id="tick-n" style="color:var(--yellow)">0</span></span>
     <span>🕐 <span id="last-tick" style="color:var(--dim)">--</span></span>
     <span id="trade-status-txt" style="color:var(--dim)">🔍 Analizzando...</span>
     <span style="margin-left:auto; font-size:10px;" id="regime-badge-ticker"></span>
@@ -1633,7 +1633,7 @@ canvas.spark { width:100%; height:40px; }
 
     <!-- M2 CAMPO GRAVITAZIONALE -->
     <div class="panel">
-      <div class="panel-head blue">[T] MOTORE 2 - CAMPO GRAVITAZIONALE
+      <div class="panel-head blue">🎯 MOTORE 2 — CAMPO GRAVITAZIONALE
         <span id="m2-shadow-badge" style="font-size:9px; color:var(--dim)">shadow chiuso</span>
       </div>
       <div class="panel-body">
@@ -1659,11 +1659,11 @@ canvas.spark { width:100%; height:40px; }
 
     <!-- ORACOLO DINAMICO -->
     <div class="panel">
-      <div class="panel-head purple">🔮 ORACOLO DINAMICO - Fingerprint Memory</div>
+      <div class="panel-head purple">🔮 ORACOLO DINAMICO — Fingerprint Memory</div>
       <div class="panel-body">
         <div style="font-size:9px; color:var(--dim); margin-bottom:6px;">
           Fingerprint = (momentum × volatilità × trend × direction). WR pesato con decay 0.95.
-          [W] ≥60% vincente  🟡 45-60% neutro  [L] &lt;45% tossico
+          🟢 ≥60% vincente  🟡 45-60% neutro  🔴 &lt;45% tossico
         </div>
         <table class="oracolo-table" id="oracolo-tbl">
           <thead>
@@ -1692,7 +1692,7 @@ canvas.spark { width:100%; height:40px; }
 
     <!-- INTELLIGENZA AUTONOMA -->
     <div class="panel">
-      <div class="panel-head orange">[AI] INTELLIGENZA AUTONOMA - Capsule Vive
+      <div class="panel-head orange">🧠 INTELLIGENZA AUTONOMA — Capsule Vive
         <span id="ia-gen-count" style="font-size:9px; color:var(--dim)">gen: 0 / exp: 0</span>
       </div>
       <div class="panel-body">
@@ -1715,39 +1715,39 @@ canvas.spark { width:100%; height:40px; }
     <!-- LATENCY TRACKER -->
     <div class="panel" id="latency-panel" style="margin-bottom:10px;">
       <div class="panel-head" id="latency-head" style="background:linear-gradient(90deg,#0a1628,#0d1f3c);border-left:3px solid var(--green);">
-        [LAT] LATENCY TRACKER - Slippage decisione->esecuzione
+        ⏱ LATENCY TRACKER — Slippage decisione→esecuzione
         <span id="latency-verdetto" style="float:right;font-size:9px;color:var(--green)">IN ATTESA DATI</span>
       </div>
       <div class="panel-body">
         <div style="font-size:9px;color:var(--dim);margin-bottom:8px">
-          Misura il costo della latenza Render. Quando slippage EXPLOSIVE > 0.05% -> serve VPS Frankfurt (€6/mese).
+          Misura il costo della latenza Render. Quando slippage EXPLOSIVE > 0.05% → serve VPS Frankfurt (€6/mese).
         </div>
         <!-- KPI principali -->
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px">
           <div style="background:#0a1628;border-radius:4px;padding:6px;text-align:center">
             <div style="font-size:9px;color:var(--dim)">SLIP MEDIO</div>
-            <div id="lat-slip-medio" style="font-size:16px;font-weight:bold;color:var(--green)">-</div>
+            <div id="lat-slip-medio" style="font-size:16px;font-weight:bold;color:var(--green)">—</div>
             <div style="font-size:8px;color:var(--dim)">tutti i trade</div>
           </div>
           <div style="background:#0a1628;border-radius:4px;padding:6px;text-align:center">
             <div style="font-size:9px;color:var(--dim)">SLIP EXPLOSIVE</div>
-            <div id="lat-slip-exp" style="font-size:16px;font-weight:bold;color:var(--green)">-</div>
+            <div id="lat-slip-exp" style="font-size:16px;font-weight:bold;color:var(--green)">—</div>
             <div style="font-size:8px;color:var(--dim)">contesto critico</div>
           </div>
           <div style="background:#0a1628;border-radius:4px;padding:6px;text-align:center">
             <div style="font-size:9px;color:var(--dim)">COSTO USD</div>
-            <div id="lat-costo" style="font-size:16px;font-weight:bold;color:var(--orange)">-</div>
+            <div id="lat-costo" style="font-size:16px;font-weight:bold;color:var(--orange)">—</div>
             <div style="font-size:8px;color:var(--dim)">perso per latenza</div>
           </div>
           <div style="background:#0a1628;border-radius:4px;padding:6px;text-align:center">
             <div style="font-size:9px;color:var(--dim)">COSTO EXPLOSIVE</div>
-            <div id="lat-costo-exp" style="font-size:16px;font-weight:bold;color:var(--orange)">-</div>
+            <div id="lat-costo-exp" style="font-size:16px;font-weight:bold;color:var(--orange)">—</div>
             <div style="font-size:8px;color:var(--dim)">dove conta di più</div>
           </div>
         </div>
         <!-- Barra allarme VPS -->
         <div id="lat-allarme-bar" style="display:none;background:#ff3355;color:#fff;font-size:10px;font-weight:bold;padding:8px 12px;border-radius:4px;text-align:center;margin-bottom:8px;letter-spacing:1px;animation:pulse 1s infinite">
-          [L] SLIPPAGE CRITICO - SERVE VPS FRANKFURT - €6/MESE RISOLVE IL PROBLEMA
+          🔴 SLIPPAGE CRITICO — SERVE VPS FRANKFURT — €6/MESE RISOLVE IL PROBLEMA
         </div>
         <!-- Storia ultimi eventi -->
         <div style="font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:4px">ULTIMI EVENTI LATENZA</div>
@@ -1755,22 +1755,22 @@ canvas.spark { width:100%; height:40px; }
       </div>
     </div>
 
-    <!-- NARRATORE AI - Dialogo tra due AI -->
+    <!-- NARRATORE AI — Dialogo tra due AI -->
     <div class="panel" style="margin-bottom:10px;border-color:#a855f7;border-width:2px;" id="narratore-panel">
       <div class="panel-head" style="background:linear-gradient(90deg,#1a0a2e,#2d1060);border-left:3px solid #a855f7;color:#a855f7;">
-        🎭 NARRATORE AI - Dialogo tra due intelligenze
+        🎭 NARRATORE AI — Dialogo tra due intelligenze
         <span id="narratore-ts" style="float:right;font-size:9px;color:#6b21a8">--:--</span>
       </div>
       <div id="narratore-capsula-bar" style="display:none;padding:6px 12px;background:#1a0a2e;border-bottom:1px solid #3b0764;font-size:10px;font-family:monospace;">
-        <span style="color:#a855f7">[C] ULTIMA CAPSULA:</span>
+        <span style="color:#a855f7">💊 ULTIMA CAPSULA:</span>
         <span id="narratore-cap-id" style="color:#c4b5fd;margin-left:6px;font-weight:bold"></span>
         <span id="narratore-cap-forza" style="color:#7c3aed;margin-left:8px"></span>
         <span id="narratore-cap-ts" style="color:#4c1d95;margin-left:8px;float:right"></span>
         <div id="narratore-cap-motivo" style="color:#6b21a8;margin-top:2px;font-size:9px"></div>
       </div>
-      <!-- Pannello diagnostica canale Narratore->Bot -->
+      <!-- Pannello diagnostica canale Narratore→Bot -->
       <div id="narratore-diag" style="padding:6px 12px;background:#0d0519;border-bottom:1px solid #2d1060;font-size:10px;font-family:monospace;">
-        <span style="color:#6b21a8;letter-spacing:1px;font-size:9px">📡 CANALE NARRATORE->BOT</span>
+        <span style="color:#6b21a8;letter-spacing:1px;font-size:9px">📡 CANALE NARRATORE→BOT</span>
         <span id="nd-iniettate" style="color:#00d97a;margin-left:12px">iniettate: 0</span>
         <span id="nd-bloccate" style="color:#f59e0b;margin-left:12px">bloccate: 0</span>
         <span id="nd-ultima" style="color:#4c1d95;margin-left:12px">ultima: mai</span>
@@ -1786,8 +1786,8 @@ canvas.spark { width:100%; height:40px; }
     <!-- V16 MOTORI -->
     <div class="panel">
       <div class="panel-head" style="background:linear-gradient(90deg,#0a1628,#0d1f3c);border-left:3px solid var(--green)">
-        🏎️ V16 - ASSETTO MERCATO
-        <span id="v16-comparto-nome" style="float:right;font-size:10px;color:var(--green)">-</span>
+        🏎️ V16 — ASSETTO MERCATO
+        <span id="v16-comparto-nome" style="float:right;font-size:10px;color:var(--green)">—</span>
       </div>
       <div class="panel-body">
         <!-- COMPARTO -->
@@ -1799,15 +1799,15 @@ canvas.spark { width:100%; height:40px; }
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px">
           <div class="stat-item">
             <span class="stat-lbl">GOMME</span>
-            <span class="stat-val" id="v16-gomme" style="font-size:14px">-</span>
+            <span class="stat-val" id="v16-gomme" style="font-size:14px">—</span>
           </div>
           <div class="stat-item">
             <span class="stat-lbl">NERVOSISMO</span>
-            <span class="stat-val" id="v16-nerv" style="font-size:14px">-</span>
+            <span class="stat-val" id="v16-nerv" style="font-size:14px">—</span>
           </div>
           <div class="stat-item">
             <span class="stat-lbl">BREATH FASE</span>
-            <span class="stat-val" id="v16-breath" style="font-size:14px">-</span>
+            <span class="stat-val" id="v16-breath" style="font-size:14px">—</span>
           </div>
         </div>
         <!-- BARRA NERVOSISMO -->
@@ -1832,7 +1832,7 @@ canvas.spark { width:100%; height:40px; }
     <!-- PHANTOM SUPERVISOR -->
     <div class="panel">
       <div class="panel-head" style="background:linear-gradient(90deg,#0a1628,#0d1f3c);border-left:3px solid var(--orange)">
-        [AI] PHANTOM SUPERVISOR - Autocorrezione
+        🧠 PHANTOM SUPERVISOR — Autocorrezione
         <span id="v16-sup-interventi" style="float:right;font-size:9px;color:var(--orange)">0 interventi</span>
       </div>
       <div class="panel-body">
@@ -1848,7 +1848,7 @@ canvas.spark { width:100%; height:40px; }
 
 <!-- PHANTOM TRACKER -->
     <div class="panel">
-      <div class="panel-head yellow">[P] PHANTOM - Se avessi fatto...
+      <div class="panel-head yellow">👻 PHANTOM — Se avessi fatto...
         <span style="font-size:9px; color:var(--dim)">Zavorra o Protezione?</span>
       </div>
       <div class="panel-body">
@@ -1862,7 +1862,7 @@ canvas.spark { width:100%; height:40px; }
             <div class="ph-kpi-val" id="ph-prot" style="color:var(--green)">0</div>
           </div>
           <div class="ph-kpi">
-            <div class="ph-kpi-lbl">[!] MANCATI</div>
+            <div class="ph-kpi-lbl">⚠️ MANCATI</div>
             <div class="ph-kpi-val" id="ph-zav" style="color:var(--red)">0</div>
           </div>
           <div class="ph-kpi">
@@ -1885,20 +1885,20 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
-  <!-- AI BRIDGE - IL GENERALE -->
+  <!-- AI BRIDGE — IL GENERALE -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--purple); border-width:2px;">
-    <div class="panel-head purple" style="font-size:11px;">🌉 IL GENERALE - AI BRIDGE
-      <span id="bridge-ts" style="font-size:9px; color:var(--dim)">-</span>
+    <div class="panel-head purple" style="font-size:11px;">🌉 IL GENERALE — AI BRIDGE
+      <span id="bridge-ts" style="font-size:9px; color:var(--dim)">—</span>
     </div>
     <div class="panel-body">
       <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap;">
         <div id="bridge-mercato-badge" style="font-family:'Orbitron',monospace; font-size:12px; font-weight:700;
              padding:5px 14px; border-radius:2px; letter-spacing:2px; border:1px solid var(--dim); color:var(--dim)">
-          - MERCATO -
+          — MERCATO —
         </div>
         <div id="bridge-alert-badge" style="font-size:10px; padding:3px 10px; border-radius:2px;
              border:1px solid var(--dim); color:var(--dim)">● ATTESA</div>
-        <div style="font-size:9px; color:var(--dim)">ultima analisi: <span id="bridge-last-ts">-</span></div>
+        <div style="font-size:9px; color:var(--dim)">ultima analisi: <span id="bridge-last-ts">—</span></div>
         <div style="margin-left:auto; font-size:9px; color:var(--dim)">
           <span id="bridge-active-dot">⚫</span> <span id="bridge-active-txt">offline</span>
           &nbsp;|&nbsp; err: <span id="bridge-errors">0</span>
@@ -1910,22 +1910,22 @@ canvas.spark { width:100%; height:40px; }
           <div id="bridge-analisi" style="font-size:11px; color:var(--text); line-height:1.5">In attesa...</div>
         </div>
         <div style="background:rgba(0,255,136,0.04); border-left:3px solid var(--green); padding:8px 12px; border-radius:1px;">
-          <div style="font-size:9px; color:var(--green); margin-bottom:3px; letter-spacing:1px">[T] PROSSIMO SETUP</div>
-          <div id="bridge-prossimo" style="font-size:11px; color:var(--text); line-height:1.5">-</div>
+          <div style="font-size:9px; color:var(--green); margin-bottom:3px; letter-spacing:1px">🎯 PROSSIMO SETUP</div>
+          <div id="bridge-prossimo" style="font-size:11px; color:var(--text); line-height:1.5">—</div>
         </div>
       </div>
       <div id="bridge-note-box" style="background:rgba(255,215,0,0.04); border-left:3px solid var(--yellow);
            padding:6px 12px; margin-bottom:8px; border-radius:1px; display:none;">
         <div style="font-size:9px; color:var(--yellow); margin-bottom:2px;">📝 NOTA PER TE</div>
-        <div id="bridge-note" style="font-size:11px; color:var(--text)">-</div>
+        <div id="bridge-note" style="font-size:11px; color:var(--text)">—</div>
       </div>
       <div class="log-feed" id="bridge-log" style="max-height:100px; font-size:10px;">Bridge non ancora attivo...</div>
     </div>
   </div>
 
-  <!-- GRAFICO LIVE - PREZZO + SEGNALI -->
+  <!-- GRAFICO LIVE — PREZZO + SEGNALI -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--green); border-width:2px;">
-    <div class="panel-head green">📈 GRAFICO LIVE - BTC/USDC
+    <div class="panel-head green">📈 GRAFICO LIVE — BTC/USDC
       <span id="chart-info" style="font-size:9px; color:var(--dim)">ultimi 120 tick · 30s window</span>
     </div>
     <div class="panel-body" style="padding:8px;">
@@ -1941,9 +1941,9 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
-  <!-- SUPERCERVELLO - DUE LINEE: MERCATO vs PREDIZIONE -->
+  <!-- SUPERCERVELLO — DUE LINEE: MERCATO vs PREDIZIONE -->
   <div class="panel" style="margin-bottom:10px; border-color:#aa44ff; border-width:2px;">
-    <div class="panel-head" style="color:#aa44ff;">[AI] SUPERCERVELLO - Mercato vs Predizione
+    <div class="panel-head" style="color:#aa44ff;">🧠 SUPERCERVELLO — Mercato vs Predizione
       <span id="sc-updated" style="font-size:9px; color:var(--dim)">in attesa dati...</span>
     </div>
     <div class="panel-body" style="padding:8px;">
@@ -1964,7 +1964,7 @@ canvas.spark { width:100%; height:40px; }
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">WR REALE</div>
-          <div id="sc-wr" style="font-size:14px;font-weight:500;color:var(--green)">-</div>
+          <div id="sc-wr" style="font-size:14px;font-weight:500;color:var(--green)">—</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">P&L</div>
@@ -1972,7 +1972,7 @@ canvas.spark { width:100%; height:40px; }
         </div>
       </div>
 
-      <!-- Grafico due linee - canvas puro -->
+      <!-- Grafico due linee — canvas puro -->
       <canvas id="scChart" style="width:100%;height:180px;display:block;"></canvas>
 
       <!-- Legenda -->
@@ -1987,7 +1987,7 @@ canvas.spark { width:100%; height:40px; }
 
       <!-- Carica bar -->
       <div style="margin-top:8px;">
-        <div style="font-size:9px;color:var(--dim);margin-bottom:2px;">Carica SC (0->1)</div>
+        <div style="font-size:9px;color:var(--dim);margin-bottom:2px;">Carica SC (0→1)</div>
         <canvas id="scCaricaChart" style="width:100%;height:50px;display:block;"></canvas>
       </div>
 
@@ -1995,27 +1995,27 @@ canvas.spark { width:100%; height:40px; }
       <div style="margin-top:8px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;">
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">SCOSTAMENTO</div>
-          <div id="pred-scost" style="font-size:14px;font-weight:500;color:var(--yellow)">-</div>
+          <div id="pred-scost" style="font-size:14px;font-weight:500;color:var(--yellow)">—</div>
           <div style="font-size:8px;color:var(--dim)">$ medio</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">CONFERMATE</div>
-          <div id="pred-conf" style="font-size:14px;font-weight:500;color:var(--green)">-</div>
+          <div id="pred-conf" style="font-size:14px;font-weight:500;color:var(--green)">—</div>
           <div style="font-size:8px;color:var(--dim)">su totale</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">SCORE PRED.</div>
-          <div id="pred-score" style="font-size:14px;font-weight:500;">-</div>
+          <div id="pred-score" style="font-size:14px;font-weight:500;">—</div>
           <div style="font-size:8px;color:var(--dim)">% corrette</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;grid-column:span 3;">
-          <div style="font-size:9px;color:var(--dim)">PRED -> TRADE -> PnL</div>
-          <div id="pred-trade" style="font-size:14px;font-weight:500;">-</div>
+          <div style="font-size:9px;color:var(--dim)">PRED → TRADE → PnL</div>
+          <div id="pred-trade" style="font-size:14px;font-weight:500;">—</div>
           <div style="font-size:8px;color:var(--dim)">trade da predizione / PnL cumulativo</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;grid-column:span 3;border:1px solid rgba(100,200,100,0.2);">
           <div style="font-size:9px;color:var(--dim)">CALIBRAZIONE MAGNITUDINE</div>
-          <div id="pred-ratio" style="font-size:18px;font-weight:500;">-</div>
+          <div id="pred-ratio" style="font-size:18px;font-weight:500;">—</div>
           <div style="font-size:8px;color:var(--dim)">100% = perfetto · &lt;100% troppo aggressiva · &gt;100% troppo conservativa</div>
         </div>
       </div>
@@ -2037,9 +2037,9 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
-  <!-- VERITAS TRACKER - CHI AVEVA RAGIONE -->
+  <!-- VERITAS TRACKER — CHI AVEVA RAGIONE -->
   <div class="panel" style="margin-bottom:10px; border-color:#ff8800; border-width:2px;">
-    <div class="panel-head" style="color:#ff8800;">⚖️ VERITAS - Chi aveva ragione?
+    <div class="panel-head" style="color:#ff8800;">⚖️ VERITAS — Chi aveva ragione?
       <span id="vt-counts" style="font-size:9px; color:var(--dim)">in attesa segnali...</span>
     </div>
     <div class="panel-body">
@@ -2073,9 +2073,9 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
-  <!-- SIGNAL TRACKER - MOTORE PREVISIONALE -->
+  <!-- SIGNAL TRACKER — MOTORE PREVISIONALE -->
   <div class="panel" style="margin-bottom:10px; border-color:var(--blue); border-width:2px;">
-    <div class="panel-head blue">🔭 MOTORE PREVISIONALE - Signal Tracker
+    <div class="panel-head blue">🔭 MOTORE PREVISIONALE — Signal Tracker
       <span id="st-counts" style="font-size:9px; color:var(--dim)">open:0 / chiusi:0</span>
     </div>
     <div class="panel-body">
@@ -2103,14 +2103,14 @@ canvas.spark { width:100%; height:40px; }
   </div>
 
 
-  <!-- ECONOMIC EDGE - QUANDO PRENDO SOLDI -->
+  <!-- ECONOMIC EDGE — QUANDO PRENDO SOLDI -->
   <div class="panel" style="margin-bottom:10px; border-color:#00ff88; border-width:2px;">
-    <div class="panel-head" style="color:#00ff88;">💰 ECONOMIC EDGE - Quando prendo soldi veri?
+    <div class="panel-head" style="color:#00ff88;">💰 ECONOMIC EDGE — Quando prendo soldi veri?
       <span style="font-size:9px; color:var(--dim); margin-left:8px;">hit_economica = % casi che coprono le fee reali</span>
     </div>
     <div class="panel-body">
       <div style="font-size:9px; color:var(--dim); margin-bottom:8px;">
-        [W] ≥50% = prendi soldi &nbsp;|&nbsp; 🟡 30-50% = vicino &nbsp;|&nbsp; [L] &lt;30% = sterile
+        🟢 ≥50% = prendi soldi &nbsp;|&nbsp; 🟡 30-50% = vicino &nbsp;|&nbsp; 🔴 &lt;30% = sterile
         &nbsp;|&nbsp; Fee simulata: $0.10 per trade
       </div>
       <div id="edge-body">
@@ -2124,16 +2124,16 @@ canvas.spark { width:100%; height:40px; }
   <!-- ROW 3: LOG DECISIONI + LIVE LOG M2 -->
   <div class="two-col">
     <div class="panel">
-      <div class="panel-head green">📋 DECISIONI BOT - Live Log</div>
+      <div class="panel-head green">📋 DECISIONI BOT — Live Log</div>
       <div class="panel-body">
         <div style="display:flex; flex-wrap:wrap; gap:8px; font-size:9px; margin-bottom:8px; color:var(--dim)">
-          <span style="color:var(--green)">[E] ENTRY</span>
-          <span style="color:var(--green)">[W] WIN</span>
-          <span style="color:var(--red)">[L] LOSS</span>
-          <span>* SEED</span>
-          <span style="color:#aa44ff">[P] FANTASMA</span>
+          <span style="color:var(--green)">🚀 ENTRY</span>
+          <span style="color:var(--green)">🟢 WIN</span>
+          <span style="color:var(--red)">🔴 LOSS</span>
+          <span>⚡ SEED</span>
+          <span style="color:#aa44ff">👻 FANTASMA</span>
           <span style="color:var(--orange)">🚫 MEM</span>
-          <span style="color:var(--yellow)">[C] CAPSULE</span>
+          <span style="color:var(--yellow)">💊 CAPSULE</span>
           <span style="color:var(--red)">💔 DIVORZIO</span>
           <span style="color:#aaaaff">🌙 SMORZ</span>
           <span style="color:var(--blue)">🌉 BRIDGE</span>
@@ -2145,7 +2145,7 @@ canvas.spark { width:100%; height:40px; }
     </div>
 
     <div class="panel">
-      <div class="panel-head blue">[T] LOG M2 - Campo Gravitazionale</div>
+      <div class="panel-head blue">🎯 LOG M2 — Campo Gravitazionale</div>
       <div class="panel-body">
         <div class="log-feed" id="m2-log-full" style="max-height:330px">In attesa M2...</div>
       </div>
@@ -2154,7 +2154,7 @@ canvas.spark { width:100%; height:40px; }
 
   <!-- ROW 4: TRADES TABLE -->
   <div class="panel" style="margin-bottom:10px">
-    <div class="panel-head green">[D] ULTIMI TRADE</div>
+    <div class="panel-head green">📊 ULTIMI TRADE</div>
     <div class="panel-body" style="overflow-x:auto">
       <table class="trade-tbl">
         <thead>
@@ -2170,9 +2170,9 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
-  <!-- ANALISI TRADE - Perché abbiamo vinto o perso -->
+  <!-- ANALISI TRADE — Perché abbiamo vinto o perso -->
   <div class="panel" style="margin-bottom:10px; border-color:#00aaff; border-width:2px;">
-    <div class="panel-head blue">[A] ANALISI TRADE - Perché abbiamo vinto o perso?
+    <div class="panel-head blue">🔬 ANALISI TRADE — Perché abbiamo vinto o perso?
       <span style="font-size:9px;color:var(--dim)">Analisi AI di ogni trade chiuso</span>
     </div>
     <div class="panel-body" id="trade-analisi-body">
@@ -2196,7 +2196,7 @@ canvas.spark { width:100%; height:40px; }
 const $ = id => document.getElementById(id);
 
 // ============================================================
-// GRAFICO LIVE - Mostra la TENSIONE, non la storia
+// GRAFICO LIVE — Mostra la TENSIONE, non la storia
 // ============================================================
 
 const SCPanel = (() => {
@@ -2216,7 +2216,7 @@ const SCPanel = (() => {
     const price = hb.last_price || 0;
     if (!price) return;
 
-    // Usa storia completa dal bot - non accumula tick per tick
+    // Usa storia completa dal bot — non accumula tick per tick
     const carica = hb.oi_carica || 0;
     const stato  = hb.oi_stato  || 'ATTESA';
 
@@ -2228,7 +2228,7 @@ const SCPanel = (() => {
         prices.push(p);
         labels.push(i);
         const c = ch[i] !== undefined ? ch[i] : carica;
-        // Delta reali dal Veritas - non fattore inventato
+        // Delta reali dal Veritas — non fattore inventato
         const deltaFuoco  = hb.pred_delta_fuoco  || 5.0;
         const deltaCarica = hb.pred_delta_carica || 2.0;
         let delta = 0;
@@ -2265,7 +2265,7 @@ const SCPanel = (() => {
       caricaShortEl.style.color = cs >= 0.65 ? '#ff3355' : cs >= 0.4 ? '#ff8800' : '#888';
     }
 
-    // Trades - calcola WR e PnL dai trade reali
+    // Trades — calcola WR e PnL dai trade reali
     const trades = hb.trades || [];
     if (trades.length !== lastTrades.length) {
       lastTrades = trades;
@@ -2289,7 +2289,7 @@ const SCPanel = (() => {
     const nTrades = wins + losses;
     const wr = nTrades > 0 ? Math.round(wins/nTrades*100) : 0;
     const wrEl = document.getElementById('sc-wr');
-    if (wrEl) { wrEl.textContent = nTrades > 0 ? wr + '%' : '-';
+    if (wrEl) { wrEl.textContent = nTrades > 0 ? wr + '%' : '—';
                wrEl.style.color = wr >= 60 ? '#00ff88' : wr >= 45 ? '#ffd700' : '#ff3355'; }
     const pnlEl = document.getElementById('sc-pnl');
     if (pnlEl) { pnlEl.textContent = (pnlTot>=0?'+':'') + '$' + Math.round(pnlTot);
@@ -2311,7 +2311,7 @@ const SCPanel = (() => {
           const pct = Math.round(v*100);
           const col = pct >= 30 ? '#00ff88' : pct >= 20 ? '#ffd700' : '#888';
           return `<span style="color:${col}">${k.replace('_',' ')} ${pct}%</span>`;
-        }).join(' . ');
+        }).join(' · ');
     }
 
     // Updated
@@ -2352,7 +2352,7 @@ const SCPanel = (() => {
     // Disegna grafici
     drawCharts();
   
-    // -- V16 AGGIORNAMENTO -------------------------------------
+    // ── V16 AGGIORNAMENTO ─────────────────────────────────────
     // COMPARTO
     const comparto = hb.comparto || 'NEUTRO';
     const compartiTutti = hb.comparti_tutti || [];
@@ -2412,7 +2412,7 @@ const SCPanel = (() => {
           padding:2px 0;border-bottom:1px solid #0a1020;color:#3d5a7a">
           <span style="color:#1e3a5f">${s.ts||''}</span>
           <span style="color:${COMP_COL[s.da]||'#3d5a7a'}">${s.da||''}</span>
-          <span style="color:#1e3a5f">-></span>
+          <span style="color:#1e3a5f">→</span>
           <span style="color:${COMP_COL[s.a]||'#00d97a'};font-weight:700">${s.a||''}</span>
         </div>`
       ).join('');
@@ -2437,7 +2437,7 @@ const SCPanel = (() => {
           </div>`;
         }).join('');
       } else {
-        supEl.innerHTML = '<div style="color:#1e3a5f;font-size:10px">Sistema in osservazione - nessun intervento ancora</div>';
+        supEl.innerHTML = '<div style="color:#1e3a5f;font-size:10px">Sistema in osservazione — nessun intervento ancora</div>';
       }
     }
 
@@ -2449,7 +2449,7 @@ const SCPanel = (() => {
         const tot = (d.would_win||0) + (d.would_lose||0);
         const wr  = tot > 0 ? Math.round(d.would_win/tot*100) : 0;
         const col = wr > 45 ? '#f59e0b' : wr < 25 ? '#ff3355' : '#3d5a7a';
-        const alert = wr > 45 ? '[!] ALLENTA' : wr < 25 ? ' OK' : '';
+        const alert = wr > 45 ? '⚠️ ALLENTA' : wr < 25 ? '🛡️ OK' : '';
         return `<div style="display:grid;grid-template-columns:1fr 40px 40px 40px 70px;
           gap:4px;padding:3px 0;border-bottom:1px solid #0a1020;align-items:center">
           <span style="color:#3d5a7a;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${id}</span>
@@ -2460,14 +2460,14 @@ const SCPanel = (() => {
         </div>`;
       }).join('');
     }
-    // -- FINE V16 ---------------------------------------------
+    // ── FINE V16 ─────────────────────────────────────────────
 
-    // -- NARRATORE AI ------------------------------------------
+    // ── NARRATORE AI ──────────────────────────────────────────
     const narrativa = hb.narrativa_ds || [];
     const narratoreBody = $('narratore-body');
     const narratoreTs   = $('narratore-ts');
 
-    // -- LATENCY TRACKER -------------------------------------------------
+    // ── LATENCY TRACKER ─────────────────────────────────────────────────
     const lt = hb.latency_stats || {};
     if (lt.n_total > 0) {
       const slipMedio   = lt.slippage_medio || 0;
@@ -2495,11 +2495,11 @@ const SCPanel = (() => {
 
       if (allarme) {
         if (elHead) { elHead.style.borderLeftColor = '#ff3355'; elHead.style.background = 'linear-gradient(90deg,#2a0a10,#3d0d1a)'; }
-        if (elVerd) { elVerd.textContent = '[L] SERVE VPS'; elVerd.style.color = '#ff3355'; }
+        if (elVerd) { elVerd.textContent = '🔴 SERVE VPS'; elVerd.style.color = '#ff3355'; }
         if (elAllar) elAllar.style.display = 'block';
       } else {
         if (elHead) { elHead.style.borderLeftColor = '#00d97a'; }
-        if (elVerd) { elVerd.textContent = lt.verdetto || '[W] OK'; elVerd.style.color = '#00d97a'; }
+        if (elVerd) { elVerd.textContent = lt.verdetto || '🟢 OK'; elVerd.style.color = '#00d97a'; }
         if (elAllar) elAllar.style.display = 'none';
       }
 
@@ -2507,7 +2507,7 @@ const SCPanel = (() => {
       if (elStoria && lt.storia) {
         elStoria.innerHTML = lt.storia.slice(-5).reverse().map(e => {
           const col = e.allarme ? '#ff3355' : e.slip_pct > 0.02 ? '#ffd700' : '#00d97a';
-          const tag = e.allarme ? '[L]' : e.slip_pct > 0.02 ? '' : '[W]';
+          const tag = e.allarme ? '🔴' : e.slip_pct > 0.02 ? '🟡' : '🟢';
           return `<div style="padding:2px 0;border-bottom:1px solid #1a2030;color:${col}">
             ${tag} ${e.ts} [${e.regime}] slip=${e.slip_pct.toFixed(3)}% costo=$${e.costo_usd.toFixed(3)} elapsed=${e.elapsed_ms}ms
           </div>`;
@@ -2527,7 +2527,7 @@ const SCPanel = (() => {
       if (el('narratore-cap-motivo')) el('narratore-cap-motivo').textContent = ultCap.motivo || '';
     }
 
-    // Diagnostica canale Narratore->Bot
+    // Diagnostica canale Narratore→Bot
     const diag = hb.narratore_diagnostica || {};
     const ndI = document.getElementById('nd-iniettate');
     const ndB = document.getElementById('nd-bloccate');
@@ -2549,34 +2549,34 @@ const SCPanel = (() => {
       ndS.innerHTML = storia.map(s =>
         `<span style="color:#6b21a8">${s.ts}</span> ` +
         `<span style="color:#00d97a">+[${s.iniettate?.join(',')||''}]</span>` +
-        (s.bloccate?.length ? ` <span style="color:#f59e0b">[${s.bloccate.join(',')}]</span>` : '')
-      ).join(' &nbsp;.&nbsp; ');
+        (s.bloccate?.length ? ` <span style="color:#f59e0b">✗[${s.bloccate.join(',')}]</span>` : '')
+      ).join(' &nbsp;·&nbsp; ');
     }
 
     if (narrativa.length && narratoreBody) {
       const ultimo = narrativa[narrativa.length - 1];
       narratoreTs.textContent = ultimo.ts || '--:--';
 
-      // Max 5 dialoghi, dal piu recente
+      // Max 5 dialoghi, dal più recente
       narratoreBody.innerHTML = narrativa.slice(-5).reverse().map((n, i) => {
         const isUltimo = i === 0;
         const opacita = isUltimo ? '1' : `${0.85 - i * 0.15}`;
 
         // Badge capsula con dettaglio azione
         const capBadge = n.capsula
-          ? `<span style="background:#3b0764;color:#c4b5fd;padding:2px 8px;border-radius:3px;font-size:9px;margin-left:6px;font-weight:bold">[C] ${n.capsula} -> BOT</span>`
-          : `<span style="color:#4c1d95;font-size:9px;margin-left:6px"> nessuna capsula</span>`;
+          ? `<span style="background:#3b0764;color:#c4b5fd;padding:2px 8px;border-radius:3px;font-size:9px;margin-left:6px;font-weight:bold">💊 ${n.capsula} → BOT</span>`
+          : `<span style="color:#4c1d95;font-size:9px;margin-left:6px">○ nessuna capsula</span>`;
 
         return `<div style="margin-bottom:10px;opacity:${opacita};
           border-left:2px solid ${isUltimo ? '#a855f7' : '#3b0764'};
           padding-left:8px;">
           <div style="font-size:9px;color:#7c3aed;margin-bottom:3px;letter-spacing:1px;display:flex;align-items:center;flex-wrap:wrap;gap:4px">
-             OSSERVATORE . ${n.ts} ${capBadge}
+            🔍 OSSERVATORE · ${n.ts} ${capBadge}
           </div>
           <div style="font-size:10px;color:#c4b5fd;font-style:italic;margin-bottom:4px;line-height:1.4">
             "${n.domanda}"
           </div>
-          <div style="font-size:9px;color:#9333ea;margin-bottom:2px;letter-spacing:1px"> RAGIONATORE</div>
+          <div style="font-size:9px;color:#9333ea;margin-bottom:2px;letter-spacing:1px">💭 RAGIONATORE</div>
           <div style="font-size:10px;color:#e9d5ff;line-height:1.5">
             ${n.risposta}
           </div>
@@ -2589,12 +2589,12 @@ const SCPanel = (() => {
         ? '<div style="color:#4c1d95;font-size:10px;text-align:center;padding:12px">Primo ciclo in arrivo tra 30s...</div>'
         : '<div style="color:#4c1d95;font-size:10px;text-align:center;padding:12px">DEEPSEEK_API_KEY non configurata</div>';
     }
-    // -- FINE NARRATORE AI -------------------------------------
+    // ── FINE NARRATORE AI ─────────────────────────────────────
 
 }
 
   function drawCharts() {
-    // Canvas puro - zero dipendenze Chart.js
+    // Canvas puro — zero dipendenze Chart.js
     const c1 = document.getElementById('scChart');
     const c2 = document.getElementById('scCaricaChart');
     if (!c1 || !c2 || prices.length < 2) return;
@@ -2639,7 +2639,7 @@ const SCPanel = (() => {
       const xi=Math.min(prices.length-1,Math.max(0,m.x));
       const xp=xOf(xi), yp=yOf(m.y||prices[xi]||minP);
       ctx1.fillStyle='#00ff88'; ctx1.font='12px sans-serif'; ctx1.textAlign='center';
-      ctx1.fillText('^',xp,yp+14);
+      ctx1.fillText('▲',xp,yp+14);
     });
 
     // SELL markers
@@ -2648,7 +2648,7 @@ const SCPanel = (() => {
       const xp=xOf(xi), yp=yOf(m.y||prices[xi]||minP);
       ctx1.fillStyle=m.loss?'#ff3355':'#00ff88';
       ctx1.font='12px sans-serif'; ctx1.textAlign='center';
-      ctx1.fillText('v',xp,yp-4);
+      ctx1.fillText('▼',xp,yp-4);
     });
 
     // Label prezzo live
@@ -2657,7 +2657,7 @@ const SCPanel = (() => {
     ctx1.fillStyle='#378ADD';
     ctx1.fillText('$'+Math.round(lp),PAD.left+w1+2,yOf(lp)+4);
 
-    // -- Grafico carica ----------------------------------------
+    // ── Grafico carica ────────────────────────────────────────
     const W2=c2.offsetWidth||600, H2=50;
     c2.width=W2; c2.height=H2;
     const ctx2=c2.getContext('2d');
@@ -2709,8 +2709,8 @@ const VeritatisPanel = (() => {
       const col = chi === 'ORACOLO' ? '#00ff88' : '#ff8800';
       const pnl = conf.pnl_perso_bloccando || conf.pnl_salvato_bloccando || 0;
       const msg = chi === 'ORACOLO'
-        ? ` ORACOLO aveva ragione - SC ha bloccato $${Math.abs(pnl).toFixed(0)} di guadagni`
-        : ` SC aveva ragione - ha salvato $${Math.abs(pnl).toFixed(0)} bloccando perdite`;
+        ? `🔥 ORACOLO aveva ragione — SC ha bloccato $${Math.abs(pnl).toFixed(0)} di guadagni`
+        : `🛡️ SC aveva ragione — ha salvato $${Math.abs(pnl).toFixed(0)} bloccando perdite`;
       confEl.innerHTML = `<span style="color:${col};font-weight:500">${msg}</span>`;
     }
 
@@ -2780,8 +2780,8 @@ const LiveChart = (() => {
     // Sfondo
     ctx.fillStyle='#060810'; ctx.fillRect(0,0,W,H);
 
-    // -- BARRA DI TENSIONE -------------------------------------
-    // Mostra quanto il sistema  vicino alla soglia
+    // ── BARRA DI TENSIONE ─────────────────────────────────────
+    // Mostra quanto il sistema è vicino alla soglia
     // 0% = lontano | 100% = ENTRA
     const tension = curSoglia > 0 ? Math.min(1, curScore/curSoglia) : 0;
     const tensionW = w * tension;
@@ -2822,20 +2822,20 @@ const LiveChart = (() => {
     ctx.textAlign = 'left';
     if (tension >= 1.0) {
       ctx.fillStyle = '#00ff88';
-      ctx.fillText('* PRONTO - score ' + curScore.toFixed(0) + ' / ' + curSoglia, PAD.left+4, 20);
+      ctx.fillText('⚡ PRONTO — score ' + curScore.toFixed(0) + ' / ' + curSoglia, PAD.left+4, 20);
     } else if (tension >= 0.85) {
       ctx.fillStyle = '#ffd700';
-      ctx.fillText(' IN AVVICINAMENTO - ' + (tension*100).toFixed(0) + '% soglia', PAD.left+4, 20);
+      ctx.fillText('⚠ IN AVVICINAMENTO — ' + (tension*100).toFixed(0) + '% soglia', PAD.left+4, 20);
     } else {
       ctx.fillStyle = '#334455';
-      ctx.fillText('. in attesa  score ' + curScore.toFixed(0) + ' / soglia ' + curSoglia, PAD.left+4, 20);
+      ctx.fillText('· in attesa  score ' + curScore.toFixed(0) + ' / soglia ' + curSoglia, PAD.left+4, 20);
     }
     // Direzione attesa
     ctx.textAlign = 'right';
     ctx.fillStyle = shadowDir==='LONG' ? '#00ff88' : '#ff3355';
-    ctx.fillText(shadowDir==='LONG' ? '^ LONG' : 'v SHORT', PAD.left+w-2, 20);
+    ctx.fillText(shadowDir==='LONG' ? '↑ LONG' : '↓ SHORT', PAD.left+w-2, 20);
 
-    // -- GRAFICO PREZZO ----------------------------------------
+    // ── GRAFICO PREZZO ────────────────────────────────────────
     const vals = prices.map(p=>p.v);
     let mn=Math.min(...vals), mx=Math.max(...vals);
     const sp=mx-mn;
@@ -2910,7 +2910,7 @@ const LiveChart = (() => {
     ctx.fillStyle=lCol;
     ctx.shadowColor=lCol; ctx.shadowBlur=12; ctx.fill(); ctx.shadowBlur=0;
 
-    // -- MARKER EVENTI -----------------------------------------
+    // ── MARKER EVENTI ─────────────────────────────────────────
     const tMin=prices[0].ts, tMax=prices[prices.length-1].ts, tRng=tMax-tMin||1;
     events.forEach(ev=>{
       if(ev.ts<tMin||ev.ts>tMax) return;
@@ -2929,9 +2929,9 @@ const LiveChart = (() => {
         ctx.font='bold 16px Share Tech Mono'; ctx.textAlign='center';
         ctx.fillStyle=col;
         ctx.shadowColor=col; ctx.shadowBlur=10;
-        ctx.fillText(ev.dir==='LONG'?'^':'v', xp, ev.dir==='LONG'?yp+18:yp-8);
+        ctx.fillText(ev.dir==='LONG'?'▲':'▼', xp, ev.dir==='LONG'?yp+18:yp-8);
         ctx.shadowBlur=0;
-        // Score badge - solo se non sovrapposto
+        // Score badge — solo se non sovrapposto
         const others = events.filter(e => e !== ev && Math.abs((e.ts-tMin)/(tRng||1)*w - (xp-PAD.left)) < 20);
         if (others.length === 0) {
           ctx.font='bold 9px Share Tech Mono';
@@ -2945,7 +2945,7 @@ const LiveChart = (() => {
         ctx.beginPath(); ctx.moveTo(xp,PAD.top); ctx.lineTo(xp,PAD.top+h); ctx.stroke();
         ctx.setLineDash([]);
         ctx.font='11px Share Tech Mono'; ctx.textAlign='center';
-        ctx.fillStyle='#667788'; ctx.fillText('x', xp, yp-6);
+        ctx.fillStyle='#667788'; ctx.fillText('✕', xp, yp-6);
       }
     });
 
@@ -2978,11 +2978,11 @@ function renderLog(lines, elId, maxH) {
   const el = $(elId);
   if(!lines||lines.length===0) return;
   const LOG_COLORS = {
-    '[E]':'var(--green)','[W]':'var(--green)','[L]':'var(--red)','':'var(--red)',
-    '':'var(--red)','*':'var(--dim)','[P]':'#aa44ff','':'var(--orange)',
-    '[C]':'var(--yellow)','':'#aaaaff','':'var(--blue)','[T]':'var(--blue)',
-    '':'var(--orange)','':'var(--purple)','':'var(--dim)','':'var(--blue)',
-    '[AI]':'var(--orange)','':'var(--dim)','*':'var(--yellow)',
+    '🚀':'var(--green)','🟢':'var(--green)','🔴':'var(--red)','💔':'var(--red)',
+    '🛑':'var(--red)','⚡':'var(--dim)','👻':'#aa44ff','🚫':'var(--orange)',
+    '💊':'var(--yellow)','🌙':'#aaaaff','🌉':'var(--blue)','🎯':'var(--blue)',
+    '🧭':'var(--orange)','🌍':'var(--purple)','💓':'var(--dim)','🔄':'var(--blue)',
+    '🧠':'var(--orange)','🗑️':'var(--dim)','⚡':'var(--yellow)',
   };
   el.innerHTML = [...lines].reverse().map(line => {
     let col = 'var(--text)';
@@ -3011,7 +3011,7 @@ function update() {
     $('status-txt').textContent = hb.status||'OFFLINE';
     $('status-txt').style.color = running?'var(--green)':'var(--red)';
     const mode = hb.mode||'PAPER';
-    $('mode-badge').textContent = mode==='LIVE'?'[L] LIVE':' PAPER';
+    $('mode-badge').textContent = mode==='LIVE'?'🔴 LIVE':'📄 PAPER';
     $('mode-badge').className = 'badge '+(mode==='LIVE'?'badge-live':'badge-paper');
     $('last-seen').textContent = hb.last_seen ? new Date(hb.last_seen).toLocaleTimeString() : '--';
 
@@ -3027,10 +3027,10 @@ function update() {
 
     // Trade status
     const ts = $('trade-status-txt');
-    if(hb.posizione_aperta){ts.textContent='[W] M1 APERTO';ts.style.color='var(--green)';}
-    else if(hb.m2_shadow_open){ts.textContent='[T] M2 SHADOW APERTO';ts.style.color='var(--blue)';}
-    else if((hb.tick_count||0)<200){ts.textContent=' Warmup';ts.style.color='var(--yellow)';}
-    else{ts.textContent=' In attesa setup';ts.style.color='var(--dim)';}
+    if(hb.posizione_aperta){ts.textContent='🟢 M1 APERTO';ts.style.color='var(--green)';}
+    else if(hb.m2_shadow_open){ts.textContent='🎯 M2 SHADOW APERTO';ts.style.color='var(--blue)';}
+    else if((hb.tick_count||0)<200){ts.textContent='⏳ Warmup';ts.style.color='var(--yellow)';}
+    else{ts.textContent='🔍 In attesa setup';ts.style.color='var(--dim)';}
 
     // KPI
     const m2pnl = hb.m2_pnl||0;
@@ -3076,10 +3076,10 @@ function update() {
 
     // ALERT BAR
     const alerts=[];
-    if((hb.m2_loss_streak||0)>=3) alerts.push('[!] LOSS STREAK '+hb.m2_loss_streak);
-    if(m2wr<40 && m2t>5) alerts.push('[!] WR BASSO '+m2wr.toFixed(0)+'%');
-    if(m2pnl<-50) alerts.push('[L] DRAWDOWN '+fmtUSD(m2pnl));
-    if((hb.m2_cooldown||0)>0) alerts.push(' COOLDOWN '+(hb.m2_cooldown||0).toFixed(0)+'s');
+    if((hb.m2_loss_streak||0)>=3) alerts.push('⚠️ LOSS STREAK '+hb.m2_loss_streak);
+    if(m2wr<40 && m2t>5) alerts.push('⚠️ WR BASSO '+m2wr.toFixed(0)+'%');
+    if(m2pnl<-50) alerts.push('🔴 DRAWDOWN '+fmtUSD(m2pnl));
+    if((hb.m2_cooldown||0)>0) alerts.push('⏳ COOLDOWN '+(hb.m2_cooldown||0).toFixed(0)+'s');
     const ab = $('alert-bar');
     if(alerts.length>0){ ab.style.display='block'; ab.innerHTML=alerts.join('  &nbsp;|&nbsp;  '); }
     else { ab.style.display='none'; }
@@ -3087,9 +3087,9 @@ function update() {
     // M2 DIRECTION
     const dir = hb.m2_direction||'LONG';
     const db = $('dir-box'), dt = $('dir-txt');
-    dt.textContent = dir==='SHORT'?'[L] SHORT v':'[W] LONG ^';
+    dt.textContent = dir==='SHORT'?'🔴 SHORT ↓':'🟢 LONG ↑';
     db.className = 'dir-box '+(dir==='SHORT'?'dir-short':'dir-long');
-    $('m2-shadow-badge').textContent = hb.m2_shadow_open?'[W] SHADOW APERTO':' shadow chiuso';
+    $('m2-shadow-badge').textContent = hb.m2_shadow_open?'🟢 SHADOW APERTO':'⚪ shadow chiuso';
     $('m2-shadow-badge').style.color = hb.m2_shadow_open?'var(--green)':'var(--dim)';
 
     $('m2-wr-detail').textContent = m2wr.toFixed(1)+'%';
@@ -3100,7 +3100,7 @@ function update() {
     $('m2-streak').textContent = hb.m2_loss_streak||0;
     $('m2-streak').style.color = (hb.m2_loss_streak||0)>=2?'var(--red)':'var(--text)';
     const cd = hb.m2_cooldown||0;
-    $('m2-cooldown').textContent = cd>0?cd.toFixed(0)+'s':'-';
+    $('m2-cooldown').textContent = cd>0?cd.toFixed(0)+'s':'—';
     $('m2-cooldown').style.color = cd>0?'var(--yellow)':'var(--dim)';
 
     const rsi = cs.rsi||50, macd_h = cs.macd_hist||0;
@@ -3136,12 +3136,12 @@ function update() {
           const wr100 = (v.wr*100);
           const wrCol = colorWR(wr100);
           const pnlA = v.pnl_avg||0;
-          const earlyPct = v.exit_too_early ? (v.exit_too_early*100).toFixed(0)+'%' : '-';
+          const earlyPct = v.exit_too_early ? (v.exit_too_early*100).toFixed(0)+'%' : '—';
           const barW = Math.round(wr100)+'px';
-          const realTag = v.real>0?`<span style="color:var(--green);font-size:9px"> ${v.real}</span>`:'';
-          const status = wr100>=60?'<span style="color:var(--green)">*</span>':
-                         wr100>=45?'<span style="color:var(--yellow)"></span>':
-                         '<span style="color:var(--red)"></span>';
+          const realTag = v.real>0?`<span style="color:var(--green);font-size:9px"> ★${v.real}</span>`:'';
+          const status = wr100>=60?'<span style="color:var(--green)">●</span>':
+                         wr100>=45?'<span style="color:var(--yellow)">◐</span>':
+                         '<span style="color:var(--red)">○</span>';
           return `<tr>
             <td style="font-size:9px;color:var(--dim)">${fp.replace('LONG|','').replace('SHORT|','<span style="color:var(--red)">S</span> ')}${realTag}</td>
             <td><span style="color:${wrCol};font-weight:700">${wr100.toFixed(0)}%</span>
@@ -3159,7 +3159,7 @@ function update() {
 
     const cp = hb.calibra_params||{};
     $('calib-params').textContent = cp.seed_threshold?
-      `seed>=${cp.seed_threshold} cap1>=${cp.cap1_soglia_buona} cap3>=${cp.cap3_fp_minimo}`:'--';
+      `seed≥${cp.seed_threshold} cap1≥${cp.cap1_soglia_buona} cap3≥${cp.cap3_fp_minimo}`:'--';
 
     // IA CAPSULE LIST
     $('ia-l2').textContent = ia.l2||0;
@@ -3179,9 +3179,9 @@ function update() {
           'L2_BLK':'cap-l2-blk','L2_BST':'cap-l2-bst',
           'L3_STK':'cap-l3-stk','L3_RBLO':'cap-l3-reg','L3_OPP':'cap-l3-opp'
         }[c.tipo]||'cap-l3-stk';
-        const icon = c.tipo?.includes('BLK')||c.tipo?.includes('RBLO')?'':
-                     c.tipo?.includes('BST')||c.tipo?.includes('OPP')?'[E]':
-                     c.tipo?.includes('STK')?'*':'[C]';
+        const icon = c.tipo?.includes('BLK')||c.tipo?.includes('RBLO')?'🚫':
+                     c.tipo?.includes('BST')||c.tipo?.includes('OPP')?'🚀':
+                     c.tipo?.includes('STK')?'⚡':'💊';
         return `<div class="capsule-item ${typeClass}">
           <span>${icon} ${c.id||c.capsule_id||'?'}</span>
           <span class="ttl-bar">TTL ${ttlStr} | ${c.tipo||'?'}</span>
@@ -3245,7 +3245,7 @@ function update() {
       }).join('');
     }
 
-    // GRAFICO LIVE - feed dati e disegno
+    // GRAFICO LIVE — feed dati e disegno
     const nowTs = Date.now();
     if (hb.last_price) {
       LiveChart.addPrice(hb.last_price, nowTs);
@@ -3277,7 +3277,7 @@ function update() {
     });
 
     // Aggiorna info chart
-    $('chart-info').textContent = `ultimi 180 tick . aggiornato ${new Date().toLocaleTimeString()}`;
+    $('chart-info').textContent = `ultimi 180 tick · aggiornato ${new Date().toLocaleTimeString()}`;
     const m2cs = hb.m2_campo_stats || {};
     const scoreNow = m2cs.last_score || 0;
     const soglNow  = hb.m2_soglia_base || 60;
@@ -3293,14 +3293,14 @@ function update() {
 
     // AI BRIDGE PANEL
     const ba = hb.bridge_active;
-    $('bridge-active-dot').textContent = ba ? '[W]' : 'o';
+    $('bridge-active-dot').textContent = ba ? '🟢' : '⚫';
     $('bridge-active-txt').textContent = ba ? 'attivo' : 'offline';
     $('bridge-active-txt').style.color = ba ? 'var(--green)' : 'var(--dim)';
     $('bridge-errors').textContent = hb.bridge_errors || 0;
     $('bridge-errors').style.color = (hb.bridge_errors||0) > 0 ? 'var(--red)' : 'var(--dim)';
 
     const bts = hb.bridge_last_ts || hb.bridge_last_call;
-    $('bridge-last-ts').textContent = bts ? (bts.length > 8 ? new Date(bts).toLocaleTimeString() : bts) : '-';
+    $('bridge-last-ts').textContent = bts ? (bts.length > 8 ? new Date(bts).toLocaleTimeString() : bts) : '—';
 
     // Analisi testuale
     const analisi = hb.bridge_analisi || '';
@@ -3309,7 +3309,7 @@ function update() {
 
     // Prossimo setup
     const setup = hb.bridge_prossimo || '';
-    $('bridge-prossimo').textContent = setup || '-';
+    $('bridge-prossimo').textContent = setup || '—';
     $('bridge-prossimo').style.color = setup ? 'var(--green)' : 'var(--dim)';
 
     // Nota per Roberto
@@ -3331,7 +3331,7 @@ function update() {
       'NEUTRO':      {bg:'rgba(0,170,255,0.08)',  border:'var(--blue)',   color:'var(--blue)'},
     };
     const ms = mercatoStyles[mercato] || {bg:'transparent',border:'var(--dim)',color:'var(--dim)'};
-    mbadge.textContent = mercato || '- MERCATO -';
+    mbadge.textContent = mercato || '— MERCATO —';
     mbadge.style.background = ms.bg;
     mbadge.style.borderColor = ms.border;
     mbadge.style.color = ms.color;
@@ -3340,11 +3340,11 @@ function update() {
     const alert = hb.bridge_alert || '';
     const abadge = $('bridge-alert-badge');
     const alertStyles = {
-      'green':  {border:'var(--green)',  color:'var(--green)',  txt:'* OK'},
-      'yellow': {border:'var(--yellow)', color:'var(--yellow)', txt:' ATTENZIONE'},
-      'red':    {border:'var(--red)',    color:'var(--red)',    txt:'[L] ALERT'},
+      'green':  {border:'var(--green)',  color:'var(--green)',  txt:'● OK'},
+      'yellow': {border:'var(--yellow)', color:'var(--yellow)', txt:'⚠ ATTENZIONE'},
+      'red':    {border:'var(--red)',    color:'var(--red)',    txt:'🔴 ALERT'},
     };
-    const as = alertStyles[alert] || {border:'var(--dim)', color:'var(--dim)', txt:'* -'};
+    const as = alertStyles[alert] || {border:'var(--dim)', color:'var(--dim)', txt:'● —'};
     abadge.textContent = as.txt;
     abadge.style.borderColor = as.border;
     abadge.style.color = as.color;
@@ -3355,7 +3355,7 @@ function update() {
     // SIGNAL TRACKER
     const st = hb.signal_tracker || {};
 
-      // -- ECONOMIC EDGE ----------------------------------------------
+      // ── ECONOMIC EDGE ──────────────────────────────────────────────
       // Calcola hit_economica per ogni contesto dal Signal Tracker
       // hit_economica = % segnali chiusi con pnl_sim > FEE_SIM ($0.10)
       const FEE_SIM = 0.10;
@@ -3372,9 +3372,9 @@ function update() {
         const delta  = row.avg_delta_60s || 0;
 
         // Stima hit_economica dal pnl_sim_avg
-        // Se pnl_sim_avg > FEE_SIM -> contesto mediamente profittevole
+        // Se pnl_sim_avg > FEE_SIM → contesto mediamente profittevole
         // hit_economica stimata: proporzionale al rapporto pnl/fee
-        // (approssimazione finch non abbiamo distribuzione completa)
+        // (approssimazione finché non abbiamo distribuzione completa)
         let hitEcon;
         if (pnlAvg > FEE_SIM * 3)       hitEcon = 0.75;   // chiaramente profittevole
         else if (pnlAvg > FEE_SIM)       hitEcon = 0.55;   // sopra fee
@@ -3390,8 +3390,8 @@ function update() {
         const pct  = Math.round(d.hitEcon * 100);
         const color = d.hitEcon >= 0.50 ? '#00ff88' :
                       d.hitEcon >= 0.30 ? '#ffaa00' : '#ff4444';
-        const emoji = d.hitEcon >= 0.50 ? '[W]' :
-                      d.hitEcon >= 0.30 ? '' : '[L]';
+        const emoji = d.hitEcon >= 0.50 ? '🟢' :
+                      d.hitEcon >= 0.30 ? '🟡' : '🔴';
         const barW = Math.round(d.hitEcon * 100);
         const [dir, reg, band] = d.ctx.split('|');
         const dirColor = dir === 'LONG' ? 'var(--green)' : 'var(--red)';
@@ -3412,14 +3412,14 @@ function update() {
               <span>n=${d.n}</span>
               <span>hit=${Math.round(d.hit60*100)}%</span>
               <span>PnL sim <span style="color:${d.pnlAvg>0?'var(--green)':'var(--red)'}">${d.pnlAvg>0?'+':''}${d.pnlAvg.toFixed(2)}$</span></span>
-              <span> ${d.delta>0?'+':''}${d.delta.toFixed(1)}</span>
+              <span>Δ ${d.delta>0?'+':''}${d.delta.toFixed(1)}</span>
             </div>
           </div>`;
       });
 
       document.getElementById('edge-body').innerHTML =
         edgeRows || '<div style="color:var(--dim);text-align:center;padding:16px;font-size:10px;">In attesa segnali...</div>';
-      // -- END ECONOMIC EDGE ------------------------------------------
+      // ── END ECONOMIC EDGE ──────────────────────────────────────────
     $('st-counts').textContent = `open:${st.open||0} / chiusi:${st.closed||0}`;
     const stTopRows = st.top || [];
     if (stTopRows.length > 0) {
@@ -3449,31 +3449,35 @@ function update() {
     // SUGGESTIONS
     $('suggestions-box').innerHTML = (d.suggestions||[]).map(s=>`<span style="margin-right:16px">${s}</span>`).join('');
 
-    // ANALISI TRADE - Perch abbiamo vinto o perso
+    // ANALISI TRADE — Perché abbiamo vinto o perso
     const analisiList = hb.trade_analisi || [];
-    const analisiEl = document.getElementById('trade-analisi-body');
+    const analisiEl = $('trade-analisi-body');
     if (analisiEl && analisiList.length > 0) {
-      var html = '';
-      var items = analisiList.slice().reverse().slice(0, 8);
-      for (var i = 0; i < items.length; i++) {
-        var a = items[i];
-        var isWin = a.esito === 'WIN';
-        var col = isWin ? '#00ff88' : '#ff3355';
-        var bg  = isWin ? 'rgba(0,255,136,0.04)' : 'rgba(255,51,85,0.04)';
-        var pnlStr = (a.pnl >= 0 ? '+' : '') + '$' + (a.pnl ? parseFloat(a.pnl).toFixed(2) : '?');
-        var scoreStr = a.score ? parseFloat(a.score).toFixed(1) : '?';
-        var testo = (a.analisi || '').replace(/\n/g, '<br>');
-        html += '<div style="padding:8px 10px;margin-bottom:6px;border-radius:4px;background:' + bg + ';border-left:3px solid ' + col + '">';
-        html += '<div style="display:flex;justify-content:space-between;margin-bottom:4px">';
-        html += '<span style="font-size:10px;font-weight:bold;color:' + col + '">' + (isWin ? 'WIN' : 'LOSS') + ' ' + (a.ts||'') + ' score=' + scoreStr + ' ' + (a.ctx||'') + '</span>';
-        html += '<span style="font-size:10px;color:' + col + ';font-weight:bold">' + pnlStr + '</span>';
-        html += '</div>';
-        html += '<div style="font-size:9px;color:var(--dim);margin-bottom:4px">' + (a.motivo||'') + '</div>';
-        html += '<div style="font-size:10px;color:var(--text);line-height:1.7">' + testo + '</div>';
-        html += '</div>';
-      }
-      analisiEl.innerHTML = html;
-    }
+      analisiEl.innerHTML = analisiList.slice().reverse().slice(0, 8).map(a => {
+        const isWin = a.esito === 'WIN';
+        const col   = isWin ? '#00ff88' : '#ff3355';
+        const bg    = isWin ? 'rgba(0,255,136,0.04)' : 'rgba(255,51,85,0.04)';
+        const icon  = isWin ? '🟢' : '🔴';
+        const lines = (a.analisi || '').split('\n').filter(l => l.trim());
+        return `<div style="padding:8px 10px;margin-bottom:6px;border-radius:4px;
+          background:${bg};border-left:3px solid ${col}">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span style="font-size:10px;font-weight:bold;color:${col}">
+              ${icon} ${a.esito} ${a.ts} — score ${a.score?.toFixed(1)||'?'} — ${a.ctx}
+            </span>
+            <span style="font-size:10px;color:${col};font-weight:bold">
+              ${a.pnl >= 0 ? '+' : ''}$${a.pnl?.toFixed(2)||'?'}
+            </span>
+          </div>
+          <div style="font-size:9px;color:var(--dim);margin-bottom:4px">${a.motivo||''}</div>
+          ${lines.map(l => {
+            const isEsito = l.startsWith('ESITO:');
+            const isLez   = l.startsWith('LEZIONE:');
+            const lCol    = isEsito ? col : isLez ? '#ffd700' : 'var(--text)';
+            return `<div style="font-size:10px;color:${lCol};line-height:1.6">${l}</div>`;
+          }).join('')}
+        </div>`;
+      }).join('');
     }
 
   }).catch(()=>{
@@ -3485,7 +3489,7 @@ function update() {
 
 function sendCmd(cmd){
   fetch('/trading/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:cmd})})
-  .then(r=>r.json()).then(()=>{ const ab=$('alert-bar'); ab.style.display='block'; ab.innerHTML='OK Comando inviato: '+cmd; setTimeout(()=>{ab.style.display='none'},3000); });
+  .then(r=>r.json()).then(()=>{ const ab=$('alert-bar'); ab.style.display='block'; ab.innerHTML='✅ Comando inviato: '+cmd; setTimeout(()=>{ab.style.display='none'},3000); });
 }
 
 update();
