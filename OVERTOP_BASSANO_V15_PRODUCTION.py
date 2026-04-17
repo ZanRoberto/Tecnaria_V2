@@ -7391,9 +7391,11 @@ class OvertopBassanoV15Production:
                     triggers.append("T3_DD")
                 # T4: FIX — scatta solo se in perdita, non se stai guadagnando
                 current_fp = self.oracolo.get_wr(momentum, volatility, trend, entry_direction)
-                fp_div = abs(current_fp - self._shadow_entry_fingerprint) / max(self._shadow_entry_fingerprint, 0.001)
-                if fp_div > DIVORCE_FP_DIVERGE_PCT and current_pnl_real < 0:
-                    triggers.append("T4_FP")
+                _entry_fp = self._shadow_entry_fingerprint or 0.0
+                if _entry_fp > 0:
+                    fp_div = abs(current_fp - _entry_fp) / max(_entry_fp, 0.001)
+                    if fp_div > DIVORCE_FP_DIVERGE_PCT and current_pnl_real < 0:
+                        triggers.append("T4_FP")
                 if len(triggers) >= DIVORCE_MIN_TRIGGERS:
                     self._close_shadow_trade(price, f"DIVORZIO|{'|'.join(triggers)}")
                     return
