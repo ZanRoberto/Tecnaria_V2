@@ -8932,8 +8932,70 @@ class OvertopBassanoV15Production:
         except Exception as e:
             log.error(f"[WATCHDOG] Errore nel watchdog stesso: {e}")
 
+    def _carica_storia_dal_db(self):
+        """Al boot carica gli ultimi trade dal DB in narratore_trade_storia."""
+        try:
+            rows = self.db_execute("""
+                SELECT timestamp, direction, price, pnl, reason, data_json
+                FROM trades WHERE event_type='M2_EXIT'
+                ORDER BY id DESC LIMIT 20
+            """, fetch=True)
+            if not rows:
+                return
+            storia = []
+            wins = 0
+            losses = 0
+            pnl_tot = 0.0
+            consec_loss = 0
+            last_ctx = ''
+            for r in reversed(rows):
+                try:
+                    import json as _json
+                    dj = _json.loads(r[5]) if r[5] else {}
+                except Exception:
+                    dj = {}
+                pnl = float(r[3] or 0)
+                is_win = pnl > 0
+                entry = {
+                    'ts':        (r[0] or '')[-8:][:5],
+                    'is_win':    is_win,
+                    'pnl':       round(pnl, 2),
+                    'reason':    r[4] or '',
+                    'momentum':  dj.get('momentum', '?'),
+                    'volatility':dj.get('volatility', '?'),
+                    'trend':     dj.get('trend', '?'),
+                    'regime':    dj.get('regime', '?'),
+                    'score':     float(dj.get('score', 0)),
+                    'soglia':    float(dj.get('soglia', 0)),
+                    'direction': r[1] or 'LONG',
+                    'matrimonio':dj.get('matrimonio', '?'),
+                }
+                storia.append(entry)
+                pnl_tot += pnl
+                if is_win:
+                    wins += 1
+                    consec_loss = 0
+                else:
+                    losses += 1
+                    consec_loss += 1
+                last_ctx = f"{entry['momentum']}|{entry['volatility']}|{entry['trend']}"
+            n = len(storia)
+            if self.heartbeat_data is not None:
+                with self.heartbeat_lock:
+                    self.heartbeat_data['narratore_trade_storia'] = storia
+                    self.heartbeat_data['narratore_trade_stats'] = {
+                        'n': n, 'wins': wins, 'pnl_tot': round(pnl_tot, 2),
+                        'last_context': last_ctx,
+                        'consecutive_losses': consec_loss,
+                        'wr': round(wins/n, 3) if n > 0 else 0.0,
+                    }
+            log.info(f"[BOOT] Caricati {n} trade da DB in narratore_trade_storia")
+        except Exception as e:
+            log.error(f"[BOOT_STORIA] {e}")
+
     def run(self):
         log.info("[START] Bot avviato - connessione Binance WS...")
+        self._carica_storia_dal_db()
         self.connect_binance()
         _watchdog_last = time.time()
         try:
