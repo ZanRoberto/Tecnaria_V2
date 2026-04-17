@@ -1207,6 +1207,16 @@ def _build_status_summary(hb: dict) -> str:
             return " | ".join(parts)
 
         analisi_win  = _analisi_trade(win_trades,  'WIN')
+
+        # ── ANALISI TRADE per il Narratore ───────────────────────────────
+        _trade_analisi = hb.get('trade_analisi', [])
+        if _trade_analisi:
+            analisi_trade_str = " | ".join([
+                f"{a.get('ts','?')} {a.get('esito','?')} ${a.get('pnl',0):.2f} score={a.get('score',0):.1f} [{a.get('analisi','')[:80]}]"
+                for a in _trade_analisi[-3:]
+            ])
+        else:
+            analisi_trade_str = "nessuna analisi ancora"
         analisi_loss = _analisi_trade(loss_trades, 'LOSS')
         ph_data = hb.get('phantom', {})
         zavorra_n = ph_data.get('zavorra', 0)
@@ -1242,6 +1252,7 @@ SCORE_VS_RISULTATO: {score_corr}
 ZAVORRA_ANALISI: {zavorra_str}
 ANALISI_WIN: {analisi_win}
 ANALISI_LOSS: {analisi_loss}
+ANALISI_TRADE_RECENTI: {analisi_trade_str}
 LATENCY: slip_medio={hb.get('latency_stats',{}).get('slippage_medio',0):.3f}% slip_explosive={hb.get('latency_stats',{}).get('slippage_medio_exp',0):.3f}% costo_usd=${hb.get('latency_stats',{}).get('costo_usd_tot',0):.2f} verdetto={hb.get('latency_stats',{}).get('verdetto','N/A')}"""
     except Exception as e:
         return f"Errore costruzione summary: {e}"
