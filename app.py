@@ -2059,34 +2059,37 @@ const SCPanel = (() => {
       const ultimo = narrativa[narrativa.length - 1];
       narratoreTs.textContent = ultimo.ts || '--:--';
 
-      narratoreBody.innerHTML = narrativa.slice().reverse().map((n, i) => {
+      // Max 5 dialoghi, dal più recente
+      narratoreBody.innerHTML = narrativa.slice(-5).reverse().map((n, i) => {
         const isUltimo = i === 0;
-        const opacita = isUltimo ? '1' : '0.5';
+        const opacita = isUltimo ? '1' : `${0.85 - i * 0.15}`;
+
+        // Badge capsula con dettaglio azione
         const capBadge = n.capsula
-          ? `<span style="background:#3b0764;color:#c4b5fd;padding:2px 6px;border-radius:3px;font-size:9px;margin-left:6px">💊 ${n.capsula}</span>`
-          : '';
-        return `<div style="margin-bottom:${isUltimo ? '12' : '8'}px;opacity:${opacita};
-          border-left:2px solid ${isUltimo ? '#a855f7' : '#4c1d95'};
-          padding-left:10px;">
-          <div style="font-size:9px;color:#7c3aed;margin-bottom:4px;letter-spacing:1px">
-            🔍 OSSERVATORE · ${n.ts}${capBadge}
+          ? `<span style="background:#3b0764;color:#c4b5fd;padding:2px 8px;border-radius:3px;font-size:9px;margin-left:6px;font-weight:bold">💊 ${n.capsula} → BOT</span>`
+          : `<span style="color:#4c1d95;font-size:9px;margin-left:6px">○ nessuna capsula</span>`;
+
+        return `<div style="margin-bottom:10px;opacity:${opacita};
+          border-left:2px solid ${isUltimo ? '#a855f7' : '#3b0764'};
+          padding-left:8px;">
+          <div style="font-size:9px;color:#7c3aed;margin-bottom:3px;letter-spacing:1px;display:flex;align-items:center;flex-wrap:wrap;gap:4px">
+            🔍 OSSERVATORE · ${n.ts} ${capBadge}
           </div>
-          <div style="font-size:11px;color:#c4b5fd;font-style:italic;margin-bottom:6px;line-height:1.5">
+          <div style="font-size:10px;color:#c4b5fd;font-style:italic;margin-bottom:4px;line-height:1.4">
             "${n.domanda}"
           </div>
-          <div style="font-size:9px;color:#9333ea;margin-bottom:4px;letter-spacing:1px">
-            💭 RAGIONATORE
-          </div>
-          <div style="font-size:11px;color:#e9d5ff;line-height:1.6">
+          <div style="font-size:9px;color:#9333ea;margin-bottom:2px;letter-spacing:1px">💭 RAGIONATORE</div>
+          <div style="font-size:10px;color:#e9d5ff;line-height:1.5">
             ${n.risposta}
           </div>
         </div>`;
-      }).join('<hr style="border:none;border-top:1px solid #2d1060;margin:8px 0">');
+      }).join('<hr style="border:none;border-top:1px solid #1a0a2e;margin:6px 0">');
+
     } else if (narratoreBody && !narrativa.length) {
       const hasDsKey = typeof hb.narrativa_ds !== 'undefined';
       narratoreBody.innerHTML = hasDsKey
         ? '<div style="color:#4c1d95;font-size:10px;text-align:center;padding:12px">Primo ciclo in arrivo tra 30s...</div>'
-        : '<div style="color:#4c1d95;font-size:10px;text-align:center;padding:12px">DEEPSEEK_API_KEY non configurata — Narratore disabilitato</div>';
+        : '<div style="color:#4c1d95;font-size:10px;text-align:center;padding:12px">DEEPSEEK_API_KEY non configurata</div>';
     }
     // ── FINE NARRATORE AI ─────────────────────────────────────
 
