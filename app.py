@@ -2184,7 +2184,7 @@ canvas.spark { width:100%; height:40px; }
 
   <!-- ANALISI TRADE -->
   <div class="panel" style="margin-bottom:10px">
-    <div class="panel-head blue">ANALISI TRADE - Perche abbiamo vinto o perso?</div>
+    <div class="panel-head blue">ANALISI TRADE</div>
     <div class="panel-body" id="trade-analisi-body">
       <div style="color:var(--dim);font-size:10px;text-align:center;padding:12px">In attesa del primo trade...</div>
     </div>
@@ -2474,54 +2474,6 @@ const SCPanel = (() => {
     const narrativa = hb.narrativa_ds || [];
     const narratoreBody = $('narratore-body');
     const narratoreTs   = $('narratore-ts');
-
-    // ── LATENCY TRACKER ─────────────────────────────────────────────────
-    const lt = hb.latency_stats || {};
-    if (lt.n_total > 0) {
-      const slipMedio   = lt.slippage_medio || 0;
-      const slipExp     = lt.slippage_medio_exp || 0;
-      const costoTot    = lt.costo_usd_tot || 0;
-      const costoExp    = lt.costo_usd_exp || 0;
-      const allarme     = lt.allarme || false;
-
-      // Colore in base al valore
-      const colorSlip = v => v > 0.05 ? '#ff3355' : v > 0.02 ? '#ffd700' : '#00d97a';
-
-      const elSlipM = document.getElementById('lat-slip-medio');
-      const elSlipE = document.getElementById('lat-slip-exp');
-      const elCosto = document.getElementById('lat-costo');
-      const elCostoE = document.getElementById('lat-costo-exp');
-      const elHead  = document.getElementById('latency-head');
-      const elVerd  = document.getElementById('latency-verdetto');
-      const elAllar = document.getElementById('lat-allarme-bar');
-      const elStoria = document.getElementById('lat-storia');
-
-      if (elSlipM) { elSlipM.textContent = slipMedio.toFixed(3) + '%'; elSlipM.style.color = colorSlip(slipMedio); }
-      if (elSlipE) { elSlipE.textContent = slipExp.toFixed(3) + '%';   elSlipE.style.color = colorSlip(slipExp); }
-      if (elCosto) { elCosto.textContent  = '$' + costoTot.toFixed(2); }
-      if (elCostoE) { elCostoE.textContent = '$' + costoExp.toFixed(2); }
-
-      if (allarme) {
-        if (elHead) { elHead.style.borderLeftColor = '#ff3355'; elHead.style.background = 'linear-gradient(90deg,#2a0a10,#3d0d1a)'; }
-        if (elVerd) { elVerd.textContent = '🔴 SERVE VPS'; elVerd.style.color = '#ff3355'; }
-        if (elAllar) elAllar.style.display = 'block';
-      } else {
-        if (elHead) { elHead.style.borderLeftColor = '#00d97a'; }
-        if (elVerd) { elVerd.textContent = lt.verdetto || '🟢 OK'; elVerd.style.color = '#00d97a'; }
-        if (elAllar) elAllar.style.display = 'none';
-      }
-
-      // Storia ultimi eventi
-      if (elStoria && lt.storia) {
-        elStoria.innerHTML = lt.storia.slice(-5).reverse().map(e => {
-          const col = e.allarme ? '#ff3355' : e.slip_pct > 0.02 ? '#ffd700' : '#00d97a';
-          const tag = e.allarme ? '🔴' : e.slip_pct > 0.02 ? '🟡' : '🟢';
-          return `<div style="padding:2px 0;border-bottom:1px solid #1a2030;color:${col}">
-            ${tag} ${e.ts} [${e.regime}] slip=${e.slip_pct.toFixed(3)}% costo=$${e.costo_usd.toFixed(3)} elapsed=${e.elapsed_ms}ms
-          </div>`;
-        }).join('');
-      }
-    }
 
     // Barra ultima capsula generata
     const ultCap = hb.narratore_ultima_capsula;
@@ -3455,62 +3407,7 @@ function update() {
     }
 
     // SUGGESTIONS
-    $('suggestions-box').innerHTML = (d.suggestions||[]).map(s=>'<span style="margin-right:16px">'+s+'</span>').join('');
-
-    var analisiList = hb.trade_analisi || [];
-    var analisiEl = document.getElementById('trade-analisi-body');
-    if (analisiEl && analisiList.length > 0) {
-      var aHtml = '';
-      var aItems = analisiList.slice().reverse().slice(0, 5);
-      for (var ai = 0; ai < aItems.length; ai++) {
-        var aItem = aItems[ai];
-        var aWin = aItem.esito === 'WIN';
-        var aCol = aWin ? '#00ff88' : '#ff3355';
-        var aBg = aWin ? 'rgba(0,255,136,0.04)' : 'rgba(255,51,85,0.04)';
-        var aPnl = (aItem.pnl >= 0 ? '+' : '') + '$' + parseFloat(aItem.pnl||0).toFixed(2);
-        var aScore = parseFloat(aItem.score||0).toFixed(1);
-        var aText = (aItem.analisi || '').split('\n').join('<br>');
-        aHtml += '<div style="padding:8px;margin-bottom:4px;border-left:3px solid ' + aCol + ';background:' + aBg + '">';
-        aHtml += '<b style="color:' + aCol + '">' + (aWin ? 'WIN' : 'LOSS') + '</b>';
-        aHtml += ' ' + (aItem.ts||'') + ' score=' + aScore + ' ' + (aItem.ctx||'');
-        aHtml += ' <b style="color:' + aCol + '">' + aPnl + '</b><br>';
-        aHtml += '<span style="color:var(--dim);font-size:9px">' + (aItem.motivo||'') + '</span><br>';
-        aHtml += '<span style="font-size:10px">' + aText + '</span>';
-        aHtml += '</div>';
-      }
-      analisiEl.innerHTML = aHtml;
-    }
-
-    // ANALISI TRADE — Perché abbiamo vinto o perso
-    const analisiList = hb.trade_analisi || [];
-    const analisiEl = $('trade-analisi-body');
-    if (analisiEl && analisiList.length > 0) {
-      analisiEl.innerHTML = analisiList.slice().reverse().slice(0, 8).map(a => {
-        const isWin = a.esito === 'WIN';
-        const col   = isWin ? '#00ff88' : '#ff3355';
-        const bg    = isWin ? 'rgba(0,255,136,0.04)' : 'rgba(255,51,85,0.04)';
-        const icon  = isWin ? '🟢' : '🔴';
-        const lines = (a.analisi || '').split('\n').filter(l => l.trim());
-        return `<div style="padding:8px 10px;margin-bottom:6px;border-radius:4px;
-          background:${bg};border-left:3px solid ${col}">
-          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
-            <span style="font-size:10px;font-weight:bold;color:${col}">
-              ${icon} ${a.esito} ${a.ts} — score ${a.score?.toFixed(1)||'?'} — ${a.ctx}
-            </span>
-            <span style="font-size:10px;color:${col};font-weight:bold">
-              ${a.pnl >= 0 ? '+' : ''}$${a.pnl?.toFixed(2)||'?'}
-            </span>
-          </div>
-          <div style="font-size:9px;color:var(--dim);margin-bottom:4px">${a.motivo||''}</div>
-          ${lines.map(l => {
-            const isEsito = l.startsWith('ESITO:');
-            const isLez   = l.startsWith('LEZIONE:');
-            const lCol    = isEsito ? col : isLez ? '#ffd700' : 'var(--text)';
-            return `<div style="font-size:10px;color:${lCol};line-height:1.6">${l}</div>`;
-          }).join('')}
-        </div>`;
-      }).join('');
-    }
+    $('suggestions-box').innerHTML = (d.suggestions||[]).map(s=>`<span style="margin-right:16px">${s}</span>`).join('');
 
   }).catch(()=>{
     $('status-dot').className='status-dot dot-off';
