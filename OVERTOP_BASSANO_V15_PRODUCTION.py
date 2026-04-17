@@ -7215,6 +7215,41 @@ class OvertopBassanoV15Production:
             except Exception as _bs_e:
                 log.debug(f"[BOOST_SEED_ERR] {_bs_e}")
 
+            # ── BLOCCA_CONTESTO dalle capsule RA_ del Ragionatore ────────────
+            # Quando il Ragionatore vede WR reale < 20% su un contesto specifico
+            # genera BLOCCA_CONTESTO — veto dinamico basato su dati reali.
+            # Più potente del VETO_TOSSICO statico perché nasce dall'esperienza viva.
+            try:
+                _caps_ra = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
+                _now_ra  = time.time()
+                for _cap in _caps_ra:
+                    if _cap.get('azione') != 'BLOCCA_CONTESTO':
+                        continue
+                    # Verifica scadenza
+                    try:
+                        from datetime import datetime as _dt4
+                        _cap_ts = _dt4.fromisoformat(_cap.get('ts', '')).timestamp()
+                        if _now_ra - _cap_ts > _cap.get('vita', 1800):
+                            continue
+                    except Exception:
+                        pass
+                    # Controlla se il contesto corrente corrisponde
+                    _params = _cap.get('params', {})
+                    _match_mom = _params.get('momentum', '') == momentum
+                    _match_vol = _params.get('volatility', '') == volatility
+                    _match_trd = _params.get('trend', '') == trend
+                    if _match_mom and _match_vol and _match_trd:
+                        _cap_id = _cap.get('id', 'RA_BLOCCA')
+                        self._log_m2("🤖", f"RA_BLOCCA_CONTESTO: {_cap_id} "
+                                          f"blocca {momentum}|{volatility}|{trend} "
+                                          f"— {_cap.get('motivo','')[:50]}")
+                        if len(self._phantoms_open) < 5:
+                            self._record_phantom(price, f"RA_BLOCCA_{momentum}_{volatility}_{trend}",
+                                                 seed['score'], momentum, volatility, trend)
+                        return
+            except Exception as _bc_e:
+                log.debug(f"[BLOCCA_CONTESTO_ERR] {_bc_e}")
+
             # ── CAPSULE INTELLIGENTE: modifiche predittive ───────────────────
             try:
                 _ci_mods = self.ci.get_entry_mods()
