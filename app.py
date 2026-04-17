@@ -773,6 +773,7 @@ R3. OI FUOCO + hit ST < 50% → capsula leggera max delta -6
 R4. OI FUOCO + hit ST > 60% + regime stabile > 90s → capsula forte delta -10/-12
 R5. Phantom zavorra < 7% → VETO funziona, non toccare
 R6. Phantom zavorra > 15% → VETO troppo aggressivo, bypass giustificato
+R6b. REGOLA FONDAMENTALE — quando zavorra > 15% NON aggiungere altri BLOCCA_CONTESTO generici. Il problema non è bloccare di meno — è discriminare meglio. Guarda ANALISI_WIN e ANALISI_LOSS nel summary: i trade che vincono hanno un pattern preciso (score alto, contesto specifico, OI confermato). I trade che perdono hanno un pattern diverso (score basso, stesso contesto ma condizioni diverse). La soluzione non è aprire tutto né bloccare tutto — è capire quale combinazione di score+contesto+OI produce WIN e quale produce LOSS, e bloccare SOLO quella combinazione tossica. Con zavorra > 15% usa ABBASSA_SOGLIA mirato sul contesto che ha WIN reali, non BLOCCA_CONTESTO cieco su tutto il contesto.
 R7. n_trade < 5 E seed=0 E fp=0 → BOOST_SEED per rompere paradosso zero-trade
 R7b. PERICOLO CRITICO — soglia=0 nel MOTORE: quando il campo restituisce score=0 E soglia=0 significa che un VETO ha bloccato PRIMA del calcolo. In questo caso BOOST_SEED bypassa tutto e il sistema entra CIECO senza nessuna valutazione reale del mercato. MAI generare BOOST_SEED quando vedi soglia=0.0 nello status MOTORE. Aspetta che il sistema esca dal VETO naturalmente oppure genera BLOCCA_CONTESTO sul contesto tossico.
 R8. n_trade > 10 E wr < 20% → sistema NON è cieco, vede il problema: BLOCCA_CONTESTO
@@ -857,6 +858,20 @@ SESSIONI DI MERCATO:
 - Europa (8-16 UTC): migliore sessione per BTC, movimenti affidabili
 - USA (14-22 UTC): alta volatilità, EXPLOSIVE frequenti ma anche falsi breakout
 - Notte (22-6 UTC): peggior sessione, spread alti, NON tradare in RANGING notturno
+
+COME LEGGERE SCORE_VS_RISULTATO:
+- avg_score_WIN >> avg_score_LOSS → la soglia operativa reale è tra i due valori — usala come riferimento
+- score<35: WR basso → BLOCCA_CONTESTO su trade con score < 35
+- score35-40: WR medio-basso → zona grigia, dipende dal contesto
+- score40-45: WR accettabile → lasciare passare se OI FUOCO confermato
+- score>45: WR alto → non bloccare questi trade, sono i migliori
+- Se avg_score_WIN=44 e avg_score_LOSS=34 → soglia operativa reale = 42-43, non 48
+
+COME LEGGERE ZAVORRA_ANALISI:
+- BLOCCO_ECCESSIVO (zavorra > 15%) → stiamo perdendo troppo — ridurre i blocchi, aumentare vita capsule, NON aggiungere nuovi BLOCCA_CONTESTO
+- ZONA_GRIGIA (7-15%) → monitorare, non intervenire
+- BLOCCO_CORRETTO (< 7%) → sistema protegge bene, capsule funzionano
+- Quando BLOCCO_ECCESSIVO: generare ABBASSA_SOGLIA leggero invece di BLOCCA_CONTESTO
 
 QUANDO PASSARE AL LIVE:
 - WR > 55% su 200+ trade paper
@@ -1049,9 +1064,70 @@ def _build_status_summary(hb: dict) -> str:
                         f"ultimo_contesto={trade_stats.get('last_context','?')}")
         ultimi_trade = " | ".join([
             f"{t.get('ts','?')} {t.get('momentum','?')}|{t.get('volatility','?')}|{t.get('trend','?')} "
-            f"pnl=${t.get('pnl',0):.2f} {'WIN' if t.get('is_win') else 'LOSS'} [{t.get('reason','?')}]"
+            f"score={t.get('score',0):.1f} pnl=${t.get('pnl',0):.2f} {'WIN' if t.get('is_win') else 'LOSS'} [{t.get('reason','?')}]"
             for t in trade_storia
         ]) or "nessun trade ancora"
+
+        # ── CORRELAZIONE SCORE → RISULTATO ────────────────────────────────
+        # Il Ragionatore deve vedere quali fasce di score producono WIN vs LOSS
+        # Questo è il dato che permette di calibrare la soglia operativa reale
+        tutti_trade = hb.get('narratore_trade_storia', [])
+        score_win = [t.get('score',0) for t in tutti_trade if t.get('is_win') and t.get('score',0) > 0]
+        score_loss = [t.get('score',0) for t in tutti_trade if not t.get('is_win') and t.get('score',0) > 0]
+        score_corr = "nessun dato"
+        if score_win or score_loss:
+            avg_win  = round(sum(score_win)/len(score_win),1)  if score_win  else 0
+            avg_loss = round(sum(score_loss)/len(score_loss),1) if score_loss else 0
+            # Conta WIN e LOSS per fascia di score
+            fasce = {'<35':{'w':0,'l':0}, '35-40':{'w':0,'l':0}, '40-45':{'w':0,'l':0}, '45-50':{'w':0,'l':0}, '>50':{'w':0,'l':0}}
+            for t in tutti_trade:
+                s = t.get('score', 0)
+                if s <= 0: continue
+                k = '<35' if s < 35 else '35-40' if s < 40 else '40-45' if s < 45 else '45-50' if s < 50 else '>50'
+                if t.get('is_win'): fasce[k]['w'] += 1
+                else: fasce[k]['l'] += 1
+            fascia_str = " | ".join([
+                f"score{k}: {v['w']}W/{v['l']}L WR={round(v['w']/(v['w']+v['l'])*100) if v['w']+v['l']>0 else 0}%"
+                for k,v in fasce.items() if v['w']+v['l'] > 0
+            ])
+            score_corr = f"avg_score_WIN={avg_win} avg_score_LOSS={avg_loss} | {fascia_str}"
+
+        # ── ANALISI WIN — perché i trade vincono ─────────────────────────
+        # Il Ragionatore deve capire il pattern dei vincitori
+        win_trades  = [t for t in tutti_trade if t.get('is_win')]
+        loss_trades = [t for t in tutti_trade if not t.get('is_win')]
+
+        def _analisi_trade(trades, label):
+            if not trades:
+                return f"nessun {label} ancora"
+            contesti = {}
+            for t in trades:
+                ctx = f"{t.get('momentum','?')}|{t.get('volatility','?')}|{t.get('trend','?')}"
+                if ctx not in contesti:
+                    contesti[ctx] = {'n':0, 'pnl':0.0, 'scores':[]}
+                contesti[ctx]['n'] += 1
+                contesti[ctx]['pnl'] += t.get('pnl', 0)
+                if t.get('score', 0) > 0:
+                    contesti[ctx]['scores'].append(t.get('score', 0))
+            parts = []
+            for ctx, v in sorted(contesti.items(), key=lambda x: -x[1]['n'])[:3]:
+                avg_score = round(sum(v['scores'])/len(v['scores']),1) if v['scores'] else 0
+                avg_pnl   = round(v['pnl']/v['n'], 2)
+                parts.append(f"{ctx} n={v['n']} avg_score={avg_score} avg_pnl=${avg_pnl}")
+            return " | ".join(parts)
+
+        analisi_win  = _analisi_trade(win_trades,  'WIN')
+        analisi_loss = _analisi_trade(loss_trades, 'LOSS')
+        ph_data = hb.get('phantom', {})
+        zavorra_n = ph_data.get('zavorra', 0)
+        prot_n    = ph_data.get('protezione', 0)
+        tot_n     = ph_data.get('total', 1)
+        zavorra_pct = round(zavorra_n / tot_n * 100, 1) if tot_n > 0 else 0
+        pnl_missed = ph_data.get('pnl_missed', 0)
+        pnl_saved  = ph_data.get('pnl_saved', 0)
+        zavorra_str = (f"zavorra={zavorra_n}/{tot_n} ({zavorra_pct}%) "
+                      f"pnl_mancato=${pnl_missed:.0f} pnl_salvato=${pnl_saved:.0f} "
+                      f"{'BLOCCO_ECCESSIVO' if zavorra_pct > 15 else 'BLOCCO_CORRETTO' if zavorra_pct < 7 else 'ZONA_GRIGIA'}")
 
         return f"""STATUS OVERTOP — {hb.get('last_seen','?')}
 MERCATO_ORA: regime={hb.get('regime','?')} conf={hb.get('regime_conf',0):.0%} | BTC={hb.get('last_price',0):.0f}
@@ -1072,6 +1148,10 @@ SC_PESI: campo={sc_pesi.get('campo_carica',0):.2f} oracolo={sc_pesi.get('oracolo
 TRADES_TOTALI: n={hb.get('m2_trades',0)} wins={hb.get('m2_wins',0)} pnl=${hb.get('m2_pnl',0):.2f}
 TRADES_STATS: {trade_str}
 ULTIMI_TRADE: {ultimi_trade}
+SCORE_VS_RISULTATO: {score_corr}
+ZAVORRA_ANALISI: {zavorra_str}
+ANALISI_WIN: {analisi_win}
+ANALISI_LOSS: {analisi_loss}
 LATENCY: slip_medio={hb.get('latency_stats',{}).get('slippage_medio',0):.3f}% slip_explosive={hb.get('latency_stats',{}).get('slippage_medio_exp',0):.3f}% costo_usd=${hb.get('latency_stats',{}).get('costo_usd_tot',0):.2f} verdetto={hb.get('latency_stats',{}).get('verdetto','N/A')}"""
     except Exception as e:
         return f"Errore costruzione summary: {e}"
@@ -1184,10 +1264,111 @@ def narratore_thread():
 
         time.sleep(NARRATORE_INTERVAL)
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ANALIZZATORE TRADE — Perché abbiamo vinto o perso questo trade?
+# ═══════════════════════════════════════════════════════════════════════════
+# Quarto livello del Narratore. Si attiva dopo ogni trade chiuso.
+# Analizza il singolo trade e risponde: perché abbiamo vinto/perso?
+# La risposta appare in dashboard accanto al trade.
+
+PROMPT_ANALIZZATORE_TRADE = """Sei l'Analizzatore Trade del sistema OVERTOP BASSANO.
+Ricevi i dettagli di un singolo trade appena chiuso e devi spiegare in modo preciso e operativo:
+1. PERCHÉ ha vinto o perso (causa principale)
+2. COSA il sistema avrebbe dovuto fare diversamente (se loss)
+3. COSA ha fatto bene (se win)
+4. LEZIONE per i prossimi trade
+
+Conosci l'architettura completa:
+- CampoGravitazionale: score 0-100, soglia 48-55
+- EXIT_E{N}_S{M} = energy score N vs soglia M al momento dell'exit
+- WIN_+{N} nel motivo = il sistema ha raggiunto quel profitto durante il trade
+- Se PnL negativo con WIN_+N = il sistema ha visto il profitto ma non l'ha catturato
+- score basso (< 35) = momentum debole, non doveva entrare
+- DIVORZIO = trigger di uscita forzata (volatilità, trend, drawdown, fingerprint)
+- RANGING|ALTA|SIDEWAYS = contesto storicamente tossico
+- EXPLOSIVE + OI FUOCO = contesto favorevole
+
+Rispondi in italiano, massimo 3 righe, formato:
+ESITO: [WIN/LOSS] — [causa principale in una frase]
+LEZIONE: [cosa imparare da questo trade]
+"""
+
+_ultimo_trade_id_analizzato = 0
+
+def analizzatore_trade_thread():
+    """Analizza ogni trade chiuso e spiega perché ha vinto o perso."""
+    global _ultimo_trade_id_analizzato
+    log("[ANALIZZATORE] 🔬 Analizzatore trade avviato")
+    time.sleep(45)
+
+    while True:
+        try:
+            with heartbeat_lock:
+                storia = list(heartbeat_data.get('narratore_trade_storia', []))
+
+            if not storia:
+                time.sleep(20)
+                continue
+
+            ultimo = storia[-1]
+            trade_id = ultimo.get('ts', '') + str(ultimo.get('pnl', 0))
+
+            if trade_id == _ultimo_trade_id_analizzato:
+                time.sleep(15)
+                continue
+
+            _ultimo_trade_id_analizzato = trade_id
+
+            # Costruisce il contesto del trade
+            esito     = "WIN" if ultimo.get('is_win') else "LOSS"
+            pnl       = ultimo.get('pnl', 0)
+            score     = ultimo.get('score', 0)
+            motivo    = ultimo.get('reason', '?')
+            ctx       = f"{ultimo.get('momentum','?')}|{ultimo.get('volatility','?')}|{ultimo.get('trend','?')}"
+            regime    = ultimo.get('regime', '?')
+            matrimon  = ultimo.get('matrimonio', '?')
+
+            messaggio = f"""Trade appena chiuso:
+ESITO: {esito} | PnL: ${pnl:.2f}
+Score entry: {score:.1f} | Contesto: {ctx} | Regime: {regime}
+Matrimonio: {matrimon} | Motivo exit: {motivo}
+
+{"Il sistema ha raggiunto profitto durante il trade ma è uscito in perdita." if 'WIN_+' in motivo and pnl < 0 else ""}
+{"Score molto basso — sistema entrato con momentum debole." if score < 38 else ""}
+{"Score nella fascia buona." if score >= 43 else ""}
+
+Spiega perché ha vinto/perso e cosa imparare."""
+
+            risposta = _chiama_deepseek(PROMPT_ANALIZZATORE_TRADE, messaggio, max_tokens=150)
+
+            if risposta:
+                with heartbeat_lock:
+                    analisi_list = heartbeat_data.get('trade_analisi', [])
+                    analisi_list.append({
+                        'ts':      ultimo.get('ts', '?'),
+                        'esito':   esito,
+                        'pnl':     round(pnl, 2),
+                        'score':   score,
+                        'ctx':     ctx,
+                        'motivo':  motivo,
+                        'analisi': risposta,
+                    })
+                    if len(analisi_list) > 20:
+                        analisi_list = analisi_list[-20:]
+                    heartbeat_data['trade_analisi'] = analisi_list
+
+                log(f"[ANALIZZATORE] 🔬 {esito} ${pnl:.2f} — {risposta[:60]}...")
+
+        except Exception as e:
+            log(f"[ANALIZZATORE] ❌ {e}")
+
+        time.sleep(15)
+
 # Avvia narratore solo se DeepSeek è configurato
 if DEEPSEEK_API_KEY:
     threading.Thread(target=narratore_thread, daemon=True, name='narratore_ai').start()
-    log("[MAIN] ✅ Narratore AI avviato")
+    threading.Thread(target=analizzatore_trade_thread, daemon=True, name='analizzatore_trade').start()
+    log("[MAIN] ✅ Narratore AI + Analizzatore Trade avviati")
 else:
     log("[MAIN] ⚠️ DEEPSEEK_API_KEY mancante — Narratore AI disabilitato")
 
@@ -1986,6 +2167,18 @@ canvas.spark { width:100%; height:40px; }
           <tr><td colspan="7" style="color:var(--dim); text-align:center; padding:16px">Nessun trade ancora</td></tr>
         </tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- ANALISI TRADE — Perché abbiamo vinto o perso -->
+  <div class="panel" style="margin-bottom:10px; border-color:#00aaff; border-width:2px;">
+    <div class="panel-head blue">🔬 ANALISI TRADE — Perché abbiamo vinto o perso?
+      <span style="font-size:9px;color:var(--dim)">Analisi AI di ogni trade chiuso</span>
+    </div>
+    <div class="panel-body" id="trade-analisi-body">
+      <div style="color:var(--dim);font-size:10px;text-align:center;padding:12px">
+        In attesa del primo trade...
+      </div>
     </div>
   </div>
 
@@ -3255,6 +3448,37 @@ function update() {
 
     // SUGGESTIONS
     $('suggestions-box').innerHTML = (d.suggestions||[]).map(s=>`<span style="margin-right:16px">${s}</span>`).join('');
+
+    // ANALISI TRADE — Perché abbiamo vinto o perso
+    const analisiList = hb.trade_analisi || [];
+    const analisiEl = $('trade-analisi-body');
+    if (analisiEl && analisiList.length > 0) {
+      analisiEl.innerHTML = analisiList.slice().reverse().slice(0, 8).map(a => {
+        const isWin = a.esito === 'WIN';
+        const col   = isWin ? '#00ff88' : '#ff3355';
+        const bg    = isWin ? 'rgba(0,255,136,0.04)' : 'rgba(255,51,85,0.04)';
+        const icon  = isWin ? '🟢' : '🔴';
+        const lines = (a.analisi || '').split('\n').filter(l => l.trim());
+        return `<div style="padding:8px 10px;margin-bottom:6px;border-radius:4px;
+          background:${bg};border-left:3px solid ${col}">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+            <span style="font-size:10px;font-weight:bold;color:${col}">
+              ${icon} ${a.esito} ${a.ts} — score ${a.score?.toFixed(1)||'?'} — ${a.ctx}
+            </span>
+            <span style="font-size:10px;color:${col};font-weight:bold">
+              ${a.pnl >= 0 ? '+' : ''}$${a.pnl?.toFixed(2)||'?'}
+            </span>
+          </div>
+          <div style="font-size:9px;color:var(--dim);margin-bottom:4px">${a.motivo||''}</div>
+          ${lines.map(l => {
+            const isEsito = l.startsWith('ESITO:');
+            const isLez   = l.startsWith('LEZIONE:');
+            const lCol    = isEsito ? col : isLez ? '#ffd700' : 'var(--text)';
+            return `<div style="font-size:10px;color:${lCol};line-height:1.6">${l}</div>`;
+          }).join('')}
+        </div>`;
+      }).join('');
+    }
 
   }).catch(()=>{
     $('status-dot').className='status-dot dot-off';
