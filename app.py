@@ -2647,8 +2647,33 @@ const SCPanel = (() => {
       const ultimo = narrativa[narrativa.length - 1];
       narratoreTs.textContent = ultimo.ts || '--:--';
 
-      // Max 5 dialoghi, dal più recente
-      narratoreBody.innerHTML = narrativa.slice(-5).reverse().map((n, i) => {
+      // ANALIZZATORE TRADER — verde/rosso sopra il viola
+      var atHtml = '';
+      var atList = hb.trade_analisi || [];
+      if (atList.length > 0) {
+        atHtml = '<div style="margin-bottom:10px;padding:8px 10px;background:#0a1a0a;border-left:3px solid #00ff88;border-radius:3px">';
+        atHtml += '<div style="font-size:9px;color:#00ff88;letter-spacing:1px;margin-bottom:6px">ANALIZZATORE TRADER &mdash; Pattern e Capsule</div>';
+        var atItems = atList.slice(-3).reverse();
+        for (var ai = 0; ai < atItems.length; ai++) {
+          var at = atItems[ai];
+          var atWin = at.esito === 'WIN';
+          var atCol = atWin ? '#00ff88' : '#ff3355';
+          var atBg = atWin ? 'rgba(0,255,136,0.04)' : 'rgba(255,51,85,0.04)';
+          var atPnl = (at.pnl >= 0 ? '+' : '') + '$' + parseFloat(at.pnl||0).toFixed(2);
+          var atCap = at.capsula ? ' &mdash; C:' + at.capsula + ' &rarr; BOT' : '';
+          var atTesto = (at.analisi || '').split('\n').join('<br>');
+          atHtml += '<div style="margin-bottom:6px;padding:5px 8px;border-left:2px solid ' + atCol + ';background:' + atBg + ';border-radius:2px">';
+          atHtml += '<div style="font-size:9px;color:' + atCol + ';font-weight:bold;margin-bottom:3px">';
+          atHtml += (atWin ? 'WIN' : 'LOSS') + ' ' + (at.ts||'') + ' score=' + parseFloat(at.score||0).toFixed(1) + ' ' + atPnl + atCap;
+          atHtml += '</div>';
+          atHtml += '<div style="font-size:10px;color:#aaa;line-height:1.6">' + atTesto + '</div>';
+          atHtml += '</div>';
+        }
+        atHtml += '</div><hr style="border:none;border-top:1px solid #1a2a1a;margin:8px 0">';
+      }
+
+      // Max 5 dialoghi Narratore, dal piu recente
+      narratoreBody.innerHTML = atHtml + narrativa.slice(-5).reverse().map((n, i) => {
         const isUltimo = i === 0;
         const opacita = isUltimo ? '1' : `${0.85 - i * 0.15}`;
 
