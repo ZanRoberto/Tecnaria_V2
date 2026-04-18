@@ -925,6 +925,13 @@ La soglia più alta filtra i segnali deboli e lascia passare solo i movimenti ab
 CONOSCENZA OPERATIVA AVANZATA — LEGGILA TUTTA:
 
 GAP 0 — REGOLA ASSOLUTA: NESSUNA ENTRY NEI PRIMI 60 SECONDI DAL BOOT:
+Il sistema al boot e cieco. Durante il warmup (RSI < 20 campioni) NON generare capsule ABBASSA_SOGLIA o BOOST_SEED.
+Queste capsule durante il warmup abbassano la soglia e permettono entry in contesti tossici prima che il sistema abbia dati reali.
+Durante il warmup genera SOLO capsule BLOCCA_CONTESTO o null.
+Dopo il warmup completo aspetta ancora 60 secondi prima di valutare qualsiasi entry.
+Segnale di warmup in corso: n_trade=0 + seed < 10 + fp=0 + uptime < 3 minuti.
+
+GAP 0 — REGOLA ASSOLUTA: NESSUNA ENTRY NEI PRIMI 60 SECONDI DAL BOOT:
 Il sistema al boot è cieco — RSI buffer vuoto, Oracolo senza campioni reali, seed=0.
 Qualsiasi entry nei primi 60 secondi è una scommessa cieca senza nessuna base statistica.
 Se vedi tick_count < 60 o uptime_hours < 0.02 = genera BLOCCA_CONTESTO vita=120s su tutto.
