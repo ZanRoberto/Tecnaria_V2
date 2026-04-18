@@ -2748,7 +2748,34 @@ const SCPanel = (() => {
           atOut += '<div style="font-size:10px;color:#aaa;line-height:1.5;margin-top:2px">' + atTesto + '</div>';
           atOut += '</div>';
         }
-        atOut += '</div><hr style="border:none;border-top:1px solid #1a2a1a;margin:6px 0">';
+        atOut += '</div>';
+
+        // CONTRADDITTORIO PHANTOM — arancione
+        var phLiv = ((hb.phantom||{}).per_livello)||{};
+        var phKeys = Object.keys(phLiv);
+        if (phKeys.length > 0) {
+          var ctOut = '<div style="margin-top:6px;padding:5px 8px;background:#1a0e00;border-left:3px solid #ff8c00;border-radius:3px">';
+          ctOut += '<div style="font-size:9px;color:#ff8c00;letter-spacing:1px;margin-bottom:4px">CONTRADDITTORIO PHANTOM</div>';
+          for (var pi = 0; pi < phKeys.length; pi++) {
+            var pk = phKeys[pi];
+            var pd = phLiv[pk];
+            var pBlk = pd.blocked||0;
+            var pWin = pd.would_win||0;
+            var pSav = parseFloat(pd.pnl_saved||0).toFixed(0);
+            var pMis = parseFloat(pd.pnl_missed||0).toFixed(2);
+            var pVrd = pWin === 0 ? 'BLOCCO_CORRETTO' : (pBlk > 0 && pWin/pBlk > 0.15 ? 'BLOCCO_ECCESSIVO' : 'ZONA_GRIGIA');
+            var pCol = pVrd === 'BLOCCO_CORRETTO' ? '#00ff88' : (pVrd === 'BLOCCO_ECCESSIVO' ? '#ff3355' : '#ffd700');
+            ctOut += '<div style="font-size:9px;margin-bottom:3px">';
+            ctOut += '<span style="color:#ff8c00">' + pk.substring(0,25) + '</span> ';
+            ctOut += '<span style="color:' + pCol + ';font-weight:bold">' + pVrd + '</span> ';
+            ctOut += '<span style="color:#888">blk=' + pBlk + ' win=' + pWin + ' saved=$' + pSav + ' missed=$' + pMis + '</span>';
+            ctOut += '</div>';
+          }
+          ctOut += '</div>';
+          atOut += ctOut;
+        }
+
+        atOut += '<hr style="border:none;border-top:1px solid #1a2a1a;margin:6px 0">';
         atHtml = atOut;
       }
 
