@@ -7163,6 +7163,18 @@ class OvertopBassanoV15Production:
                                              momentum, volatility, trend)
                     return
 
+            # ── BOOT GUARD — warmup RSI 20 campioni + 60 secondi ────────────
+            _warmup_rsi = len(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else 0
+            if _warmup_rsi < 20:
+                self._log_m2("⏳", f"BOOT_GUARD: warmup RSI {_warmup_rsi}/20")
+                return
+            if not hasattr(self, '_warmup_done_time'):
+                self._warmup_done_time = time.time()
+                self._log_m2("✅", "BOOT_GUARD: warmup OK — aspetto 60s")
+            if time.time() - self._warmup_done_time < 60:
+                self._log_m2("⏳", f"BOOT_GUARD: {60-(time.time()-self._warmup_done_time):.0f}s al via")
+                return
+
             # ── SCORE vs SOGLIA ──────────────────────────────────────────────
             score  = result['score']
             soglia = result['soglia']
