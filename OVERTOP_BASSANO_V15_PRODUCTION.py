@@ -5457,6 +5457,22 @@ class OvertopBassanoV15Production:
             try:
                 _caps_ra = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
                 _now_ra  = time.time()
+
+                # REGOLA FISICA: BLOCCA_CONTESTO prevale su ABBASSA_SOGLIA stesso contesto
+                _contesti_bloccati = set()
+                for _cap in _caps_ra:
+                    if _cap.get('azione') == 'BLOCCA_CONTESTO':
+                        _p = _cap.get('params', {})
+                        _key = f"{_p.get('momentum','')}|{_p.get('volatility','')}|{_p.get('trend','')}"
+                        _contesti_bloccati.add(_key)
+                _caps_ra = [
+                    c for c in _caps_ra
+                    if not (
+                        c.get('azione') == 'ABBASSA_SOGLIA' and
+                        f"{c.get('params',{}).get('momentum','')}|{c.get('params',{}).get('volatility','')}|{c.get('params',{}).get('trend','')}" in _contesti_bloccati
+                    )
+                ]
+
                 for _cap in _caps_ra:
                     _cid = _cap.get('id', '')
                     if not _cid:
@@ -7119,6 +7135,17 @@ class OvertopBassanoV15Production:
                                 _motivo_ci = f"CI_OVERRIDE_VETO: ST_hit>63% + capsule={_ci_caps_forti}"
                         except Exception:
                             pass
+
+                    # REGOLA ASSOLUTA: DEBOLE|ALTA|SIDEWAYS non si bypassa mai
+                    _contesto_invalicabile = (
+                        momentum == "DEBOLE" and
+                        volatility == "ALTA" and
+                        trend == "SIDEWAYS"
+                    )
+                    if _contesto_invalicabile:
+                        _fuoco_estremo = False
+                        _ci_override = False
+                        self._log_m2("🧱", f"CONTESTO_INVALICABILE: DEBOLE|ALTA|SIDEWAYS — nessun bypass")
 
                     if veto.startswith("STATIC_TOSSICO") and (_fuoco_estremo or _ci_override):
                         if _fuoco_estremo:
@@ -9008,6 +9035,7 @@ class OvertopBassanoV15Production:
     def run(self):
         log.info("[START] Bot avviato - connessione Binance WS...")
         self._carica_storia_dal_db()
+        self._boot_time = time.time()
         self.connect_binance()
         _watchdog_last = time.time()
         try:
