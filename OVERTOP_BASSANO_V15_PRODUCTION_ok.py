@@ -5457,6 +5457,22 @@ class OvertopBassanoV15Production:
             try:
                 _caps_ra = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
                 _now_ra  = time.time()
+
+                # REGOLA FISICA: BLOCCA_CONTESTO prevale su ABBASSA_SOGLIA stesso contesto
+                _contesti_bloccati = set()
+                for _cap in _caps_ra:
+                    if _cap.get('azione') == 'BLOCCA_CONTESTO':
+                        _p = _cap.get('params', {})
+                        _key = f"{_p.get('momentum','')}|{_p.get('volatility','')}|{_p.get('trend','')}"
+                        _contesti_bloccati.add(_key)
+                _caps_ra = [
+                    c for c in _caps_ra
+                    if not (
+                        c.get('azione') == 'ABBASSA_SOGLIA' and
+                        f"{c.get('params',{}).get('momentum','')}|{c.get('params',{}).get('volatility','')}|{c.get('params',{}).get('trend','')}" in _contesti_bloccati
+                    )
+                ]
+
                 for _cap in _caps_ra:
                     _cid = _cap.get('id', '')
                     if not _cid:
@@ -7120,6 +7136,17 @@ class OvertopBassanoV15Production:
                         except Exception:
                             pass
 
+                    # REGOLA ASSOLUTA: DEBOLE|ALTA|SIDEWAYS non si bypassa mai
+                    _contesto_invalicabile = (
+                        momentum == "DEBOLE" and
+                        volatility == "ALTA" and
+                        trend == "SIDEWAYS"
+                    )
+                    if _contesto_invalicabile:
+                        _fuoco_estremo = False
+                        _ci_override = False
+                        self._log_m2("🧱", f"CONTESTO_INVALICABILE: DEBOLE|ALTA|SIDEWAYS — nessun bypass")
+
                     if veto.startswith("STATIC_TOSSICO") and (_fuoco_estremo or _ci_override):
                         if _fuoco_estremo:
                             self._log_m2("🔥", f"STATIC bypassed — FUOCO carica={self._oi_carica:.2f}")
@@ -7162,6 +7189,18 @@ class OvertopBassanoV15Production:
                         self._record_phantom(price, veto, seed['score'],
                                              momentum, volatility, trend)
                     return
+
+            # ── BOOT GUARD — warmup RSI 20 campioni + 60 secondi ────────────
+            _warmup_rsi = len(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else 0
+            if _warmup_rsi < 20:
+                self._log_m2("⏳", f"BOOT_GUARD: warmup RSI {_warmup_rsi}/20")
+                return
+            if not hasattr(self, '_warmup_done_time'):
+                self._warmup_done_time = time.time()
+                self._log_m2("✅", "BOOT_GUARD: warmup OK — aspetto 60s")
+            if time.time() - self._warmup_done_time < 60:
+                self._log_m2("⏳", f"BOOT_GUARD: {60-(time.time()-self._warmup_done_time):.0f}s al via")
+                return
 
             # ── SCORE vs SOGLIA ──────────────────────────────────────────────
             score  = result['score']
@@ -8996,6 +9035,7 @@ class OvertopBassanoV15Production:
     def run(self):
         log.info("[START] Bot avviato - connessione Binance WS...")
         self._carica_storia_dal_db()
+        self._boot_time = time.time()
         self.connect_binance()
         _watchdog_last = time.time()
         try:
