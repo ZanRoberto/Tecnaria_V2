@@ -3914,7 +3914,7 @@ class CampoGravitazionale:
     VOL_SCORE       = {"BASSA": 1.0,  "MEDIA": 0.60, "ALTA": 0.20}
 
     # -- SOGLIA DINAMICA ---------------------------------------------------
-    SOGLIA_BASE = 52
+    SOGLIA_BASE = 50
     REGIME_FACTOR = {"TRENDING_BULL": 0.80, "EXPLOSIVE": 0.85,
                      "RANGING": 1.00, "TRENDING_BEAR": 1.10}
     # RANGING: era 1.10, ora 1.00 - soglia formula 75.9 irraggiungibile, score max realistico 64
@@ -3922,7 +3922,7 @@ class CampoGravitazionale:
     VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.00}
     # ALTA: era 1.05, ora 1.00 - phantom SCORE_INSUFF WR 65% R/R 2.04, profittevoli
     # Soglia RANGING+ALTA: 60 × 1.00 × 1.00 = 60.0 (trade score 58-63 passano)
-    SOGLIA_MIN    = 48    # PAVIMENTO calibrato su dati reali Signal Tracker
+    SOGLIA_MIN    = 44    # Abbassato da 48 — calibrato sulla sessione 3 aprile WR 58.5%
     SOGLIA_MAX    = 80    # era 90 - phantom SCORE_INSUFFICIENTE dice -$3871, troppo alto in RANGING
 
     # -- SIZE CONTINUA -----------------------------------------------------
@@ -5114,6 +5114,27 @@ class OvertopBassanoV15Production:
         self._shadow_max_price = None
         self._shadow_min_price = None
         self._shadow_matrimonio = None
+
+        # -- LATENCY TRACKER — misura slippage decisione→esecuzione -------
+        # Registra la differenza tra prezzo al momento della DECISIONE
+        # e prezzo al momento dell'APERTURA EFFETTIVA della shadow.
+        # In EXPLOSIVE questa differenza rivela quanto la latenza ci costa.
+        # Quando slippage_medio_explosive > 0.05% → serve VPS Frankfurt.
+        self._latency_stats = {
+            'n_total':          0,
+            'n_explosive':      0,
+            'slippage_sum':     0.0,
+            'slippage_sum_exp': 0.0,
+            'slippage_max':     0.0,
+            'slippage_max_exp': 0.0,
+            'costo_usd_tot':    0.0,
+            'costo_usd_exp':    0.0,
+            'storia':           [],
+        }
+        self._decision_price  = 0.0
+        self._decision_ts     = 0.0
+        self._decision_regime = ''
+
         # -- STATE ENGINE - AGGRESSIVO / NEUTRO / DIFENSIVO ----------------
         # Il tempismo. Non solo COSA fare, ma QUANDO NON FARLO.
         self._state = "NEUTRO"                   # AGGRESSIVO | NEUTRO | DIFENSIVO
@@ -7030,6 +7051,37 @@ class OvertopBassanoV15Production:
                               veto.startswith("DIVORZIO"))
 
                 if is_tossico:
+                    # ── BLOCCA_CONTESTO RA_ ha priorità assoluta sul FUOCO bypass ──
+                    # Il Ragionatore genera BLOCCA_CONTESTO quando vede perdite sistematiche.
+                    # Questa capsula deve prevalere anche sul FUOCO bypass — altrimenti
+                    # il sistema entra cieco ignorando la decisione del Ragionatore.
+                    try:
+                        _caps_ra_blocca = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
+                        _now_ra_blocca = time.time()
+                        for _cap_b in _caps_ra_blocca:
+                            if _cap_b.get('azione') != 'BLOCCA_CONTESTO':
+                                continue
+                            try:
+                                from datetime import datetime as _dt5
+                                _cap_ts_b = _dt5.fromisoformat(_cap_b.get('ts', '')).timestamp()
+                                if _now_ra_blocca - _cap_ts_b > _cap_b.get('vita', 600):
+                                    continue
+                            except Exception:
+                                pass
+                            _pb = _cap_b.get('params', {})
+                            if (_pb.get('momentum','') == momentum and
+                                _pb.get('volatility','') == volatility and
+                                _pb.get('trend','') == trend):
+                                self._log_m2("🤖", f"RA_BLOCCA_CONTESTO_PRIORITY: {_cap_b.get('id','')} "
+                                                   f"blocca {momentum}|{volatility}|{trend} "
+                                                   f"PRIMA del FUOCO bypass")
+                                if len(self._phantoms_open) < 5:
+                                    self._record_phantom(price, f"RA_BLOCCA_{momentum}_{volatility}_{trend}",
+                                                         seed['score'], momentum, volatility, trend)
+                                return
+                    except Exception as _bcp_e:
+                        log.debug(f"[BLOCCA_PRIORITY] {_bcp_e}")
+
                     # Controlla se OI FUOCO estremo può bypassare STATIC
                     _fuoco_estremo = (self._oi_stato == "FUOCO" and
                                       self._oi_carica >= 0.85)
@@ -7073,6 +7125,31 @@ class OvertopBassanoV15Production:
                             self._log_m2("🔥", f"STATIC bypassed — FUOCO carica={self._oi_carica:.2f}")
                         else:
                             self._log_m2("💊", f"STATIC bypassed — CI ha autorità: {_motivo_ci}")
+
+                        # FIX: evaluate si è fermato al veto → score=0, size=0
+                        # Ricalcola score dai componenti che abbiamo già
+                        _rsi_now = getattr(self.campo, '_last_rsi', 50.0)
+                        _macd_now = getattr(self.campo, '_last_macd_hist', 0.0)
+                        _score_bypass = round(
+                            seed['score'] * 25 +
+                            fingerprint_wr * 25 +
+                            (10.0 if 40 < _rsi_now < 70 else 4.0) +
+                            (10.0 if abs(_macd_now) > 1 else 0.0),
+                            1
+                        ) if seed.get('score', 0) > 0 else 20.0
+
+                        result['enter'] = True
+                        result['score'] = _score_bypass
+                        result['size']  = max(result.get('size', 0), 0.15)
+                        self._log_m2("📊", f"Score bypass: {_score_bypass:.1f} size={result['size']:.2f}")
+
+                        # SOGLIA MINIMA ASSOLUTA nel bypass FUOCO
+                        # Quando il campo restituisce soglia=0 (VETO prima del calcolo)
+                        # non permettere entry sotto score 40 — sistema non può essere cieco
+                        _soglia_bypass_min = 40.0
+                        if _score_bypass < _soglia_bypass_min:
+                            result['enter'] = False
+                            self._log_m2("🛑", f"BYPASS BLOCCATO: score {_score_bypass:.1f} < soglia_min {_soglia_bypass_min:.1f}")
                     else:
                         self._log_m2("🚫", f"VETO_TOSSICO: {veto}")
                         if len(self._phantoms_open) < 5:
@@ -7163,6 +7240,79 @@ class OvertopBassanoV15Production:
                     # Pista asciutta — size piena
                     pass
 
+            # ── BOOST_SEED dalle capsule RA_ del Ragionatore ────────────────
+            # Quando il sistema è cieco (seed basso, fp=0) il Ragionatore
+            # genera BOOST_SEED per rompere il paradosso zero-trade.
+            # Il boost viene applicato allo score direttamente.
+            try:
+                _caps_ra = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
+                _now_ra  = time.time()
+                _boost_seed_delta = 0.0
+                for _cap in _caps_ra:
+                    if _cap.get('azione') != 'BOOST_SEED':
+                        continue
+                    # Verifica scadenza
+                    try:
+                        from datetime import datetime as _dt3
+                        _cap_ts = _dt3.fromisoformat(_cap.get('ts', '')).timestamp()
+                        if _now_ra - _cap_ts > _cap.get('vita', 300):
+                            continue
+                    except Exception:
+                        pass
+                    _delta = _cap.get('params', {}).get('delta', 0)
+                    _forza = min(0.65, _cap.get('forza', 0.5))
+                    _boost_seed_delta += _delta * _forza
+                if _boost_seed_delta > 0:
+                    _score_prima = result.get('score', score)
+                    result['score'] = round(_score_prima + _boost_seed_delta, 1)
+                    score = result['score']
+                    # Se ora supera la soglia → entra
+                    # SOGLIA MINIMA ASSOLUTA: mai entrare sotto 40 anche con BOOST_SEED
+                    # Evita entry cieche quando soglia=0 (sistema non ancora calibrato)
+                    _soglia_eff = max(soglia, 40.0)
+                    if not result.get('enter') and score >= _soglia_eff:
+                        result['enter'] = True
+                        result['size']  = max(result.get('size', 0), 0.15)
+                    self._log_m2("🤖", f"RA_BOOST_SEED: score {_score_prima:.1f}→{score:.1f} "
+                                      f"(delta={_boost_seed_delta:.1f}) soglia_eff={_soglia_eff:.1f}")
+            except Exception as _bs_e:
+                log.debug(f"[BOOST_SEED_ERR] {_bs_e}")
+
+            # ── BLOCCA_CONTESTO dalle capsule RA_ del Ragionatore ────────────
+            # Quando il Ragionatore vede WR reale < 20% su un contesto specifico
+            # genera BLOCCA_CONTESTO — veto dinamico basato su dati reali.
+            # Più potente del VETO_TOSSICO statico perché nasce dall'esperienza viva.
+            try:
+                _caps_ra = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
+                _now_ra  = time.time()
+                for _cap in _caps_ra:
+                    if _cap.get('azione') != 'BLOCCA_CONTESTO':
+                        continue
+                    # Verifica scadenza
+                    try:
+                        from datetime import datetime as _dt4
+                        _cap_ts = _dt4.fromisoformat(_cap.get('ts', '')).timestamp()
+                        if _now_ra - _cap_ts > _cap.get('vita', 1800):
+                            continue
+                    except Exception:
+                        pass
+                    # Controlla se il contesto corrente corrisponde
+                    _params = _cap.get('params', {})
+                    _match_mom = _params.get('momentum', '') == momentum
+                    _match_vol = _params.get('volatility', '') == volatility
+                    _match_trd = _params.get('trend', '') == trend
+                    if _match_mom and _match_vol and _match_trd:
+                        _cap_id = _cap.get('id', 'RA_BLOCCA')
+                        self._log_m2("🤖", f"RA_BLOCCA_CONTESTO: {_cap_id} "
+                                          f"blocca {momentum}|{volatility}|{trend} "
+                                          f"— {_cap.get('motivo','')[:50]}")
+                        if len(self._phantoms_open) < 5:
+                            self._record_phantom(price, f"RA_BLOCCA_{momentum}_{volatility}_{trend}",
+                                                 seed['score'], momentum, volatility, trend)
+                        return
+            except Exception as _bc_e:
+                log.debug(f"[BLOCCA_CONTESTO_ERR] {_bc_e}")
+
             # ── CAPSULE INTELLIGENTE: modifiche predittive ───────────────────
             try:
                 _ci_mods = self.ci.get_entry_mods()
@@ -7201,6 +7351,11 @@ class OvertopBassanoV15Production:
                 self._breath.on_trade_open()
             if _V16_ENGINES_OK and self._comparto:
                 self._comparto._attivo  # registra trade nel comparto
+
+            # ── LATENCY TRACKER: registra prezzo decisione ───────────────
+            self._decision_price  = price
+            self._decision_ts     = time.time()
+            self._decision_regime = self._regime_current
 
             self._open_shadow_position(price, score, soglia, seed, size,
                                         momentum, volatility, trend,
@@ -7244,10 +7399,72 @@ class OvertopBassanoV15Production:
                 "seed":          round(seed.get('score', 0), 3),
                 "ts_entry":      time.time(),
             }
-            self._shadow_entry_time = time.time()
-            self._shadow_max_price  = price
-            self._shadow_min_price  = price
-            self._shadow_matrimonio = matrimonio_name
+            self._shadow_entry_time        = time.time()
+            self._shadow_max_price         = price
+            self._shadow_min_price         = price
+            self._shadow_matrimonio        = matrimonio_name
+
+            # ── LATENCY TRACKER: misura slippage decisione→esecuzione ────
+            # Il prezzo della decisione è stato registrato in _decision_price.
+            # Il prezzo qui è quello effettivo dell'apertura.
+            # La differenza è il costo della latenza.
+            try:
+                if self._decision_price > 0:
+                    _lat_elapsed  = time.time() - self._decision_ts
+                    _slip_abs     = abs(price - self._decision_price)
+                    _slip_pct     = _slip_abs / self._decision_price * 100
+                    _is_explosive = self._decision_regime == "EXPLOSIVE"
+                    _exposure     = self.TRADE_SIZE_USD * self.LEVERAGE
+                    _btc_qty      = _exposure / self._decision_price
+                    _costo_usd    = _slip_abs * _btc_qty
+
+                    # Aggiorna stats
+                    ls = self._latency_stats
+                    ls['n_total']       += 1
+                    ls['slippage_sum']  += _slip_pct
+                    ls['costo_usd_tot'] += _costo_usd
+                    if _slip_pct > ls['slippage_max']:
+                        ls['slippage_max'] = round(_slip_pct, 4)
+
+                    if _is_explosive:
+                        ls['n_explosive']      += 1
+                        ls['slippage_sum_exp'] += _slip_pct
+                        ls['costo_usd_exp']    += _costo_usd
+                        if _slip_pct > ls['slippage_max_exp']:
+                            ls['slippage_max_exp'] = round(_slip_pct, 4)
+
+                    # Log evento
+                    _avg_slip = ls['slippage_sum'] / ls['n_total']
+                    _evento = {
+                        'ts':        time.strftime('%H:%M:%S'),
+                        'regime':    self._decision_regime,
+                        'slip_pct':  round(_slip_pct, 4),
+                        'costo_usd': round(_costo_usd, 3),
+                        'elapsed_ms':round(_lat_elapsed * 1000, 1),
+                        'allarme':   _slip_pct > 0.05,
+                    }
+                    ls['storia'].append(_evento)
+                    if len(ls['storia']) > 20:
+                        ls['storia'] = ls['storia'][-20:]
+
+                    # Log visibile se slippage significativo
+                    if _slip_pct > 0.02:
+                        _tag = "🔴 LATENZA CRITICA" if _slip_pct > 0.05 else "🟡 LATENZA"
+                        self._log_m2("⏱", f"{_tag}: slip={_slip_pct:.3f}% "
+                                         f"costo=${_costo_usd:.2f} "
+                                         f"elapsed={_lat_elapsed*1000:.0f}ms "
+                                         f"regime={self._decision_regime}")
+            except Exception as _lt_e:
+                log.debug(f"[LATENCY_TRACK] {_lt_e}")
+
+            # FIX CRITICO: setta contesto entry per Oracolo e divorzi
+            self._shadow_entry_momentum    = momentum
+            self._shadow_entry_volatility  = volatility
+            self._shadow_entry_trend       = trend
+            self._shadow_entry_fingerprint = fingerprint_wr
+
+
+
 
             self._m2_trades += 1
             self._log_m2("📈", f"SHADOW APERTA {self.campo._direction} "
@@ -7256,12 +7473,17 @@ class OvertopBassanoV15Production:
                               f"matrimonio={matrimonio_name}")
 
             # Telemetry
-            ctx = self._tele_ctx()
-            self.telemetry.log_trade_open(
-                trade_direction=self.campo._direction,
-                **{k: ctx[k] for k in ('regime','direction','open_position',
-                   'active_threshold','drift','macd','trend','volatility')}
-            )
+            try:
+                ctx = self._tele_ctx()
+                self.telemetry.log_trade_entry(
+                    trade_direction=self.campo._direction,
+                    score=score, soglia=soglia,
+                    matrimonio=matrimonio_name,
+                    **{k: ctx[k] for k in ('regime','direction','open_position',
+                       'active_threshold','drift','macd','trend','volatility')}
+                )
+            except Exception as _te:
+                log.debug(f"[TELEMETRY_OPEN] {_te}")
 
         except Exception as e:
             log.error(f"[OPEN_SHADOW_ERROR] {e}")
@@ -7369,9 +7591,11 @@ class OvertopBassanoV15Production:
                     triggers.append("T3_DD")
                 # T4: FIX — scatta solo se in perdita, non se stai guadagnando
                 current_fp = self.oracolo.get_wr(momentum, volatility, trend, entry_direction)
-                fp_div = abs(current_fp - self._shadow_entry_fingerprint) / max(self._shadow_entry_fingerprint, 0.001)
-                if fp_div > DIVORCE_FP_DIVERGE_PCT and current_pnl_real < 0:
-                    triggers.append("T4_FP")
+                _entry_fp = self._shadow_entry_fingerprint or 0.0
+                if _entry_fp > 0:
+                    fp_div = abs(current_fp - _entry_fp) / max(_entry_fp, 0.001)
+                    if fp_div > DIVORCE_FP_DIVERGE_PCT and current_pnl_real < 0:
+                        triggers.append("T4_FP")
                 if len(triggers) >= DIVORCE_MIN_TRIGGERS:
                     self._close_shadow_trade(price, f"DIVORZIO|{'|'.join(triggers)}")
                     return
@@ -7739,6 +7963,72 @@ class OvertopBassanoV15Production:
                 f"M2 shadow {self._shadow_matrimonio} | PnL=${pnl:+.4f} | {reason}",
                 {'pnl': pnl, 'is_win': is_win, 'reason': reason,
                  'score': self._shadow.get('score', 0), 'soglia': self._shadow.get('soglia', 0)})
+
+            # -- PASSA RISULTATO AL NARRATORE — impara dal dissanguamento ----
+            # Il Narratore riceve ogni trade chiuso con contesto completo.
+            # Questo rompe il secondo paradosso: il Ragionatore non può
+            # imparare se non vede i risultati reali delle sue capsule.
+            try:
+                _trade_result = {
+                    'ts':         datetime.utcnow().strftime('%H:%M:%S'),
+                    'pnl':        round(pnl, 2),
+                    'is_win':     is_win,
+                    'reason':     reason,
+                    'matrimonio': self._shadow_matrimonio,
+                    'momentum':   self._shadow_entry_momentum,
+                    'volatility': self._shadow_entry_volatility,
+                    'trend':      self._shadow_entry_trend,
+                    'regime':     self._regime_current,
+                    'score':      self._shadow.get('score', 0) if self._shadow else 0,
+                    'soglia':     self._shadow.get('soglia', 0) if self._shadow else 0,
+                    'direction':  entry_direction,
+                }
+                if self.heartbeat_data is not None:
+                    _storia = self.heartbeat_data.get('narratore_trade_storia', [])
+                    _storia.append(_trade_result)
+                    if len(_storia) > 20:
+                        _storia = _storia[-20:]
+                    self.heartbeat_data['narratore_trade_storia'] = _storia
+                    # Aggiorna anche stats aggregate per il Narratore
+                    _ns = self.heartbeat_data.get('narratore_trade_stats', {
+                        'n': 0, 'wins': 0, 'pnl_tot': 0.0,
+                        'last_context': '', 'consecutive_losses': 0
+                    })
+                    _ns['n'] += 1
+                    _ns['pnl_tot'] = round(_ns['pnl_tot'] + pnl, 2)
+                    if is_win:
+                        _ns['wins'] += 1
+                        _ns['consecutive_losses'] = 0
+                    else:
+                        _ns['consecutive_losses'] = _ns.get('consecutive_losses', 0) + 1
+                    _ns['last_context'] = f"{self._shadow_entry_momentum}|{self._shadow_entry_volatility}|{self._shadow_entry_trend}"
+                    _ns['wr'] = round(_ns['wins'] / _ns['n'], 3)
+                    self.heartbeat_data['narratore_trade_stats'] = _ns
+            except Exception as _nr_e:
+                log.debug(f"[NARRATORE_TRADE] {_nr_e}")
+
+            # -- EXPORT LATENCY STATS all'heartbeat ----------------------
+            try:
+                if self.heartbeat_data is not None:
+                    ls = self._latency_stats
+                    _avg_tot = round(ls['slippage_sum'] / ls['n_total'], 4) if ls['n_total'] > 0 else 0
+                    _avg_exp = round(ls['slippage_sum_exp'] / ls['n_explosive'], 4) if ls['n_explosive'] > 0 else 0
+                    _allarme = _avg_exp > 0.05 or _avg_tot > 0.03
+                    self.heartbeat_data['latency_stats'] = {
+                        'n_total':          ls['n_total'],
+                        'n_explosive':      ls['n_explosive'],
+                        'slippage_medio':   _avg_tot,
+                        'slippage_medio_exp': _avg_exp,
+                        'slippage_max':     ls['slippage_max'],
+                        'slippage_max_exp': ls['slippage_max_exp'],
+                        'costo_usd_tot':    round(ls['costo_usd_tot'], 2),
+                        'costo_usd_exp':    round(ls['costo_usd_exp'], 2),
+                        'allarme':          _allarme,
+                        'storia':           ls['storia'][-5:],
+                        'verdetto':         '🔴 SERVE VPS' if _allarme else '🟢 LATENZA OK',
+                    }
+            except Exception as _lte:
+                log.debug(f"[LATENCY_EXPORT] {_lte}")
 
         except Exception as e:
             import traceback
@@ -8642,8 +8932,70 @@ class OvertopBassanoV15Production:
         except Exception as e:
             log.error(f"[WATCHDOG] Errore nel watchdog stesso: {e}")
 
+    def _carica_storia_dal_db(self):
+        """Al boot carica gli ultimi trade dal DB in narratore_trade_storia."""
+        try:
+            rows = self.db_execute("""
+                SELECT timestamp, direction, price, pnl, reason, data_json
+                FROM trades WHERE event_type='M2_EXIT'
+                ORDER BY id DESC LIMIT 20
+            """, fetch=True)
+            if not rows:
+                return
+            storia = []
+            wins = 0
+            losses = 0
+            pnl_tot = 0.0
+            consec_loss = 0
+            last_ctx = ''
+            for r in reversed(rows):
+                try:
+                    import json as _json
+                    dj = _json.loads(r[5]) if r[5] else {}
+                except Exception:
+                    dj = {}
+                pnl = float(r[3] or 0)
+                is_win = pnl > 0
+                entry = {
+                    'ts':        (r[0] or '')[-8:][:5],
+                    'is_win':    is_win,
+                    'pnl':       round(pnl, 2),
+                    'reason':    r[4] or '',
+                    'momentum':  dj.get('momentum', '?'),
+                    'volatility':dj.get('volatility', '?'),
+                    'trend':     dj.get('trend', '?'),
+                    'regime':    dj.get('regime', '?'),
+                    'score':     float(dj.get('score', 0)),
+                    'soglia':    float(dj.get('soglia', 0)),
+                    'direction': r[1] or 'LONG',
+                    'matrimonio':dj.get('matrimonio', '?'),
+                }
+                storia.append(entry)
+                pnl_tot += pnl
+                if is_win:
+                    wins += 1
+                    consec_loss = 0
+                else:
+                    losses += 1
+                    consec_loss += 1
+                last_ctx = f"{entry['momentum']}|{entry['volatility']}|{entry['trend']}"
+            n = len(storia)
+            if self.heartbeat_data is not None:
+                with self.heartbeat_lock:
+                    self.heartbeat_data['narratore_trade_storia'] = storia
+                    self.heartbeat_data['narratore_trade_stats'] = {
+                        'n': n, 'wins': wins, 'pnl_tot': round(pnl_tot, 2),
+                        'last_context': last_ctx,
+                        'consecutive_losses': consec_loss,
+                        'wr': round(wins/n, 3) if n > 0 else 0.0,
+                    }
+            log.info(f"[BOOT] Caricati {n} trade da DB in narratore_trade_storia")
+        except Exception as e:
+            log.error(f"[BOOT_STORIA] {e}")
+
     def run(self):
         log.info("[START] Bot avviato - connessione Binance WS...")
+        self._carica_storia_dal_db()
         self.connect_binance()
         _watchdog_last = time.time()
         try:
