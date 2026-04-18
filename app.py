@@ -2647,8 +2647,31 @@ const SCPanel = (() => {
       const ultimo = narrativa[narrativa.length - 1];
       narratoreTs.textContent = ultimo.ts || '--:--';
 
-      // Max 5 dialoghi, dal più recente
-      narratoreBody.innerHTML = narrativa.slice(-5).reverse().map((n, i) => {
+      var atHtml = '';
+      var atList = hb.trade_analisi || [];
+      if (atList.length > 0) {
+        var atOut = '<div style="margin-bottom:10px;padding:8px;background:#0a1a0a;border-left:3px solid #00ff88;border-radius:3px">';
+        atOut += '<div style="font-size:9px;color:#00ff88;letter-spacing:1px;margin-bottom:6px">ANALIZZATORE TRADER</div>';
+        var atItems = atList.slice(-3).reverse();
+        for (var ai = 0; ai < atItems.length; ai++) {
+          var at = atItems[ai];
+          var atWin = at.esito === 'WIN';
+          var atCol = atWin ? '#00ff88' : '#ff3355';
+          var atBg = atWin ? 'rgba(0,255,136,0.04)' : 'rgba(255,51,85,0.04)';
+          var atPnl = (at.pnl >= 0 ? '+' : '') + '$' + parseFloat(at.pnl||0).toFixed(2);
+          var atCap = at.capsula ? ' C:' + at.capsula : '';
+          var atTesto = (at.analisi || '');
+          atOut += '<div style="margin-bottom:5px;padding:4px 6px;border-left:2px solid ' + atCol + ';background:' + atBg + '">';
+          atOut += '<div style="font-size:9px;color:' + atCol + ';font-weight:bold">' + (atWin ? 'WIN' : 'LOSS') + ' ' + (at.ts||'') + ' score=' + parseFloat(at.score||0).toFixed(1) + ' ' + atPnl + atCap + '</div>';
+          atOut += '<div style="font-size:10px;color:#aaa;line-height:1.5;margin-top:2px">' + atTesto + '</div>';
+          atOut += '</div>';
+        }
+        atOut += '</div><hr style="border:none;border-top:1px solid #1a2a1a;margin:6px 0">';
+        atHtml = atOut;
+      }
+
+      // Max 5 dialoghi, dal piu recente
+      narratoreBody.innerHTML = atHtml + narrativa.slice(-5).reverse().map((n, i) => {
         const isUltimo = i === 0;
         const opacita = isUltimo ? '1' : `${0.85 - i * 0.15}`;
 
