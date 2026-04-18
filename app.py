@@ -974,23 +974,20 @@ Analizzatore dice LOSS + Phantom would_win=0 + pnl_missed=$0
 CASO 2 — PHANTOM DIVENTA ZAVORRA:
 Phantom would_win > 15% dei bloccati + pnl_missed > pnl_saved * 0.3
 = Il blocco sta perdendo opportunità reali.
-= Analizzatore e Phantom sono in conflitto.
 = CAPSULA: ABBASSA_SOGLIA mirato sul contesto con would_win alto.
 
 CASO 3 — ANALIZZATORE IN CONFLITTO CON PHANTOM:
-Analizzatore dice "non doveva entrare" ma Phantom dice would_win alto su quel contesto
-= Il sistema ha imparato male — il blocco è eccessivo.
+Analizzatore dice non doveva entrare ma Phantom dice would_win alto su quel contesto
+= Il sistema ha imparato male, il blocco e eccessivo.
 = CAPSULA: ABBASSA_SOGLIA leggero delta -4 vita=300s per quel contesto specifico.
 
 CASO 4 — PHANTOM CONFERMA ANALIZZATORE:
 Entrambi dicono che il trade era sbagliato.
 = CAPSULA: BLOCCA_CONTESTO vita=600s per quel contesto.
-= Questo è il caso più frequente in RANGING|ALTA|SIDEWAYS.
 
 REGOLA ASSOLUTA:
-Il Ragionatore è il giudice — non esegue ciecamente né l'uno né l'altro.
-Quando i due concordano → rafforza la decisione.
-Quando i due divergono → indaga il perché e genera capsula calibrata.
+Il Ragionatore e il giudice. Quando i due concordano rafforza la decisione.
+Quando i due divergono indaga il perche e genera capsula calibrata.
 Il verdetto va dichiarato esplicitamente nell'ANALISI prima della capsula.
 
 QUANDO PASSARE AL LIVE:
@@ -2677,8 +2674,31 @@ const SCPanel = (() => {
       const ultimo = narrativa[narrativa.length - 1];
       narratoreTs.textContent = ultimo.ts || '--:--';
 
-      // Max 5 dialoghi, dal più recente
-      narratoreBody.innerHTML = narrativa.slice(-5).reverse().map((n, i) => {
+      var atHtml = '';
+      var atList = hb.trade_analisi || [];
+      if (atList.length > 0) {
+        var atOut = '<div style="margin-bottom:10px;padding:8px;background:#0a1a0a;border-left:3px solid #00ff88;border-radius:3px">';
+        atOut += '<div style="font-size:9px;color:#00ff88;letter-spacing:1px;margin-bottom:6px">ANALIZZATORE TRADER</div>';
+        var atItems = atList.slice(-3).reverse();
+        for (var ai = 0; ai < atItems.length; ai++) {
+          var at = atItems[ai];
+          var atWin = at.esito === 'WIN';
+          var atCol = atWin ? '#00ff88' : '#ff3355';
+          var atBg = atWin ? 'rgba(0,255,136,0.04)' : 'rgba(255,51,85,0.04)';
+          var atPnl = (at.pnl >= 0 ? '+' : '') + '$' + parseFloat(at.pnl||0).toFixed(2);
+          var atCap = at.capsula ? ' C:' + at.capsula : '';
+          var atTesto = (at.analisi || '');
+          atOut += '<div style="margin-bottom:5px;padding:4px 6px;border-left:2px solid ' + atCol + ';background:' + atBg + '">';
+          atOut += '<div style="font-size:9px;color:' + atCol + ';font-weight:bold">' + (atWin ? 'WIN' : 'LOSS') + ' ' + (at.ts||'') + ' score=' + parseFloat(at.score||0).toFixed(1) + ' ' + atPnl + atCap + '</div>';
+          atOut += '<div style="font-size:10px;color:#aaa;line-height:1.5;margin-top:2px">' + atTesto + '</div>';
+          atOut += '</div>';
+        }
+        atOut += '</div><hr style="border:none;border-top:1px solid #1a2a1a;margin:6px 0">';
+        atHtml = atOut;
+      }
+
+      // Max 5 dialoghi, dal piu recente
+      narratoreBody.innerHTML = atHtml + narrativa.slice(-5).reverse().map((n, i) => {
         const isUltimo = i === 0;
         const opacita = isUltimo ? '1' : `${0.85 - i * 0.15}`;
 
