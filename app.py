@@ -970,6 +970,30 @@ score 35-42 = durata attesa 20-30s = borderline = solo in EXPLOSIVE
 score 43-48 = durata attesa 30-40s = accettabile in condizioni giuste
 score > 48 = durata attesa > 40s = trade di qualità = lascia passare
 
+CONTRADDITTORIO PHANTOM — REGOLA OPERATIVA:
+Ogni ciclo ricevi PHANTOM_CONTRADDITTORIO con il verdetto per ogni livello di blocco.
+NON limitarti ad analizzare — devi INTERVENIRE con una capsula concreta.
+
+LEGGI COSI':
+- verdetto=BLOCCO_CORRETTO + would_win=0 + pnl_missed=$0
+  = Il blocco funziona. Rafforza con BLOCCA_CONTESTO vita lunga (600s).
+  
+- verdetto=BLOCCO_ECCESSIVO + would_win > 15% + pnl_missed > pnl_saved*0.3
+  = Il blocco sta perdendo opportunita reali. Genera ABBASSA_SOGLIA delta -6 vita=300s.
+  
+- verdetto=ZONA_GRIGIA
+  = Osserva ancora. Capsula null.
+
+REGOLA ASSOLUTA DEL CONTRADDITTORIO:
+Se PHANTOM_CONTRADDITTORIO dice BLOCCO_CORRETTO su un contesto
+E ANALISI_TRADE_RECENTI dice LOSS su quello stesso contesto
+= I due concordano. Genera BLOCCA_CONTESTO vita=600s. Non servono altre capsule.
+
+Se PHANTOM_CONTRADDITTORIO dice BLOCCO_ECCESSIVO
+E ANALISI_TRADE_RECENTI dice LOSS
+= Contraddizione. Phantom vede opportunita che il sistema non cattura.
+= Genera ABBASSA_SOGLIA mirato su quel contesto specifico.
+
 VERDETTO PHANTOM — IL GIUDICE FINALE:
 Ogni ciclo devi confrontare Analizzatore Trade e Phantom e dichiarare il verdetto:
 
@@ -1263,6 +1287,29 @@ def _build_status_summary(hb: dict) -> str:
                       f"pnl_mancato=${pnl_missed:.0f} pnl_salvato=${pnl_saved:.0f} "
                       f"{'BLOCCO_ECCESSIVO' if zavorra_pct > 15 else 'BLOCCO_CORRETTO' if zavorra_pct < 7 else 'ZONA_GRIGIA'}")
 
+        # PHANTOM_CONTRADDITTORIO — verdetto per ogni livello di blocco
+        _ph_livelli = hb.get('phantom', {}).get('per_livello', {})
+        _ph_parts = []
+        for _livello, _dati in _ph_livelli.items():
+            _blk = _dati.get('blocked', 0)
+            _win = _dati.get('would_win', 0)
+            _los = _dati.get('would_lose', 0)
+            _mis = round(_dati.get('pnl_missed', 0), 2)
+            _sav = round(_dati.get('pnl_saved', 0), 2)
+            if _blk > 0:
+                _wr_bloccati = round(_win / _blk * 100, 1)
+                if _win == 0:
+                    _vrd = "BLOCCO_CORRETTO"
+                elif _wr_bloccati > 15:
+                    _vrd = "BLOCCO_ECCESSIVO"
+                else:
+                    _vrd = "ZONA_GRIGIA"
+                _ph_parts.append(
+                    f"{_livello}: blocked={_blk} would_win={_win} would_lose={_los} "
+                    f"pnl_missed=${_mis} pnl_saved=${_sav} verdetto={_vrd}"
+                )
+        phantom_contraddittorio = " || ".join(_ph_parts) if _ph_parts else "nessun dato"
+
         return f"""STATUS OVERTOP — {hb.get('last_seen','?')}
 MERCATO_ORA: regime={hb.get('regime','?')} conf={hb.get('regime_conf',0):.0%} | BTC={hb.get('last_price',0):.0f}
 REGIME_STORIA: {regime_log}
@@ -1287,7 +1334,8 @@ ZAVORRA_ANALISI: {zavorra_str}
 ANALISI_WIN: {analisi_win}
 ANALISI_LOSS: {analisi_loss}
 ANALISI_TRADE_RECENTI: {analisi_trade_str}
-LATENCY: slip_medio={hb.get('latency_stats',{}).get('slippage_medio',0):.3f}% slip_explosive={hb.get('latency_stats',{}).get('slippage_medio_exp',0):.3f}% costo_usd=${hb.get('latency_stats',{}).get('costo_usd_tot',0):.2f} verdetto={hb.get('latency_stats',{}).get('verdetto','N/A')}"""
+PHANTOM_CONTRADDITTORIO: {phantom_contraddittorio}
+LATENCY: slip_medio={{hb.get('latency_stats',{{}}).get('slippage_medio',0):.3f}}% slip_explosive={hb.get('latency_stats',{}).get('slippage_medio_exp',0):.3f}% costo_usd=${hb.get('latency_stats',{}).get('costo_usd_tot',0):.2f} verdetto={hb.get('latency_stats',{}).get('verdetto','N/A')}"""
     except Exception as e:
         return f"Errore costruzione summary: {e}"
 
