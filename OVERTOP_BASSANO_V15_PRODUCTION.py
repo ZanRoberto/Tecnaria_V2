@@ -7821,6 +7821,14 @@ class OvertopBassanoV15Production:
             else:
                 exit_soglia = exit_soglia_base
             
+            # -- PROFIT LOCK: mai perdere un profitto acquisito ----------
+            # Se siamo in profitto e il prezzo è tornato indietro > 40% del massimo → esci
+            if current_pnl > 0 and max_profit > 0:
+                retreat_pct_now = retreat / max_profit
+                if retreat_pct_now > 0.40:
+                    self._close_shadow_trade(price, f"PROFIT_LOCK_E{exit_energy}_WIN_{max_profit:+.0f}")
+                    return
+
             # -- DECISIONE ---------------------------------------------
             if exit_energy < exit_soglia:
                 if current_pnl > 0:
