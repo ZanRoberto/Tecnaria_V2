@@ -1275,6 +1275,15 @@ def _build_status_summary(hb: dict) -> str:
             ])
         else:
             analisi_trade_str = "nessuna analisi ancora"
+
+        # MEMORIA PERMANENTE — prompt contestuali dalle capsule nel DB
+        _caps_perm = hb.get('capsule_ragionatore', [])
+        _mem_parts = []
+        for _cp in _caps_perm:
+            if _cp.get('fonte') == 'PERMANENTE_DB' and _cp.get('prompt_contestuale'):
+                _mem_parts.append(_cp['prompt_contestuale'][:150])
+        memoria_permanente_str = " || ".join(_mem_parts) if _mem_parts else "nessuna memoria permanente ancora"
+
         analisi_loss = _analisi_trade(loss_trades, 'LOSS')
         ph_data = hb.get('phantom', {})
         zavorra_n = ph_data.get('zavorra', 0)
@@ -1334,6 +1343,7 @@ ZAVORRA_ANALISI: {zavorra_str}
 ANALISI_WIN: {analisi_win}
 ANALISI_LOSS: {analisi_loss}
 ANALISI_TRADE_RECENTI: {analisi_trade_str}
+MEMORIA_PERMANENTE: {memoria_permanente_str}
 PHANTOM_CONTRADDITTORIO: {phantom_contraddittorio}
 LATENCY: slip_medio={{hb.get('latency_stats',{{}}).get('slippage_medio',0):.3f}}% slip_explosive={hb.get('latency_stats',{}).get('slippage_medio_exp',0):.3f}% costo_usd=${hb.get('latency_stats',{}).get('costo_usd_tot',0):.2f} verdetto={hb.get('latency_stats',{}).get('verdetto','N/A')}"""
     except Exception as e:
