@@ -5524,10 +5524,7 @@ class OvertopBassanoV15Production:
                     _last_ctx = (self.heartbeat_data or {}).get('narratore_trade_stats', {}).get('last_context', '')
                     _trade_analisi = (self.heartbeat_data or {}).get('trade_analisi', [])
                     _ultima_analisi = _trade_analisi[-1].get('analisi', '') if _trade_analisi else ''
-                    _salva = (_n_trades >= 10 and (
-                        (_azione_cap == 'BLOCCA_CONTESTO' and _wr_now <= 0.20) or
-                        (_azione_cap == 'ABBASSA_SOGLIA' and _wr_now >= 0.60)
-                    ))
+                    _salva = True  # ogni capsula salvata nel DB — il sistema non dimentica
                     if _salva:
                         _prompt_ctx = (
                             f"MEMORIA per {_last_ctx}: {_azione_cap} "
@@ -6586,8 +6583,18 @@ class OvertopBassanoV15Production:
             campo._direction_bearish_streak = 0
             self._log_m2("🔄", f"RSI OVERRIDE → LONG (RSI={_rsi_now:.0f} ipervenduto)")
         elif _rsi_now < 30 and campo._direction == "LONG":
-            # Già LONG e ipervenduto — blocca qualsiasi flip a SHORT
-            campo._direction_bearish_streak = 0
+            # Già LONG e ipervenduto — blocca flip SHORT
+            # ECCEZIONE: OI SHORT FUOCO molto forte (>=0.90) + drift negativo + RANGING
+            # = il mercato sta dichiarando la direzione nonostante RSI basso
+            _oi_short_forte = (getattr(self, '_oi_carica_short', 0) >= 0.90 and
+                               getattr(self, '_oi_stato_short', '') == "FUOCO")
+            if _oi_short_forte and drift < -0.003 and self._regime_current == "RANGING":
+                campo._direction = "SHORT"
+                campo._direction_last_change = now
+                campo._direction_bearish_streak = 0
+                self._log_m2("🔄", f"FLIP → SHORT in RANGING (OI_SHORT_FORTE={getattr(self,'_oi_carica_short',0):.2f} drift={drift:+.3f}% RSI={_rsi_now:.0f})")
+            else:
+                campo._direction_bearish_streak = 0
 
         # In NON-RANGING: flip normale LONG → SHORT
         elif campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
