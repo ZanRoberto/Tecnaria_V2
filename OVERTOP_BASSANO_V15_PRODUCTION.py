@@ -6586,8 +6586,18 @@ class OvertopBassanoV15Production:
             campo._direction_bearish_streak = 0
             self._log_m2("🔄", f"RSI OVERRIDE → LONG (RSI={_rsi_now:.0f} ipervenduto)")
         elif _rsi_now < 30 and campo._direction == "LONG":
-            # Già LONG e ipervenduto — blocca qualsiasi flip a SHORT
-            campo._direction_bearish_streak = 0
+            # Già LONG e ipervenduto — blocca flip SHORT
+            # ECCEZIONE: OI SHORT FUOCO molto forte (>=0.90) + drift negativo + RANGING
+            # = il mercato sta dichiarando la direzione nonostante RSI basso
+            _oi_short_forte = (getattr(self, '_oi_carica_short', 0) >= 0.90 and
+                               getattr(self, '_oi_stato_short', '') == "FUOCO")
+            if _oi_short_forte and drift < -0.003 and self._regime_current == "RANGING":
+                campo._direction = "SHORT"
+                campo._direction_last_change = now
+                campo._direction_bearish_streak = 0
+                self._log_m2("🔄", f"FLIP → SHORT in RANGING (OI_SHORT_FORTE={getattr(self,'_oi_carica_short',0):.2f} drift={drift:+.3f}% RSI={_rsi_now:.0f})")
+            else:
+                campo._direction_bearish_streak = 0
 
         # In NON-RANGING: flip normale LONG → SHORT
         elif campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
