@@ -1430,8 +1430,8 @@ def narratore_thread():
                             capsule_ra = [c for c in capsule_ra
                                           if c.get('id') != cap_data['id']]
                             capsule_ra.append(cap_data)
-                            if len(capsule_ra) > 5:
-                                capsule_ra = capsule_ra[-5:]
+                            # Nessun limite — ogni capsula resta in memoria
+                            # Le permanenti vengono dal DB al boot, le nuove si accumulano
                             heartbeat_data["capsule_ragionatore"] = capsule_ra
                             heartbeat_data["narratore_ultima_capsula"] = {
                                 "id":     cap_data['id'],
