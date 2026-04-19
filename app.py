@@ -1266,6 +1266,15 @@ def _build_status_summary(hb: dict) -> str:
 
         analisi_win  = _analisi_trade(win_trades,  'WIN')
 
+        _trade_analisi = hb.get('trade_analisi', [])
+        if _trade_analisi:
+            analisi_trade_str = ' | '.join([
+                f"{a.get('ts','?')} {a.get('esito','?')} ${a.get('pnl',0):.2f} score={a.get('score',0):.1f} [{a.get('analisi','')[:60]}]"
+                for a in _trade_analisi[-3:]
+            ])
+        else:
+            analisi_trade_str = 'nessuna analisi ancora'
+
         # ── ANALISI TRADE per il Narratore ───────────────────────────────
         _trade_analisi = hb.get('trade_analisi', [])
         if _trade_analisi:
@@ -1275,15 +1284,6 @@ def _build_status_summary(hb: dict) -> str:
             ])
         else:
             analisi_trade_str = "nessuna analisi ancora"
-
-        # MEMORIA PERMANENTE — prompt contestuali dalle capsule nel DB
-        _caps_perm = hb.get('capsule_ragionatore', [])
-        _mem_parts = []
-        for _cp in _caps_perm:
-            if _cp.get('fonte') == 'PERMANENTE_DB' and _cp.get('prompt_contestuale'):
-                _mem_parts.append(_cp['prompt_contestuale'][:150])
-        memoria_permanente_str = " || ".join(_mem_parts) if _mem_parts else "nessuna memoria permanente ancora"
-
         analisi_loss = _analisi_trade(loss_trades, 'LOSS')
         ph_data = hb.get('phantom', {})
         zavorra_n = ph_data.get('zavorra', 0)
@@ -1319,6 +1319,20 @@ def _build_status_summary(hb: dict) -> str:
                 )
         phantom_contraddittorio = " || ".join(_ph_parts) if _ph_parts else "nessun dato"
 
+        # PHANTOM CONTRADDITTORIO
+        _ph_livelli = hb.get('phantom', {}).get('per_livello', {})
+        _ph_parts = []
+        for _lv, _dati in _ph_livelli.items():
+            _blk = _dati.get('blocked', 0)
+            _win = _dati.get('would_win', 0)
+            _sav = round(_dati.get('pnl_saved', 0), 2)
+            _mis = round(_dati.get('pnl_missed', 0), 2)
+            if _blk > 0:
+                _wr_b = round(_win / _blk * 100, 1)
+                _vrd = 'BLOCCO_CORRETTO' if _win == 0 else ('BLOCCO_ECCESSIVO' if _wr_b > 15 else 'ZONA_GRIGIA')
+                _ph_parts.append(f"{_lv}: blk={_blk} win={_win} saved=${_sav} missed=${_mis} verdetto={_vrd}")
+        phantom_contraddittorio = ' || '.join(_ph_parts) if _ph_parts else 'nessun dato'
+
         return f"""STATUS OVERTOP — {hb.get('last_seen','?')}
 MERCATO_ORA: regime={hb.get('regime','?')} conf={hb.get('regime_conf',0):.0%} | BTC={hb.get('last_price',0):.0f}
 REGIME_STORIA: {regime_log}
@@ -1343,7 +1357,6 @@ ZAVORRA_ANALISI: {zavorra_str}
 ANALISI_WIN: {analisi_win}
 ANALISI_LOSS: {analisi_loss}
 ANALISI_TRADE_RECENTI: {analisi_trade_str}
-MEMORIA_PERMANENTE: {memoria_permanente_str}
 PHANTOM_CONTRADDITTORIO: {phantom_contraddittorio}
 LATENCY: slip_medio={{hb.get('latency_stats',{{}}).get('slippage_medio',0):.3f}}% slip_explosive={hb.get('latency_stats',{}).get('slippage_medio_exp',0):.3f}% costo_usd=${hb.get('latency_stats',{}).get('costo_usd_tot',0):.2f} verdetto={hb.get('latency_stats',{}).get('verdetto','N/A')}"""
     except Exception as e:
@@ -2758,34 +2771,7 @@ const SCPanel = (() => {
           atOut += '<div style="font-size:10px;color:#aaa;line-height:1.5;margin-top:2px">' + atTesto + '</div>';
           atOut += '</div>';
         }
-        atOut += '</div>';
-
-        // CONTRADDITTORIO PHANTOM — arancione
-        var phLiv = ((hb.phantom||{}).per_livello)||{};
-        var phKeys = Object.keys(phLiv);
-        if (phKeys.length > 0) {
-          var ctOut = '<div style="margin-top:6px;padding:5px 8px;background:#1a0e00;border-left:3px solid #ff8c00;border-radius:3px">';
-          ctOut += '<div style="font-size:9px;color:#ff8c00;letter-spacing:1px;margin-bottom:4px">CONTRADDITTORIO PHANTOM</div>';
-          for (var pi = 0; pi < phKeys.length; pi++) {
-            var pk = phKeys[pi];
-            var pd = phLiv[pk];
-            var pBlk = pd.blocked||0;
-            var pWin = pd.would_win||0;
-            var pSav = parseFloat(pd.pnl_saved||0).toFixed(0);
-            var pMis = parseFloat(pd.pnl_missed||0).toFixed(2);
-            var pVrd = pWin === 0 ? 'BLOCCO_CORRETTO' : (pBlk > 0 && pWin/pBlk > 0.15 ? 'BLOCCO_ECCESSIVO' : 'ZONA_GRIGIA');
-            var pCol = pVrd === 'BLOCCO_CORRETTO' ? '#00ff88' : (pVrd === 'BLOCCO_ECCESSIVO' ? '#ff3355' : '#ffd700');
-            ctOut += '<div style="font-size:9px;margin-bottom:3px">';
-            ctOut += '<span style="color:#ff8c00">' + pk.substring(0,25) + '</span> ';
-            ctOut += '<span style="color:' + pCol + ';font-weight:bold">' + pVrd + '</span> ';
-            ctOut += '<span style="color:#888">blk=' + pBlk + ' win=' + pWin + ' saved=$' + pSav + ' missed=$' + pMis + '</span>';
-            ctOut += '</div>';
-          }
-          ctOut += '</div>';
-          atOut += ctOut;
-        }
-
-        atOut += '<hr style="border:none;border-top:1px solid #1a2a1a;margin:6px 0">';
+        atOut += '</div><hr style="border:none;border-top:1px solid #1a2a1a;margin:6px 0">';
         atHtml = atOut;
       }
 
