@@ -3051,6 +3051,20 @@ class PersistenzaStato:
                     value TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS capsule_permanenti (
+                    id              TEXT PRIMARY KEY,
+                    azione          TEXT,
+                    params_json     TEXT,
+                    motivo          TEXT,
+                    forza           REAL,
+                    contesto        TEXT,
+                    creata_ts       TEXT,
+                    analisi_causale TEXT,
+                    prompt_contestuale TEXT,
+                    n_attivazioni   INTEGER DEFAULT 0
+                )
+            """)
             conn.commit()
             conn.close()
         except Exception as e:
@@ -5504,6 +5518,41 @@ class OvertopBassanoV15Production:
                     })
                     _ra_iniettate.append(_cid)
                     log.info(f"[CI] 🤖 RA capsula→CI: {_cid} forza={_forza:.2f}")
+                    # Salva capsule permanenti per contesti con evidenza statistica
+                    _azione_cap = _cap.get('azione', '')
+                    _n_trades = (self.heartbeat_data or {}).get('m2_trades', 0)
+                    _wr_now = (self.heartbeat_data or {}).get('m2_wr', 1.0)
+                    _last_ctx = (self.heartbeat_data or {}).get('narratore_trade_stats', {}).get('last_context', '')
+                    _salva = False
+                    if _n_trades >= 10:
+                        if _azione_cap == 'BLOCCA_CONTESTO' and _wr_now <= 0.20:
+                            _salva = True  # contesto tossico confermato
+                        elif _azione_cap == 'ABBASSA_SOGLIA' and _wr_now >= 0.60:
+                            _salva = True  # contesto favorevole confermato
+                    if _salva:
+                        # Prende l'ultima analisi dell'Analizzatore Trade
+                        _trade_analisi = (self.heartbeat_data or {}).get('trade_analisi', [])
+                        _ultima_analisi = _trade_analisi[-1].get('analisi', '') if _trade_analisi else ''
+                        # Costruisce prompt contestuale dalla analisi causale
+                        _prompt_ctx = ''
+                        if _ultima_analisi:
+                            _prompt_ctx = (
+                                f"MEMORIA PERMANENTE per contesto {_last_ctx}:\n"
+                                f"Azione: {_azione_cap}\n"
+                                f"Evidenza: n_trade={_n_trades} wr={round(_wr_now*100)}%\n"
+                                f"Causa: {_ultima_analisi[:300]}"
+                            )
+                        self._salva_capsula_permanente({
+                            'id': _cid,
+                            'azione': _azione_cap,
+                            'params': _cap.get('params', {}),
+                            'motivo': _cap.get('motivo', ''),
+                            'forza': _forza,
+                            'contesto': _last_ctx,
+                            'ts': _cap.get('ts', ''),
+                            'analisi_causale': _ultima_analisi,
+                            'prompt_contestuale': _prompt_ctx,
+                        })
             except Exception as _ra_e:
                 log.debug(f"[CI_RA_ERR] {_ra_e}")
 
@@ -7138,14 +7187,14 @@ class OvertopBassanoV15Production:
 
                     # REGOLA ASSOLUTA: DEBOLE|ALTA|SIDEWAYS non si bypassa mai
                     _contesto_invalicabile = (
-                        momentum == "DEBOLE" and
                         volatility == "ALTA" and
-                        trend == "SIDEWAYS"
+                        trend == "SIDEWAYS" and
+                        momentum in ("DEBOLE", "MEDIO", "FORTE")
                     )
                     if _contesto_invalicabile:
                         _fuoco_estremo = False
                         _ci_override = False
-                        self._log_m2("🧱", f"CONTESTO_INVALICABILE: DEBOLE|ALTA|SIDEWAYS — nessun bypass")
+                        self._log_m2("🧱", f"CONTESTO_INVALICABILE: {momentum}|ALTA|SIDEWAYS — nessun bypass")
 
                     if veto.startswith("STATIC_TOSSICO") and (_fuoco_estremo or _ci_override):
                         if _fuoco_estremo:
@@ -8971,6 +9020,78 @@ class OvertopBassanoV15Production:
         except Exception as e:
             log.error(f"[WATCHDOG] Errore nel watchdog stesso: {e}")
 
+    def _carica_capsule_permanenti(self):
+        """Al boot carica le capsule permanenti dal DB e le inietta nel heartbeat."""
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            rows = conn.execute("""
+                SELECT id, azione, params_json, motivo, forza, creata_ts, analisi_causale, prompt_contestuale
+                FROM capsule_permanenti
+                ORDER BY creata_ts DESC
+            """).fetchall()
+            conn.close()
+            if not rows:
+                return
+            caps = []
+            import json as _j
+            for r in rows:
+                try:
+                    params = _j.loads(r[2]) if r[2] else {}
+                except Exception:
+                    params = {}
+                caps.append({
+                    'id':                r[0],
+                    'azione':            r[1],
+                    'params':            params,
+                    'motivo':            r[3] or '',
+                    'forza':             float(r[4] or 0.55),
+                    'ts':                r[5] or '',
+                    'vita':              86400,
+                    'fonte':             'PERMANENTE_DB',
+                    'analisi_causale':   r[6] or '',
+                    'prompt_contestuale': r[7] or '',
+                })
+            if self.heartbeat_data is not None:
+                with self.heartbeat_lock:
+                    existing = self.heartbeat_data.get('capsule_ragionatore', [])
+                    ids_existing = {c.get('id') for c in existing}
+                    for c in caps:
+                        if c['id'] not in ids_existing:
+                            existing.append(c)
+                    self.heartbeat_data['capsule_ragionatore'] = existing
+            log.info(f"[BOOT] Caricate {len(caps)} capsule permanenti dal DB")
+        except Exception as e:
+            log.error(f"[BOOT_CAPSULE] {e}")
+
+    def _salva_capsula_permanente(self, capsula: dict):
+        """Salva una capsula nel DB come permanente."""
+        try:
+            import json as _j
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("""
+                INSERT OR REPLACE INTO capsule_permanenti
+                (id, azione, params_json, motivo, forza, contesto, creata_ts, analisi_causale, prompt_contestuale, n_attivazioni)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(
+                    (SELECT n_attivazioni + 1 FROM capsule_permanenti WHERE id = ?), 1
+                ))
+            """, (
+                capsula.get('id'),
+                capsula.get('azione'),
+                _j.dumps(capsula.get('params', {})),
+                capsula.get('motivo', '')[:200],
+                float(capsula.get('forza', 0.55)),
+                capsula.get('contesto', ''),
+                capsula.get('ts', ''),
+                capsula.get('analisi_causale', '')[:500],
+                capsula.get('prompt_contestuale', '')[:1000],
+                capsula.get('id'),
+            ))
+            conn.commit()
+            conn.close()
+            log.info(f"[CAPSULA_PERM] Salvata: {capsula.get('id')} {capsula.get('azione')}")
+        except Exception as e:
+            log.error(f"[CAPSULA_PERM_SAVE] {e}")
+
     def _carica_storia_dal_db(self):
         """Al boot carica gli ultimi trade dal DB in narratore_trade_storia."""
         try:
@@ -9035,6 +9156,7 @@ class OvertopBassanoV15Production:
     def run(self):
         log.info("[START] Bot avviato - connessione Binance WS...")
         self._carica_storia_dal_db()
+        self._carica_capsule_permanenti()
         self._boot_time = time.time()
         self.connect_binance()
         _watchdog_last = time.time()
