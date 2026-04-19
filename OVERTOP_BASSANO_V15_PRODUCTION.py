@@ -7176,14 +7176,14 @@ class OvertopBassanoV15Production:
 
                     # REGOLA ASSOLUTA: DEBOLE|ALTA|SIDEWAYS non si bypassa mai
                     _contesto_invalicabile = (
-                        momentum == "DEBOLE" and
                         volatility == "ALTA" and
-                        trend == "SIDEWAYS"
+                        trend == "SIDEWAYS" and
+                        momentum in ("DEBOLE", "MEDIO", "FORTE")
                     )
                     if _contesto_invalicabile:
                         _fuoco_estremo = False
                         _ci_override = False
-                        self._log_m2("🧱", f"CONTESTO_INVALICABILE: DEBOLE|ALTA|SIDEWAYS — nessun bypass")
+                        self._log_m2("🧱", f"CONTESTO_INVALICABILE: {momentum}|ALTA|SIDEWAYS — nessun bypass")
 
                     if veto.startswith("STATIC_TOSSICO") and (_fuoco_estremo or _ci_override):
                         if _fuoco_estremo:
