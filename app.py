@@ -1002,6 +1002,12 @@ Analizzatore dice LOSS + Phantom would_win=0 + pnl_missed=$0
 = Il blocco era corretto. Analizzatore e Phantom concordano.
 = CAPSULA: null. Non toccare nulla. Il sistema funziona.
 
+REGOLA OPERATIVA IMMEDIATA — QUANDO AGIRE SUBITO:
+Se PHANTOM_CONTRADDITTORIO mostra VETO_TOSSICO con would_win > 5% dei bloccati E pnl_missed > $50:
+= Il blocco sta lasciando soldi reali per strada. Questo NON e' zona grigia — e' perdita certa.
+= Genera ABBASSA_SOGLIA delta -6 vita=300s per permettere entry con score > 45 in quel contesto.
+= NON aspettare il prossimo ciclo. Agisci adesso.
+
 CASO 2 — PHANTOM DIVENTA ZAVORRA:
 Phantom would_win > 15% dei bloccati + pnl_missed > pnl_saved * 0.3
 = Il blocco sta perdendo opportunità reali.
