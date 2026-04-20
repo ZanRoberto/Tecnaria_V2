@@ -1,10 +1,35 @@
 #!/usr/bin/env python3
 """
-OVERTOP BASSANO V14 PRODUCTION - FULL BUILD
+OVERTOP BASSANO V15 PRODUCTION - FULL BUILD
 BOT TRADING COMPLETO INTEGRATO - PRODUCTION READY
-Con Oracolo 2.0: memoria multi-dimensionale, context-matching,
-capsule auto-generative, duration memory, post-trade tracker.
-PAPER TRADE: imposta PAPER_TRADE = True per test sicuro
+
+╔══════════════════════════════════════════════════════════════════════════╗
+║  LEGGE FONDAMENTALE — LEGGILA PRIMA DI TOCCARE QUALSIASI CALCOLO        ║
+║                                                                          ║
+║  TUTTO è calcolato in USDC. MAI in BTC. MAI in delta prezzo puro.       ║
+║                                                                          ║
+║  PARAMETRI FISSI:                                                        ║
+║    TRADE_SIZE_USD = $1000  (margine per trade)                           ║
+║    LEVERAGE       = 5      (leva)                                        ║
+║    EXPOSURE       = $5000  (TRADE_SIZE_USD × LEVERAGE)                  ║
+║    BTC_QTY        = EXPOSURE / entry_price  (mai hardcodato)             ║
+║    FEE            = EXPOSURE × 0.0002 × 2 = $2.00 fissi per trade       ║
+║                                                                          ║
+║  FORMULA UNICA PER QUALSIASI PnL:                                        ║
+║    delta    = price - entry  (LONG) | entry - price  (SHORT)             ║
+║    pnl_lordo = delta × (EXPOSURE / entry_price)      ← USDC             ║
+║    pnl_netto = pnl_lordo - FEE                       ← USDC             ║
+║                                                                          ║
+║  DURANTE IL TRADE  → usa pnl_lordo  (il trade respira)                  ║
+║  AL CLOSE          → usa pnl_netto  (fee sottratta una sola volta)       ║
+║  STATISTICHE       → usa pnl_netto  (oracolo, phantom, capsule)          ║
+║                                                                          ║
+║  BREAKEVEN: delta BTC minimo = FEE / BTC_QTY ≈ +$30                     ║
+║  STOP LIVE: pnl_lordo < -$7  (= pnl_netto < -$5 dopo fee)               ║
+║                                                                          ║
+║  SE SCRIVI  pnl = price - entry  → È SBAGLIATO. SEMPRE.                 ║
+║  SE SCRIVI  pnl = delta * btc_qty  SENZA  / entry_price  → SBAGLIATO.   ║
+╚══════════════════════════════════════════════════════════════════════════╝
 """
 
 import json
@@ -821,7 +846,7 @@ class IntelligenzaAutonoma:
                     log.info(f"[IA] 🔴 L2_BLOCCO {mat}/{reg}/{vol} WR={wr:.0%} pnl={pnl_avg:+.2f} vita={vita}s")
 
             # -- OPPORTUNITÀ: WR alto E PnL positivo → boost size ----------
-            elif wr > 0.68 and pnl_avg > 1.0 and s['total'] >= 10:
+            elif wr > 0.68 and pnl_avg > 2.5 and s['total'] >= 10:  # lordo > breakeven
                 boost = min(1.4, 1.0 + (wr - 0.65) * 2.0)  # max +40% size
                 cap = self._crea_capsule_boost(
                     cap_id, mat, reg, vol, wr, pnl_avg, s['total'], boost,
@@ -1071,7 +1096,7 @@ class IntelligenzaAutonoma:
             pnl    = sum(t.get('pnl', 0) for t in pool)
             pnl_avg = pnl / len(pool)
 
-            if wr >= 0.75 and pnl_avg > 2.0:
+            if wr >= 0.75 and pnl_avg > 2.5:  # lordo > breakeven
                 boost = min(1.3, 1.0 + (wr - 0.70) * 1.5)
                 vita  = int(90 + (wr - 0.70) * 600)  # 90s → 4min
                 cap_id = f"L3_OPP_{regime}_BOOST"
@@ -1941,7 +1966,7 @@ class OracoloDinamico:
     FANTASMA_WR_THRESHOLD = 0.45
     DECAY_FACTOR          = 0.95
     MIN_SAMPLES           = 5
-    MIN_PNL_EDGE          = 0.50    # abbassato per raccogliere dati - OC+CTX proteggono
+    MIN_PNL_EDGE          = 2.50    # profitto lordo minimo — lordo $2.50 = netto $0.50 dopo fee $2
     MIN_REAL_SAMPLES      = 5
 
     def __init__(self):
@@ -1955,62 +1980,62 @@ class OracoloDinamico:
         
         # -- INTELLIGENZA REALE - dati da trade veri 23 marzo 2026 ------
         self._memory = {
-            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 13.0, 'samples': 24.0, 'pnl_sum': 15.0, 'real_samples': 5,
+            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 13.0, 'samples': 24.0, 'pnl_sum': 1.0, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0, 'pnl_sum': -15.0, 'real_samples': 5,
+            "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0, 'pnl_sum': -1.0, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|DEBOLE|ALTA|SIDEWAYS":  {'wins': 1.4,  'samples': 7.4,  'pnl_sum': -20.0, 'real_samples': 0,
+            "LONG|DEBOLE|ALTA|SIDEWAYS":  {'wins': 1.4,  'samples': 7.4,  'pnl_sum': -1.33, 'real_samples': 0,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|FORTE|MEDIA|SIDEWAYS":  {'wins': 4.5,  'samples': 6.0,  'pnl_sum': 8.0, 'real_samples': 0,
+            "LONG|FORTE|MEDIA|SIDEWAYS":  {'wins': 4.5,  'samples': 6.0,  'pnl_sum': 0.53, 'real_samples': 0,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|MEDIO|MEDIA|SIDEWAYS":  {'wins': 1.0,  'samples': 2.0,  'pnl_sum': -1.0, 'real_samples': 0,
+            "LONG|MEDIO|MEDIA|SIDEWAYS":  {'wins': 1.0,  'samples': 2.0,  'pnl_sum': -0.07, 'real_samples': 0,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|DEBOLE|MEDIA|SIDEWAYS": {'wins': 0.5,  'samples': 3.7,  'pnl_sum': -8.0, 'real_samples': 0,
+            "LONG|DEBOLE|MEDIA|SIDEWAYS": {'wins': 0.5,  'samples': 3.7,  'pnl_sum': -0.53, 'real_samples': 0,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|FORTE|BASSA|UP":        {'wins': 23.4, 'samples': 30.0, 'pnl_sum': 462.0, 'real_samples': 5,
+            "LONG|FORTE|BASSA|UP":        {'wins': 23.4, 'samples': 30.0, 'pnl_sum': 30.8, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
-            "LONG|FORTE|MEDIA|UP":        {'wins': 15.3, 'samples': 22.5, 'pnl_sum': 180.0, 'real_samples': 5,
+            "LONG|FORTE|MEDIA|UP":        {'wins': 15.3, 'samples': 22.5, 'pnl_sum': 12.0, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
-            "LONG|MEDIO|BASSA|UP":        {'wins': 12.2, 'samples': 18.8, 'pnl_sum': 118.0, 'real_samples': 5,
+            "LONG|MEDIO|BASSA|UP":        {'wins': 12.2, 'samples': 18.8, 'pnl_sum': 7.87, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
-            "LONG|FORTE|MEDIA|DOWN":      {'wins': 2.5,  'samples': 5.0,  'pnl_sum': 2.5,  'real_samples': 5,
+            "LONG|FORTE|MEDIA|DOWN":      {'wins': 2.5,  'samples': 5.0,  'pnl_sum': 0.17,  'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
-            "SHORT|FORTE|ALTA|DOWN":      {'wins': 5.5,  'samples': 10.0, 'pnl_sum': 54.0, 'real_samples': 5,
+            "SHORT|FORTE|ALTA|DOWN":      {'wins': 5.5,  'samples': 10.0, 'pnl_sum': 3.6, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
-            "LONG|DEBOLE|BASSA|SIDEWAYS": {'wins': 1.9,  'samples': 2.9,  'pnl_sum': 2.0, 'real_samples': 0,
+            "LONG|DEBOLE|BASSA|SIDEWAYS": {'wins': 1.9,  'samples': 2.9,  'pnl_sum': 0.13, 'real_samples': 0,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "SHORT|MEDIO|ALTA|SIDEWAYS":  {'wins': 0.3,  'samples': 4.0,  'pnl_sum': -16.83, 'real_samples': 2,
+            "SHORT|MEDIO|ALTA|SIDEWAYS":  {'wins': 0.3,  'samples': 4.0,  'pnl_sum': -1.12, 'real_samples': 2,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
@@ -2559,15 +2584,10 @@ class PreTradeSignalTracker:
                         delta = current_price - sig['price']
                     else:
                         delta = sig['price'] - current_price
-                    # Fee simulata con size reale: ~$250 × 0.02% × 2 = $0.10
-                    # Size reale = capital × size_factor × 0.05 ≈ $250
-                    _size_sim = 250.0  # stima conservativa size reale
-                    _fee_sim  = _size_sim * 0.0002 * 2  # 0.02% maker × 2 lati
-                    pnl_sim = delta * (_size_sim / sig['price']) - _fee_sim
-                    sig['results'][key]          = round(delta, 2)
-                    sig['results'][f'pnl_{w}']   = round(pnl_sim, 2)
-                    # Fee simulata: $5000 esposti × 0.02% × 2 = $2
-                    pnl_sim = delta * (5000 / sig['price']) - 2.0
+                    # PnL LORDO: fee esclusa dal monitoring
+                    pnl_sim = delta * (5000.0 / sig['price'])
+                    sig['results'][key]        = round(delta, 2)
+                    sig['results'][f'pnl_{w}'] = round(pnl_sim, 2)
                     sig['results'][f'hit_{w}']    = delta > 0
 
             # Chiudi dopo la finestra massima
@@ -4663,7 +4683,7 @@ class VeritatisTracker:
             # Hit vero: il delta deve coprire le fee reali
             # $1000 margine × 5x leva = $5000 esposti
             # Fee: $5000 × 0.02% × 2 lati = $2.00
-            pnl_sim = delta / sig['price'] * 5000 * 0.7 - 2.0
+            pnl_sim = delta * (5000.0 / sig['price'])  # lordo — fee al close
             hit     = delta > 0  # direzione corretta
             
             if elapsed >= 60:
@@ -5031,9 +5051,21 @@ class OvertopBassanoV15Production:
         # -- Persistenza --------------------------------------------------
         self._persist        = PersistenzaStato(db_path=DB_PATH)
         self.capital, self.total_trades = self._persist.load()
-        self.TRADE_SIZE_USD = 1000.0  # SIZE FISSA $1000 margine per trade
-        self.LEVERAGE = 5             # LEVA 5x - $1000 margine = $5000 esposizione
-        self.FEE_PCT = 0.0002        # 0.02% maker futures (vs 0.075% spot)
+        # ── LEGGE FONDAMENTALE — TUTTO IN USDC ──────────────────────────────
+        # MAI: pnl = price - entry         ← delta BTC puro, SBAGLIATO
+        # SEMPRE:
+        #   exposure  = TRADE_SIZE_USD x LEVERAGE   = $5000
+        #   btc_qty   = exposure / entry_price
+        #   pnl_lordo = delta x btc_qty              (live — fee esclusa)
+        #   pnl_netto = pnl_lordo - FEE_TRADE        (al close — una sola volta)
+        #   stop live = pnl_lordo < -STOP_LIVE = -$7 (netto ~-$5 dopo fee)
+        # ────────────────────────────────────────────────────────────────────
+        self.TRADE_SIZE_USD = 1000.0
+        self.LEVERAGE       = 5
+        self.EXPOSURE       = self.TRADE_SIZE_USD * self.LEVERAGE  # $5000
+        self.FEE_PCT        = 0.0002
+        self.FEE_TRADE      = self.EXPOSURE * self.FEE_PCT * 2     # $2.00 fissi
+        self.STOP_LIVE      = 7.0  # lordo live — $7 lordi = ~$5 netti dopo fee
         self.wins    = 0
         self.losses  = 0
 
@@ -5495,17 +5527,20 @@ class OvertopBassanoV15Production:
                     if _cid in self.ci._capsule_attive:
                         _ra_bloccate.append(f"{_cid}(già_attiva)")
                         continue
-                    # Verifica scadenza
-                    try:
-                        from datetime import datetime as _dt2
-                        _cap_ts = _dt2.fromisoformat(_cap.get('ts','')).timestamp()
-                        if _now_ra - _cap_ts > _cap.get('vita', 300):
-                            _ra_bloccate.append(f"{_cid}(scaduta)")
-                            continue
-                    except Exception:
-                        pass
-                    # Inietta con forza limitata
-                    _forza = min(0.65, _cap.get('forza', 0.5))
+                    # Capsule PERMANENTE_DB non scadono mai
+                    _fonte = _cap.get('fonte', '')
+                    if _fonte != 'PERMANENTE_DB':
+                        try:
+                            from datetime import datetime as _dt2
+                            _cap_ts = _dt2.fromisoformat(_cap.get('ts','')).timestamp()
+                            _vita_cap = max(600, _cap.get('vita', 600))  # minimo 600s
+                            if _now_ra - _cap_ts > _vita_cap:
+                                _ra_bloccate.append(f"{_cid}(scaduta)")
+                                continue
+                        except Exception:
+                            pass
+                    # Forza: permanenti a piena forza, temporanee limitate
+                    _forza = min(0.85, _cap.get('forza', 0.65)) if _fonte == 'PERMANENTE_DB' else min(0.65, _cap.get('forza', 0.5))
                     self.ci._attiva_capsula(_cid, {
                         'id':     _cid,
                         'tipo':   'OPPORTUNITA',
@@ -5831,7 +5866,7 @@ class OvertopBassanoV15Production:
         if not self.paper_trade:
             self._place_order("BUY", price, size_factor)
 
-        _size_usdt_entry = round(self.capital * size_factor * 0.05, 2)  # 5% capitale × size_mult
+        _size_usdt_entry = self.TRADE_SIZE_USD  # margine fisso $1000
         self.trade_open = {
             "price_entry":    price,
             "matrimonio":     matrimonio_name,
@@ -5865,14 +5900,19 @@ class OvertopBassanoV15Production:
         # 1% del margine = $10 max loss per trade.
         # Il T3 drawdown 3% sul prezzo BTC è inutile: 3% BTC = ~$2100 movimento.
         # Questo stop ferma il danno PRIMA che arrivi al T3.
-        exposure_m1 = self.TRADE_SIZE_USD * self.LEVERAGE
-        btc_qty_m1  = exposure_m1 / self.trade_open["price_entry"]
-        current_pnl_m1 = (price - self.trade_open["price_entry"]) * btc_qty_m1
-        HARD_STOP_M1 = self.TRADE_SIZE_USD * 0.01  # 1% margine = $10
-        if current_pnl_m1 < -HARD_STOP_M1:
-            self._log("🛑", f"HARD_STOP M1 PnL=${current_pnl_m1:.1f} max=-${HARD_STOP_M1:.0f}")
+        # HARD STOP: PnL LORDO (fee esclusa — il trade respira)
+        # Fee pagata solo al close, non monitored live
+        _hs_entry = self.trade_open["price_entry"]
+        _hs_dir   = self.trade_open.get("direction", "LONG")
+        _hs_exp   = self.TRADE_SIZE_USD * self.LEVERAGE     # $5000
+        _hs_btc   = _hs_exp / _hs_entry
+        _hs_delta = price - _hs_entry if _hs_dir == "LONG" else _hs_entry - price
+        _hs_pnl   = _hs_delta * _hs_btc                    # lordo, senza fee
+        HARD_STOP_M1 = self.STOP_LIVE  # lordo live ($7 = netto ~$5) $2
+        if _hs_pnl < -HARD_STOP_M1:
+            self._log("🛑", f"HARD_STOP lordo=${_hs_pnl:.2f} → netto≈${_hs_pnl-2:.2f}")
             self._close_trade(price, momentum, volatility, trend,
-                              reason=f"HARD_STOP_${abs(current_pnl_m1):.1f}")
+                              reason=f"HARD_STOP_${abs(_hs_pnl):.1f}")
             return
 
         # -- MOMENTUM DECELEROMETER - exit anticipata ----------------------
@@ -5910,10 +5950,10 @@ class OvertopBassanoV15Production:
         _size_usdt    = self.trade_open.get("size_usdt", 500.0)
         _direction    = self.trade_open.get("direction", "LONG")
         if _direction == "LONG":
-            _pnl_posizione = (price - _entry_price) / _entry_price * _size_usdt
+            _pnl_posizione = (price - _entry_price) * (5000.0 / _entry_price)  # lordo
         else:
-            _pnl_posizione = (_entry_price - price) / _entry_price * _size_usdt
-        _stop_loss_usdt = _size_usdt * 0.02  # 2% della size
+            _pnl_posizione = (_entry_price - price) * (5000.0 / _entry_price)  # lordo
+        _stop_loss_usdt = self.STOP_LIVE
         if _pnl_posizione < -_stop_loss_usdt:
             triggers_attivi.append(f"T3_STOPLOSS_PNL_{_pnl_posizione:.2f}$")
         # Mantieni anche il drawdown % come riferimento (più largo)
@@ -5954,8 +5994,19 @@ class OvertopBassanoV15Production:
     # ========================================================================
 
     def _close_trade(self, price, momentum, volatility, trend, reason: str):
-        pnl    = price - self.trade_open["price_entry"]
-        is_win = pnl > 0
+        # PnL REALE USDC FUTURES
+        # Esposizione = $1000 margine × 5 leva = $5000
+        # BTC qty     = $5000 / entry_price
+        # PnL lordo   = delta × btc_qty
+        # Fee         = $5000 × 0.02% × 2 = $2.00 fissi
+        _entry   = self.trade_open["price_entry"]
+        _dir     = self.trade_open.get("direction", "LONG")
+        _exp     = self.TRADE_SIZE_USD * self.LEVERAGE          # $5000
+        _btc_qty = _exp / _entry
+        _delta   = price - _entry if _dir == "LONG" else _entry - price
+        _fee     = _exp * self.FEE_PCT * 2                      # $2.00
+        pnl      = round(_delta * _btc_qty - _fee, 4)
+        is_win   = pnl > 0
         matrimonio_name = self.current_matrimonio
         matrimonio      = MatrimonioIntelligente.get_by_name(matrimonio_name)
         wr_expected     = matrimonio.get("wr", 0.50)
@@ -7644,7 +7695,7 @@ class OvertopBassanoV15Production:
             else:
                 current_pnl_real = (price - self._shadow["price_entry"]) * btc_qty_sl
 
-            HARD_STOP_USD = exposure_sl * 0.02  # 2% dell'esposizione = $100 su $5000
+            HARD_STOP_USD = self.STOP_LIVE
             if current_pnl_real < -HARD_STOP_USD:
                 self._close_shadow_trade(price, f"HARD_STOP_${abs(current_pnl_real):.1f}_max${HARD_STOP_USD:.0f}")
                 return
@@ -7702,13 +7753,14 @@ class OvertopBassanoV15Production:
             # ===============================================================
             
             if entry_direction == "LONG":
-                current_pnl = price - self._shadow["price_entry"]
-                max_profit = self._shadow_max_price - self._shadow["price_entry"]
-                retreat = self._shadow_max_price - price
+                _sdelta    = price - self._shadow["price_entry"]
+                max_profit = (self._shadow_max_price - self._shadow["price_entry"]) * (5000.0 / self._shadow["price_entry"])
+                retreat    = self._shadow_max_price - price
             else:
-                current_pnl = self._shadow["price_entry"] - price
-                max_profit = self._shadow["price_entry"] - self._shadow_min_price
-                retreat = price - self._shadow_min_price
+                _sdelta    = self._shadow["price_entry"] - price
+                max_profit = (self._shadow["price_entry"] - self._shadow_min_price) * (5000.0 / self._shadow["price_entry"])
+                retreat    = price - self._shadow_min_price
+            current_pnl = _sdelta * (5000.0 / self._shadow["price_entry"])  # lordo — fee al close
 
             # -- COMPONENTE 1: MOMENTUM (peso 30) ---------------------
             # FORTE=30, MEDIO=20, DEBOLE=5
@@ -8234,16 +8286,16 @@ class OvertopBassanoV15Production:
                 ph['min_price'] = price
 
             duration = time.time() - ph['entry_time']
-            # PnL bidirezionale - come il bot reale
-            if ph.get('direction', 'LONG') == 'SHORT':
-                pnl = ph['price_entry'] - price
-            else:
-                pnl = price - ph['price_entry']
+            # PnL LORDO USDC: fee esclusa dal monitoring (come il bot reale)
+            _ph_exp = 5000.0
+            _ph_btc = _ph_exp / ph['price_entry']
+            _ph_d   = price - ph['price_entry'] if ph.get('direction','LONG') == 'LONG' else ph['price_entry'] - price
+            pnl     = round(_ph_d * _ph_btc, 4)  # lordo — fee solo al close
             pnl_pct = (pnl / ph['price_entry']) * 100
 
             # -- Stesse regole di uscita del bot reale --
-            # Stop loss 2%
-            if pnl_pct < -2.0:
+            # Stop live lordo
+            if pnl < -self.STOP_LIVE:
                 to_close.append((i, price, "HARD_STOP"))
                 continue
             # DECEL (semplificato: dopo 15s se in perdita)
@@ -8361,12 +8413,16 @@ class OvertopBassanoV15Production:
                 }
 
             stats = self._phantom_stats[reason_key]
-            if is_win:
+            # Calcola PnL netto per statistiche (fee inclusa)
+            _ph_fee_final = self.FEE_TRADE  # $2.00 fissi
+            pnl_netto = pnl - _ph_fee_final
+            is_win_netto = pnl_netto > 0
+            if is_win_netto:
                 stats['would_win'] += 1
-                stats['pnl_missed'] += pnl   # soldi che NON abbiamo guadagnato
+                stats['pnl_missed'] += pnl_netto
             else:
                 stats['would_lose'] += 1
-                stats['pnl_saved'] += abs(pnl)   # soldi che NON abbiamo perso
+                stats['pnl_saved'] += abs(pnl_netto)
 
             result = {
                 'block_reason': block,
