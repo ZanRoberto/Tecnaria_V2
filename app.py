@@ -1816,6 +1816,7 @@ canvas.spark { width:100%; height:40px; }
       <span id="mode-badge" class="badge badge-paper">PAPER</span>
       <a href="/supervisor" style="background:rgba(139,92,246,0.3); border:1px solid rgba(139,92,246,0.6); color:#a78bfa; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; letter-spacing:1px;">⚡ COMMAND CENTER</a>
       <a href="/health" style="background:rgba(0,201,122,0.15); border:1px solid rgba(0,201,122,0.4); color:#00c97a; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; letter-spacing:1px;">🩺 HEALTH</a>
+      <a href="/oracle" style="background:rgba(255,215,0,0.15); border:1px solid rgba(255,215,0,0.5); color:#ffd700; padding:5px 12px; border-radius:6px; font-size:11px; font-weight:700; text-decoration:none; letter-spacing:1px;">🧠 ORACLE</a>
       <span style="font-size:10px; color:var(--dim)" id="last-seen">--</span>
     </div>
   </div>
@@ -4105,6 +4106,359 @@ def supervisor_result():
         "assets":       list(snaps.keys()),
         "snapshots":    snaps,
     })
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ORACLE — DUAL AI SUPERCAPSULE ENGINE
+# ═══════════════════════════════════════════════════════════════════════════
+
+KNOW = """OVERTOP BASSANO V15 — CONOSCENZA COMPLETA
+
+IDENTITA: Bot paper trading BTC/USDC su Render (tecnaria-v2.onrender.com). Flask+SQLite+Python. Repo: Tecnaria_V2. Autore: Roberto, Bassano del Grappa.
+
+COMPONENTI CORE:
+1. CampoGravitazionale: SeedScorer 4 componenti (seed 0-100), RSI 14, MACD. Entry se score >= soglia (base 55, min 52). _ta_sample_rate=5 (fixato da 50 il 20/04/2026).
+2. MatrimonioIntelligente: 7 tipi - STRONG_BULL 85%WR, MEDIUM_BULL 70%, CAUTIOUS 60%, WEAK_NEUTRAL 45%, TRAP 5%, PANIC 15%, STRONG_MED 75%. 4 divorce triggers: volatilita explosion, trend reversal, drawdown >3%, fingerprint divergence (2+=exit forzata).
+3. OracoloDinamico: fingerprint WR memory decay 0.95. Fingerprint=momentum x volatilita x trend x direction. DEBOLE|ALTA|SIDEWAYS=WR 12%=TOSSICO.
+4. CapsuleIntelligente: sistema immunitario predittivo. Precursori: breath/nervosismo/comparto/OI/drift. Postura: ALLERTA/OFFENSIVO/DIFENSIVO/NEUTRO. 8 capsule attive.
+5. PhantomTracker: simula trade non eseguiti. Misura zavorra vs mancati. PROBLEMA NOTO: Phantom Supervisor autoirrigidisce soglia ogni 60s con 0 trade reali = loop infinito.
+6. SuperCervello: predice direzione, carica LONG/SHORT (0-1). Conferma o blocca entry.
+7. VeritatisTracker: verifica decisioni SC a 60s.
+8. AIBridge (Il Generale): analisi ogni 5s, comandi FORZA_ENTRY/ABBASSA_SOGLIA/BLOCCA_SC/RESET_PESI.
+9. RegimeDetector: RANGING/EXPLOSIVE/TRENDING_BULL/TRENDING_BEAR + confidence%.
+10. MemoriaMatrimoni: WR tracking, separazione dopo 50-trade blacklist, divorzio permanente.
+
+ASSETTI V16: DIFENSIVO/NEUTRO/ATTACCO/TRENDING_BULL/TRENDING_BEAR.
+
+STATO (20 aprile 2026): 0 trade eseguiti. BTC $75465. Regime RANGING 27%. Fingerprint DEBOLE|ALTA|SIDEWAYS. VETO_TOSSICO INVALICABILE. Phantom Supervisor irrigidisce in loop. Fix applicati: sample_rate 50->5, warmup 35->20, BOOT_GUARD 14+10s. SHORT disabilitato. Economic Edge 35%.
+
+PROBLEMI APERTI:
+P1-CRITICO: Phantom Supervisor loop autoirrigidimento
+P2-ALTO: RANGING dominante fingerprint tossico
+P3-ALTO: Assetto DIFENSIVO oscillante
+P4-MEDIO: SHORT disabilitato carica 0.913 sprecata
+P5-MEDIO: Economic Edge 35% sotto soglia 50%
+
+REGOLE ASSOLUTE: una modifica alla volta, mai toccare cio che funziona, audit prima di intervenire, backup sempre."""
+
+PROMPT_L1 = KNOW + """
+
+Sei il RISPONDITORE di OVERTOP - esperto tecnico assoluto.
+
+COMPITO:
+1. Analizza la situazione con precisione tecnica
+2. Formula 3-5 DOMANDE PRECISE per il SUPERRISPONDITORE
+
+FORMATO OBBLIGATORIO:
+
+ANALISI:
+[analisi tecnica 3-5 paragrafi]
+
+DOMANDE AL SUPERRISPONDITORE:
+1. [domanda tecnica precisa]
+2. [domanda tecnica precisa]
+3. [...]"""
+
+PROMPT_L2 = KNOW + """
+
+Sei il SUPERRISPONDITORE di OVERTOP - il giudice supremo. Parli SOLO in SuperCapsule JSON.
+
+Per ogni domanda ricevuta dal Risponditore emetti UNA SuperCapsule.
+
+Struttura ESATTA:
+{
+  "nome": "NOME_CAPSULE_UPPERCASE",
+  "urgenza": "CRITICA|ALTA|MEDIA|BASSA",
+  "problema": "problema tecnico preciso",
+  "causa": "causa tecnica nel codice/architettura",
+  "perche": "perche causa il problema E perche la soluzione funziona",
+  "soluzione": "azione concreta e specifica",
+  "codice": "riga Python da modificare (null se non applicabile)",
+  "effetto_atteso": "cosa cambiera nel bot - misurabile"
+}
+
+Rispondi SOLO con array JSON valido [ {...}, {...} ].
+NESSUN testo fuori dal JSON. Ordina per urgenza (CRITICA prima)."""
+
+
+@app.route('/oracle')
+def oracle_page():
+    return render_template_string(ORACLE_HTML)
+
+
+@app.route('/oracle/ask', methods=['POST'])
+def oracle_ask():
+    """Proxy DeepSeek - la key resta sul server, mai esposta al client."""
+    if not DEEPSEEK_API_KEY:
+        return jsonify({"error": "DEEPSEEK_API_KEY non configurata su Render"}), 500
+    data = request.get_json()
+    level = data.get("level", 1)
+    user_msg = data.get("message", "")
+    system_prompt = PROMPT_L1 if level == 1 else PROMPT_L2
+    try:
+        import urllib.request as _ur
+        import json as _json
+        payload = _json.dumps({
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg}
+            ],
+            "max_tokens": 3000,
+            "temperature": 0.3
+        }).encode()
+        req = _ur.Request(
+            "https://api.deepseek.com/v1/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
+        )
+        with _ur.urlopen(req, timeout=60) as resp:
+            result = _json.loads(resp.read())
+        answer = result["choices"][0]["message"]["content"]
+        return jsonify({"answer": answer})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+ORACLE_HTML = """<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OVERTOP ORACLE</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600;700&display=swap');
+:root{--bg:#04040a;--bg2:#080810;--bg3:#0c0c18;--border:#151525;--accent:#00d4ff;--gold:#ffd700;--green:#39ff14;--red:#ff2244;--orange:#ff6b35;--text:#b8cce0;--dim:#3a4a5a;}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:'Rajdhani',sans-serif;min-height:100vh;}
+body::before{content:'';position:fixed;inset:0;background:linear-gradient(rgba(0,212,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(0,212,255,.025) 1px,transparent 1px);background-size:50px 50px;pointer-events:none;z-index:0;}
+.wrap{max-width:1300px;margin:0 auto;padding:20px;position:relative;z-index:1;}
+.hdr{display:flex;align-items:center;justify-content:space-between;padding:15px 0 25px;border-bottom:1px solid var(--border);margin-bottom:25px;}
+.logo{font-family:'Orbitron',monospace;font-size:1.6rem;font-weight:900;letter-spacing:5px;background:linear-gradient(135deg,var(--accent),var(--gold));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.logo small{display:block;font-size:.55rem;letter-spacing:8px;font-weight:400;background:linear-gradient(135deg,var(--dim),var(--text));-webkit-background-clip:text;}
+.back-btn{font-family:'Share Tech Mono',monospace;font-size:.72rem;color:var(--dim);text-decoration:none;border:1px solid var(--border);padding:6px 14px;}
+.back-btn:hover{color:var(--accent);border-color:var(--accent);}
+.live-dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:blink 2s infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.input-panel{background:var(--bg2);border:1px solid var(--border);padding:20px;margin-bottom:22px;}
+.stitle{font-family:'Orbitron',monospace;font-size:.7rem;letter-spacing:3px;margin-bottom:12px;display:flex;align-items:center;gap:10px;}
+.tag{font-family:'Share Tech Mono',monospace;font-size:.6rem;padding:2px 8px;border:1px solid;letter-spacing:1px;}
+textarea{width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:14px;font-family:'Rajdhani',sans-serif;font-size:1rem;resize:vertical;min-height:100px;outline:none;line-height:1.6;}
+textarea:focus{border-color:var(--accent);}
+textarea::placeholder{color:var(--dim);}
+.btn-main{width:100%;margin-top:12px;background:linear-gradient(135deg,var(--accent),#007a99);color:#000;border:none;padding:14px;font-family:'Orbitron',monospace;font-size:.78rem;font-weight:700;letter-spacing:4px;cursor:pointer;transition:all .3s;}
+.btn-main:hover{box-shadow:0 0 25px rgba(0,212,255,.4);}
+.btn-main:disabled{opacity:.4;cursor:not-allowed;}
+.quick{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+.qbtn{background:var(--bg3);border:1px solid var(--border);color:var(--dim);padding:5px 10px;font-family:'Rajdhani',sans-serif;font-size:.78rem;cursor:pointer;transition:all .2s;}
+.qbtn:hover{border-color:var(--accent);color:var(--accent);}
+.pipeline{display:grid;grid-template-columns:1fr 55px 1fr;gap:0;margin-bottom:22px;align-items:start;}
+.pipe-arrow{display:flex;flex-direction:column;align-items:center;padding-top:60px;color:var(--dim);font-size:1.5rem;}
+.pipe-arrow small{font-family:'Share Tech Mono',monospace;font-size:.48rem;letter-spacing:1px;margin-top:4px;text-align:center;}
+.rpanel{background:var(--bg2);border:1px solid var(--border);padding:18px;}
+.rpanel.super{border-left:3px solid var(--gold);}
+.rbox{background:var(--bg3);border:1px solid var(--border);padding:14px;min-height:200px;font-family:'Rajdhani',sans-serif;font-size:.92rem;line-height:1.7;white-space:pre-wrap;}
+.domande{background:var(--bg);border:1px solid var(--border);border-left:2px solid var(--accent);padding:12px;margin-top:10px;font-family:'Share Tech Mono',monospace;font-size:.73rem;color:var(--accent);line-height:1.9;display:none;white-space:pre-wrap;}
+.csec{margin-bottom:22px;}
+.chdr{display:flex;align-items:center;gap:12px;font-family:'Orbitron',monospace;font-size:.72rem;letter-spacing:3px;color:var(--gold);margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border);}
+.ccount{background:var(--gold);color:#000;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.8rem;font-weight:900;}
+.auto-badge{margin-left:auto;font-family:'Share Tech Mono',monospace;font-size:.6rem;color:var(--green);border:1px solid var(--green);padding:2px 8px;animation:blink 2s infinite;}
+.scap{background:var(--bg2);border:1px solid var(--border);border-left:4px solid var(--gold);margin-bottom:12px;animation:fadeUp .4s ease forwards;opacity:0;}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.scap.CRITICA{border-left-color:var(--red);}
+.scap.ALTA{border-left-color:var(--orange);}
+.scap.MEDIA{border-left-color:var(--gold);}
+.scap.BASSA{border-left-color:var(--green);}
+.scap.injected{opacity:.4;border-left-style:dashed;}
+.cap-hd{display:flex;align-items:center;gap:10px;padding:11px 14px;cursor:pointer;user-select:none;}
+.cap-urg{font-family:'Orbitron',monospace;font-size:.58rem;letter-spacing:2px;padding:2px 7px;border:1px solid;font-weight:700;}
+.CRITICA .cap-urg{color:var(--red);border-color:var(--red);}
+.ALTA .cap-urg{color:var(--orange);border-color:var(--orange);}
+.MEDIA .cap-urg{color:var(--gold);border-color:var(--gold);}
+.BASSA .cap-urg{color:var(--green);border-color:var(--green);}
+.cap-nm{font-family:'Share Tech Mono',monospace;font-size:.82rem;flex:1;}
+.cap-chev{color:var(--dim);transition:transform .2s;}
+.cap-chev.open{transform:rotate(180deg);}
+.cap-bd{padding:0 14px 14px;display:none;}
+.cap-bd.open{display:block;}
+.crow{margin-bottom:10px;}
+.clbl{font-family:'Orbitron',monospace;font-size:.55rem;letter-spacing:3px;color:var(--dim);margin-bottom:4px;}
+.cval{font-size:.88rem;line-height:1.6;padding-left:10px;border-left:2px solid var(--border);}
+.ccode{background:var(--bg);border:1px solid var(--border);padding:10px 12px;font-family:'Share Tech Mono',monospace;font-size:.74rem;color:var(--green);overflow-x:auto;white-space:pre;margin-top:4px;line-height:1.5;}
+.cact{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
+.btn-inj{background:var(--green);color:#000;border:none;padding:7px 18px;font-family:'Orbitron',monospace;font-size:.62rem;font-weight:700;letter-spacing:2px;cursor:pointer;}
+.btn-inj:disabled{opacity:.3;cursor:not-allowed;}
+.btn-drop{background:transparent;color:var(--red);border:1px solid var(--red);padding:7px 18px;font-family:'Orbitron',monospace;font-size:.62rem;font-weight:700;letter-spacing:2px;cursor:pointer;}
+.btn-cp{margin-left:auto;background:transparent;color:var(--accent);border:1px solid var(--accent);padding:7px 14px;font-family:'Orbitron',monospace;font-size:.62rem;letter-spacing:2px;cursor:pointer;}
+.ilog{background:var(--bg2);border:1px solid var(--border);border-left:3px solid var(--green);padding:15px;margin-bottom:22px;display:none;}
+.ilog-t{font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:3px;color:var(--green);margin-bottom:10px;}
+.ient{font-family:'Share Tech Mono',monospace;font-size:.72rem;padding:4px 0;border-bottom:1px solid var(--border);display:flex;gap:10px;}
+.err{background:rgba(255,34,68,.1);border:1px solid var(--red);padding:10px;color:var(--red);font-family:'Share Tech Mono',monospace;font-size:.78rem;margin-top:8px;}
+@media(max-width:800px){.pipeline{grid-template-columns:1fr;}.pipe-arrow{display:none;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="hdr">
+  <div class="logo">OVERTOP ORACLE<small>DUAL AI - SUPERCAPSULE ENGINE</small></div>
+  <div style="display:flex;align-items:center;gap:12px">
+    <div class="live-dot"></div>
+    <span style="font-family:'Share Tech Mono',monospace;font-size:.72rem;color:var(--dim)" id="ss">STANDBY</span>
+    <a href="/" class="back-btn">← MISSION CONTROL</a>
+  </div>
+</div>
+<div class="input-panel">
+  <div class="stitle" style="color:var(--accent)">
+    🎯 <span>COMANDO</span>
+    <span class="tag" style="color:var(--accent);border-color:var(--accent)">INPUT OPERATORE</span>
+  </div>
+  <textarea id="ui" placeholder="Descrivi la situazione o fai una domanda...&#10;&#10;Es: Il bot non entra da ore — analizza tutti i blocchi&#10;Es: Sistema tutti i problemi aperti con priorita&#10;Es: Sono pronto per il live trading?"></textarea>
+  <button class="btn-main" id="btnGo" onclick="run()">AVVIA — RISPONDITORE → SUPERRISPONDITORE → SUPERCAPSULE</button>
+  <div class="quick">
+    <button class="qbtn" onclick="q('Il bot ha 0 trade da ore. Analizza tutti i blocchi attivi')">🔍 Zero trade</button>
+    <button class="qbtn" onclick="q('Sistema tutti i problemi aperti di OVERTOP V15 con priorita assoluta')">🔧 Problemi aperti</button>
+    <button class="qbtn" onclick="q('Sono pronto per passare al live trading? Valuta ogni rischio')">🚀 Live check</button>
+    <button class="qbtn" onclick="q('Phantom Supervisor irrigidisce soglia in loop con 0 trade — risolvilo')">👻 Phantom loop</button>
+    <button class="qbtn" onclick="q('Sample rate RSI abbassato da 50 a 5 — analizza tutti i rischi')">📊 RSI rate=5</button>
+    <button class="qbtn" onclick="q('Qual e la prossima cosa da fare per portare OVERTOP al live?')">🎯 Next step</button>
+  </div>
+</div>
+<div class="pipeline">
+  <div class="rpanel">
+    <div class="stitle" style="color:var(--accent)">🧠 <span>RISPONDITORE</span> <span class="tag" style="color:var(--accent);border-color:var(--accent)">LIVELLO 1</span></div>
+    <div class="rbox" id="b1"><span style="color:var(--dim);font-family:'Share Tech Mono',monospace;font-size:.72rem">In attesa input...</span></div>
+    <div class="domande" id="dbox"></div>
+  </div>
+  <div class="pipe-arrow">→<small>INTERROGA<br>SUPER</small></div>
+  <div class="rpanel super">
+    <div class="stitle" style="color:var(--gold)">⚡ <span>SUPERRISPONDITORE</span> <span class="tag" style="color:var(--gold);border-color:var(--gold)">LIVELLO 2 - SENTENZA</span></div>
+    <div class="rbox" id="b2"><span style="color:var(--dim);font-family:'Share Tech Mono',monospace;font-size:.72rem">Attende Livello 1...</span></div>
+  </div>
+</div>
+<div class="csec" id="csec" style="display:none">
+  <div class="chdr">💊 SUPERCAPSULE EMESSE <div class="ccount" id="cc">0</div> <span style="font-size:.65rem;color:var(--dim)">ordinate per urgenza</span> <div class="auto-badge">PRONTE ALL'INIEZIONE</div></div>
+  <div id="cl"></div>
+</div>
+<div class="ilog" id="ilog">
+  <div class="ilog-t">📡 CAPSULE INIETTATE NEL BOT</div>
+  <div id="ie"></div>
+</div>
+</div>
+<script>
+function q(t){document.getElementById('ui').value=t;}
+function ss(t,c){const e=document.getElementById('ss');e.textContent=t;e.style.color=c||'var(--dim)';}
+
+async function ask(level, msg) {
+  const r = await fetch('/oracle/ask', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({level: level, message: msg})
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(d.error);
+  return d.answer;
+}
+
+async function run(){
+  const input = document.getElementById('ui').value.trim();
+  if (!input) return;
+  const btn = document.getElementById('btnGo');
+  btn.disabled = true;
+  document.getElementById('csec').style.display = 'none';
+  document.getElementById('cl').innerHTML = '';
+  document.getElementById('dbox').style.display = 'none';
+
+  ss('LIVELLO 1 — RISPONDITORE', 'var(--accent)');
+  document.getElementById('b1').textContent = 'Elaborazione...';
+  let r1 = '';
+  try { r1 = await ask(1, input); document.getElementById('b1').textContent = r1; }
+  catch(e) { document.getElementById('b1').innerHTML = '<div class="err">ERRORE L1: '+e.message+'</div>'; btn.disabled=false; return; }
+
+  const domande = extractD(r1);
+  if (domande.length) {
+    const d = document.getElementById('dbox');
+    d.style.display = 'block';
+    d.textContent = 'INTERROGA SUPERRISPONDITORE:\n' + domande.map(function(x,i){return (i+1)+'. '+x;}).join('\n');
+  }
+
+  ss('LIVELLO 2 — SUPERRISPONDITORE', 'var(--gold)');
+  document.getElementById('b2').textContent = 'Elaborazione...';
+  const l2in = 'DOMANDE DAL RISPONDITORE:\n' + domande.map(function(x,i){return (i+1)+'. '+x;}).join('\n') + '\n\nCONTESTO: ' + input;
+  let r2 = '';
+  try { r2 = await ask(2, l2in); document.getElementById('b2').textContent = r2; }
+  catch(e) { document.getElementById('b2').innerHTML = '<div class="err">ERRORE L2: '+e.message+'</div>'; btn.disabled=false; return; }
+
+  parseCaps(r2);
+  ss('PRONTO — '+new Date().toLocaleTimeString('it-IT'), 'var(--green)');
+  btn.disabled = false;
+}
+
+function extractD(text){
+  var lines=text.split('\n'), d=[], ins=false;
+  for(var i=0;i<lines.length;i++){
+    if(lines[i].indexOf('DOMANDE AL SUPERRISPONDITORE')>=0){ins=true;continue;}
+    if(ins){var m=lines[i].match(/^\d+\.\s+(.+)/);if(m)d.push(m[1].trim());}
+  }
+  return d;
+}
+
+function parseCaps(text){
+  var s=text.indexOf('['), e=text.lastIndexOf(']');
+  if(s===-1||e===-1)return;
+  var caps;
+  try{caps=JSON.parse(text.slice(s,e+1));}
+  catch(ex){try{caps=JSON.parse(text.slice(s,e+1).replace(/[\u0000-\u001F]/g,' ').replace(/,\s*]/g,']').replace(/,\s*}/g,'}'));}catch(ex2){return;}}
+  if(!caps||!caps.length)return;
+  var ord={CRITICA:0,ALTA:1,MEDIA:2,BASSA:3};
+  caps.sort(function(a,b){return (ord[a.urgenza]||9)-(ord[b.urgenza]||9);});
+  document.getElementById('csec').style.display='block';
+  document.getElementById('cc').textContent=caps.length;
+  for(var i=0;i<caps.length;i++)renderCap(caps[i],i);
+}
+
+function renderCap(c,i){
+  var list=document.getElementById('cl');
+  var div=document.createElement('div');
+  div.className='scap '+(c.urgenza||'MEDIA');
+  div.id='cap'+i;
+  div.style.animationDelay=(i*.1)+'s';
+  var code=c.codice?'<div class="crow"><div class="clbl">CODICE</div><div class="ccode">'+esc(c.codice)+'</div></div>':'';
+  var cpBtn=c.codice?'<button class="btn-cp" onclick="cpCode('+i+')">COPIA</button>':'';
+  div.innerHTML=
+    '<div class="cap-hd" onclick="tog('+i+')"><span class="cap-urg">'+c.urgenza+'</span><span class="cap-nm">'+c.nome+'</span><span id="cst'+i+'" style="font-size:.7rem"></span><span class="cap-chev" id="ch'+i+'">▼</span></div>'+
+    '<div class="cap-bd" id="cb'+i+'">'+
+      '<div class="crow"><div class="clbl">PROBLEMA</div><div class="cval">'+esc(c.problema||'')+'</div></div>'+
+      '<div class="crow"><div class="clbl">CAUSA</div><div class="cval">'+esc(c.causa||'')+'</div></div>'+
+      '<div class="crow"><div class="clbl">PERCHÉ</div><div class="cval">'+esc(c.perche||'')+'</div></div>'+
+      '<div class="crow"><div class="clbl">SOLUZIONE</div><div class="cval">'+esc(c.soluzione||'')+'</div></div>'+
+      code+
+      '<div class="crow"><div class="clbl">EFFETTO ATTESO</div><div class="cval">'+esc(c.effetto_atteso||'—')+'</div></div>'+
+      '<div class="cact"><button class="btn-inj" id="bi'+i+'" onclick="inj('+i+',\''+esca(c.nome||'')+'\')">⚡ INIETTA NEL BOT</button><button class="btn-drop" onclick="drop('+i+')">✕ SCARTA</button>'+cpBtn+'</div>'+
+    '</div>';
+  list.appendChild(div);
+  if(c.urgenza==='CRITICA')tog(i);
+}
+
+function tog(i){var b=document.getElementById('cb'+i),h=document.getElementById('ch'+i),o=b.classList.toggle('open');h.classList.toggle('open',o);}
+function inj(i,nome){
+  document.getElementById('cap'+i).classList.add('injected');
+  var btn=document.getElementById('bi'+i);btn.disabled=true;btn.textContent='✓ INIETTATA';
+  document.getElementById('cst'+i).textContent='✓';document.getElementById('cst'+i).style.color='var(--green)';
+  var log=document.getElementById('ilog');log.style.display='block';
+  var ts=new Date().toLocaleTimeString('it-IT');
+  var e=document.createElement('div');e.className='ient';
+  e.innerHTML='<span style="color:var(--dim)">'+ts+'</span><span style="color:var(--green)">💊 '+nome+'</span><span style="color:var(--green)">INIETTATA</span>';
+  document.getElementById('ie').prepend(e);
+}
+function drop(i){var e=document.getElementById('cap'+i);e.style.transition='all .3s';e.style.opacity='0';e.style.transform='translateX(-15px)';setTimeout(function(){e.remove();},300);}
+function cpCode(i){var el=document.querySelector('#cap'+i+' .ccode');if(!el)return;navigator.clipboard.writeText(el.textContent).then(function(){var b=document.querySelector('#cap'+i+' .btn-cp');if(b){b.textContent='✓';setTimeout(function(){b.textContent='COPIA';},2000);}});}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function esca(s){return String(s||'').replace(/'/g,"\\'");}
+</script>
+</body>
+</html>"""
+
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
