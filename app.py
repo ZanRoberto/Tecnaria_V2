@@ -1179,7 +1179,7 @@ def _build_status_summary(hb: dict) -> str:
 
         ci_str  = ", ".join([f"{c['id']}(forza={c['forza']:.0%})" for c in ci]) or "nessuna"
         sig_str = ", ".join([f"{s.get('context','?')} hit={s.get('hit_60s',0):.0%} n={s.get('n',0)}"
-                             for s in sig[:3]]) or "nessuno"
+                             for s in sig[:3] if s.get('n',0) >= 10]) or "warmup in corso (<10 campioni)"
         vr_str  = ", ".join([f"{r.get('chiave','?')} hit={r.get('hit_rate',0):.0%} n={r.get('n',0)}"
                              for r in vr[:3]]) or "nessuno"
 
@@ -3624,7 +3624,7 @@ function update() {
       // ── ECONOMIC EDGE ──────────────────────────────────────────────
       // Calcola hit_economica per ogni contesto dal Signal Tracker
       // hit_economica = % segnali chiusi con pnl_sim > FEE_SIM ($0.10)
-      const FEE_SIM = 0.10;
+      const FEE_SIM = 2.00;  // fee futures $5000 × 0.02% × 2 = $2.00 lordo
       const stStats = st.stats_n || {};
       const stTop   = st.top || [];
       let edgeRows = '';
@@ -3652,7 +3652,7 @@ function update() {
       }).sort((a, b) => b.hitEcon - a.hitEcon);
 
       edgeData.forEach(d => {
-        if (d.n < 5) return;
+        if (d.n < 10) return;  // minimo 10 campioni — sotto è warmup
         const pct  = Math.round(d.hitEcon * 100);
         const color = d.hitEcon >= 0.50 ? '#00ff88' :
                       d.hitEcon >= 0.30 ? '#ffaa00' : '#ff4444';
@@ -3690,24 +3690,28 @@ function update() {
     const stTopRows = st.top || [];
     if (stTopRows.length > 0) {
       $('st-body').innerHTML = stTopRows.map(r => {
+        const n   = r.n || 0;
         const hit = r.hit_60s || 0;
-        const hitCol = hit >= 0.65 ? 'var(--green)' : hit >= 0.50 ? 'var(--yellow)' : 'var(--red)';
         const pnl = r.pnl_sim_avg || 0;
-        const pnlCol = pnl > 0 ? 'var(--green)' : 'var(--red)';
         const delta = r.avg_delta_60s || 0;
         const parts = r.context.split('|');
         const regime = parts[0] || '?';
         const dir    = parts[1] || '?';
         const band   = parts[2] || '?';
-        return `<tr>
+        // Warmup: dati non affidabili sotto 10 campioni
+        const isWarmup = n < 10;
+        const hitCol = isWarmup ? 'var(--dim)' : hit >= 0.65 ? 'var(--green)' : hit >= 0.50 ? 'var(--yellow)' : 'var(--red)';
+        const pnlCol = isWarmup ? 'var(--dim)' : pnl > 0 ? 'var(--green)' : 'var(--red)';
+        const warmupBadge = isWarmup ? '<span style="font-size:8px;color:#ff8800;margin-left:3px">⏳WARMUP</span>' : '';
+        return `<tr style="opacity:${isWarmup?0.5:1}">
           <td style="padding:4px 6px;color:var(--dim);font-size:9px">
             <span style="color:${dir==='LONG'?'var(--green)':'var(--red)'}">${dir}</span>
             ${regime} ${band}
           </td>
-          <td style="padding:4px 6px;text-align:center;color:var(--text)">${r.n}</td>
-          <td style="padding:4px 6px;text-align:center;color:${hitCol};font-weight:700">${(hit*100).toFixed(0)}%</td>
-          <td style="padding:4px 6px;text-align:center;color:${delta>=0?'var(--green)':'var(--red)'}">${delta>=0?'+':''}${delta.toFixed(1)}</td>
-          <td style="padding:4px 6px;text-align:center;color:${pnlCol};font-weight:700">${pnl>=0?'+':''}$${Math.abs(pnl).toFixed(2)}</td>
+          <td style="padding:4px 6px;text-align:center;color:${isWarmup?'var(--dim)':'var(--text)'}">${n}${warmupBadge}</td>
+          <td style="padding:4px 6px;text-align:center;color:${hitCol};font-weight:700">${isWarmup?'—':(hit*100).toFixed(0)+'%'}</td>
+          <td style="padding:4px 6px;text-align:center;color:${isWarmup?'var(--dim)':delta>=0?'var(--green)':'var(--red)'}">${isWarmup?'—':(delta>=0?'+':'')+delta.toFixed(1)}</td>
+          <td style="padding:4px 6px;text-align:center;color:${pnlCol};font-weight:700">${isWarmup?'—':(pnl>=0?'+':'')+'$'+Math.abs(pnl).toFixed(2)}</td>
         </tr>`;
       }).join('');
     }
