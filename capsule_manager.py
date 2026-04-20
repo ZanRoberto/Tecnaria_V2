@@ -335,7 +335,7 @@ class CapsuleManager:
             wins = sum(1 for t in tt if t.get("is_win"))
             wr   = wins / len(tt)
             pnl  = sum(t.get("pnl",0) for t in tt) / len(tt)
-            if wr < 0.35 and pnl < -0.5:
+            if wr < 0.35 and pnl < -0.5:  # USDC netti
                 caps.append(self._build(
                     f"LEARNED_MAT_TOSSICO_{mat}_{self.asset}", "LEARNED", "MATRIMONIO_TOSSICO",
                     f"Matrimonio {mat} tossico su {self.asset}: WR {wr:.0%} n={len(tt)}",
@@ -343,7 +343,7 @@ class CapsuleManager:
                     {"type":"blocca_entry","params":{"reason":f"MAT_TOSSICO_{mat}"}},
                     len(tt), wr, pnl, time.time()+self.MAX_AGE_L2))
                 log.info(f"[CM] 🧬 L2 MAT TOSSICO: {mat} WR={wr:.0%} n={len(tt)}")
-            elif wr > 0.70 and pnl > 0.5:
+            elif wr > 0.70 and pnl > 2.50:  # breakeven USDC
                 caps.append(self._build(
                     f"LEARNED_MAT_OPP_{mat}_{self.asset}", "LEARNED", "MATRIMONIO_OPP",
                     f"Matrimonio {mat} opportunità su {self.asset}: WR {wr:.0%}",
@@ -440,7 +440,7 @@ class CapsuleManager:
         wins = sum(1 for t in recent if t.get("is_win"))
         wr   = wins / len(recent)
         pnl  = sum(t.get("pnl",0) for t in recent) / len(recent)
-        if wr >= 0.75 and pnl > 0.5:
+        if wr >= 0.75 and pnl > 2.50:  # breakeven USDC
             boost = min(1.4, 1.0 + (wr-0.65)*2.0)
             caps.append(self._build(
                 f"AUTO_OPP_{regime}_{self.asset}", "AUTO", "OPPORTUNITA",
