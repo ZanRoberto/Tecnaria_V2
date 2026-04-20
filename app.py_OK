@@ -658,6 +658,14 @@ Esempio: "Perché l'OI è a FUOCO ma il sistema non entra nonostante il Signal T
 """
 
 PROMPT_RAGIONATORE = """Sei il Ragionatore del sistema OVERTOP BASSANO — trading bot BTC/USDC.
+
+╔══ LEGGE FONDAMENTALE — TUTTO IN USDC ═══════════════════════════════╗
+║ MAI interpretare PnL come delta BTC. SEMPRE in USDC.                ║
+║ exposure = $5000 | fee = $2.00 fissi | breakeven = +$30 delta BTC   ║
+║ pnl_lordo = delta x (5000/entry)     ← durante il trade             ║
+║ pnl_netto = pnl_lordo - $2.00        ← al close e nelle statistiche ║
+║ stop live = pnl_lordo < -$7 (netto ~-$5)                            ║
+╚═════════════════════════════════════════════════════════════════════╝
 Sei l'intelligenza centrale del sistema. Ogni tua capsula viene iniettata nel bot e cambia il suo comportamento.
 La tua responsabilità è totale: capsule sbagliate fanno perdere soldi. Capsule giuste fanno guadagnare.
 
@@ -899,25 +907,24 @@ COME LEGGERE L'ENERGIA DEL SEME:
 
 EDGE ECONOMICO — LA REGOLA PIU' IMPORTANTE:
 Un trade che vince in tick ma perde in dollari NON è una vittoria. È un dissanguamento lento.
-Fee Binance su size 0.15 BTC = circa $0.15-0.20 per trade completo (entry + exit).
+Fee futures USDC: esposizione $5000 × 0.02% × 2 lati = $2.00 fissi per trade. Breakeven lordo: +$30 di movimento BTC.
 Se WIN_+N nel motivo ma PnL negativo o < $0.10 = le fee hanno mangiato tutto.
 Questo si chiama EDGE ECONOMICO NEGATIVO — il sistema trova la direzione giusta ma il movimento è troppo piccolo.
 
 COME RICONOSCERLO:
-- WIN_+12 con PnL=-$0.50 → movimento 12 tick non copre le fee
-- WIN_+27 con PnL=+$0.24 → appena sopra zero, non sostenibile
-- WIN_+35 con PnL=+$0.78 → borderline
-- WIN_+60 con PnL=+$1.90 → questo è edge economico reale
+- WIN_+10 con PnL lordo $0.67 → fee $2 → netto -$1.33 = PERDE
+- WIN_+30 con PnL lordo $2.00 → fee $2 → netto $0.00 = breakeven
+- WIN_+50 con PnL lordo $3.34 → fee $2 → netto +$1.34 = edge reale
+- WIN_+100 con PnL lordo $6.68 → fee $2 → netto +$4.68 = ottimo
 
 SOGLIA MINIMA DI PROFITTO ATTESO:
-- In RANGING con volatilità ALTA → movimento medio < 30 tick → edge economico negativo → ALZA_SOGLIA
-- In EXPLOSIVE → movimento medio > 60 tick → edge positivo → soglia normale
-- Se ULTIMI_TRADE mostrano 3+ trade con WIN_+N ma PnL < $0.30 → genera ALZA_SOGLIA delta +6/+8
-  per filtrare i trade con movimento insufficiente a coprire le fee
+- Breakeven lordo: +$30 di movimento BTC (fee $2 / btc_qty≈0.067 = $29.85)
+- In RANGING → movimenti medi $15-40 → borderline, spesso sotto breakeven → ALZA_SOGLIA
+- In EXPLOSIVE → movimenti medi $50-150 → sopra breakeven → edge reale
+- Se ULTIMI_TRADE mostrano PnL lordo < $2 su 3+ trade → ALZA_SOGLIA delta +6/+8
 
 CAPSULA CORRETTA quando vedi edge economico negativo:
-{"id": "RA_EDGE_ECONOMICO", "azione": "ALZA_SOGLIA", "params": {"delta": 6}, 
- "motivo": "WIN_+N con PnL negativo = fee mangiano profitto, soglia insufficiente", "vita": 600, "forza": 0.7}
+{"id": "RA_EDGE_ECONOMICO", "azione": "ALZA_SOGLIA", "params": {"delta": 6}, "motivo": "lordo < $2 = fee mangiano tutto, soglia insufficiente", "vita": 600, "forza": 0.7}
 
 NON generare BLOCCA_CONTESTO per questo problema — il contesto non è tossico, è la soglia troppo bassa.
 La soglia più alta filtra i segnali deboli e lascia passare solo i movimenti abbastanza grandi da coprire le fee.
@@ -1172,7 +1179,7 @@ def _build_status_summary(hb: dict) -> str:
 
         ci_str  = ", ".join([f"{c['id']}(forza={c['forza']:.0%})" for c in ci]) or "nessuna"
         sig_str = ", ".join([f"{s.get('context','?')} hit={s.get('hit_60s',0):.0%} n={s.get('n',0)}"
-                             for s in sig[:3]]) or "nessuno"
+                             for s in sig[:3] if s.get('n',0) >= 10]) or "warmup in corso (<10 campioni)"
         vr_str  = ", ".join([f"{r.get('chiave','?')} hit={r.get('hit_rate',0):.0%} n={r.get('n',0)}"
                              for r in vr[:3]]) or "nessuno"
 
@@ -1430,8 +1437,8 @@ def narratore_thread():
                             capsule_ra = [c for c in capsule_ra
                                           if c.get('id') != cap_data['id']]
                             capsule_ra.append(cap_data)
-                            if len(capsule_ra) > 5:
-                                capsule_ra = capsule_ra[-5:]
+                            # Nessun limite — ogni capsula resta in memoria
+                            # Le permanenti vengono dal DB al boot, le nuove si accumulano
                             heartbeat_data["capsule_ragionatore"] = capsule_ra
                             heartbeat_data["narratore_ultima_capsula"] = {
                                 "id":     cap_data['id'],
@@ -2781,12 +2788,39 @@ const SCPanel = (() => {
         atHtml = atOut;
       }
 
+      // Calcola PHANTOM_VERDETTO per contraddittorio visibile
+      var phLivelli = (hb.phantom||{}).per_livello || {};
+      var phVerdetto = '';
+      var phContraddizione = false;
+      Object.entries(phLivelli).forEach(([lv, d]) => {
+        var tot = (d.would_win||0) + (d.would_lose||0);
+        if (tot < 3) return;
+        var wr = tot > 0 ? Math.round(d.would_win/tot*100) : 0;
+        var vrd = d.would_win === 0 ? 'BLOCCO_CORRETTO' : wr > 15 ? 'BLOCCO_ECCESSIVO' : 'ZONA_GRIGIA';
+        if (vrd === 'BLOCCO_ECCESSIVO') phContraddizione = true;
+        var col = vrd === 'BLOCCO_CORRETTO' ? '#00ff88' : vrd === 'BLOCCO_ECCESSIVO' ? '#ff8800' : '#3b82f6';
+        phVerdetto += `<span style="color:${col};font-weight:bold">${lv.slice(0,20)}: ${vrd}</span> `;
+      });
+      var phHtml = phVerdetto ? `<div style="margin-bottom:8px;padding:5px 8px;border-left:3px solid ${phContraddizione?'#ff8800':'#00ff88'};background:${phContraddizione?'rgba(255,136,0,0.06)':'rgba(0,255,136,0.04)'}">
+        <div style="font-size:9px;color:${phContraddizione?'#ff8800':'#00ff88'};letter-spacing:1px;margin-bottom:3px">⚖️ PHANTOM VERDETTO ${phContraddizione?'— ⚠️ CONTRADDIZIONE':''}</div>
+        <div style="font-size:9px;line-height:1.6">${phVerdetto}</div>
+      </div>` : '';
+
       // Max 5 dialoghi, dal piu recente
-      narratoreBody.innerHTML = atHtml + narrativa.slice(-5).reverse().map((n, i) => {
+      narratoreBody.innerHTML = phHtml + atHtml + narrativa.slice(-5).reverse().map((n, i) => {
         const isUltimo = i === 0;
         const opacita = isUltimo ? '1' : `${0.85 - i * 0.15}`;
 
-        // Badge capsula con dettaglio azione
+        // Estrai verdetto contraddittorio dalla risposta del Ragionatore
+        var contrad = '';
+        if (n.risposta) {
+          var rMatch = n.risposta.match(/PHANTOM[_\s]VERDETTO[:\s]+(\S+)/i);
+          if (rMatch) {
+            var vCol = rMatch[1].includes('CORRETTO') ? '#00ff88' : rMatch[1].includes('ECCESSIVO') ? '#ff8800' : '#3b82f6';
+            contrad = `<span style="background:rgba(255,136,0,0.12);color:#ff8800;padding:2px 6px;border-radius:3px;font-size:9px;margin-left:6px">${rMatch[0]}</span>`;
+          }
+        }
+
         const capBadge = n.capsula
           ? `<span style="background:#3b0764;color:#c4b5fd;padding:2px 8px;border-radius:3px;font-size:9px;margin-left:6px;font-weight:bold">💊 ${n.capsula} → BOT</span>`
           : `<span style="color:#4c1d95;font-size:9px;margin-left:6px">○ nessuna capsula</span>`;
@@ -2795,7 +2829,7 @@ const SCPanel = (() => {
           border-left:2px solid ${isUltimo ? '#a855f7' : '#3b0764'};
           padding-left:8px;">
           <div style="font-size:9px;color:#7c3aed;margin-bottom:3px;letter-spacing:1px;display:flex;align-items:center;flex-wrap:wrap;gap:4px">
-            🔍 OSSERVATORE · ${n.ts} ${capBadge}
+            🔍 OSSERVATORE · ${n.ts} ${capBadge} ${contrad}
           </div>
           <div style="font-size:10px;color:#c4b5fd;font-style:italic;margin-bottom:4px;line-height:1.4">
             "${n.domanda}"
@@ -3395,24 +3429,32 @@ function update() {
 
     // Carica capsule da API capsule o da ia_stats
     const capsule = hb.ia_capsule_attive||[];
-    if(capsule.length>0) {
+    const nCaps = capsule.length;
+    // Aggiorna contatore con totale reale
+    const cntEl = document.getElementById('ia-cap-count');
+    if(cntEl) cntEl.textContent = nCaps + ' attive';
+    if(nCaps>0) {
       $('ia-capsule-list').innerHTML = capsule.map(c=>{
         const ttl = c.ttl_seconds||0;
-        const ttlStr = ttl>3600?(ttl/3600).toFixed(1)+'h':ttl>60?(ttl/60).toFixed(0)+'m':ttl+'s';
-        const typeClass = {
-          'L2_BLK':'cap-l2-blk','L2_BST':'cap-l2-bst',
-          'L3_STK':'cap-l3-stk','L3_RBLO':'cap-l3-reg','L3_OPP':'cap-l3-opp'
-        }[c.tipo]||'cap-l3-stk';
-        const icon = c.tipo?.includes('BLK')||c.tipo?.includes('RBLO')?'🚫':
-                     c.tipo?.includes('BST')||c.tipo?.includes('OPP')?'🚀':
-                     c.tipo?.includes('STK')?'⚡':'💊';
-        return `<div class="capsule-item ${typeClass}">
-          <span>${icon} ${c.id||c.capsule_id||'?'}</span>
-          <span class="ttl-bar">TTL ${ttlStr} | ${c.tipo||'?'}</span>
+        const ttlStr = ttl>=86400?'PERM':ttl>3600?(ttl/3600).toFixed(1)+'h':ttl>60?(ttl/60).toFixed(0)+'m':ttl+'s';
+        const fonte  = c.fonte||'';
+        const isPerm = fonte==='PERMANENTE_DB'||ttl>=86400;
+        const isRA   = fonte==='RA'||c.id?.startsWith('RA_');
+        const isCI   = fonte==='CI';
+        const bgCol  = isPerm?'rgba(0,255,136,0.06)':isRA?'rgba(187,102,255,0.06)':isCI?'rgba(0,170,255,0.06)':'rgba(255,136,0,0.06)';
+        const bdCol  = isPerm?'#00ff88':isRA?'#bb66ff':isCI?'#00aaff':'#ff8800';
+        const icon   = isPerm?'🔒':isRA?'🤖':isCI?'⚡':'💊';
+        const fonteTag = `<span style="font-size:8px;color:${bdCol};opacity:0.7">[${fonte||c.tipo||'?'}]</span>`;
+        const motivo = c.motivo?`<div style="font-size:8px;color:#3d5a7a;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.motivo}</div>`:'';
+        return `<div style="padding:4px 6px;margin-bottom:3px;border-left:2px solid ${bdCol};background:${bgCol};border-radius:2px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:10px;color:#ccd6e0">${icon} ${c.id||'?'} ${fonteTag}</span>
+            <span style="font-size:9px;color:${isPerm?'#00ff88':'#3d5a7a'}">${ttlStr}</span>
+          </div>${motivo}
         </div>`;
       }).join('');
     } else {
-      $('ia-capsule-list').innerHTML = '<div style="color:var(--dim);font-size:10px;text-align:center;padding:16px 0">Nessuna capsule attiva. Il sistema impara dai trade.</div>';
+      $('ia-capsule-list').innerHTML = '<div style="color:var(--dim);font-size:10px;text-align:center;padding:16px 0">Nessuna capsula attiva.</div>';
     }
 
     // PHANTOM
@@ -3582,7 +3624,7 @@ function update() {
       // ── ECONOMIC EDGE ──────────────────────────────────────────────
       // Calcola hit_economica per ogni contesto dal Signal Tracker
       // hit_economica = % segnali chiusi con pnl_sim > FEE_SIM ($0.10)
-      const FEE_SIM = 0.10;
+      const FEE_SIM = 2.00;  // fee futures $5000 × 0.02% × 2 = $2.00 lordo
       const stStats = st.stats_n || {};
       const stTop   = st.top || [];
       let edgeRows = '';
@@ -3610,7 +3652,7 @@ function update() {
       }).sort((a, b) => b.hitEcon - a.hitEcon);
 
       edgeData.forEach(d => {
-        if (d.n < 5) return;
+        if (d.n < 10) return;  // minimo 10 campioni — sotto è warmup
         const pct  = Math.round(d.hitEcon * 100);
         const color = d.hitEcon >= 0.50 ? '#00ff88' :
                       d.hitEcon >= 0.30 ? '#ffaa00' : '#ff4444';
@@ -3648,24 +3690,28 @@ function update() {
     const stTopRows = st.top || [];
     if (stTopRows.length > 0) {
       $('st-body').innerHTML = stTopRows.map(r => {
+        const n   = r.n || 0;
         const hit = r.hit_60s || 0;
-        const hitCol = hit >= 0.65 ? 'var(--green)' : hit >= 0.50 ? 'var(--yellow)' : 'var(--red)';
         const pnl = r.pnl_sim_avg || 0;
-        const pnlCol = pnl > 0 ? 'var(--green)' : 'var(--red)';
         const delta = r.avg_delta_60s || 0;
         const parts = r.context.split('|');
         const regime = parts[0] || '?';
         const dir    = parts[1] || '?';
         const band   = parts[2] || '?';
-        return `<tr>
+        // Warmup: dati non affidabili sotto 10 campioni
+        const isWarmup = n < 10;
+        const hitCol = isWarmup ? 'var(--dim)' : hit >= 0.65 ? 'var(--green)' : hit >= 0.50 ? 'var(--yellow)' : 'var(--red)';
+        const pnlCol = isWarmup ? 'var(--dim)' : pnl > 0 ? 'var(--green)' : 'var(--red)';
+        const warmupBadge = isWarmup ? '<span style="font-size:8px;color:#ff8800;margin-left:3px">⏳WARMUP</span>' : '';
+        return `<tr style="opacity:${isWarmup?0.5:1}">
           <td style="padding:4px 6px;color:var(--dim);font-size:9px">
             <span style="color:${dir==='LONG'?'var(--green)':'var(--red)'}">${dir}</span>
             ${regime} ${band}
           </td>
-          <td style="padding:4px 6px;text-align:center;color:var(--text)">${r.n}</td>
-          <td style="padding:4px 6px;text-align:center;color:${hitCol};font-weight:700">${(hit*100).toFixed(0)}%</td>
-          <td style="padding:4px 6px;text-align:center;color:${delta>=0?'var(--green)':'var(--red)'}">${delta>=0?'+':''}${delta.toFixed(1)}</td>
-          <td style="padding:4px 6px;text-align:center;color:${pnlCol};font-weight:700">${pnl>=0?'+':''}$${Math.abs(pnl).toFixed(2)}</td>
+          <td style="padding:4px 6px;text-align:center;color:${isWarmup?'var(--dim)':'var(--text)'}">${n}${warmupBadge}</td>
+          <td style="padding:4px 6px;text-align:center;color:${hitCol};font-weight:700">${isWarmup?'—':(hit*100).toFixed(0)+'%'}</td>
+          <td style="padding:4px 6px;text-align:center;color:${isWarmup?'var(--dim)':delta>=0?'var(--green)':'var(--red)'}">${isWarmup?'—':(delta>=0?'+':'')+delta.toFixed(1)}</td>
+          <td style="padding:4px 6px;text-align:center;color:${pnlCol};font-weight:700">${isWarmup?'—':(pnl>=0?'+':'')+'$'+Math.abs(pnl).toFixed(2)}</td>
         </tr>`;
       }).join('');
     }
