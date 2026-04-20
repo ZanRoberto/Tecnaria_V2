@@ -3429,24 +3429,32 @@ function update() {
 
     // Carica capsule da API capsule o da ia_stats
     const capsule = hb.ia_capsule_attive||[];
-    if(capsule.length>0) {
+    const nCaps = capsule.length;
+    // Aggiorna contatore con totale reale
+    const cntEl = document.getElementById('ia-cap-count');
+    if(cntEl) cntEl.textContent = nCaps + ' attive';
+    if(nCaps>0) {
       $('ia-capsule-list').innerHTML = capsule.map(c=>{
         const ttl = c.ttl_seconds||0;
-        const ttlStr = ttl>3600?(ttl/3600).toFixed(1)+'h':ttl>60?(ttl/60).toFixed(0)+'m':ttl+'s';
-        const typeClass = {
-          'L2_BLK':'cap-l2-blk','L2_BST':'cap-l2-bst',
-          'L3_STK':'cap-l3-stk','L3_RBLO':'cap-l3-reg','L3_OPP':'cap-l3-opp'
-        }[c.tipo]||'cap-l3-stk';
-        const icon = c.tipo?.includes('BLK')||c.tipo?.includes('RBLO')?'🚫':
-                     c.tipo?.includes('BST')||c.tipo?.includes('OPP')?'🚀':
-                     c.tipo?.includes('STK')?'⚡':'💊';
-        return `<div class="capsule-item ${typeClass}">
-          <span>${icon} ${c.id||c.capsule_id||'?'}</span>
-          <span class="ttl-bar">TTL ${ttlStr} | ${c.tipo||'?'}</span>
+        const ttlStr = ttl>=86400?'PERM':ttl>3600?(ttl/3600).toFixed(1)+'h':ttl>60?(ttl/60).toFixed(0)+'m':ttl+'s';
+        const fonte  = c.fonte||'';
+        const isPerm = fonte==='PERMANENTE_DB'||ttl>=86400;
+        const isRA   = fonte==='RA'||c.id?.startsWith('RA_');
+        const isCI   = fonte==='CI';
+        const bgCol  = isPerm?'rgba(0,255,136,0.06)':isRA?'rgba(187,102,255,0.06)':isCI?'rgba(0,170,255,0.06)':'rgba(255,136,0,0.06)';
+        const bdCol  = isPerm?'#00ff88':isRA?'#bb66ff':isCI?'#00aaff':'#ff8800';
+        const icon   = isPerm?'🔒':isRA?'🤖':isCI?'⚡':'💊';
+        const fonteTag = `<span style="font-size:8px;color:${bdCol};opacity:0.7">[${fonte||c.tipo||'?'}]</span>`;
+        const motivo = c.motivo?`<div style="font-size:8px;color:#3d5a7a;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.motivo}</div>`:'';
+        return `<div style="padding:4px 6px;margin-bottom:3px;border-left:2px solid ${bdCol};background:${bgCol};border-radius:2px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:10px;color:#ccd6e0">${icon} ${c.id||'?'} ${fonteTag}</span>
+            <span style="font-size:9px;color:${isPerm?'#00ff88':'#3d5a7a'}">${ttlStr}</span>
+          </div>${motivo}
         </div>`;
       }).join('');
     } else {
-      $('ia-capsule-list').innerHTML = '<div style="color:var(--dim);font-size:10px;text-align:center;padding:16px 0">Nessuna capsule attiva. Il sistema impara dai trade.</div>';
+      $('ia-capsule-list').innerHTML = '<div style="color:var(--dim);font-size:10px;text-align:center;padding:16px 0">Nessuna capsula attiva.</div>';
     }
 
     // PHANTOM
