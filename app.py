@@ -658,6 +658,14 @@ Esempio: "Perché l'OI è a FUOCO ma il sistema non entra nonostante il Signal T
 """
 
 PROMPT_RAGIONATORE = """Sei il Ragionatore del sistema OVERTOP BASSANO — trading bot BTC/USDC.
+
+╔══ LEGGE FONDAMENTALE — TUTTO IN USDC ═══════════════════════════════╗
+║ MAI interpretare PnL come delta BTC. SEMPRE in USDC.                ║
+║ exposure = $5000 | fee = $2.00 fissi | breakeven = +$30 delta BTC   ║
+║ pnl_lordo = delta x (5000/entry)     ← durante il trade             ║
+║ pnl_netto = pnl_lordo - $2.00        ← al close e nelle statistiche ║
+║ stop live = pnl_lordo < -$7 (netto ~-$5)                            ║
+╚═════════════════════════════════════════════════════════════════════╝
 Sei l'intelligenza centrale del sistema. Ogni tua capsula viene iniettata nel bot e cambia il suo comportamento.
 La tua responsabilità è totale: capsule sbagliate fanno perdere soldi. Capsule giuste fanno guadagnare.
 
@@ -899,25 +907,24 @@ COME LEGGERE L'ENERGIA DEL SEME:
 
 EDGE ECONOMICO — LA REGOLA PIU' IMPORTANTE:
 Un trade che vince in tick ma perde in dollari NON è una vittoria. È un dissanguamento lento.
-Fee Binance su size 0.15 BTC = circa $0.15-0.20 per trade completo (entry + exit).
+Fee futures USDC: esposizione $5000 × 0.02% × 2 lati = $2.00 fissi per trade. Breakeven lordo: +$30 di movimento BTC.
 Se WIN_+N nel motivo ma PnL negativo o < $0.10 = le fee hanno mangiato tutto.
 Questo si chiama EDGE ECONOMICO NEGATIVO — il sistema trova la direzione giusta ma il movimento è troppo piccolo.
 
 COME RICONOSCERLO:
-- WIN_+12 con PnL=-$0.50 → movimento 12 tick non copre le fee
-- WIN_+27 con PnL=+$0.24 → appena sopra zero, non sostenibile
-- WIN_+35 con PnL=+$0.78 → borderline
-- WIN_+60 con PnL=+$1.90 → questo è edge economico reale
+- WIN_+10 con PnL lordo $0.67 → fee $2 → netto -$1.33 = PERDE
+- WIN_+30 con PnL lordo $2.00 → fee $2 → netto $0.00 = breakeven
+- WIN_+50 con PnL lordo $3.34 → fee $2 → netto +$1.34 = edge reale
+- WIN_+100 con PnL lordo $6.68 → fee $2 → netto +$4.68 = ottimo
 
 SOGLIA MINIMA DI PROFITTO ATTESO:
-- In RANGING con volatilità ALTA → movimento medio < 30 tick → edge economico negativo → ALZA_SOGLIA
-- In EXPLOSIVE → movimento medio > 60 tick → edge positivo → soglia normale
-- Se ULTIMI_TRADE mostrano 3+ trade con WIN_+N ma PnL < $0.30 → genera ALZA_SOGLIA delta +6/+8
-  per filtrare i trade con movimento insufficiente a coprire le fee
+- Breakeven lordo: +$30 di movimento BTC (fee $2 / btc_qty≈0.067 = $29.85)
+- In RANGING → movimenti medi $15-40 → borderline, spesso sotto breakeven → ALZA_SOGLIA
+- In EXPLOSIVE → movimenti medi $50-150 → sopra breakeven → edge reale
+- Se ULTIMI_TRADE mostrano PnL lordo < $2 su 3+ trade → ALZA_SOGLIA delta +6/+8
 
 CAPSULA CORRETTA quando vedi edge economico negativo:
-{"id": "RA_EDGE_ECONOMICO", "azione": "ALZA_SOGLIA", "params": {"delta": 6}, 
- "motivo": "WIN_+N con PnL negativo = fee mangiano profitto, soglia insufficiente", "vita": 600, "forza": 0.7}
+{"id": "RA_EDGE_ECONOMICO", "azione": "ALZA_SOGLIA", "params": {"delta": 6}, "motivo": "lordo < $2 = fee mangiano tutto, soglia insufficiente", "vita": 600, "forza": 0.7}
 
 NON generare BLOCCA_CONTESTO per questo problema — il contesto non è tossico, è la soglia troppo bassa.
 La soglia più alta filtra i segnali deboli e lascia passare solo i movimenti abbastanza grandi da coprire le fee.
@@ -2781,12 +2788,39 @@ const SCPanel = (() => {
         atHtml = atOut;
       }
 
+      // Calcola PHANTOM_VERDETTO per contraddittorio visibile
+      var phLivelli = (hb.phantom||{}).per_livello || {};
+      var phVerdetto = '';
+      var phContraddizione = false;
+      Object.entries(phLivelli).forEach(([lv, d]) => {
+        var tot = (d.would_win||0) + (d.would_lose||0);
+        if (tot < 3) return;
+        var wr = tot > 0 ? Math.round(d.would_win/tot*100) : 0;
+        var vrd = d.would_win === 0 ? 'BLOCCO_CORRETTO' : wr > 15 ? 'BLOCCO_ECCESSIVO' : 'ZONA_GRIGIA';
+        if (vrd === 'BLOCCO_ECCESSIVO') phContraddizione = true;
+        var col = vrd === 'BLOCCO_CORRETTO' ? '#00ff88' : vrd === 'BLOCCO_ECCESSIVO' ? '#ff8800' : '#3b82f6';
+        phVerdetto += `<span style="color:${col};font-weight:bold">${lv.slice(0,20)}: ${vrd}</span> `;
+      });
+      var phHtml = phVerdetto ? `<div style="margin-bottom:8px;padding:5px 8px;border-left:3px solid ${phContraddizione?'#ff8800':'#00ff88'};background:${phContraddizione?'rgba(255,136,0,0.06)':'rgba(0,255,136,0.04)'}">
+        <div style="font-size:9px;color:${phContraddizione?'#ff8800':'#00ff88'};letter-spacing:1px;margin-bottom:3px">⚖️ PHANTOM VERDETTO ${phContraddizione?'— ⚠️ CONTRADDIZIONE':''}</div>
+        <div style="font-size:9px;line-height:1.6">${phVerdetto}</div>
+      </div>` : '';
+
       // Max 5 dialoghi, dal piu recente
-      narratoreBody.innerHTML = atHtml + narrativa.slice(-5).reverse().map((n, i) => {
+      narratoreBody.innerHTML = phHtml + atHtml + narrativa.slice(-5).reverse().map((n, i) => {
         const isUltimo = i === 0;
         const opacita = isUltimo ? '1' : `${0.85 - i * 0.15}`;
 
-        // Badge capsula con dettaglio azione
+        // Estrai verdetto contraddittorio dalla risposta del Ragionatore
+        var contrad = '';
+        if (n.risposta) {
+          var rMatch = n.risposta.match(/PHANTOM[_\s]VERDETTO[:\s]+(\S+)/i);
+          if (rMatch) {
+            var vCol = rMatch[1].includes('CORRETTO') ? '#00ff88' : rMatch[1].includes('ECCESSIVO') ? '#ff8800' : '#3b82f6';
+            contrad = `<span style="background:rgba(255,136,0,0.12);color:#ff8800;padding:2px 6px;border-radius:3px;font-size:9px;margin-left:6px">${rMatch[0]}</span>`;
+          }
+        }
+
         const capBadge = n.capsula
           ? `<span style="background:#3b0764;color:#c4b5fd;padding:2px 8px;border-radius:3px;font-size:9px;margin-left:6px;font-weight:bold">💊 ${n.capsula} → BOT</span>`
           : `<span style="color:#4c1d95;font-size:9px;margin-left:6px">○ nessuna capsula</span>`;
@@ -2795,7 +2829,7 @@ const SCPanel = (() => {
           border-left:2px solid ${isUltimo ? '#a855f7' : '#3b0764'};
           padding-left:8px;">
           <div style="font-size:9px;color:#7c3aed;margin-bottom:3px;letter-spacing:1px;display:flex;align-items:center;flex-wrap:wrap;gap:4px">
-            🔍 OSSERVATORE · ${n.ts} ${capBadge}
+            🔍 OSSERVATORE · ${n.ts} ${capBadge} ${contrad}
           </div>
           <div style="font-size:10px;color:#c4b5fd;font-style:italic;margin-bottom:4px;line-height:1.4">
             "${n.domanda}"
