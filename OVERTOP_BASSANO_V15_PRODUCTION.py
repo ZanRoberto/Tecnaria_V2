@@ -8883,30 +8883,79 @@ class OvertopBassanoV15Production:
                     pass
 
                 # ── ia_capsule_attive — lista capsule vive per dashboard ──
+                # Include: CapsuleManager + capsule_ragionatore (RA) + CI attive
                 try:
+                    _caps_all = []
+                    _now_ts   = time.time()
+
+                    # 1. CapsuleManager (file JSON o get_active_capsules)
                     _cm = self.capsule_manager
                     if _cm and hasattr(_cm, 'get_active_capsules'):
-                        self.heartbeat_data["ia_capsule_attive"] = _cm.get_active_capsules()
+                        _caps_all += _cm.get_active_capsules()
                     elif _cm and hasattr(_cm, 'capsule_file'):
                         import json as _json
                         if os.path.exists(_cm.capsule_file):
                             with open(_cm.capsule_file) as _f:
-                                _caps = _json.load(_f)
-                            _now_ts = time.time()
-                            self.heartbeat_data["ia_capsule_attive"] = [
+                                _cj = _json.load(_f)
+                            _caps_all += [
                                 {
                                     'id':          c.get('id', c.get('capsule_id', '?')),
-                                    'tipo':        c.get('tipo', c.get('type', '?')),
+                                    'tipo':        c.get('tipo', c.get('type', 'CM')),
                                     'ttl_seconds': max(0, int(c.get('scade_ts', _now_ts) - _now_ts))
                                                    if c.get('scade_ts') else 0,
                                     'enabled':     c.get('enabled', True),
+                                    'fonte':       'CM',
                                 }
-                                for c in _caps if c.get('enabled', True)
+                                for c in _cj if c.get('enabled', True)
                             ]
+
+                    # 2. Capsule Ragionatore (RA) — tutte, nessun limite
+                    _caps_ra_hb = self.heartbeat_data.get('capsule_ragionatore', [])
+                    _ids_gia    = {c.get('id') for c in _caps_all}
+                    for _c in _caps_ra_hb:
+                        _cid  = _c.get('id', '')
+                        if not _cid or _cid in _ids_gia:
+                            continue
+                        # Calcola TTL
+                        _fonte = _c.get('fonte', '')
+                        if _fonte == 'PERMANENTE_DB':
+                            _ttl = 86400  # permanenti: 24h
                         else:
-                            self.heartbeat_data["ia_capsule_attive"] = []
-                    else:
-                        self.heartbeat_data["ia_capsule_attive"] = []
+                            try:
+                                from datetime import datetime as _dt3
+                                _ts_cap = _dt3.fromisoformat(_c.get('ts', '')).timestamp()
+                                _ttl = max(0, int(_c.get('vita', 600) - (_now_ts - _ts_cap)))
+                            except Exception:
+                                _ttl = _c.get('vita', 600)
+                        if _fonte == 'PERMANENTE_DB' or _ttl > 0:
+                            _caps_all.append({
+                                'id':          _cid,
+                                'tipo':        f"RA_{_c.get('azione','?')[:8]}",
+                                'ttl_seconds': _ttl,
+                                'enabled':     True,
+                                'fonte':       _fonte or 'RA',
+                                'motivo':      _c.get('motivo', '')[:60],
+                                'forza':       _c.get('forza', 0.65),
+                            })
+                            _ids_gia.add(_cid)
+
+                    # 3. CI capsule attive
+                    try:
+                        _ci_dash = self.ci.get_dashboard()
+                        for _c in _ci_dash.get('capsule_attive', []):
+                            _cid = _c.get('id', '')
+                            if _cid and _cid not in _ids_gia:
+                                _caps_all.append({
+                                    'id':          _cid,
+                                    'tipo':        'CI_' + _c.get('tipo', '?')[:6],
+                                    'ttl_seconds': _c.get('vita', 0),
+                                    'enabled':     True,
+                                    'fonte':       'CI',
+                                })
+                    except Exception:
+                        pass
+
+                    self.heartbeat_data["ia_capsule_attive"] = _caps_all
                 except Exception:
                     self.heartbeat_data["ia_capsule_attive"] = []
 
