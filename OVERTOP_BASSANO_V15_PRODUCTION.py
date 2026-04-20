@@ -2732,7 +2732,7 @@ class PreTradeSignalTracker:
         # Fee simulata nella stessa scala di pnl_60: $250 * 0.02% * 2 = $0.10
         # hit_economica = % vicini con pnl_60 > fee_sim (coprono davvero i costi)
         # Il numero emerge dalla distribuzione storica dei vicini — non è inventato
-        FEE_SIM = 0.10  # fee nella scala simulata (size=$250)
+        FEE_SIM = 2.00  # fee futures: $5000 × 0.02% × 2 = $2.00
         pnl_vicini = [v['pnl'] for v in vicini if v.get('pnl') is not None]
 
         if pnl_vicini:
@@ -5585,7 +5585,9 @@ class OvertopBassanoV15Production:
                         "ultima_iniettata": None, "storia": []
                     })
                     _diag["iniettate_tot"] += len(_ra_iniettate)
-                    _diag["bloccate_tot"]  += len(_ra_bloccate)
+                    _ra_bloccate_reali = [b for b in _ra_bloccate if "(già_attiva)" not in b]
+                    _diag["bloccate_tot"]  += len(_ra_bloccate_reali)
+                    _diag["attive_ci"]      = len(_ra_bloccate) - len(_ra_bloccate_reali)
                     if _ra_iniettate:
                         _diag["ultima_iniettata"] = {
                             "ids": _ra_iniettate,
@@ -8341,7 +8343,7 @@ class OvertopBassanoV15Production:
                 pnl = pnl_gross - (exposure * self.FEE_PCT * 2)
                 
                 close_reason = None
-                if pnl < -(self.TRADE_SIZE_USD * 0.02):  # stop loss
+                if pnl < -self.STOP_LIVE:  # stop lordo $7
                     close_reason = "HARD_STOP_SIM"
                 elif duration > 15 and pnl < 0:
                     close_reason = "DECEL_SIM"
