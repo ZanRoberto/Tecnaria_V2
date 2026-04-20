@@ -111,12 +111,12 @@ COME LEGGERE I PHANTOM:
 
 COME AGIRE SUI PHANTOM:
 
-1. Se un livello ha BILANCIO NEGATIVO ALTO (es. DRIFT_VETO perde più di $500 in opportunità):
+1. Se un livello ha BILANCIO NEGATIVO ALTO (es. DRIFT_VETO perde più di $50 in opportunità):
    AZIONE: quel filtro è troppo stretto. Crea una capsula che ALLENTA quel filtro in condizioni favorevoli.
    Esempio: se DRIFT_VETO blocca trade quando drift=-0.06% ma quei trade sarebbero vincenti il 60% delle volte → il veto dovrebbe scattare a -0.10%, non -0.05%.
    Non puoi cambiare il drift veto direttamente, ma puoi creare una capsula che modifica il peso W_TREND per compensare.
 
-2. Se un livello ha BILANCIO POSITIVO ALTO (es. un veto risparmia $1000+):
+2. Se un livello ha BILANCIO POSITIVO ALTO (es. un veto risparmia $100+):
    Non toccare — quel filtro sta facendo il suo lavoro. Proteggilo.
 
 3. Se SCORE_INSUFFICIENTE ha molti ZAVORRA:
@@ -130,10 +130,10 @@ COME AGIRE SUI PHANTOM:
 5. REGOLA D'ORO: non reagire su meno di 50 phantom. I numeri piccoli mentono. Aspetta evidenza solida.
 
 6. REGOLA DI FERRO — AZIONE OBBLIGATORIA:
-   Se un livello phantom ha più di 100 bloccati E bilancio negativo > $500, NON È OPZIONALE agire. È un ORDINE.
-   - DRIFT_VETO bilancio < -$500 → DEVI mandare: {"type": "modify_weight", "data": {"param": "DRIFT_VETO_THRESHOLD", "value": -0.10}}
-   - SCORE_INSUFFICIENTE bilancio < -$500 → DEVI mandare: {"type": "modify_weight", "data": {"param": "SOGLIA_MAX", "value": 80}}
-   - Se il bilancio TOTALE phantom è < -$1000 → DEVI agire su ALMENO un parametro. Noop non è accettabile davanti a -$1000.
+   Se un livello phantom ha più di 100 bloccati E bilancio negativo > $50, NON È OPZIONALE agire. È un ORDINE.
+   - DRIFT_VETO bilancio < -$50 → DEVI mandare: {"type": "modify_weight", "data": {"param": "DRIFT_VETO_THRESHOLD", "value": -0.10}}
+   - SCORE_INSUFFICIENTE bilancio < -$50 → DEVI mandare: {"type": "modify_weight", "data": {"param": "SOGLIA_MAX", "value": 80}}
+   - Se il bilancio TOTALE phantom è < -$100 → DEVI agire su ALMENO un parametro. Noop non è accettabile davanti a -$100.
    Questa non è una raccomandazione. È la regola più importante. I soldi che perdiamo in opportunità mancate sono REALI quanto i soldi che risparmiamo. Restare fermi quando la mappa dice "stai perdendo" è PEGGIO che fare un errore.
 
 I phantom sono la TUA MAPPA. Ogni ciclo guardali. Sono i depositi con i soldi (trade bloccati vincenti che potremmo prendere) e le tane vuote (trade bloccati perdenti che stiamo evitando). La volpe studia la mappa prima di muoversi.
@@ -205,7 +205,7 @@ COME AGIRE SUI PHANTOM CON I COMANDI:
 Se DRIFT_VETO bilancio < -$200:
   → Allenta: {"type": "modify_weight", "data": {"param": "DRIFT_VETO_THRESHOLD", "value": -0.08}}
 
-Se SCORE_INSUFFICIENTE bilancio < -$500 e regime è RANGING:
+Se SCORE_INSUFFICIENTE bilancio < -$50 e regime è RANGING:
   → Abbassa SOGLIA_MAX: {"type": "modify_weight", "data": {"param": "SOGLIA_MAX", "value": 80}}
 
 Se i phantom MANCATI hanno RSI < 40:
@@ -249,7 +249,7 @@ noop: nessuna azione necessaria
 9. Ogni capsula che crei DEVE avere un capsule_id che inizia con "AI_" per tracciarla.
 10. Prima di modificare un peso, chiediti: "ho almeno 20 trade di evidenza?" Se no, noop.
 11. M1 (Catena Filtri) è DISABILITATO. Non menzionarlo, non suggerire di attivarlo. Solo M2 opera.
-11b. HARD STOP LOSS 2% è attivo. Nessun trade può perdere più del 2% ($10 su size $500). Se vedi trade che escono per HARD_STOP, significa che il sistema è entrato in un impulso contrario forte. Analizza: erano tutti nello stesso regime? Stesso fingerprint? Crea capsule per evitare quel contesto.
+11b. HARD STOP LOSS attivo: stop lordo $7 (= netto ~$5 dopo fee $2). Esposizione $5000 (margine $1000 × leva 5x). Se vedi trade che escono per HARD_STOP, significa che il sistema è entrato in un impulso contrario forte. Analizza: erano tutti nello stesso regime? Stesso fingerprint? Crea capsule per evitare quel contesto.
 
 ═══ PATTERN CRITICI DA RILEVARE E CORREGGERE ═══
 
