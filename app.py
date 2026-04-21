@@ -4274,13 +4274,41 @@ def oracle_ask():
     level = data.get("level", 1)
     user_msg = data.get("message", "")
     system_prompt = _ORACLE_PROMPT_L1 if level == 1 else _ORACLE_PROMPT_L2
+
+    # ── HEARTBEAT LIVE: inietta stato reale del bot nel contesto ──────────
     try:
-        import urllib.request as _ur, json as _j
+        import json as _j
+        with heartbeat_lock:
+            hb = dict(heartbeat_data)
+        live_ctx = (
+            "\n\n=== STATO LIVE BOT (aggiornato ora) ===\n"
+            f"Regime: {hb.get('regime', 'N/A')} (conf={hb.get('regime_conf', 0):.0%})\n"
+            f"Assetto: {hb.get('state', 'N/A')}\n"
+            f"OI stato: {hb.get('oi_stato', 'N/A')} carica={hb.get('oi_carica', 0):.3f}\n"
+            f"SOGLIA_BASE: {hb.get('m2_soglia_base', 'N/A')}\n"
+            f"RSI: {hb.get('rsi', 'N/A')} MACD hist: {hb.get('macd_hist', 'N/A')}\n"
+            f"Trade totali sessione: {hb.get('total_trades', 0)}\n"
+            f"Win/Loss: {hb.get('wins', 0)}W / {hb.get('losses', 0)}L\n"
+            f"PnL sessione: ${hb.get('pnl_netto', 0):.2f}\n"
+            f"Capital: ${hb.get('capital', 10000):.2f}\n"
+            f"Shadow aperto: {hb.get('shadow_open', False)}\n"
+            f"Loss streak: {hb.get('loss_streak', 0)}\n"
+            f"Capsule attive: {hb.get('capsule_count', 'N/A')}\n"
+            f"Ultimo regime switch: {hb.get('last_regime_switch', 'N/A')}\n"
+            "=== FINE STATO LIVE ===\n"
+        )
+    except Exception:
+        live_ctx = "\n[STATO LIVE: non disponibile]\n"
+
+    final_msg = user_msg + live_ctx
+
+    try:
+        import urllib.request as _ur
         payload = _j.dumps({
             "model": "deepseek-chat",
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_msg}
+                {"role": "user", "content": final_msg}
             ],
             "max_tokens": 3000,
             "temperature": 0.3
@@ -4293,6 +4321,36 @@ def oracle_ask():
         with _ur.urlopen(req, timeout=60) as resp:
             result = _j.loads(resp.read())
         return jsonify({"answer": result["choices"][0]["message"]["content"]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/oracle/status')
+def oracle_status():
+    """Stato live del bot per Oracle dashboard."""
+    try:
+        with heartbeat_lock:
+            hb = dict(heartbeat_data)
+        return jsonify({
+            "regime": hb.get("regime", "N/A"),
+            "regime_conf": round(hb.get("regime_conf", 0) * 100),
+            "state": hb.get("state", "N/A"),
+            "oi_stato": hb.get("oi_stato", "N/A"),
+            "oi_carica": round(hb.get("oi_carica", 0), 3),
+            "soglia_base": hb.get("m2_soglia_base", "N/A"),
+            "rsi": round(hb.get("rsi", 0), 1),
+            "macd_hist": round(hb.get("macd_hist", 0), 2),
+            "total_trades": hb.get("total_trades", 0),
+            "wins": hb.get("wins", 0),
+            "losses": hb.get("losses", 0),
+            "pnl": round(hb.get("pnl_netto", 0), 2),
+            "capital": round(hb.get("capital", 10000), 2),
+            "shadow_open": hb.get("shadow_open", False),
+            "loss_streak": hb.get("loss_streak", 0),
+            "capsule_count": hb.get("capsule_count", 0),
+            "running": hb.get("running", False),
+            "last_update": hb.get("last_update", "N/A"),
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
