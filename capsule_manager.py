@@ -99,12 +99,8 @@ STATIC_BTC = [
      "azione": {"type":"blocca_entry","params":{"reason":"STATIC_TOSSICO_LONG_FORTE_ALTA_DOWN"}},
      "priority":1, "samples":52, "wr":0.15, "note":"WR 15% PANIC BTC"},
 
-    {"id": "STATIC_LONG_DEBOLE_ALTA_SIDEWAYS_BTC", "asset": "BTCUSDC", "livello": "STATIC", "tipo": "VETO_LONG",
-     "descrizione": "RANGE_VOL_W: WR 19% su dati BTC reali",
-     "trigger": [{"param":"momentum","op":"==","value":"DEBOLE"},{"param":"volatility","op":"==","value":"ALTA"},
-                 {"param":"trend","op":"==","value":"SIDEWAYS"},{"param":"direction","op":"==","value":"LONG"}],
-     "azione": {"type":"blocca_entry","params":{"reason":"STATIC_TOSSICO_LONG_DEBOLE_ALTA_SIDEWAYS"}},
-     "priority":1, "samples":74, "wr":0.19, "note":"WR 19% RANGE_VOL_W BTC"},
+    # RIMOSSO 21/04/2026: Signal Tracker V15 WR=73% su 1632 campioni reali — NON è tossico
+    # {"id": "STATIC_LONG_DEBOLE_ALTA_SIDEWAYS_BTC", ...},
 
     {"id": "STATIC_LONG_FORTE_ALTA_SIDEWAYS_BTC",  "asset": "BTCUSDC", "livello": "STATIC", "tipo": "VETO_LONG",
      "descrizione": "RANGE_VOL_F: WR 34% su dati BTC reali",
