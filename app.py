@@ -4355,6 +4355,108 @@ def oracle_status():
         return jsonify({"error": str(e)}), 500
 
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ORACLE AUTO — Controllo modalità e log
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _oracle_auto_db():
+    import sqlite3 as _sl
+    db = os.path.join(os.path.dirname(DB_PATH), "oracle_auto.db")
+    return _sl.connect(db)
+
+def _oracle_init_db():
+    try:
+        conn = _oracle_auto_db()
+        conn.execute("""CREATE TABLE IF NOT EXISTS oracle_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, mode TEXT,
+            domanda TEXT, capsule_emesse INTEGER, capsule_iniettate INTEGER, capsule_json TEXT)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS oracle_capsule_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, nome TEXT,
+            sicurezza TEXT, urgenza TEXT, azione TEXT, esito TEXT)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS oracle_mode (key TEXT PRIMARY KEY, value TEXT)""")
+        conn.execute("INSERT OR IGNORE INTO oracle_mode VALUES ('mode', 'MANUAL')")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log(f"[ORACLE_DB] init error: {e}")
+
+_oracle_init_db()
+
+# Avvia background worker Oracle Auto
+try:
+    import oracle_auto as _oa
+    _oa.init_oracle_db()
+    _oracle_auto_thread = _oa.start_background()
+    log("[ORACLE_AUTO] ✅ Background worker avviato")
+except Exception as _e:
+    log(f"[ORACLE_AUTO] ⚠️ Worker non avviato: {_e}")
+
+
+@app.route('/oracle/mode', methods=['GET'])
+def oracle_get_mode():
+    try:
+        conn = _oracle_auto_db()
+        row = conn.execute("SELECT value FROM oracle_mode WHERE key='mode'").fetchone()
+        conn.close()
+        return jsonify({"mode": row[0] if row else "MANUAL"})
+    except Exception as e:
+        return jsonify({"mode": "MANUAL", "error": str(e)})
+
+
+@app.route('/oracle/mode', methods=['POST'])
+def oracle_set_mode():
+    try:
+        data = request.get_json()
+        mode = data.get("mode", "MANUAL").upper()
+        if mode not in ("AUTO", "MANUAL"):
+            return jsonify({"error": "mode deve essere AUTO o MANUAL"}), 400
+        conn = _oracle_auto_db()
+        conn.execute("INSERT OR REPLACE INTO oracle_mode VALUES ('mode', ?)", (mode,))
+        conn.commit()
+        conn.close()
+        log(f"[ORACLE_AUTO] Modalità → {mode}")
+        return jsonify({"mode": mode, "status": "ok"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/oracle/log')
+def oracle_log():
+    try:
+        conn = _oracle_auto_db()
+        runs = conn.execute(
+            "SELECT ts, mode, domanda, capsule_emesse, capsule_iniettate FROM oracle_runs ORDER BY id DESC LIMIT 20"
+        ).fetchall()
+        caps = conn.execute(
+            "SELECT ts, nome, sicurezza, urgenza, esito FROM oracle_capsule_log ORDER BY id DESC LIMIT 50"
+        ).fetchall()
+        conn.close()
+        return jsonify({
+            "runs": [{"ts":r[0],"mode":r[1],"domanda":r[2],"emesse":r[3],"iniettate":r[4]} for r in runs],
+            "capsule": [{"ts":c[0],"nome":c[1],"sicurezza":c[2],"urgenza":c[3],"esito":c[4]} for c in caps]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/oracle/run_now', methods=['POST'])
+def oracle_run_now():
+    """Forza un run Oracle immediato (modalità AUTO)."""
+    try:
+        import oracle_auto as _oa
+        import threading
+        def _run():
+            try:
+                _oa.run_oracle()
+            except Exception as e:
+                log(f"[ORACLE_AUTO] run_now error: {e}")
+        threading.Thread(target=_run, daemon=True).start()
+        return jsonify({"status": "run avviato in background"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     log(f"[MAIN] 🚀 MISSION CONTROL V6.0 + AI BRIDGE — porta {port}")
