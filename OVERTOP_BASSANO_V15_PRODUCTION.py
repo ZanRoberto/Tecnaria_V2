@@ -8153,6 +8153,88 @@ class OvertopBassanoV15Production:
             except Exception as _nr_e:
                 log.debug(f"[NARRATORE_TRADE] {_nr_e}")
 
+            # ── ORACLE WIN TRIGGER — cattura pattern vincente ────────────
+            # Ogni trade vincente genera snapshot e trigger per Oracle Auto.
+            # Oracle analizza perché ha vinto e genera capsule che amplifica quel pattern.
+            if is_win and self.heartbeat_data is not None:
+                try:
+                    _win_snapshot = {
+                        'ts':           datetime.utcnow().isoformat(),
+                        'pnl':          round(pnl, 4),
+                        'reason':       reason,
+                        'matrimonio':   self._shadow_matrimonio,
+                        'momentum':     self._shadow_entry_momentum,
+                        'volatility':   self._shadow_entry_volatility,
+                        'trend':        self._shadow_entry_trend,
+                        'regime':       self._regime_current,
+                        'oi_stato':     self._oi_stato,
+                        'oi_carica':    round(self._oi_carica, 3),
+                        'score':        round(self._shadow.get('score', 0) if self._shadow else 0, 1),
+                        'soglia':       round(self._shadow.get('soglia', 0) if self._shadow else 0, 1),
+                        'rsi':          round(getattr(self.campo, '_last_rsi', 50), 1),
+                        'macd_hist':    round(getattr(self.campo, '_last_macd_hist', 0), 4),
+                        'direction':    entry_direction,
+                        'duration_s':   round(trade_duration, 1),
+                    }
+                    # Conserva storico vincite (max 50)
+                    _win_history = self.heartbeat_data.get('oracle_win_history', [])
+                    _win_history.append(_win_snapshot)
+                    if len(_win_history) > 50:
+                        _win_history = _win_history[-50:]
+                    self.heartbeat_data['oracle_win_history'] = _win_history
+
+                    # Trigger Oracle solo per profit significativi (> $1 netto)
+                    # I micro-profit non hanno pattern solido da amplificare
+                    if pnl > 1.0:
+                        _fingerprint = f"{self._shadow_entry_momentum}|{self._shadow_entry_volatility}|{self._shadow_entry_trend}"
+                        _trigger = f"WIN_PATTERN_{_fingerprint}_pnl{pnl:.2f}_reason{reason[:20]}"
+                        self.heartbeat_data['oracle_trigger'] = _trigger
+                        log.info(f"[ORACLE_TRIGGER] 🟢 WIN_PATTERN: {_fingerprint} PnL={pnl:.2f}")
+                except Exception as _owt_e:
+                    log.debug(f"[ORACLE_WIN_TRIGGER] {_owt_e}")
+
+            # ── ORACLE LOSS TRIGGER — cattura pattern perdita ─────────────
+            # Ogni trade in perdita genera uno snapshot completo del contesto
+            # e scrive oracle_trigger nel heartbeat per svegliare Oracle Auto.
+            # Oracle analizza, capisce il pattern, genera capsule correttiva permanente.
+            if not is_win and self.heartbeat_data is not None:
+                try:
+                    _loss_snapshot = {
+                        'ts':           datetime.utcnow().isoformat(),
+                        'pnl':          round(pnl, 4),
+                        'pnl_gross':    round(pnl_gross, 4),
+                        'reason':       reason,
+                        'matrimonio':   self._shadow_matrimonio,
+                        'momentum':     self._shadow_entry_momentum,
+                        'volatility':   self._shadow_entry_volatility,
+                        'trend':        self._shadow_entry_trend,
+                        'regime':       self._regime_current,
+                        'oi_stato':     self._oi_stato,
+                        'oi_carica':    round(self._oi_carica, 3),
+                        'score':        round(self._shadow.get('score', 0) if self._shadow else 0, 1),
+                        'soglia':       round(self._shadow.get('soglia', 0) if self._shadow else 0, 1),
+                        'rsi':          round(getattr(self.campo, '_last_rsi', 50), 1),
+                        'macd_hist':    round(getattr(self.campo, '_last_macd_hist', 0), 4),
+                        'direction':    entry_direction,
+                        'duration_s':   round(trade_duration, 1),
+                        'm2_state':     self._state,
+                        'loss_streak':  self._m2_loss_streak,
+                    }
+                    # Conserva storico perdite (max 50)
+                    _loss_history = self.heartbeat_data.get('oracle_loss_history', [])
+                    _loss_history.append(_loss_snapshot)
+                    if len(_loss_history) > 50:
+                        _loss_history = _loss_history[-50:]
+                    self.heartbeat_data['oracle_loss_history'] = _loss_history
+
+                    # Trigger Oracle — pattern da analizzare
+                    _fingerprint = f"{self._shadow_entry_momentum}|{self._shadow_entry_volatility}|{self._shadow_entry_trend}"
+                    _trigger = f"LOSS_PATTERN_{_fingerprint}_pnl{pnl:.2f}_reason{reason[:20]}"
+                    self.heartbeat_data['oracle_trigger'] = _trigger
+                    log.info(f"[ORACLE_TRIGGER] 🔴 LOSS_PATTERN: {_fingerprint} PnL={pnl:.2f} reason={reason}")
+                except Exception as _olt_e:
+                    log.debug(f"[ORACLE_LOSS_TRIGGER] {_olt_e}")
+
             # -- EXPORT LATENCY STATS all'heartbeat ----------------------
             try:
                 if self.heartbeat_data is not None:
