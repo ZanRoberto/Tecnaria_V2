@@ -127,6 +127,56 @@ def trigger_to_domanda(trigger, status):
         "EXPLOSIVE_ZERO_TRADE": lambda: "Il regime è EXPLOSIVE ma il bot non sta entrando. È una finestra di opportunità che si sta perdendo. Analizza i blocchi attivi e genera capsule per permettere entry selettive.",
         "DIFENSIVO_BLOCCATO": lambda: f"Il bot è in stato DIFENSIVO da troppo tempo senza trade. Analizza se il blocco difensivo è giustificato o se va allentato.",
     }
+
+    # ── WIN_PATTERN — amplifica pattern vincente ─────────────────────────
+    if trigger.startswith("WIN_PATTERN_"):
+        parts = trigger.replace("WIN_PATTERN_", "")
+        import re as _re
+        fp_match = _re.match(r"([A-Z]+[|][A-Z]+[|][A-Z]+)_pnl([^_]+)_reason(.+)", parts)
+        if fp_match:
+            fingerprint = fp_match.group(1)
+            pnl_val     = fp_match.group(2)
+            reason      = fp_match.group(3)
+            mom, vol, trend = fingerprint.split("|") if "|" in fingerprint else ("?","?","?")
+            return (
+                f"Il bot ha appena chiuso un trade VINCENTE di +${pnl_val} USDC. "
+                f"Contesto al momento dell'entry: momentum={mom}, volatilità={vol}, trend={trend}, "
+                f"regime={status.get('regime','?')}, OI={status.get('oi_stato','?')} carica={status.get('oi_carica',0):.2f}, "
+                f"motivo chiusura: {reason}. "
+                f"OBIETTIVO: analizza PERCHÉ il sistema ha vinto in questo contesto, "
+                f"identifica il pattern vincente, e genera una SuperCapsule che amplifichi "
+                f"questo fingerprint {fingerprint} in futuro — boost size, soglia più bassa, "
+                f"o priorità entry. La capsule deve essere permanente e specifica."
+            )
+        else:
+            return f"Trade vincente con trigger: {trigger}. Analizza il pattern e genera capsule di amplificazione permanente."
+
+    # ── LOSS_PATTERN — analisi specifica per ogni perdita ────────────────
+    # Trigger formato: LOSS_PATTERN_MOM|VOL|TREND_pnlX.XX_reasonYYY
+    if trigger.startswith("LOSS_PATTERN_"):
+        # Estrai componenti dal trigger
+        parts = trigger.replace("LOSS_PATTERN_", "")
+        # Cerca il fingerprint (MOM|VOL|TREND)
+        import re as _re
+        fp_match = _re.match(r"([A-Z]+\|[A-Z]+\|[A-Z]+)_pnl([^_]+)_reason(.+)", parts)
+        if fp_match:
+            fingerprint = fp_match.group(1)
+            pnl_val     = fp_match.group(2)
+            reason      = fp_match.group(3)
+            mom, vol, trend = fingerprint.split("|") if "|" in fingerprint else ("?","?","?")
+            return (
+                f"Il bot ha appena chiuso un trade in PERDITA di ${pnl_val} USDC. "
+                f"Contesto al momento dell'entry: momentum={mom}, volatilità={vol}, trend={trend}, "
+                f"regime={status.get('regime','?')}, OI={status.get('oi_stato','?')} carica={status.get('oi_carica',0):.2f}, "
+                f"motivo chiusura: {reason}. "
+                f"OBIETTIVO: analizza PERCHÉ il sistema è entrato in questo contesto, "
+                f"identifica il pattern di perdita, e genera una SuperCapsule che blocchi o riduca size "
+                f"per questo specifico fingerprint {fingerprint} in futuro. "
+                f"La capsule deve essere permanente e specifica — non generica."
+            )
+        else:
+            return f"Trade in perdita con trigger: {trigger}. Analizza il pattern e genera capsule correttiva permanente."
+
     # Trova la chiave che matcha
     for key, fn in domande.items():
         if trigger.startswith(key):
