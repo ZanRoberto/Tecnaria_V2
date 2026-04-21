@@ -3904,7 +3904,8 @@ class CampoGravitazionale:
     VETI_LONG = {
         ("DEBOLE", "ALTA", "DOWN"),    # TRAP - WR 5% per LONG
         ("FORTE",  "ALTA", "DOWN"),    # PANIC - WR 15% per LONG
-        ("DEBOLE", "ALTA", "SIDEWAYS"),# RANGE_VOL_W - WR 19% dati reali
+        # RIMOSSO 21/04/2026: Signal Tracker V15 dice DEBOLE|ALTA|SIDEWAYS = WR 73% su 1632 campioni reali
+        # ("DEBOLE", "ALTA", "SIDEWAYS"),# era WR 19% dati V13 — ora 73% V15
         ("FORTE",  "ALTA", "SIDEWAYS"),# RANGE_VOL_F - WR 34% dati reali Oracolo
         ("MEDIO",  "ALTA", "SIDEWAYS"),# RANGE_VOL_M - WR 28% dati reali Oracolo
     }
@@ -7234,11 +7235,13 @@ class OvertopBassanoV15Production:
                         except Exception:
                             pass
 
-                    # REGOLA ASSOLUTA: DEBOLE|ALTA|SIDEWAYS non si bypassa mai
+                    # REGOLA AGGIORNATA 21/04/2026:
+                    # DEBOLE|ALTA|SIDEWAYS rimosso — Signal Tracker V15 WR=73% su 1632 campioni
+                    # Rimangono invalicabili solo FORTE e MEDIO con ALTA|SIDEWAYS (WR basso confermato)
                     _contesto_invalicabile = (
                         volatility == "ALTA" and
                         trend == "SIDEWAYS" and
-                        momentum in ("DEBOLE", "MEDIO", "FORTE")
+                        momentum in ("MEDIO", "FORTE")  # DEBOLE rimosso: dati reali V15 dicono WR 73%
                     )
                     if _contesto_invalicabile:
                         _fuoco_estremo = False
