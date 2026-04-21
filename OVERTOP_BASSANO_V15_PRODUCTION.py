@@ -4139,8 +4139,8 @@ class CampoGravitazionale:
             warmup_checks.append(f"tick={self._tick_count}/200")
         if len(self._prices_long) < 50:
             warmup_checks.append(f"drift={len(self._prices_long)}/100")
-        if len(self._prices_ta) < 35:
-            warmup_checks.append(f"RSI_MACD={len(self._prices_ta)}/35")
+        if len(self._prices_ta) < 20:
+            warmup_checks.append(f"RSI_MACD={len(self._prices_ta)}/20")
         if warmup_checks:
             return self._veto(f"WARMUP_{'|'.join(warmup_checks)}")
 
@@ -7271,10 +7271,10 @@ class OvertopBassanoV15Production:
                         result['size']  = max(result.get('size', 0), 0.15)
                         self._log_m2("📊", f"Score bypass: {_score_bypass:.1f} size={result['size']:.2f}")
 
-                        # SOGLIA MINIMA ASSOLUTA nel bypass FUOCO
-                        # Quando il campo restituisce soglia=0 (VETO prima del calcolo)
-                        # non permettere entry sotto score 40 — sistema non può essere cieco
-                        _soglia_bypass_min = 40.0
+                        # SOGLIA MINIMA nel bypass FUOCO
+                        # Con OI FUOCO >= 0.65 il rischio è gestito — soglia bassa accettabile
+                        # 40 era troppo alta: bloccava tutti i trade con OI FUOCO ad inizio sessione
+                        _soglia_bypass_min = 25.0  # era 40 — abbassata: OI FUOCO è garanzia sufficiente
                         if _score_bypass < _soglia_bypass_min:
                             result['enter'] = False
                             self._log_m2("🛑", f"BYPASS BLOCCATO: score {_score_bypass:.1f} < soglia_min {_soglia_bypass_min:.1f}")
@@ -7299,8 +7299,8 @@ class OvertopBassanoV15Production:
             if not hasattr(self, '_warmup_done_time'):
                 self._warmup_done_time = time.time()
                 self._log_m2("✅", "BOOT_GUARD: warmup OK — aspetto 60s")
-            if time.time() - self._warmup_done_time < 60:
-                self._log_m2("⏳", f"BOOT_GUARD: {60-(time.time()-self._warmup_done_time):.0f}s al via")
+            if time.time() - self._warmup_done_time < 10:
+                self._log_m2("⏳", f"BOOT_GUARD: {10-(time.time()-self._warmup_done_time):.0f}s al via")
                 return
 
             # ── SCORE vs SOGLIA ──────────────────────────────────────────────
@@ -7333,7 +7333,7 @@ class OvertopBassanoV15Production:
                     return
                 else:
                     result['enter'] = True
-                    result['size']  = min(result.get('size', 1.0), 0.3)
+                    result['size']  = min(result.get('size', 1.0), 0.5)  # era 0.3 — troppo bassa per coprire fee
                     self._log_m2("🔥",
                         f"FUOCO bypass score — carica={self._oi_carica:.2f}")
 
@@ -7632,8 +7632,14 @@ class OvertopBassanoV15Production:
 
     def _evaluate_shadow_exit(self, price, momentum, volatility, trend):
         """Stessa logica di uscita V15 + BreathEngine V16 per timing ottimale."""
+        # Guard anti-doppio-close
+        if getattr(self, "_shadow_closing", False):
+            self._log_m2("⚠️", f"DOPPIO_CLOSE prevenuto — reason={reason}")
+            return
+        self._shadow_closing = True
         try:
             if not self._shadow:
+                self._shadow_closing = False
                 return
             if price > self._shadow_max_price:
                 self._shadow_max_price = price
@@ -7927,8 +7933,14 @@ class OvertopBassanoV15Production:
         Lo scalping a 10-15s con PnL $5-17 NON è profittevole in spot.
         Serve: futures (fee 0.07% RT) con leva, oppure trade più lunghi con PnL > $150.
         """
+        # Guard anti-doppio-close
+        if getattr(self, "_shadow_closing", False):
+            self._log_m2("⚠️", f"DOPPIO_CLOSE prevenuto — reason={reason}")
+            return
+        self._shadow_closing = True
         try:
             if not self._shadow:
+                self._shadow_closing = False
                 return
             # PnL REALE FUTURES = delta_prezzo × quantita BTC nella posizione
             # CRITICO: usa la direzione al momento dell'ENTRY, non quella attuale
@@ -8266,6 +8278,7 @@ class OvertopBassanoV15Production:
             self._log_m2("💥", f"ERRORE close_shadow: {e}")
             log.error(f"[M2_CLOSE_ERROR] {e}\n{traceback.format_exc()}")
         finally:
+            self._shadow_closing = False  # Reset lock anti-doppio-close
             # Reset shadow SEMPRE - anche se c'è un errore, non lasciare trade fantasma
             self._shadow                   = None
             self._shadow_entry_time        = None
