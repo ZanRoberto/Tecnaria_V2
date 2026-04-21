@@ -8961,6 +8961,65 @@ class OvertopBassanoV15Production:
                 except Exception:
                     self.heartbeat_data["ia_capsule_attive"] = []
 
+            # ── ORACLE TRIGGER — event-driven anomaly detection ─────────
+            # Scrive oracle_trigger nel heartbeat quando rileva un'anomalia.
+            # Oracle Auto legge questo campo ogni 30s e si sveglia solo se non vuoto.
+            try:
+                _ot = None
+                _loss_streak = self._m2_loss_streak
+                _trades      = self._m2_trades
+                _pnl         = self._m2_pnl
+                _regime      = self._regime_current
+                _oi_stato    = self._oi_stato
+                _oi_carica   = self._oi_carica
+                _soglia      = self.campo.SOGLIA_BASE
+                _state       = self._state
+                _hc          = getattr(self, '_hardening_cycles', {})
+                _last_trade_ts = getattr(self, '_last_shadow_close_ts', 0)
+                _now_ts      = time.time()
+
+                # P1: Loss streak >= 2 — priorità massima
+                if _loss_streak >= 2 and not _ot:
+                    _ot = f"LOSS_STREAK_{_loss_streak}"
+
+                # P2: OI FUOCO ma 0 trade da più di 15 minuti
+                elif _oi_stato == "FUOCO" and _oi_carica >= 0.70 and _trades == 0 and not _ot:
+                    if _now_ts - getattr(self, '_boot_time', _now_ts) > 900:
+                        _ot = f"OI_FUOCO_ZERO_TRADE_carica{_oi_carica:.2f}"
+
+                # P3: Phantom Supervisor sta irrigidendo (cicli >= 3)
+                elif any(v >= 3 for v in _hc.values()) and not _ot:
+                    _max_cicli = max(_hc.values()) if _hc else 0
+                    _ot = f"PHANTOM_IRRIGIDISCE_cicli{_max_cicli}"
+
+                # P4: PnL sessione negativo oltre -$15
+                elif _pnl < -15.0 and not _ot:
+                    _ot = f"PNL_DRAWDOWN_{abs(_pnl):.0f}usd"
+
+                # P5: Regime EXPLOSIVE ma 0 trade
+                elif _regime == "EXPLOSIVE" and _trades == 0 and not _ot:
+                    if _now_ts - getattr(self, '_boot_time', _now_ts) > 300:
+                        _ot = "EXPLOSIVE_ZERO_TRADE"
+
+                # P6: Stato DIFENSIVO da più di 10 minuti senza trade
+                elif _state == "DIFENSIVO" and _trades == 0 and not _ot:
+                    _state_since = getattr(self, '_state_since', _now_ts)
+                    if _now_ts - _state_since > 600:
+                        _ot = f"DIFENSIVO_BLOCCATO_{int((_now_ts-_state_since)/60)}min"
+
+                # Scrivi trigger (o cancella se nessuna anomalia)
+                if _ot:
+                    _existing = self.heartbeat_data.get('oracle_trigger', '')
+                    # Non sovrascrivere se stesso trigger — evita loop
+                    if _ot != _existing:
+                        self.heartbeat_data['oracle_trigger'] = _ot
+                        log.info(f"[ORACLE_TRIGGER] 🔔 {_ot}")
+                else:
+                    self.heartbeat_data['oracle_trigger'] = ''
+
+            except Exception as _ote:
+                log.warning(f"[ORACLE_TRIGGER] error: {_ote}")
+
             self.heartbeat_lock.release()
 
     def _get_shadow_short_report(self):
