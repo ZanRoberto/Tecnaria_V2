@@ -3968,7 +3968,7 @@ class CampoGravitazionale:
     DRIFT_VETO_THRESHOLD = -0.20   # era -0.10 - phantom WR 81% bloccati, sta bloccando i migliori
 
     # -- WARMUP ---------------------------------------------------------
-    WARMUP_TICKS = 200   # tick minimi prima di operare - buffer devono riempirsi
+    WARMUP_TICKS = 50    # tick minimi prima di operare (era 200 — troppo lento)
 
     def __init__(self):
         self._recent_results = deque(maxlen=20)
@@ -4028,7 +4028,7 @@ class CampoGravitazionale:
         Nessun veto, nessun effetto collaterale — pura osservazione.
         Chiamato ogni tick per il SignalTracker.
         """
-        if self._tick_count < 200:
+        if self._tick_count < 50:
             return {'score': 0, 'soglia': 60, 'valid': False}
 
         W = {"seed":25,"fp":20,"mom":12,"trend":12,"vol":8,"regime":3,"rsi":10,"mac":10}
@@ -4137,8 +4137,8 @@ class CampoGravitazionale:
         #   - prices_ta >= 35 (RSI=14 periodi + MACD=26+9=35 periodi)
         # ~6 minuti di warmup - la volpe annusa, guarda, ascolta.
         warmup_checks = []
-        if self._tick_count < 200:
-            warmup_checks.append(f"tick={self._tick_count}/200")
+        if self._tick_count < 50:
+            warmup_checks.append(f"tick={self._tick_count}/50")
         if len(self._prices_long) < 50:
             warmup_checks.append(f"drift={len(self._prices_long)}/100")
         if len(self._prices_ta) < 20:
