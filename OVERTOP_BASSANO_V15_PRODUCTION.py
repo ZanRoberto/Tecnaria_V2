@@ -3985,7 +3985,7 @@ class CampoGravitazionale:
         # -- RSI + MACD CONSIGLIERI ----------------------------------------
         self._prices_ta = deque(maxlen=50)        # buffer prezzi CAMPIONATI per indicatori tecnici
         self._ta_tick_counter = 0                  # conta tick per campionamento
-        self._ta_sample_rate = 50                  # campiona ogni 50 tick (non ogni tick!)
+        self._ta_sample_rate = 1                   # warmup: campiona ogni tick finché buffer pieno
         self._rsi_period = 14                     # RSI standard 14 periodi
         self._macd_fast = 12                      # MACD EMA veloce
         self._macd_slow = 26                      # MACD EMA lenta
@@ -4011,7 +4011,9 @@ class CampoGravitazionale:
         # I tick sono troppo veloci - RSI su tick-by-tick va a 100/0.
         # Campionando ogni 50 tick creiamo "candele" virtuali stabili.
         self._ta_tick_counter += 1
-        if self._ta_tick_counter >= self._ta_sample_rate:
+        # Sample rate dinamico: 1 tick durante warmup, 5 a regime
+        _sample_now = 1 if len(self._prices_ta) < self._rsi_period else 5
+        if self._ta_tick_counter >= _sample_now:
             self._ta_tick_counter = 0
             self._prices_ta.append(price)
             if len(self._prices_ta) >= 30:
@@ -6377,22 +6379,12 @@ class OvertopBassanoV15Production:
             # Sta lasciando passare cose che perdono — soglia troppo bassa
             elif wr_blocco < 0.25 and blk > 20:
                 old_base = self.campo.SOGLIA_BASE
-                new_base = min(55, old_base + 1)  # max 55, step 1
+                new_base = min(55, old_base + 1)  # era max60/step3
                 if new_base != old_base:
                     self.campo.SOGLIA_BASE = new_base
-                    # ── CIRCUIT BREAKER ────────────────────────────────────────
-                    if not hasattr(self, '_hardening_cycles'):
-                        self._hardening_cycles = {}
-                    self._hardening_cycles[blocco_id] = self._hardening_cycles.get(blocco_id, 0) + 1
-                    hc = self._hardening_cycles[blocco_id]
                     self._log_m2("🧠",
                         f"PHANTOM_SUP: {blocco_id} WR={wr_blocco:.0%} blk={blk} "
-                        f"→ AUTO_IRRIGIDISCE soglia {old_base}→{new_base} (ciclo {hc}/3)")
-                    if hc >= 3:
-                        self.campo.SOGLIA_BASE = 50  # RESET a default operativo
-                        self._hardening_cycles[blocco_id] = 0
-                        self._log_m2("🔴",
-                            f"CIRCUIT_BREAKER: {blocco_id} reset soglia→50 dopo {hc} cicli")
+                        f"→ AUTO_IRRIGIDISCE soglia {old_base}→{new_base}")
                     if not hasattr(self, '_phantom_sup_log'):
                         self._phantom_sup_log = []
                     self._phantom_sup_log.append({
@@ -7284,7 +7276,7 @@ class OvertopBassanoV15Production:
                         # SOGLIA MINIMA ASSOLUTA nel bypass FUOCO
                         # Quando il campo restituisce soglia=0 (VETO prima del calcolo)
                         # non permettere entry sotto score 40 — sistema non può essere cieco
-                        _soglia_bypass_min = 25.0  # era 40
+                        _soglia_bypass_min = 25.0
                         if _score_bypass < _soglia_bypass_min:
                             result['enter'] = False
                             self._log_m2("🛑", f"BYPASS BLOCCATO: score {_score_bypass:.1f} < soglia_min {_soglia_bypass_min:.1f}")
@@ -7348,10 +7340,11 @@ class OvertopBassanoV15Production:
                         f"FUOCO bypass score — carica={self._oi_carica:.2f}")
 
             # ── BREATH ENGINE: conferma timing entry ─────────────────────────
-            # BYPASS: OI FUOCO >= 0.70 — abbassato da 0.85 perché bloccava troppo
-            # Con OI FUOCO l'energia di mercato è dichiarata — breath non blocca
+            # BYPASS: OI FUOCO >= 0.85 — Veritas dimostra FUOCO|BLOCCA sbagliato
+            # nel 65% dei casi. Quando l'energia di mercato è dichiarata al 85%+
+            # il breath non ha autorità di bloccare.
             _fuoco_bypass_breath = (self._oi_stato == "FUOCO" and
-                                    self._oi_carica >= 0.70)
+                                    self._oi_carica >= 0.85)
             if _V16_ENGINES_OK and self._breath and not _fuoco_bypass_breath:
                 _nerv_val = getattr(self._nerv, '_nervosismo', 0.3) if self._nerv else 0.3
                 b_entry = self._breath.segnale_entry(_dir, _nerv_val)
