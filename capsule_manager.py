@@ -272,15 +272,47 @@ class CapsuleManager:
                 res[atype] = act.get("params", True)
                 self._fire(cap["id"], contesto)
 
+            elif atype in ("ALZA_SOGLIA", "alza_soglia"):
+                # SuperCapsule Oracle: alza soglia di N punti
+                delta = float(act.get("valore", act.get("params", {}).get("delta", 5)))
+                res["soglia_boost"] += delta
+                res["reason"] = f"SC_ALZA_SOGLIA+{delta:.0f}"
+                self._fire(cap["id"], contesto)
+                log.info(f"[CM] ⬆️  ALZA_SOGLIA +{delta:.0f} da {cap['id']}")
+
+            elif atype in ("ABBASSA_SOGLIA", "abbassa_soglia"):
+                # SuperCapsule Oracle: abbassa soglia di N punti
+                delta = float(act.get("valore", act.get("params", {}).get("delta", 5)))
+                res["soglia_boost"] -= delta
+                res["reason"] = f"SC_ABBASSA_SOGLIA-{delta:.0f}"
+                self._fire(cap["id"], contesto)
+                log.info(f"[CM] ⬇️  ABBASSA_SOGLIA -{delta:.0f} da {cap['id']}")
+
+            elif atype in ("BLOCCA_ENTRY", "blocca_entry_oracle"):
+                # SuperCapsule Oracle: blocca entry
+                res["blocca"]     = True
+                res["reason"]     = act.get("motivo", act.get("valore", cap["id"]))
+                res["capsule_id"] = cap["id"]
+                self._fire(cap["id"], contesto)
+                log.info(f"[CM] 🚫 BLOCCO Oracle {cap['id']}")
+                break
+
         return res
 
     def _check_triggers(self, triggers: list, ctx: dict) -> bool:
         if not triggers:
             return True
         for t in triggers:
-            p, op, v = t.get("param"), t.get("op"), t.get("value")
-            if p not in ctx or op not in OPS:
-                return False
+            # Supporta sia formato vecchio (param/value) che nuovo Oracle (campo/valore)
+            p  = t.get("param") or t.get("campo")
+            op = t.get("op")
+            v  = t.get("value") if "value" in t else t.get("valore")
+            if not p or not op:
+                continue
+            if p not in ctx:
+                continue
+            if op not in OPS:
+                continue
             try:
                 if not OPS[op](ctx[p], v):
                     return False
