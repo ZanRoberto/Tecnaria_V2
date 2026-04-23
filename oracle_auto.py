@@ -174,7 +174,7 @@ def _pipeline(trigger: str) -> dict:
 
     _p("L1 Risponditore in chiamata...")
     l1 = _call_l1(ctx, trigger)
-    _p(f"L1 completato — {len(l1)} chars")
+    _p(f"L1 completato — {len(l1)} chars — inizio: {l1[:150].strip()}")
 
     sem = _semaforo(l1)
     _p(f"Semaforo L1: {sem}")
