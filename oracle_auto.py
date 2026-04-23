@@ -539,19 +539,40 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
             conn.close()
             return False
 
-        c.execute("""
-            INSERT INTO capsule
-              (id, asset, livello, tipo, trigger_json, azione_json,
-               priority, enabled, samples, wr, pnl_avg,
-               created_ts, scade_ts, hits, hits_saved, last_hit_ts, note)
-            VALUES (?,?,?,?,?,?,?,1,0,0.0,0.0,?,?,0,0,0,?)
-        """, (
-            cap_id, asset, livello, tipo,
-            trigger_json, azione_json,
-            priority,
-            time.time(), scade_ts,
-            f"OracleAuto|trigger={trigger}|{analisi}"
-        ))
+        # Verifica colonne disponibili nel DB (versioni diverse possono mancare di colonne)
+        try:
+            cols = [r[1] for r in c.execute("PRAGMA table_info(capsule)").fetchall()]
+        except:
+            cols = []
+        
+        if 'last_hit_ts' in cols:
+            c.execute("""
+                INSERT OR IGNORE INTO capsule
+                  (id, asset, livello, tipo, trigger_json, azione_json,
+                   priority, enabled, samples, wr, pnl_avg,
+                   created_ts, scade_ts, hits, hits_saved, last_hit_ts, note)
+                VALUES (?,?,?,?,?,?,?,1,0,0.0,0.0,?,?,0,0,0,?)
+            """, (
+                cap_id, asset, livello, tipo,
+                trigger_json, azione_json,
+                priority,
+                time.time(), scade_ts,
+                f"OracleAuto|trigger={trigger}|{analisi}"
+            ))
+        else:
+            c.execute("""
+                INSERT OR IGNORE INTO capsule
+                  (id, asset, livello, tipo, trigger_json, azione_json,
+                   priority, enabled, samples, wr, pnl_avg,
+                   created_ts, scade_ts, hits, note)
+                VALUES (?,?,?,?,?,?,?,1,0,0.0,0.0,?,?,0,?)
+            """, (
+                cap_id, asset, livello, tipo,
+                trigger_json, azione_json,
+                priority,
+                time.time(), scade_ts,
+                f"OracleAuto|trigger={trigger}|{analisi}"
+            ))
         conn.commit()
         conn.close()
 
