@@ -16,6 +16,12 @@ import logging
 import re
 import urllib.request as _ur
 
+import sys
+def _p(msg):
+    print("[ORACLE_AUTO] " + str(msg), flush=True)
+    sys.stdout.flush()
+
+
 log = logging.getLogger(__name__)
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -488,12 +494,17 @@ def run_oracle(trigger: str = "") -> dict:
 def _loop():
     global _running
     _running = True
+    _p("loop avviato")
     log.info("[ORACLE_AUTO] 🤖 Background worker avviato — event-driven ogni 30s")
     while _running:
         try:
-            if _mode == "AUTO" and _heartbeat_ref:
-                trigger = _heartbeat_ref.get("oracle_trigger", "")
+            hb_ok = _heartbeat_ref is not None
+            trig = _heartbeat_ref.get("oracle_trigger", "") if hb_ok else ""
+            _p("tick mode=" + _mode + " hb=" + str(hb_ok) + " trigger=" + (trig or "nessuno"))
+            if _mode == "AUTO" and hb_ok:
+                trigger = trig
                 if trigger:
+                    _p("ESEGUO run_oracle trigger=" + trigger)
                     run_oracle(trigger)
         except Exception as e:
             log.debug(f"[ORACLE_AUTO] loop error: {e}")
@@ -503,9 +514,11 @@ def start_background(heartbeat_data=None, bot_instance=None):
     global _heartbeat_ref, _bot_ref
     _heartbeat_ref = heartbeat_data
     _bot_ref       = bot_instance
+    _p("start_background: hb=" + str(bool(heartbeat_data)) + " bot=" + str(bool(bot_instance)))
     _init_db()
     t = threading.Thread(target=_loop, daemon=True, name="oracle_auto")
     t.start()
+    _p("thread avviato")
     return t
 
 def set_mode(mode: str):
