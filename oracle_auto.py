@@ -149,7 +149,7 @@ def _loop():
 
             _p(f"tick mode={mode} hb={_heartbeat is not None} trigger={trigger or 'nessuno'}")
 
-            if mode == "AUTO" and trigger and trigger != _last_trigger:
+            if mode == "AUTO" and trigger:
                 _p(f"Trigger rilevato: {trigger}")
                 _pipeline(trigger)
 
