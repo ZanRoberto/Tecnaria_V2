@@ -312,82 +312,118 @@ def _build_context(trigger: str) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 def _call_l1(ctx: dict, trigger: str) -> str:
-    system = """Sei il Risponditore L1 di OVERTOP BASSANO — sistema trading BTC/USDC paper trade.
-TUTTI i PnL sono in USDC. Mai BTC. Formula: pnl = delta × (5000/entry_price) - 2.00
+    system = (
+        "Sei il Risponditore L1 di OVERTOP BASSANO V15 — sistema AI trading BTC/USDC.\n\n"
+        "LEGGI FISICHE:\n"
+        "- PnL in USDC: pnl_netto = (delta x 5000/entry_price) - 2.00\n"
+        "- FEE FISSA $2. BREAKEVEN ~$30 movimento BTC.\n"
+        "- PROFIT_LOCK WIN_+1/WIN_+2 = perdita netta certa (lordo < fee).\n\n"
+        "PATTERN TOSSICI:\n"
+        "- DEBOLE|ALTA|SIDEWAYS: WR 11% pnl -$3.29 — il piu tossico\n"
+        "- MEDIO|ALTA|SIDEWAYS: WR 28% pnl -$2.79\n"
+        "- RANGING + volatilita ALTA: edge fisico negativo\n"
+        "- FUOCO bypass in RANGING con loss_streak>=2: entry cieche\n\n"
+        "PATTERN VINCENTI:\n"
+        "- FORTE|BASSA|UP: WR 78% — non bloccare mai\n"
+        "- FORTE|MEDIA|UP: WR 68%\n"
+        "- MEDIO|BASSA|UP: WR 65%\n\n"
+        "PHANTOM:\n"
+        "- pnl_missed = soldi lasciati (blocchi eccessivi) — priorita assoluta se > $20\n"
+        "- pnl_saved = perdite evitate (blocchi corretti)\n"
+        "- BLOCCO_ECCESSIVO = wr_bloccati > 15%\n\n"
+        "SEMAFORO:\n"
+        "SAFE = blocchi corretti, phantom zero missed, nessuna anomalia\n"
+        "VALUTA = score sotto soglia entra, PROFIT_LOCK perde, pattern tossico non bloccato\n"
+        "RISCHIO = loss_streak>=3, FUOCO bypass in RANGING, DEBOLE|ALTA|SIDEWAYS non bloccato\n\n"
+        "FORMATO (max 200 parole):\n"
+        "Causa: [1 frase]\n"
+        "Phantom: [protezione/zavorra/mancato]\n"
+        "Pattern: [fingerprint problema]\n"
+        "Per L2: [cosa correggere]\n"
+        "SEMAFORO: [SAFE|VALUTA|RISCHIO]"
+    )
 
-COMPITO: diagnosi rapida del contesto.
+    user = (
+        f"TRIGGER: {trigger}\n\n"
+        f"STATO BOT:\n{json.dumps(ctx['stato_bot'], indent=2)}\n\n"
+        f"PHANTOM (USDC):\n{json.dumps(ctx['phantom'], indent=2)}\n\n"
+        f"ULTIMI TRADE:\n{json.dumps(ctx['storia_trade'][-5:], indent=2)}\n\n"
+        f"PERDITE RECENTI:\n{json.dumps(ctx['loss_history'], indent=2)}\n\n"
+        f"PATTERN WR<55%:\n{json.dumps(ctx['bad_patterns'][:5], indent=2)}"
+    )
 
-PHANTOM:
-- pnl_missed_usdc = soldi USDC mancati perché il sistema bloccava trade vincenti
-- verdetto BLOCCO_ECCESSIVO = sistema troppo difensivo in quel contesto
-- Questo e' denaro lasciato sul tavolo — e' la priorita'
+    return _deepseek(system, user, max_tokens=500)
 
-FORMATO (max 150 parole):
-[causa principale]
-[osservazioni phantom + WR]
-[cosa deve fare L2]
-SEMAFORO: [SAFE|VALUTA|RISCHIO]"""
-
-    user = f"""TRIGGER: {trigger}
-
-STATO:
-{json.dumps(ctx['stato_bot'], indent=2)}
-
-PHANTOM (USDC):
-{json.dumps(ctx['phantom'], indent=2)}
-
-ULTIMI TRADE:
-{json.dumps(ctx['storia_trade'][-5:], indent=2)}
-
-PATTERN WR<55%:
-{json.dumps(ctx['bad_patterns'][:5], indent=2)}"""
-
-    return _deepseek(system, user, max_tokens=400)
-
-
-# ═══════════════════════════════════════════════════════════════
-# L2 — SUPERRISPONDITORE
-# ═══════════════════════════════════════════════════════════════
 
 def _call_l2(ctx: dict, trigger: str, l1: str) -> str:
-    system = """Sei il Superrisponditore L2 di OVERTOP BASSANO.
-TUTTI i PnL in USDC. Formula: pnl = delta × (5000/entry_price) - 2.00
+    system = """Sei il Superrisponditore L2 di OVERTOP BASSANO V15 — il chirurgo del sistema.
+Hai piena conoscenza dell'architettura. Agisci con precisione assoluta.
 
-COMPITO:
-1. Causa radicale (phantom BLOCCO_ECCESSIVO = soldi lasciati, non trade evitati)
-2. UNA correzione chirurgica
-3. UNA SuperCapsule JSON tra <SUPERCAPSULE></SUPERCAPSULE>
+═══ LEGGI FISICHE (NON VIOLARE MAI) ═══
+- PnL in USDC: pnl_netto = (delta × 5000/entry_price) - 2.00
+- FEE = $2 fissi. BREAKEVEN = ~$30 movimento BTC. Sotto questo: perdita certa.
+- EXPOSURE = $5000. BTC_QTY = 5000/entry_price.
+- PROFIT_LOCK su WIN_+1 (+$1 lordo) = -$1 netto. È una perdita. La soglia minima di uscita deve essere WIN_+3 ($3 lordo = $1 netto).
 
-TIPI:
-- VETO: blocca entry in contesto perdente
-- BOOST: abbassa soglia in contesto bloccato ma vincente
-- PARAMETRO: modifica parametro numerico
+═══ COME FUNZIONA IL CAPSULE_MANAGER ═══
+Il CapsuleManager legge ogni tick il contesto: {momentum, volatility, trend, regime, direction, ...}
+e confronta con i trigger della capsule. Se match → esegue l'azione.
 
-FORMATO JSON:
+AZIONI DISPONIBILI (usa ESATTAMENTE questi valori nel campo azione.tipo):
+- "BLOCCA_ENTRY" → blocca entry in quel contesto (come VETO)
+- "ALZA_SOGLIA"  → aggiunge N punti alla soglia (es. valore: 10 = soglia+10)
+- "ABBASSA_SOGLIA" → sottrae N punti alla soglia (es. valore: 5 = soglia-5)
+
+CAMPI TRIGGER DISPONIBILI (usa ESATTAMENTE questi nomi):
+- "momentum"   → "FORTE" | "MEDIO" | "DEBOLE"
+- "volatility" → "ALTA" | "MEDIA" | "BASSA"
+- "trend"      → "UP" | "SIDEWAYS" | "DOWN"
+- "regime"     → "RANGING" | "TRENDING_BULL" | "TRENDING_BEAR" | "EXPLOSIVE"
+- "direction"  → "LONG" | "SHORT"
+
+OPERATORI: "==" | "!=" | "<" | ">" | "<=" | ">="
+
+═══ PATTERN TOSSICI — BLOCCA SEMPRE ═══
+- DEBOLE|ALTA|SIDEWAYS: WR 11% — BLOCCA_ENTRY, priority 10
+- MEDIO|ALTA|SIDEWAYS: WR 28% — BLOCCA_ENTRY, priority 9
+- FORTE|ALTA|SIDEWAYS: WR 35% — ALZA_SOGLIA +15, priority 8
+- RANGING + loss_streak >= 2: ALZA_SOGLIA +10
+
+═══ PATTERN VINCENTI — NON BLOCCARE MAI ═══
+- FORTE|BASSA|UP: WR 78% → se bloccato = ABBASSA_SOGLIA -8
+- FORTE|MEDIA|UP: WR 68% → se bloccato = ABBASSA_SOGLIA -5
+- MEDIO|BASSA|UP: WR 65% → se bloccato = ABBASSA_SOGLIA -5
+
+═══ DECISIONE CAPSULE ═══
+1. Se phantom mostra MANCATO con pnl_missed > $10 su pattern vincente → ABBASSA_SOGLIA
+2. Se loss_streak >= 2 in contesto tossico → BLOCCA_ENTRY o ALZA_SOGLIA
+3. Se PROFIT_LOCK perde (WIN_+1 o WIN_+2) → non serve capsule qui, il problema è nel bot
+4. Una sola capsule — quella più urgente. Chirurgica. Non generica.
+
+FORMATO RISPOSTA:
+[diagnosi in 3 righe max]
+[perché questa capsule specifica]
 <SUPERCAPSULE>
 {
-  "id": "SC_NOME_UNIX",
+  "id": "SC_[NOME_BREVE]_[UNIX_TIMESTAMP]",
   "asset": "BTCUSDC",
   "livello": "AUTO",
-  "tipo": "VETO|BOOST|PARAMETRO",
+  "tipo": "PARAMETRO",
   "trigger": [
-    {"campo": "momentum",   "op": "==", "valore": "FORTE|MEDIO|DEBOLE"},
-    {"campo": "volatility", "op": "==", "valore": "ALTA|MEDIA|BASSA"},
-    {"campo": "trend",      "op": "==", "valore": "UP|SIDEWAYS|DOWN"}
+    {"campo": "momentum",   "op": "==", "valore": "VALORE"},
+    {"campo": "volatility", "op": "==", "valore": "VALORE"},
+    {"campo": "trend",      "op": "==", "valore": "VALORE"}
   ],
   "azione": {
-    "tipo": "BLOCCA_ENTRY|ABBASSA_SOGLIA|ALZA_SOGLIA",
-    "valore": "numero o stringa",
-    "motivo": "max 50 parole italiano"
+    "tipo": "BLOCCA_ENTRY|ALZA_SOGLIA|ABBASSA_SOGLIA",
+    "valore": NUMERO,
+    "motivo": "max 40 parole"
   },
-  "priority": 8,
-  "durata_ore": 24,
-  "analisi_causale": "max 80 parole"
+  "priority": 9,
+  "durata_ore": 48,
+  "analisi_causale": "max 60 parole"
 }
-</SUPERCAPSULE>
-
-REGOLA: se phantom BLOCCO_ECCESSIVO con pnl_missed > $20 -> BOOST, non VETO.
-Il sistema deve prendere soldi, non solo evitare perdite."""
+</SUPERCAPSULE>"""
 
     user = f"""TRIGGER: {trigger}
 
@@ -426,7 +462,6 @@ def _semaforo(text: str, trigger: str = "") -> str:
         sem = "SAFE"
     else:
         sem = "VALUTA"
-    # REGOLA: perdita = L2 sempre chiamato
     if sem == "SAFE" and ("LOSS_PATTERN" in trig or "LOSS_STREAK" in trig):
         _p(f"Semaforo override SAFE->VALUTA — perdita richiede L2")
         return "VALUTA"
