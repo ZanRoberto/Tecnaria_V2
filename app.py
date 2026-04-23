@@ -598,7 +598,7 @@ def _auto_inject_brain():
 
 
 def bot_thread_launcher():
-    global bridge
+    global bridge, bot
     retry_count = 0
     max_retries = 5
     while retry_count < max_retries:
@@ -625,6 +625,13 @@ def bot_thread_launcher():
             bridge.start()
 
             log(f"[BOT_LAUNCHER] ✅ Bot istanziato — capital=${bot.capital:.2f} — bot.run() in partenza")
+            # ── Aggiorna Oracle Auto con riferimento bot reale ───────────
+            try:
+                import oracle_auto as _oa
+                _oa._bot_ref = bot
+                log("[ORACLE_AUTO] 🔗 Bot reference aggiornato in Oracle Auto")
+            except Exception as _oae:
+                log(f"[ORACLE_AUTO] ⚠️ Bot ref: {_oae}")
             bot.run()
         except Exception as e:
             retry_count += 1
@@ -4443,7 +4450,7 @@ try:
     import oracle_auto as _oa
     _oracle_auto_thread = _oa.start_background(
         heartbeat_data=heartbeat_data,
-        bot_instance=bot
+        bot_instance=None  # aggiornato da bot_thread_launcher dopo init
     )
     log("[ORACLE_AUTO] ✅ Background worker avviato (event-driven 30s)")
 except Exception as _e:
