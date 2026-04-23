@@ -7338,7 +7338,8 @@ class OvertopBassanoV15Production:
                 # OI FUOCO può bypassare se il score è vicino
                 _fuoco_ok = (self._oi_stato == "FUOCO" and
                              self._oi_carica >= 0.65 and
-                             self._regime_current != "EXPLOSIVE")
+                             self._regime_current != "EXPLOSIVE" and
+                             self._m2_loss_streak < 2)
                 if not _fuoco_ok:
                     self._log_m2("🔇",
                         f"SCORE_SOTTO: {score:.1f} vs {soglia:.1f} gap={soglia-score:.1f}")
