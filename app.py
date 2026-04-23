@@ -4448,11 +4448,20 @@ _oracle_init_db()
 # Avvia background worker Oracle Auto
 try:
     import oracle_auto as _oa
+    # Leggi mode salvato dal DB e sincronizza
+    try:
+        _oa_conn = _oracle_auto_db()
+        _oa_row = _oa_conn.execute("SELECT value FROM oracle_mode WHERE key='mode'").fetchone()
+        _oa_conn.close()
+        _saved_mode = _oa_row[0] if _oa_row else "AUTO"
+    except Exception:
+        _saved_mode = "AUTO"
     _oracle_auto_thread = _oa.start_background(
         heartbeat_data=heartbeat_data,
         bot_instance=None  # aggiornato da bot_thread_launcher dopo init
     )
-    log("[ORACLE_AUTO] ✅ Background worker avviato (event-driven 30s)")
+    _oa.set_mode(_saved_mode)
+    log(f"[ORACLE_AUTO] ✅ Background worker avviato — modalità={_saved_mode}")
 except Exception as _e:
     log(f"[ORACLE_AUTO] ⚠️ Worker non avviato: {_e}")
 
@@ -4479,6 +4488,12 @@ def oracle_set_mode():
         conn.execute("INSERT OR REPLACE INTO oracle_mode VALUES ('mode', ?)", (mode,))
         conn.commit()
         conn.close()
+        # Notifica oracle_auto in memoria
+        try:
+            import oracle_auto as _oa
+            _oa.set_mode(mode)
+        except Exception:
+            pass
         log(f"[ORACLE_AUTO] Modalità → {mode}")
         return jsonify({"mode": mode, "status": "ok"})
     except Exception as e:
