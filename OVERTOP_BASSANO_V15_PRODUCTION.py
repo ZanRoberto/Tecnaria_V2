@@ -4035,7 +4035,7 @@ class CampoGravitazionale:
         Nessun veto, nessun effetto collaterale — pura osservazione.
         Chiamato ogni tick per il SignalTracker.
         """
-        if self._tick_count < 200:
+        if self._tick_count < self.WARMUP_TICKS:
             return {'score': 0, 'soglia': 60, 'valid': False}
 
         W = {"seed":25,"fp":20,"mom":12,"trend":12,"vol":8,"regime":3,"rsi":10,"mac":10}
@@ -4144,8 +4144,8 @@ class CampoGravitazionale:
         #   - prices_ta >= 35 (RSI=14 periodi + MACD=26+9=35 periodi)
         # ~6 minuti di warmup - la volpe annusa, guarda, ascolta.
         warmup_checks = []
-        if self._tick_count < 200:
-            warmup_checks.append(f"tick={self._tick_count}/200")
+        if self._tick_count < self.WARMUP_TICKS:
+            warmup_checks.append(f"tick={self._tick_count}/{self.WARMUP_TICKS}")
         if len(self._prices_long) < 50:
             warmup_checks.append(f"drift={len(self._prices_long)}/100")
         if len(self._prices_ta) < 20:
@@ -5680,7 +5680,7 @@ class OvertopBassanoV15Production:
         # -- PRE-TRADE SIGNAL TRACKER: osservazione continua ogni tick ------
         # score_now() calcola senza decidere — pura mappa del segnale nel tempo.
         # Registra tutto ciò che supera 25, prima di qualsiasi filtro.
-        if self.campo._tick_count > 200 and momentum:
+        if self.campo._tick_count > self.campo.WARMUP_TICKS and momentum:
             _seed_q = self.seed_scorer.score()
             _seed_v = _seed_q.get('score', 0.0) if _seed_q.get('reason') != 'insufficient_data' else 0.0
             _fp_wr  = self.oracolo.get_wr(momentum, volatility, trend, self.campo._direction)
