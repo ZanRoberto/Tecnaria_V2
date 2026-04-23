@@ -176,7 +176,7 @@ def _pipeline(trigger: str) -> dict:
     l1 = _call_l1(ctx, trigger)
     _p(f"L1 completato — {len(l1)} chars — inizio: {l1[:150].strip()}")
 
-    sem = _semaforo(l1)
+    sem = _semaforo(l1, trigger)
     _p(f"Semaforo L1: {sem}")
 
     l2           = ""
@@ -415,15 +415,22 @@ DOMANDA: cosa blocca i trade vincenti? Genera la capsule che sblocca quei soldi.
 # ESTRAI SEMAFORO
 # ═══════════════════════════════════════════════════════════════
 
-def _semaforo(text: str) -> str:
+def _semaforo(text: str, trigger: str = "") -> str:
     t = (text or "").upper()
+    trig = (trigger or "").upper()
     if "SEMAFORO: RISCHIO" in t or "SEMAFORO:RISCHIO" in t:
-        return "RISCHIO"
-    if "SEMAFORO: VALUTA" in t or "SEMAFORO:VALUTA" in t:
+        sem = "RISCHIO"
+    elif "SEMAFORO: VALUTA" in t or "SEMAFORO:VALUTA" in t:
+        sem = "VALUTA"
+    elif "SEMAFORO: SAFE" in t or "SEMAFORO:SAFE" in t:
+        sem = "SAFE"
+    else:
+        sem = "VALUTA"
+    # REGOLA: perdita = L2 sempre chiamato
+    if sem == "SAFE" and ("LOSS_PATTERN" in trig or "LOSS_STREAK" in trig):
+        _p(f"Semaforo override SAFE->VALUTA — perdita richiede L2")
         return "VALUTA"
-    if "SEMAFORO: SAFE" in t or "SEMAFORO:SAFE" in t:
-        return "SAFE"
-    return "VALUTA"
+    return sem
 
 
 # ═══════════════════════════════════════════════════════════════
