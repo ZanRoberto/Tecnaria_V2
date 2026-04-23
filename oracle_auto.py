@@ -1,385 +1,485 @@
 """
-OVERTOP ORACLE AUTO — Event-Driven Worker
-Si sveglia ogni 30s, controlla oracle_trigger nel heartbeat.
-Se trova un'anomalia → analizza → inietta capsule SAFE automaticamente.
-Due modalità: AUTO (autonomo) / MANUAL (aspetta domanda umana)
+ORACLE AUTO — Background Worker Event-Driven
+============================================
+Legge oracle_trigger dal heartbeat ogni 30s.
+Se trigger presente → invoca pipeline Dual-AI DeepSeek.
+Processa SuperCapsule JSON incluso campo CODICE → CapsuleExecutor.
+Modalità AUTO: event-driven (non polling orario).
 """
-import os, time, json, sqlite3, logging, threading, urllib.request
-from datetime import datetime
 
-log = logging.getLogger("oracle_auto")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [ORACLE_AUTO] %(message)s")
+import json
+import os
+import sqlite3
+import threading
+import time
+import logging
+import re
+import urllib.request as _ur
 
-# ── CONFIG ────────────────────────────────────────────────────────────
-DEEPSEEK_API_KEY  = os.environ.get("DEEPSEEK_API_KEY", "")
-DB_PATH           = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
-ORACLE_DB_PATH    = os.environ.get("ORACLE_DB_PATH", "/home/app/data/oracle_auto.db")
-BOT_BASE_URL      = os.environ.get("BOT_BASE_URL", "http://localhost:5000")
-CHECK_INTERVAL    = 30    # secondi tra check trigger
-COOLDOWN_AFTER    = 300   # 5 minuti cooldown dopo un run per non spammare DeepSeek
+log = logging.getLogger(__name__)
 
-# ── DB ORACLE ─────────────────────────────────────────────────────────
-def init_oracle_db():
+# ── Config ──────────────────────────────────────────────────────────────────
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+ORACLE_DB_PATH   = os.path.join(os.path.dirname(
+    os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
+), "oracle_auto.db")
+COOLDOWN_SECONDS = 300   # 5 min tra run auto sullo stesso trigger
+
+_heartbeat_ref   = None
+_bot_ref         = None
+_last_trigger    = ""
+_last_run_ts     = 0.0
+_running         = False
+_mode            = "AUTO"   # AUTO | MANUAL
+
+# ── Prompt sistema ──────────────────────────────────────────────────────────
+
+SYSTEM_RISPONDITORE = (
+    "Sei il RISPONDITORE L1 di OVERTOP — il primo analista della pipeline Dual-AI.\n"
+    "Ricevi lo stato live del bot e un trigger di anomalia.\n"
+    "Il tuo compito: analizza la situazione e formula 3-5 domande PRECISE e TECNICHE\n"
+    "per il SUPERRISPONDITORE L2, che risponderà con SuperCapsule JSON operative.\n"
+    "Le domande devono essere specifiche, non generiche. Usa i dati reali che vedi.\n"
+    "Formato risposta: lista numerata di domande, nessun altro testo."
+)
+
+SYSTEM_SUPERRISPONDITORE = (
+    "Sei il SUPERRISPONDITORE L2 di OVERTOP — il giudice supremo. Parli SOLO in SuperCapsule JSON.\n\n"
+    "Per ogni domanda ricevuta emetti UNA SuperCapsule con questa struttura ESATTA:\n"
+    "{\n"
+    "  \"nome\": \"NOME_BREVE\",\n"
+    "  \"urgenza\": \"CRITICA|ALTA|MEDIA\",\n"
+    "  \"sicurezza\": \"SAFE|VALUTA|RISCHIO\",\n"
+    "  \"problema\": \"...\",\n"
+    "  \"causa\": \"...\",\n"
+    "  \"perché\": \"...\",\n"
+    "  \"soluzione\": \"...\",\n"
+    "  \"codice\": \"OPZIONALE: funzione Python con firma specifica\",\n"
+    "  \"target_method\": \"OPZIONALE: nome metodo bot da sostituire\",\n"
+    "  \"effetto_atteso\": \"...\"\n"
+    "}\n\n"
+    "REGOLE SEMAFORO sicurezza (OBBLIGATORIO):\n"
+    "  SAFE   = solo lettura (print, getattr, .get()) — nessuna assegnazione\n"
+    "  VALUTA = modifica parametri reversibili: SOGLIA_BASE, soglie, size, veti, boost_seed — USA QUESTO di default\n"
+    "  RISCHIO = SOLO per: abilitare SHORT live, modificare _direction, ordini reali\n"
+    "  REGOLA CRITICA: in dubbio tra VALUTA e RISCHIO → scegli sempre VALUTA.\n"
+    "  Capsule di soglia, size, veto, seed, OI, contesto = SEMPRE VALUTA.\n\n"
+    "REGOLE CAMPO CODICE:\n"
+    "  - Se generi codice Python, usa firma: def nome_funzione(self, **kwargs):\n"
+    "  - Il codice NON può toccare: TRADE_SIZE_USD, LEVERAGE, FEE_PCT, STOP_LIVE\n"
+    "  - Il codice NON può chiamare: exec, eval, os, sys, subprocess, _place_order\n"
+    "  - Usa solo: math, collections, getattr, self.campo, self.oracolo, self._oi_carica\n"
+    "  - target_method deve essere uno di: _calcola_soglia_ranging, _calcola_soglia_explosive,\n"
+    "    _calcola_soglia_trending, _get_ia_soglia_boost, _get_dynamic_soglia_max,\n"
+    "    _calcola_size_boost, _check_extra_veto, _seed_modifier, _exit_energy_modifier\n\n"
+    "Rispondi SOLO con array JSON valido [ {...}, {...} ]. NESSUN testo fuori. Ordina per urgenza."
+)
+
+# ── DB Init ──────────────────────────────────────────────────────────────────
+
+def _init_db():
     conn = sqlite3.connect(ORACLE_DB_PATH)
     conn.execute("""CREATE TABLE IF NOT EXISTS oracle_runs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, mode TEXT,
-        trigger_nome TEXT, domanda TEXT,
-        capsule_emesse INTEGER, capsule_iniettate INTEGER, capsule_json TEXT)""")
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT, mode TEXT, trigger TEXT,
+        domanda TEXT, capsule_emesse INTEGER,
+        capsule_iniettate INTEGER, capsule_json TEXT)""")
     conn.execute("""CREATE TABLE IF NOT EXISTS oracle_capsule_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, nome TEXT,
-        sicurezza TEXT, urgenza TEXT, soluzione TEXT, esito TEXT)""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS oracle_mode (key TEXT PRIMARY KEY, value TEXT)""")
-    conn.execute("INSERT OR IGNORE INTO oracle_mode VALUES ('mode', 'MANUAL')")
-    conn.execute("INSERT OR IGNORE INTO oracle_mode VALUES ('last_run_ts', '0')")
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT, capsule_id TEXT, nome TEXT,
+        sicurezza TEXT, urgenza TEXT, azione TEXT, esito TEXT)""")
     conn.commit()
     conn.close()
 
-def get_mode():
-    try:
-        conn = sqlite3.connect(ORACLE_DB_PATH)
-        row = conn.execute("SELECT value FROM oracle_mode WHERE key='mode'").fetchone()
-        conn.close()
-        return row[0] if row else 'MANUAL'
-    except:
-        return 'MANUAL'
+# ── DeepSeek API ─────────────────────────────────────────────────────────────
 
-def get_last_run_ts():
-    try:
-        conn = sqlite3.connect(ORACLE_DB_PATH)
-        row = conn.execute("SELECT value FROM oracle_mode WHERE key='last_run_ts'").fetchone()
-        conn.close()
-        return float(row[0]) if row else 0
-    except:
-        return 0
-
-def set_last_run_ts(ts):
-    try:
-        conn = sqlite3.connect(ORACLE_DB_PATH)
-        conn.execute("INSERT OR REPLACE INTO oracle_mode VALUES ('last_run_ts', ?)", (str(ts),))
-        conn.commit()
-        conn.close()
-    except:
-        pass
-
-def log_run(trigger_nome, domanda, capsule_emesse, capsule_iniettate, capsule_json):
-    try:
-        conn = sqlite3.connect(ORACLE_DB_PATH)
-        conn.execute(
-            "INSERT INTO oracle_runs (ts,mode,trigger_nome,domanda,capsule_emesse,capsule_iniettate,capsule_json) VALUES (?,?,?,?,?,?,?)",
-            (datetime.utcnow().isoformat(), get_mode(), trigger_nome, domanda[:500],
-             capsule_emesse, capsule_iniettate, json.dumps(capsule_json, ensure_ascii=False))
-        )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        log.error(f"log_run error: {e}")
-
-def log_capsule(nome, sicurezza, urgenza, soluzione, esito):
-    try:
-        conn = sqlite3.connect(ORACLE_DB_PATH)
-        conn.execute(
-            "INSERT INTO oracle_capsule_log (ts,nome,sicurezza,urgenza,soluzione,esito) VALUES (?,?,?,?,?,?)",
-            (datetime.utcnow().isoformat(), nome, sicurezza, urgenza, soluzione[:200], esito)
-        )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        log.error(f"log_capsule error: {e}")
-
-# ── LEGGI STATUS BOT ──────────────────────────────────────────────────
-def get_bot_status():
-    try:
-        req = urllib.request.Request(f"{BOT_BASE_URL}/oracle/status")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read())
-    except Exception as e:
-        log.warning(f"get_bot_status error: {e}")
-        return {}
-
-def get_oracle_trigger():
-    """Legge oracle_trigger dal DB bot_state."""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        row = conn.execute("SELECT value FROM bot_state WHERE key='oracle_trigger'").fetchone()
-        conn.close()
-        return row[0] if row and row[0] else ''
-    except:
-        return ''
-
-def clear_oracle_trigger():
-    """Cancella il trigger dopo averlo processato."""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('oracle_trigger', '')")
-        conn.commit()
-        conn.close()
-    except:
-        pass
-
-# ── TRIGGER → DOMANDA ─────────────────────────────────────────────────
-def trigger_to_domanda(trigger, status):
-    """Converte il codice trigger nella domanda più precisa per L1."""
-    domande = {
-        "LOSS_STREAK": lambda: f"Il bot ha una loss streak di {status.get('loss_streak',0)} trade consecutivi. Analizza la causa strutturale e genera capsule difensive per proteggere il capitale.",
-        "OI_FUOCO_ZERO_TRADE": lambda: f"OI_LONG è in stato FUOCO con carica {status.get('oi_carica',0):.2f} ma il bot non sta entrando. Analizza cosa blocca l'entry e genera capsule per sbloccare il sistema.",
-        "PHANTOM_IRRIGIDISCE": lambda: "Il Phantom Supervisor sta irrigidendo la soglia in modo progressivo. Analizza il loop di irrigidimento e genera capsule per stabilizzare la soglia.",
-        "PNL_DRAWDOWN": lambda: f"Il PnL della sessione è negativo: ${status.get('pnl',0):.2f}. Analizza i trade persi e genera capsule per correggere il comportamento.",
-        "EXPLOSIVE_ZERO_TRADE": lambda: "Il regime è EXPLOSIVE ma il bot non sta entrando. È una finestra di opportunità che si sta perdendo. Analizza i blocchi attivi e genera capsule per permettere entry selettive.",
-        "DIFENSIVO_BLOCCATO": lambda: f"Il bot è in stato DIFENSIVO da troppo tempo senza trade. Analizza se il blocco difensivo è giustificato o se va allentato.",
-    }
-
-    # ── WIN_PATTERN — amplifica pattern vincente ─────────────────────────
-    if trigger.startswith("WIN_PATTERN_"):
-        parts = trigger.replace("WIN_PATTERN_", "")
-        import re as _re
-        fp_match = _re.match(r"([A-Z]+[|][A-Z]+[|][A-Z]+)_pnl([^_]+)_reason(.+)", parts)
-        if fp_match:
-            fingerprint = fp_match.group(1)
-            pnl_val     = fp_match.group(2)
-            reason      = fp_match.group(3)
-            mom, vol, trend = fingerprint.split("|") if "|" in fingerprint else ("?","?","?")
-            return (
-                f"Il bot ha appena chiuso un trade VINCENTE di +${pnl_val} USDC. "
-                f"Contesto al momento dell'entry: momentum={mom}, volatilità={vol}, trend={trend}, "
-                f"regime={status.get('regime','?')}, OI={status.get('oi_stato','?')} carica={status.get('oi_carica',0):.2f}, "
-                f"motivo chiusura: {reason}. "
-                f"OBIETTIVO: analizza PERCHÉ il sistema ha vinto in questo contesto, "
-                f"identifica il pattern vincente, e genera una SuperCapsule che amplifichi "
-                f"questo fingerprint {fingerprint} in futuro — boost size, soglia più bassa, "
-                f"o priorità entry. La capsule deve essere permanente e specifica."
-            )
-        else:
-            return f"Trade vincente con trigger: {trigger}. Analizza il pattern e genera capsule di amplificazione permanente."
-
-    # ── LOSS_PATTERN — analisi specifica per ogni perdita ────────────────
-    # Trigger formato: LOSS_PATTERN_MOM|VOL|TREND_pnlX.XX_reasonYYY
-    if trigger.startswith("LOSS_PATTERN_"):
-        # Estrai componenti dal trigger
-        parts = trigger.replace("LOSS_PATTERN_", "")
-        # Cerca il fingerprint (MOM|VOL|TREND)
-        import re as _re
-        fp_match = _re.match(r"([A-Z]+\|[A-Z]+\|[A-Z]+)_pnl([^_]+)_reason(.+)", parts)
-        if fp_match:
-            fingerprint = fp_match.group(1)
-            pnl_val     = fp_match.group(2)
-            reason      = fp_match.group(3)
-            mom, vol, trend = fingerprint.split("|") if "|" in fingerprint else ("?","?","?")
-            return (
-                f"Il bot ha appena chiuso un trade in PERDITA di ${pnl_val} USDC. "
-                f"Contesto al momento dell'entry: momentum={mom}, volatilità={vol}, trend={trend}, "
-                f"regime={status.get('regime','?')}, OI={status.get('oi_stato','?')} carica={status.get('oi_carica',0):.2f}, "
-                f"motivo chiusura: {reason}. "
-                f"OBIETTIVO: analizza PERCHÉ il sistema è entrato in questo contesto, "
-                f"identifica il pattern di perdita, e genera una SuperCapsule che blocchi o riduca size "
-                f"per questo specifico fingerprint {fingerprint} in futuro. "
-                f"La capsule deve essere permanente e specifica — non generica."
-            )
-        else:
-            return f"Trade in perdita con trigger: {trigger}. Analizza il pattern e genera capsule correttiva permanente."
-
-    # Trova la chiave che matcha
-    for key, fn in domande.items():
-        if trigger.startswith(key):
-            return fn()
-    # Default
-    return f"Anomalia rilevata: {trigger}. Analizza la situazione e genera capsule correttive appropriate."
-
-# ── CHIAMA DEEPSEEK ───────────────────────────────────────────────────
-def chiama_deepseek(system_prompt, user_msg, max_tokens=3000):
+def _deepseek_call(system: str, user: str, max_tokens: int = 2000) -> str:
     if not DEEPSEEK_API_KEY:
-        raise ValueError("DEEPSEEK_API_KEY non configurata")
+        return ""
     payload = json.dumps({
         "model": "deepseek-chat",
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_msg}
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user}
         ],
         "max_tokens": max_tokens,
         "temperature": 0.3
     }).encode()
-    req = urllib.request.Request(
+    req = _ur.Request(
         "https://api.deepseek.com/v1/chat/completions",
         data=payload,
         headers={"Content-Type": "application/json",
                  "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with _ur.urlopen(req, timeout=60) as resp:
         result = json.loads(resp.read())
     return result["choices"][0]["message"]["content"]
 
-# ── ESTRAI DOMANDE ────────────────────────────────────────────────────
-def estrai_domande(text):
-    import re
-    lines = text.split('\n')
-    domande, ins = [], False
-    for l in lines:
-        if 'DOMANDE AL SUPERRISPONDITORE' in l:
-            ins = True; continue
-        if ins:
-            m = re.match(r'^\d+\.\s+(.+)', l)
-            if m: domande.append(m.group(1).strip())
-    return domande
+# ── Contesto Status ──────────────────────────────────────────────────────────
 
-# ── PARSE CAPSULE ─────────────────────────────────────────────────────
-def parse_capsule(text):
-    s, e = text.find('['), text.rfind(']')
-    if s == -1 or e == -1: return []
+def _build_status_context() -> str:
+    if _heartbeat_ref is None:
+        return "[STATO: non disponibile]"
     try:
-        return json.loads(text[s:e+1])
-    except:
-        try:
-            return json.loads(text[s:e+1].replace('\n',' ').replace('\r',''))
-        except:
-            return []
+        hb = dict(_heartbeat_ref)
+        st = hb.get("signal_tracker", {})
+        st_top = st.get("top", [])[:3] if isinstance(st, dict) else []
+        ph = hb.get("phantom", {})
+        ia = hb.get("ia_stats", {})
 
-# ── INIETTA CAPSULE NEL BOT ───────────────────────────────────────────
-def inietta_capsule_bot(cap):
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        oracle_caps = []
-        try:
-            row = conn.execute("SELECT value FROM bot_state WHERE key='oracle_auto_capsule'").fetchone()
-            if row: oracle_caps = json.loads(row[0])
-        except:
-            pass
-        oracle_caps.append({
-            'ts':             datetime.utcnow().isoformat(),
-            'nome':           cap.get('nome', 'UNKNOWN'),
-            'urgenza':        cap.get('urgenza', 'MEDIA'),
-            'soluzione':      cap.get('soluzione', '')[:300],
-            'effetto_atteso': cap.get('effetto_atteso', '')[:200],
-            'codice':         cap.get('codice', ''),
-        })
-        oracle_caps = oracle_caps[-20:]
-        conn.execute(
-            "INSERT OR REPLACE INTO bot_state VALUES ('oracle_auto_capsule', ?)",
-            (json.dumps(oracle_caps, ensure_ascii=False),)
+        return (
+            f"\nSTATO LIVE BOT:\n"
+            f"  regime={hb.get('regime','?')} conf={hb.get('regime_conf',0):.0%}\n"
+            f"  assetto={hb.get('comparto','?')} gomme={hb.get('gomme','?')}\n"
+            f"  oi_stato={hb.get('oi_stato','?')} carica={hb.get('oi_carica',0):.3f}\n"
+            f"  soglia_base={hb.get('m2_soglia_base','?')} soglia_min={hb.get('m2_soglia_min','?')}\n"
+            f"  last_score={hb.get('m2_last_score',0):.1f} last_soglia={hb.get('m2_last_soglia',0):.1f}\n"
+            f"  rsi={hb.get('m2_campo_stats',{}).get('rsi',0):.1f} "
+            f"macd={hb.get('m2_campo_stats',{}).get('macd_hist',0):.4f}\n"
+            f"  m2_trades={hb.get('m2_trades',0)} wr={hb.get('m2_wr',0):.1%} "
+            f"pnl=${hb.get('m2_pnl',0):.2f}\n"
+            f"  loss_streak={hb.get('m2_loss_streak',0)} state={hb.get('m2_state','?')}\n"
+            f"  capsule_attive={ia.get('attive',0)} static={ia.get('static',0)}\n"
+            f"  phantom_bilancio=${ph.get('bilancio',0):.0f}\n"
+            f"SIGNAL_TRACKER_TOP:\n"
+            + "\n".join(
+                f"  {s.get('context','?')}: hit={s.get('hit_60s',0):.0%} n={s.get('n',0)} pnl={s.get('pnl_sim_avg',0):+.2f}"
+                for s in st_top
+            )
         )
+    except Exception as e:
+        return f"[STATO: errore {e}]"
+
+# ── Genera domanda dal trigger ────────────────────────────────────────────────
+
+def _domanda_da_trigger(trigger: str, status: dict) -> str:
+    """Genera la domanda specifica per il Risponditore L1 in base al trigger."""
+    oi_carica = status.get('oi_carica', 0)
+    regime    = status.get('regime', '?')
+
+    if trigger.startswith("WIN_PATTERN_"):
+        parts = trigger.replace("WIN_PATTERN_", "")
+        fp_match = re.match(r"([A-Z]+[|][A-Z]+[|][A-Z]+)_pnl([^_]+)_reason(.+)", parts)
+        if fp_match:
+            fp, pnl, reason = fp_match.group(1), fp_match.group(2), fp_match.group(3)
+            mom, vol, trend = fp.split("|") if "|" in fp else ("?","?","?")
+            return (
+                f"Il bot ha chiuso un trade VINCENTE di +${pnl} USDC. "
+                f"Contesto entry: momentum={mom}, volatilità={vol}, trend={trend}, "
+                f"regime={regime}, OI={status.get('oi_stato','?')} carica={oi_carica:.2f}, "
+                f"motivo chiusura: {reason}. "
+                f"OBIETTIVO: analizza PERCHÉ ha vinto, identifica il pattern vincente, "
+                f"genera SuperCapsule che amplifica questo fingerprint {fp} in futuro. "
+                f"Considera anche se generare CODICE Python per ottimizzare la soglia in questo contesto."
+            )
+
+    if trigger.startswith("LOSS_PATTERN_"):
+        parts = trigger.replace("LOSS_PATTERN_", "")
+        fp_match = re.match(r"([A-Z]+[|][A-Z]+[|][A-Z]+)_pnl([^_]+)_reason(.+)", parts)
+        if fp_match:
+            fp, pnl, reason = fp_match.group(1), fp_match.group(2), fp_match.group(3)
+            mom, vol, trend = fp.split("|") if "|" in fp else ("?","?","?")
+            return (
+                f"Il bot ha chiuso un trade in PERDITA di ${pnl} USDC. "
+                f"Contesto entry: momentum={mom}, volatilità={vol}, trend={trend}, "
+                f"regime={regime}, OI carica={oi_carica:.2f}, chiusura: {reason}. "
+                f"OBIETTIVO: analizza PERCHÉ è entrato qui, identifica il pattern di perdita, "
+                f"genera SuperCapsule che blocchi o riduca size per fingerprint {fp}. "
+                f"Se il pattern è sistematico, genera anche CODICE Python per _check_extra_veto."
+            )
+
+    domande = {
+        "LOSS_STREAK": lambda: (
+            f"Il bot ha {status.get('loss_streak',0)} loss consecutivi. "
+            f"Analizza la causa strutturale. Genera capsule difensive. "
+            f"Considera CODICE per _calcola_soglia_ranging se il regime è RANGING."
+        ),
+        "OI_FUOCO_ZERO_TRADE": lambda: (
+            f"OI FUOCO carica={oi_carica:.2f} ma 0 trade. Regime={regime}. "
+            f"Analizza cosa blocca l'entry. Genera capsule per sbloccare. "
+            f"Considera CODICE per _get_ia_soglia_boost che abbassa la soglia con OI FUOCO alto."
+        ),
+        "PHANTOM_IRRIGIDISCE": lambda: (
+            f"Phantom Supervisor sta irrigidendo la soglia. Analizza il loop. "
+            f"Genera capsule per stabilizzare. Considera CODICE per _get_dynamic_soglia_max "
+            f"che limita il tetto della soglia in base al regime."
+        ),
+        "PNL_DRAWDOWN": lambda: (
+            f"PnL sessione negativo: ${status.get('pnl',0):.2f}. "
+            f"Analizza i trade persi. Genera capsule correttive. "
+            f"Considera CODICE per _exit_energy_modifier che anticipa l'uscita in contesti negativi."
+        ),
+        "EXPLOSIVE_ZERO_TRADE": lambda: (
+            f"Regime EXPLOSIVE ma 0 trade. Analizza i blocchi attivi. "
+            f"Genera capsule per entry selettive. "
+            f"Considera CODICE per _calcola_soglia_explosive con soglia più bassa in EXPLOSIVE."
+        ),
+        "DIFENSIVO_BLOCCATO": lambda: (
+            f"Bot in DIFENSIVO da troppo tempo. Analizza se il blocco è giustificato. "
+            f"Genera capsule per allentare se opportuno."
+        ),
+    }
+
+    for key, fn in domande.items():
+        if trigger.startswith(key):
+            return fn()
+
+    return (
+        f"Anomalia rilevata: {trigger}. Regime={regime}, OI={status.get('oi_stato','?')} "
+        f"carica={oi_carica:.2f}, trades={status.get('total_trades',0)}. "
+        f"Analizza e genera SuperCapsule correttive. "
+        f"Se opportuno, includi CODICE Python per migliorare il comportamento del bot."
+    )
+
+# ── Processa SuperCapsule ────────────────────────────────────────────────────
+
+def _processa_supercapsule(capsule_list: list, trigger: str) -> tuple:
+    """
+    Processa le SuperCapsule emesse dal Superrisponditore.
+    Gestisce il campo CODICE → CapsuleExecutor.
+    Returns: (iniettate: int, log_entries: list)
+    """
+    iniettate = 0
+    log_entries = []
+
+    for cap in capsule_list:
+        nome     = cap.get("nome", "UNNAMED")
+        sicurezza = cap.get("sicurezza", "RISCHIO").upper()
+        urgenza  = cap.get("urgenza", "MEDIA").upper()
+        codice   = cap.get("codice", "")
+        target   = cap.get("target_method", "")
+        soluzione = cap.get("soluzione", "")
+        effetto  = cap.get("effetto_atteso", "")
+
+        # Semaforo: RISCHIO → declassa a VALUTA se non è davvero RISCHIO
+        if sicurezza == "RISCHIO":
+            # RISCHIO vero = SHORT live, _direction, ordini reali
+            if not any(k in soluzione.lower() for k in ["short live", "_direction", "ordine reale", "binance"]):
+                sicurezza = "VALUTA"
+                log.info(f"[ORACLE] ⬇️  {nome}: RISCHIO→VALUTA (non critico)")
+
+        entry = {
+            "nome": nome, "sicurezza": sicurezza, "urgenza": urgenza,
+            "esito": "SKIP"
+        }
+
+        # Gestione CODICE → CapsuleExecutor
+        if codice and target and _bot_ref and hasattr(_bot_ref, 'capsule_executor') and _bot_ref.capsule_executor:
+            ok, cap_id, err = _bot_ref.capsule_executor.add_capsule(
+                nome=nome,
+                sorgente=codice,
+                target_method=target,
+                contesto={"trigger": trigger},
+                firma_autore="SUPERRISPONDITORE"
+            )
+            if ok:
+                log.info(f"[ORACLE] 🧬 CODICE aggiunto a CapsuleExecutor: {nome} → {target} (PHANTOM)")
+                entry["esito"] = "CODICE_PHANTOM"
+                iniettate += 1
+            else:
+                log.warning(f"[ORACLE] ⚠️  CODICE rifiutato {nome}: {err}")
+                entry["esito"] = f"CODICE_RIFIUTATO: {err}"
+
+        # Gestione capsule non-codice
+        elif sicurezza in ("SAFE", "VALUTA"):
+            # Inietta come capsule_ragionatore nel heartbeat
+            if _heartbeat_ref is not None:
+                try:
+                    _heartbeat_ref["capsule_ragionatore"] = _heartbeat_ref.get("capsule_ragionatore", [])
+                    _heartbeat_ref["capsule_ragionatore"].append({
+                        "id":      f"RA_{nome}_{int(time.time())}",
+                        "azione":  _estrai_azione(cap),
+                        "params":  _estrai_params(cap),
+                        "motivo":  soluzione[:200],
+                        "forza":   0.65 if urgenza == "CRITICA" else 0.55,
+                        "vita":    600,
+                        "ts":      __import__('datetime').datetime.utcnow().isoformat(),
+                        "fonte":   "ORACLE_AUTO",
+                    })
+                    entry["esito"] = "INIETTATA"
+                    iniettate += 1
+                    log.info(f"[ORACLE] 💊 {nome} ({sicurezza}) iniettata nel bot")
+                except Exception as e:
+                    entry["esito"] = f"INJECT_ERR: {e}"
+        else:
+            entry["esito"] = f"BLOCCATA_{sicurezza}"
+            log.info(f"[ORACLE] 🔴 {nome} bloccata (semaforo {sicurezza})")
+
+        log_entries.append(entry)
+
+    return iniettate, log_entries
+
+def _estrai_azione(cap: dict) -> str:
+    soluzione = cap.get("soluzione", "").lower()
+    if "abbassa soglia" in soluzione or "soglia" in soluzione:
+        return "ABBASSA_SOGLIA"
+    if "blocca" in soluzione:
+        return "BLOCCA_CONTESTO"
+    if "boost" in soluzione or "ampli" in soluzione:
+        return "BOOST_SIZE"
+    return "ABBASSA_SOGLIA"
+
+def _estrai_params(cap: dict) -> dict:
+    azione = _estrai_azione(cap)
+    if azione == "ABBASSA_SOGLIA":
+        return {"delta": -5}
+    if azione == "BLOCCA_CONTESTO":
+        return {}
+    if azione == "BOOST_SIZE":
+        return {"mult": 1.2}
+    return {}
+
+# ── Run Oracle ───────────────────────────────────────────────────────────────
+
+def run_oracle(trigger: str = "") -> dict:
+    """Esegue il ciclo completo Risponditore → Superrisponditore → Iniezione."""
+    global _last_trigger, _last_run_ts
+
+    if not trigger and _heartbeat_ref:
+        trigger = _heartbeat_ref.get("oracle_trigger", "")
+
+    if not trigger:
+        return {"status": "no_trigger"}
+
+    # Cooldown
+    if trigger == _last_trigger and time.time() - _last_run_ts < COOLDOWN_SECONDS:
+        remaining = int(COOLDOWN_SECONDS - (time.time() - _last_run_ts))
+        return {"status": "cooldown", "remaining": remaining}
+
+    _last_trigger = trigger
+    _last_run_ts  = time.time()
+
+    status = {}
+    if _heartbeat_ref:
+        status = {
+            "regime": _heartbeat_ref.get("regime", "?"),
+            "oi_stato": _heartbeat_ref.get("oi_stato", "?"),
+            "oi_carica": _heartbeat_ref.get("oi_carica", 0),
+            "total_trades": _heartbeat_ref.get("m2_trades", 0),
+            "pnl": _heartbeat_ref.get("m2_pnl", 0),
+            "loss_streak": _heartbeat_ref.get("m2_loss_streak", 0),
+        }
+
+    ctx = _build_status_context()
+    domanda = _domanda_da_trigger(trigger, status)
+
+    log.info(f"[ORACLE] 🔍 Run: trigger={trigger}")
+
+    # ── L1: Risponditore ────────────────────────────────────────────────────
+    try:
+        risposta_l1 = _deepseek_call(
+            SYSTEM_RISPONDITORE,
+            f"Trigger: {trigger}\n{ctx}\nDomanda originale: {domanda}",
+            max_tokens=1000
+        )
+        log.info(f"[ORACLE] L1 risposta: {risposta_l1[:200]}...")
+    except Exception as e:
+        log.error(f"[ORACLE] L1 error: {e}")
+        risposta_l1 = domanda  # fallback: usa la domanda diretta
+
+    # ── L2: Superrisponditore ────────────────────────────────────────────────
+    try:
+        risposta_l2 = _deepseek_call(
+            SYSTEM_SUPERRISPONDITORE,
+            f"Stato bot:\n{ctx}\n\nDomande da analizzare:\n{risposta_l1}",
+            max_tokens=3000
+        )
+        log.info(f"[ORACLE] L2 risposta: {risposta_l2[:200]}...")
+    except Exception as e:
+        log.error(f"[ORACLE] L2 error: {e}")
+        return {"status": "l2_error", "error": str(e)}
+
+    # ── Parse JSON ───────────────────────────────────────────────────────────
+    capsule_list = []
+    try:
+        clean = risposta_l2.replace("```json", "").replace("```", "").strip()
+        capsule_list = json.loads(clean)
+        if not isinstance(capsule_list, list):
+            capsule_list = [capsule_list]
+    except Exception as e:
+        log.error(f"[ORACLE] Parse JSON L2 fallito: {e}")
+        # Tenta estrazione parziale
+        try:
+            match = re.search(r'\[.*\]', risposta_l2, re.DOTALL)
+            if match:
+                capsule_list = json.loads(match.group())
+        except Exception:
+            pass
+
+    # ── Processa e inietta ───────────────────────────────────────────────────
+    iniettate, log_entries = _processa_supercapsule(capsule_list, trigger)
+
+    # ── Pulisci trigger ───────────────────────────────────────────────────────
+    if _heartbeat_ref and trigger:
+        try:
+            _heartbeat_ref["oracle_trigger"] = ""
+        except Exception:
+            pass
+
+    # ── Salva nel DB ─────────────────────────────────────────────────────────
+    try:
+        conn = sqlite3.connect(ORACLE_DB_PATH)
+        conn.execute(
+            "INSERT INTO oracle_runs (ts, mode, trigger, domanda, capsule_emesse, capsule_iniettate, capsule_json) VALUES (?,?,?,?,?,?,?)",
+            (
+                __import__('datetime').datetime.utcnow().isoformat(),
+                _mode, trigger, risposta_l1[:500],
+                len(capsule_list), iniettate,
+                json.dumps(capsule_list, ensure_ascii=False)[:2000]
+            )
+        )
+        for entry in log_entries:
+            conn.execute(
+                "INSERT INTO oracle_capsule_log (ts, nome, sicurezza, urgenza, azione, esito) VALUES (?,?,?,?,?,?)",
+                (
+                    __import__('datetime').datetime.utcnow().isoformat(),
+                    entry["nome"], entry["sicurezza"], entry["urgenza"],
+                    entry.get("azione", ""), entry["esito"]
+                )
+            )
         conn.commit()
         conn.close()
-        log.info(f"✅ Iniettata: {cap.get('nome')} [{cap.get('urgenza')}]")
-        return True
     except Exception as e:
-        log.error(f"inietta error: {e}")
-        return False
+        log.debug(f"[ORACLE] DB save: {e}")
 
-# ── RUN ORACLE ────────────────────────────────────────────────────────
-def run_oracle(trigger_nome='', domanda_manuale=None):
-    log.info(f"=== ORACLE RUN trigger={trigger_nome or 'MANUALE'} ===")
+    log.info(f"[ORACLE] ✅ Run completato: {len(capsule_list)} capsule emesse, {iniettate} iniettate")
+    return {
+        "status":    "ok",
+        "trigger":   trigger,
+        "emesse":    len(capsule_list),
+        "iniettate": iniettate,
+        "log":       log_entries,
+    }
 
-    status = get_bot_status()
+# ── Background Thread ─────────────────────────────────────────────────────────
 
-    # Contesto live
-    live_ctx = (
-        f"\n\n=== STATO LIVE BOT ===\n"
-        f"Regime: {status.get('regime','N/A')} ({status.get('regime_conf',0)}%)\n"
-        f"Assetto: {status.get('state','N/A')}\n"
-        f"OI: {status.get('oi_stato','N/A')} carica={status.get('oi_carica',0):.3f}\n"
-        f"SOGLIA_BASE: {status.get('soglia_base','N/A')}\n"
-        f"RSI: {status.get('rsi','N/A')} MACD: {status.get('macd_hist','N/A')}\n"
-        f"Trade: {status.get('total_trades',0)} | W:{status.get('wins',0)} L:{status.get('losses',0)}\n"
-        f"PnL: ${status.get('pnl',0):.2f} | Loss streak: {status.get('loss_streak',0)}\n"
-        f"Anomalia rilevata: {trigger_nome}\n"
-        f"=== FINE STATO LIVE ===\n"
-    )
-
-    domanda = domanda_manuale or trigger_to_domanda(trigger_nome, status)
-    log.info(f"Domanda: {domanda[:100]}...")
-
-    try:
-        from app import _ORACLE_PROMPT_L1, _ORACLE_PROMPT_L2
-    except Exception as e:
-        log.error(f"Import prompt error: {e}")
-        return None
-
-    # L1
-    try:
-        r1 = chiama_deepseek(_ORACLE_PROMPT_L1, domanda + live_ctx)
-    except Exception as e:
-        log.error(f"L1 error: {e}")
-        return None
-
-    domande = estrai_domande(r1)
-    if not domande:
-        log.warning("Nessuna domanda dal L1")
-        return None
-
-    # L2
-    l2_input = (
-        "DOMANDE DAL RISPONDITORE:\n" +
-        "\n".join([f"{i+1}. {d}" for i,d in enumerate(domande)]) +
-        f"\n\nCONTESTO: {domanda}\nANOMALIA: {trigger_nome}" + live_ctx
-    )
-    try:
-        r2 = chiama_deepseek(_ORACLE_PROMPT_L2, l2_input)
-    except Exception as e:
-        log.error(f"L2 error: {e}")
-        return None
-
-    capsule = parse_capsule(r2)
-    log.info(f"Capsule emesse: {len(capsule)}")
-
-    iniettate = []
-    for cap in capsule:
-        sicurezza = cap.get('sicurezza', 'RISCHIO').upper()
-        nome = cap.get('nome', 'UNKNOWN')
-        if sicurezza == 'SAFE':
-            ok = inietta_capsule_bot(cap)
-            esito = 'INIETTATA' if ok else 'ERRORE'
-            if ok: iniettate.append(cap)
-        else:
-            esito = f'SKIP_{sicurezza}'
-        log_capsule(nome, sicurezza, cap.get('urgenza','?'), cap.get('soluzione','')[:100], esito)
-
-    log_run(trigger_nome, domanda, len(capsule), len(iniettate), capsule)
-    set_last_run_ts(time.time())
-    log.info(f"=== COMPLETATO: {len(capsule)} emesse, {len(iniettate)} iniettate ===")
-    return {'emesse': len(capsule), 'iniettate': len(iniettate), 'capsule': capsule}
-
-# ── EVENT-DRIVEN LOOP ─────────────────────────────────────────────────
-def event_loop():
-    """
-    Controlla ogni 30s se c'è un oracle_trigger nel heartbeat.
-    Si sveglia SOLO quando il bot segnala un'anomalia.
-    Cooldown di 5 minuti dopo ogni run per non spammare DeepSeek.
-    """
-    log.info(f"Oracle Event Loop avviato — check ogni {CHECK_INTERVAL}s, cooldown {COOLDOWN_AFTER}s")
-    while True:
+def _loop():
+    global _running
+    _running = True
+    log.info("[ORACLE_AUTO] 🤖 Background worker avviato — event-driven ogni 30s")
+    while _running:
         try:
-            mode = get_mode()
-            if mode == 'AUTO':
-                # Controlla cooldown
-                last_run = get_last_run_ts()
-                in_cooldown = (time.time() - last_run) < COOLDOWN_AFTER
-
-                if in_cooldown:
-                    remaining = int(COOLDOWN_AFTER - (time.time() - last_run))
-                    log.debug(f"Cooldown attivo — {remaining}s rimanenti")
-                else:
-                    # Leggi trigger
-                    trigger = get_oracle_trigger()
-                    if trigger:
-                        log.info(f"🔔 TRIGGER RILEVATO: {trigger}")
-                        clear_oracle_trigger()
-                        run_oracle(trigger_nome=trigger)
-                    else:
-                        log.debug("Nessun trigger — sistema OK")
-            else:
-                log.debug("Modalità MANUAL — skip")
-
+            if _mode == "AUTO" and _heartbeat_ref:
+                trigger = _heartbeat_ref.get("oracle_trigger", "")
+                if trigger:
+                    run_oracle(trigger)
         except Exception as e:
-            log.error(f"event_loop error: {e}")
+            log.debug(f"[ORACLE_AUTO] loop error: {e}")
+        time.sleep(30)
 
-        time.sleep(CHECK_INTERVAL)
-
-# ── ENTRY POINT ───────────────────────────────────────────────────────
-def start_background():
-    init_oracle_db()
-    t = threading.Thread(target=event_loop, daemon=True)
+def start_background(heartbeat_data=None, bot_instance=None):
+    global _heartbeat_ref, _bot_ref
+    _heartbeat_ref = heartbeat_data
+    _bot_ref       = bot_instance
+    _init_db()
+    t = threading.Thread(target=_loop, daemon=True, name="oracle_auto")
     t.start()
-    log.info("Oracle Auto event-driven thread avviato")
     return t
 
-if __name__ == '__main__':
-    init_oracle_db()
-    event_loop()
+def set_mode(mode: str):
+    global _mode
+    _mode = mode.upper()
+
+def stop():
+    global _running
+    _running = False
