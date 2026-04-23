@@ -55,7 +55,6 @@ CREATE TABLE IF NOT EXISTS capsule (
     scade_ts     REAL,
     hits         INTEGER DEFAULT 0,
     hits_saved   REAL DEFAULT 0.0,
-    last_hit_ts  REAL DEFAULT NULL,
     note         TEXT
 );
 CREATE TABLE IF NOT EXISTS capsule_log (
@@ -182,8 +181,17 @@ class CapsuleManager:
             c.executescript(SCHEMA)
 
     def _seed_static(self):
+        """Inserisce capsule statiche al boot. Ripristina se rimosse (filesystem efimero Render)."""
         seeds = STATIC_BTC if "BTC" in self.asset else STATIC_SOL
         with sqlite3.connect(self.db_path) as c:
+            # Forza re-enable se disabilitate (Render filesystem reset)
+            n_attive = c.execute(
+                "SELECT COUNT(*) FROM capsule WHERE livello='STATIC' AND enabled=1 AND asset=?",
+                (self.asset,)
+            ).fetchone()[0]
+            if n_attive == 0:
+                log.warning(f"[CM] ⚠️  0 capsule statiche attive — forzo reseed")
+                c.execute("UPDATE capsule SET enabled=1 WHERE livello='STATIC' AND asset=?", (self.asset,))
             for cap in seeds:
                 if not c.execute("SELECT id FROM capsule WHERE id=?", (cap["id"],)).fetchone():
                     c.execute("""INSERT INTO capsule
@@ -208,7 +216,7 @@ class CapsuleManager:
                            priority,enabled,samples,wr,pnl_avg,scade_ts,note
                     FROM capsule
                     WHERE enabled=1 AND (asset=? OR asset='ALL')
-                      -- scadenza temporale rimossa: capsule permanenti salvo 30gg no-hit
+                      AND (scade_ts IS NULL OR scade_ts > ?)
                     ORDER BY priority ASC
                 """, (self.asset, ora)).fetchall()
             self._cache = [{
@@ -482,27 +490,22 @@ class CapsuleManager:
 
     def _pulisci_scadute(self):
         """
-        REGOLA: una capsule non scade per tempo.
-        Scade SOLO se:
-        1. Non viene mai invocata (hits=0) per 30 giorni consecutivi
-        2. Viene esplicitamente disabilitata da verifica dati reali
+        Regola scadenza capsule:
+        - STATIC: mai scadono
+        - LEARNED/AUTO: scadono solo se hits=0 per 30gg O ultimo_hit > 30gg
+        - La scadenza temporale (scade_ts) NON disabilita più automaticamente
         """
         try:
             GIORNI_30 = 30 * 24 * 3600
             ora = time.time()
             with sqlite3.connect(self.db_path) as c:
-                # Disabilita capsule mai usate da 30+ giorni
-                # Usa last_hit_ts se disponibile, altrimenti created_ts
-                # NON tocca le STATIC — quelle sono permanenti per definizione
                 c.execute("""
                     UPDATE capsule SET enabled=0
                     WHERE enabled=1
                     AND livello != 'STATIC'
                     AND (
-                        -- mai usata e creata da >30gg
                         (hits = 0 AND (? - created_ts) > ?)
                         OR
-                        -- usata in passato ma ultimo hit >30gg fa
                         (hits > 0 AND last_hit_ts IS NOT NULL AND (? - last_hit_ts) > ?)
                     )
                 """, (ora, GIORNI_30, ora, GIORNI_30))
