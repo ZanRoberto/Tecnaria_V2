@@ -3327,7 +3327,7 @@ function update() {
 
     const ia = hb.ia_stats||{};
     $('k-caps').textContent = ia.attive||0;
-    $('k-caps-sub').textContent = 'L2:'+(ia.l2||0)+'  L3:'+(ia.l3||0);
+    $('k-caps-sub').textContent = 'S:'+(ia.static||0)+' A:'+(ia.auto||0)+' L:'+(ia.learned||0);
 
     const ph = hb.phantom||{};
     const bilancio = ph.bilancio||0;
