@@ -423,7 +423,15 @@ FORMATO RISPOSTA:
   "durata_ore": 48,
   "analisi_causale": "max 60 parole"
 }
-</SUPERCAPSULE>"""
+</SUPERCAPSULE>
+
+REGOLA CRITICA SUL CAMPO "valore":
+- Per ALZA_SOGLIA: valore = numero intero (es. 10, 15, 20) — mai stringhe
+- Per ABBASSA_SOGLIA: valore = numero intero (es. 5, 8, 10) — mai stringhe  
+- Per BLOCCA_ENTRY: valore = "BLOCCA" — stringa fissa
+- MAX valore per ALZA_SOGLIA = 20 (oltre blocchi tutto)
+- MAX valore per ABBASSA_SOGLIA = 10 (oltre apre troppo)
+- Se vuoi un cooldown → usa ALZA_SOGLIA con valore 15 (stesso effetto pratico)"""
 
     user = f"""TRIGGER: {trigger}
 
@@ -504,6 +512,20 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
         priority = capsule.get("priority", 7)
         durata_h = capsule.get("durata_ore", 24)
         analisi  = capsule.get("analisi_causale", trigger)[:200]
+
+        # Sanitizza azione: valore deve essere numerico per ALZA/ABBASSA_SOGLIA
+        azione = capsule.get("azione", {})
+        if azione.get("tipo") in ("ALZA_SOGLIA", "ABBASSA_SOGLIA"):
+            raw_val = azione.get("valore", 10)
+            if isinstance(raw_val, str):
+                # Estrai numero dalla stringa es. "cooldown_seconds=300" → 10 (default sicuro)
+                import re as _re
+                nums = _re.findall(r'\d+\.?\d*', str(raw_val))
+                # Usa valore conservativo: max 20 punti soglia
+                azione["valore"] = min(float(nums[0]), 20.0) if nums else 10.0
+                _p(f"Sanitizzato valore stringa → {azione['valore']}")
+            azione["valore"] = float(azione.get("valore", 10))
+        capsule["azione"] = azione
 
         trigger_json = json.dumps(capsule.get("trigger", []))
         azione_json  = json.dumps(capsule.get("azione",  {}))
