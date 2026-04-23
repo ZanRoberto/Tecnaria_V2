@@ -374,6 +374,13 @@ class StabilityTelemetry:
 # + VETI_LONG/SHORT hardcodati. Asset-aware. SQLite. Dashboard-ready.
 # ===========================================================================
 try:
+    from capsule_executor import CapsuleExecutor
+    _CE_AVAILABLE = True
+except ImportError:
+    _CE_AVAILABLE = False
+    log.warning("[CE] capsule_executor.py non trovato")
+
+try:
     from capsule_manager import CapsuleManager
     _CM_AVAILABLE = True
     log.info("[CM] ✅ CapsuleManager disponibile")
@@ -3968,7 +3975,7 @@ class CampoGravitazionale:
     DRIFT_VETO_THRESHOLD = -0.20   # era -0.10 - phantom WR 81% bloccati, sta bloccando i migliori
 
     # -- WARMUP ---------------------------------------------------------
-    WARMUP_TICKS = 50    # tick minimi prima di operare (era 200 — troppo lento)
+    WARMUP_TICKS = 50    # tick minimi prima di operare (era 200)
 
     def __init__(self):
         self._recent_results = deque(maxlen=20)
@@ -3985,7 +3992,7 @@ class CampoGravitazionale:
         # -- RSI + MACD CONSIGLIERI ----------------------------------------
         self._prices_ta = deque(maxlen=50)        # buffer prezzi CAMPIONATI per indicatori tecnici
         self._ta_tick_counter = 0                  # conta tick per campionamento
-        self._ta_sample_rate = 1                   # warmup: campiona ogni tick finché buffer pieno
+        self._ta_sample_rate = 1                   # warmup: campiona ogni tick
         self._rsi_period = 14                     # RSI standard 14 periodi
         self._macd_fast = 12                      # MACD EMA veloce
         self._macd_slow = 26                      # MACD EMA lenta
@@ -4011,7 +4018,7 @@ class CampoGravitazionale:
         # I tick sono troppo veloci - RSI su tick-by-tick va a 100/0.
         # Campionando ogni 50 tick creiamo "candele" virtuali stabili.
         self._ta_tick_counter += 1
-        # Sample rate dinamico: 1 tick durante warmup, 5 a regime
+        # Sample rate dinamico: 1 durante warmup, 5 a regime
         _sample_now = 1 if len(self._prices_ta) < self._rsi_period else 5
         if self._ta_tick_counter >= _sample_now:
             self._ta_tick_counter = 0
@@ -4028,7 +4035,7 @@ class CampoGravitazionale:
         Nessun veto, nessun effetto collaterale — pura osservazione.
         Chiamato ogni tick per il SignalTracker.
         """
-        if self._tick_count < 50:
+        if self._tick_count < 200:
             return {'score': 0, 'soglia': 60, 'valid': False}
 
         W = {"seed":25,"fp":20,"mom":12,"trend":12,"vol":8,"regime":3,"rsi":10,"mac":10}
@@ -4137,8 +4144,8 @@ class CampoGravitazionale:
         #   - prices_ta >= 35 (RSI=14 periodi + MACD=26+9=35 periodi)
         # ~6 minuti di warmup - la volpe annusa, guarda, ascolta.
         warmup_checks = []
-        if self._tick_count < 50:
-            warmup_checks.append(f"tick={self._tick_count}/50")
+        if self._tick_count < 200:
+            warmup_checks.append(f"tick={self._tick_count}/200")
         if len(self._prices_long) < 50:
             warmup_checks.append(f"drift={len(self._prices_long)}/100")
         if len(self._prices_ta) < 20:
@@ -5105,6 +5112,13 @@ class OvertopBassanoV15Production:
         self.position_sizer  = PositionSizer()
         self.telemetry       = StabilityTelemetry()
         self.signal_tracker  = PreTradeSignalTracker()
+
+        # ── CAPSULE EXECUTOR — ciclo di vita capsule eseguibili ──────────────
+        if _CE_AVAILABLE:
+            self.capsule_executor = CapsuleExecutor(DB_PATH, self)
+            log.info("[CE] ✅ CapsuleExecutor attivo — capsule di codice eseguibile")
+        else:
+            self.capsule_executor = None
 
         # ── CAPSULE INTELLIGENTE — Sistema Immunitario Predittivo ──────────
         self.ci = CapsuleIntelligente()
@@ -7302,7 +7316,7 @@ class OvertopBassanoV15Production:
                 self._warmup_done_time = time.time()
                 self._log_m2("✅", "BOOT_GUARD: warmup OK — aspetto 60s")
             if time.time() - self._warmup_done_time < 10:
-                self._log_m2("⏳", f"BOOT_GUARD: {60-(time.time()-self._warmup_done_time):.0f}s al via")
+                self._log_m2("⏳", f"BOOT_GUARD: {10-(time.time()-self._warmup_done_time):.0f}s al via")
                 return
 
             # ── SCORE vs SOGLIA ──────────────────────────────────────────────
@@ -7634,12 +7648,8 @@ class OvertopBassanoV15Production:
 
     def _evaluate_shadow_exit(self, price, momentum, volatility, trend):
         """Stessa logica di uscita V15 + BreathEngine V16 per timing ottimale."""
-        if getattr(self, "_shadow_closing", False):
-            return
-        self._shadow_closing = True
         try:
             if not self._shadow:
-                self._shadow_closing = False
                 return
             if price > self._shadow_max_price:
                 self._shadow_max_price = price
@@ -8105,6 +8115,13 @@ class OvertopBassanoV15Production:
             # -- PERSISTI IL CERVELLO - Oracolo, Memoria, Calibratore ----------
             self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
 
+            # ── CAPSULE EXECUTOR: monitora performance LIVE ────────────────
+            try:
+                if self.capsule_executor:
+                    self.capsule_executor.record_live_result(pnl, is_win)
+            except Exception as _ce_e:
+                log.debug(f"[CE_RECORD] {_ce_e}")
+
             # -- PERSISTI STATS M2 - sopravvivono ai restart ------------------
             try:
                 conn = sqlite3.connect(DB_PATH)
@@ -8276,6 +8293,7 @@ class OvertopBassanoV15Production:
             self._log_m2("💥", f"ERRORE close_shadow: {e}")
             log.error(f"[M2_CLOSE_ERROR] {e}\n{traceback.format_exc()}")
         finally:
+            self._shadow_closing = False
             # Reset shadow SEMPRE - anche se c'è un errore, non lasciare trade fantasma
             self._shadow                   = None
             self._shadow_entry_time        = None
@@ -8898,6 +8916,8 @@ class OvertopBassanoV15Production:
                     "ia_stats":           (self.capsule_manager.get_stats()
                                            if self.capsule_manager
                                            else self.realtime_engine.get_stats()),
+                    "ce_stats":           (self.capsule_executor.get_dashboard_data()
+                                           if self.capsule_executor else {}),
                     # -- PRE-TRADE SIGNAL TRACKER ---------------------------
                     "signal_tracker": {
                         "open":      self.signal_tracker.get_open_count(),
