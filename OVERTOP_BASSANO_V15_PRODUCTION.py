@@ -4115,6 +4115,13 @@ class CampoGravitazionale:
             _cm_result = _cm.valuta(_veto_ctx)
             if _cm_result.get('blocca'):
                 return self._veto(_cm_result.get('reason', f"CM_TOSSICO_{self._direction}_{momentum}_{volatility}_{trend}"))
+            # Applica soglia_boost dalle SuperCapsule Oracle (ALZA/ABBASSA_SOGLIA)
+            _cm_soglia_boost = _cm_result.get('soglia_boost', 0.0)
+            if _cm_soglia_boost != 0.0:
+                self._cm_soglia_boost = _cm_soglia_boost
+                log.info(f"[CM] 📊 soglia_boost={_cm_soglia_boost:+.1f} applicato da SuperCapsule")
+            else:
+                self._cm_soglia_boost = 0.0
         else:
             # Fallback hardcodato
             veti = self.VETI_SHORT if self._direction == "SHORT" else self.VETI_LONG
@@ -7170,7 +7177,7 @@ class OvertopBassanoV15Production:
                 divorzio_set      = self.memoria.divorzio,
                 fantasma_info     = fantasma_info,
                 loss_consecutivi  = self._m2_loss_consecutivi(),
-                soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend),
+                soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend) + getattr(self, '_cm_soglia_boost', 0.0),
             )
 
             # ── CAPSULE STATIC — veto assoluto MA gestibile dalla CI ────────
