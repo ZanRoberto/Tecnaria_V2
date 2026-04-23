@@ -118,6 +118,7 @@ def _deepseek_call(system: str, user: str, max_tokens: int = 2000) -> str:
 # ── Contesto Status ──────────────────────────────────────────────────────────
 
 def _build_status_context() -> str:
+    """Contesto completo per DeepSeek — include Narratore, Signal Tracker, capsule attive."""
     if _heartbeat_ref is None:
         return "[STATO: non disponibile]"
     try:
@@ -127,30 +128,61 @@ def _build_status_context() -> str:
         ph = hb.get("phantom", {})
         ia = hb.get("ia_stats", {})
 
-        return (
-            f"\nSTATO LIVE BOT:\n"
-            f"  regime={hb.get('regime','?')} conf={hb.get('regime_conf',0):.0%}\n"
-            f"  assetto={hb.get('comparto','?')} gomme={hb.get('gomme','?')}\n"
-            f"  oi_stato={hb.get('oi_stato','?')} carica={hb.get('oi_carica',0):.3f}\n"
-            f"  soglia_base={hb.get('m2_soglia_base','?')} soglia_min={hb.get('m2_soglia_min','?')}\n"
-            f"  last_score={hb.get('m2_last_score',0):.1f} last_soglia={hb.get('m2_last_soglia',0):.1f}\n"
-            f"  rsi={hb.get('m2_campo_stats',{}).get('rsi',0):.1f} "
-            f"macd={hb.get('m2_campo_stats',{}).get('macd_hist',0):.4f}\n"
-            f"  m2_trades={hb.get('m2_trades',0)} wr={hb.get('m2_wr',0):.1%} "
-            f"pnl=${hb.get('m2_pnl',0):.2f}\n"
-            f"  loss_streak={hb.get('m2_loss_streak',0)} state={hb.get('m2_state','?')}\n"
-            f"  capsule_attive={ia.get('attive',0)} static={ia.get('static',0)}\n"
-            f"  phantom_bilancio=${ph.get('bilancio',0):.0f}\n"
-            f"SIGNAL_TRACKER_TOP:\n"
-            + "\n".join(
-                f"  {s.get('context','?')}: hit={s.get('hit_60s',0):.0%} n={s.get('n',0)} pnl={s.get('pnl_sim_avg',0):+.2f}"
-                for s in st_top
+        # Narratore: ultimi trade
+        narratore_storia = hb.get("narratore_trade_storia", [])[-5:]
+        narratore_stats  = hb.get("narratore_trade_stats", {})
+        narratore_cap    = hb.get("narratore_ultima_capsula", {})
+        analisi_trader   = hb.get("trade_analisi", [])[-3:]
+        caps_ra          = hb.get("capsule_ragionatore", [])
+
+        lines_out = []
+        lines_out.append("\nSTATO LIVE BOT:")
+        lines_out.append(f"  regime={hb.get('regime','?')} conf={round(hb.get('regime_conf',0)*100)}%")
+        lines_out.append(f"  assetto={hb.get('comparto','?')} gomme={hb.get('gomme','?')}")
+        lines_out.append(f"  oi_stato={hb.get('oi_stato','?')} carica={hb.get('oi_carica',0):.3f}")
+        lines_out.append(f"  soglia_base={hb.get('m2_soglia_base','?')} soglia_min={hb.get('m2_soglia_min','?')}")
+        lines_out.append(f"  last_score={hb.get('m2_last_score',0):.1f} last_soglia={hb.get('m2_last_soglia',0):.1f}")
+        campo = hb.get('m2_campo_stats', {})
+        lines_out.append(f"  rsi={campo.get('rsi',0):.1f} macd={campo.get('macd_hist',0):.4f}")
+        lines_out.append(f"  m2_trades={hb.get('m2_trades',0)} wr={hb.get('m2_wr',0):.1%} pnl=${hb.get('m2_pnl',0):.2f}")
+        lines_out.append(f"  loss_streak={hb.get('m2_loss_streak',0)} state={hb.get('m2_state','?')}")
+        lines_out.append(f"  capsule_attive={ia.get('attive',0)} static={ia.get('static',0)}")
+        lines_out.append(f"  phantom_bilancio=${ph.get('bilancio',0):.0f}")
+
+        lines_out.append("SIGNAL_TRACKER_TOP:")
+        for s in st_top:
+            lines_out.append(f"  {s.get('context','?')}: hit={s.get('hit_60s',0):.0%} n={s.get('n',0)} pnl={s.get('pnl_sim_avg',0):+.2f}")
+
+        if narratore_storia:
+            lines_out.append("ULTIMI TRADE (Narratore):")
+            for t in narratore_storia:
+                esito = "WIN" if t.get("is_win") else "LOSS"
+                ctx = f"{t.get('momentum','?')}|{t.get('volatility','?')}|{t.get('trend','?')}"
+                lines_out.append(f"  {esito} ${t.get('pnl',0):+.2f} {ctx} score={t.get('score',0):.1f} [{t.get('reason','?')[:20]}]")
+
+        if narratore_stats:
+            lines_out.append(
+                f"STATS: n={narratore_stats.get('n',0)} wr={narratore_stats.get('wr',0):.0%} "
+                f"pnl_tot=${narratore_stats.get('pnl_tot',0):.2f} "
+                f"loss_consec={narratore_stats.get('consecutive_losses',0)}"
             )
-        )
+
+        if narratore_cap and narratore_cap.get('id'):
+            lines_out.append(f"ULTIMA_CAPSULE_NARRATORE: {narratore_cap.get('id','')} — {narratore_cap.get('motivo','')[:80]}")
+
+        if analisi_trader:
+            lines_out.append("ANALISI_TRADER:")
+            for a in analisi_trader:
+                lines_out.append(f"  {a.get('esito','?')} ${a.get('pnl',0):+.2f}: {a.get('analisi','')[:120]}")
+
+        if caps_ra:
+            lines_out.append(f"CAPSULE_RAGIONATORE_ATTIVE ({len(caps_ra)}):")
+            for c in caps_ra[-3:]:
+                lines_out.append(f"  {c.get('id','')} [{c.get('azione','')}] {c.get('motivo','')[:60]}")
+
+        return "\n".join(lines_out)
     except Exception as e:
         return f"[STATO: errore {e}]"
-
-# ── Genera domanda dal trigger ────────────────────────────────────────────────
 
 def _domanda_da_trigger(trigger: str, status: dict) -> str:
     """Genera la domanda specifica per il Risponditore L1 in base al trigger."""
