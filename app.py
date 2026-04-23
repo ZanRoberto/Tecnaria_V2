@@ -4412,6 +4412,13 @@ def oracle_status():
             # Stato sistema
             "running":      hb.get("status") == "RUNNING",
             "last_update":  hb.get("last_seen", "N/A"),
+            # Narratore — CRITICO per Oracle L1/L2
+            "narratore_trade_storia": hb.get("narratore_trade_storia", [])[-10:],
+            "narratore_trade_stats":  hb.get("narratore_trade_stats", {}),
+            "oracle_loss_history":    hb.get("oracle_loss_history",   [])[-5:],
+            "oracle_win_history":     hb.get("oracle_win_history",    [])[-3:],
+            # Phantom per livello — per BLOCCO_ECCESSIVO detection
+            "phantom_per_livello":    hb.get("phantom", {}).get("per_livello", {}),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
