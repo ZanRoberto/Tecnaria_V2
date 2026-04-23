@@ -4251,9 +4251,11 @@ _ORACLE_PROMPT_L2 = _ORACLE_KNOW + (
     " \"problema\": \"..\", \"causa\": \"..\", \"perche\": \"..\","
     " \"soluzione\": \"..\", \"codice\": \"..o null\", \"effetto_atteso\": \"..\"}\n\n"
     "REGOLE SEMAFORO sicurezza (OBBLIGATORIO):\n"
-    "  SAFE = codice di sola lettura (print, getattr, .get()) — nessuna assegnazione di stato\n"
-    "  VALUTA = modifica parametri reversibili (SOGLIA_BASE, override temporanei, boost_soglia)\n"
-    "  RISCHIO = modifica stato critico (heartbeat_data bridge commands, _direction, flag live, forza entry, abilita SHORT)\n\n"
+    "  SAFE   = solo lettura (print, getattr, .get()) — nessuna assegnazione\n"
+    "  VALUTA = modifica parametri reversibili: SOGLIA_BASE, soglie, size, veti, boost_seed, breath, OI — USA QUESTO di default\n"
+    "  RISCHIO = SOLO per: abilitare SHORT live, modificare _direction, inserire ordini reali su exchange\n"
+    "  REGOLA CRITICA: in dubbio tra VALUTA e RISCHIO → scegli sempre VALUTA.\n"
+    "  Capsule di soglia, size, veto, seed, OI, contesto = SEMPRE VALUTA.\n\n"
     "Rispondi SOLO con array JSON valido [ {...}, {...} ]. NESSUN testo fuori. Ordina per urgenza."
 )
 
@@ -4327,29 +4329,82 @@ def oracle_ask():
 
 @app.route('/oracle/status')
 def oracle_status():
-    """Stato live del bot per Oracle dashboard."""
+    """Stato live del bot per Oracle dashboard — completo per analisi AI."""
     try:
         with heartbeat_lock:
             hb = dict(heartbeat_data)
+
+        # Signal Tracker top contesti — Oracle può vedere WR per contesto
+        st = hb.get("signal_tracker", {})
+        st_top = st.get("top", [])[:5] if isinstance(st, dict) else []
+
+        # Phantom bilancio
+        phantom = hb.get("phantom", {})
+        ph_bilancio = round(phantom.get("bilancio", 0), 2) if isinstance(phantom, dict) else 0
+        ph_protezione = round(phantom.get("pnl_saved", 0), 2) if isinstance(phantom, dict) else 0
+        ph_zavorra = round(phantom.get("pnl_missed", 0), 2) if isinstance(phantom, dict) else 0
+
+        # Veritas — chi aveva ragione
+        veritas = hb.get("veritas", {})
+        vt_rows = veritas.get("rows", [])[:5] if isinstance(veritas, dict) else []
+
+        # Capsule attive
+        ia_stats = hb.get("ia_stats", {})
+        n_capsule = ia_stats.get("attive", hb.get("capsule_count", 0)) if isinstance(ia_stats, dict) else 0
+        n_static = ia_stats.get("static", 0) if isinstance(ia_stats, dict) else 0
+
+        # M2 stats corretti
+        m2_tot = hb.get("m2_trades", 0)
+        m2_wins = hb.get("m2_wins", 0)
+        m2_wr = round(m2_wins / m2_tot * 100, 1) if m2_tot > 0 else 0
+        m2_pnl = round(hb.get("m2_pnl", 0), 2)
+
         return jsonify({
-            "regime": hb.get("regime", "N/A"),
-            "regime_conf": round(hb.get("regime_conf", 0) * 100),
-            "state": hb.get("state", "N/A"),
-            "oi_stato": hb.get("oi_stato", "N/A"),
-            "oi_carica": round(hb.get("oi_carica", 0), 3),
-            "soglia_base": hb.get("m2_soglia_base", "N/A"),
-            "rsi": round(hb.get("rsi", 0), 1),
-            "macd_hist": round(hb.get("macd_hist", 0), 2),
-            "total_trades": hb.get("total_trades", 0),
-            "wins": hb.get("wins", 0),
-            "losses": hb.get("losses", 0),
-            "pnl": round(hb.get("pnl_netto", 0), 2),
-            "capital": round(hb.get("capital", 10000), 2),
-            "shadow_open": hb.get("shadow_open", False),
-            "loss_streak": hb.get("loss_streak", 0),
-            "capsule_count": hb.get("capsule_count", 0),
-            "running": hb.get("running", False),
-            "last_update": hb.get("last_update", "N/A"),
+            # Stato base
+            "regime":       hb.get("regime", "N/A"),
+            "regime_conf":  round(hb.get("regime_conf", 0) * 100),
+            "state":        hb.get("m2_state", hb.get("state", "N/A")),
+            "assetto":      hb.get("comparto", "N/A"),
+            "gomme":        hb.get("gomme", "N/A"),
+            "breath":       hb.get("breath_fase", "N/A"),
+            # OI
+            "oi_stato":     hb.get("oi_stato", "N/A"),
+            "oi_carica":    round(hb.get("oi_carica", 0), 3),
+            "oi_stato_short": hb.get("oi_stato_short", "N/A"),
+            "oi_carica_short": round(hb.get("oi_carica_short", 0), 3),
+            # Score
+            "soglia_base":  hb.get("m2_soglia_base", "N/A"),
+            "soglia_min":   hb.get("m2_soglia_min", "N/A"),
+            "last_score":   hb.get("m2_last_score", 0),
+            "last_soglia":  hb.get("m2_last_soglia", 0),
+            "rsi":          round(hb.get("m2_campo_stats", {}).get("rsi", 0), 1),
+            "macd_hist":    round(hb.get("m2_campo_stats", {}).get("macd_hist", 0), 4),
+            # Trade stats M2 (corretti)
+            "total_trades": m2_tot,
+            "wins":         m2_wins,
+            "losses":       hb.get("m2_losses", 0),
+            "wr":           m2_wr,
+            "pnl":          m2_pnl,
+            "loss_streak":  hb.get("m2_loss_streak", 0),
+            "capital":      round(hb.get("capital", 10000), 2),
+            "shadow_open":  hb.get("m2_shadow_open", False),
+            # Capsule
+            "capsule_count": n_capsule,
+            "capsule_static": n_static,
+            # Signal Tracker — CRITICO per analisi veti
+            "signal_tracker_top": st_top,
+            "signal_tracker_n":   st.get("closed", 0) if isinstance(st, dict) else 0,
+            # Phantom
+            "phantom_bilancio":   ph_bilancio,
+            "phantom_protezione": ph_protezione,
+            "phantom_zavorra":    ph_zavorra,
+            # Veritas
+            "veritas_top":  vt_rows,
+            # Oracle trigger attivo
+            "oracle_trigger": hb.get("oracle_trigger", ""),
+            # Stato sistema
+            "running":      hb.get("status") == "RUNNING",
+            "last_update":  hb.get("last_seen", "N/A"),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -4386,9 +4441,11 @@ _oracle_init_db()
 # Avvia background worker Oracle Auto
 try:
     import oracle_auto as _oa
-    _oa.init_oracle_db()
-    _oracle_auto_thread = _oa.start_background()
-    log("[ORACLE_AUTO] ✅ Background worker avviato")
+    _oracle_auto_thread = _oa.start_background(
+        heartbeat_data=heartbeat_data,
+        bot_instance=bot
+    )
+    log("[ORACLE_AUTO] ✅ Background worker avviato (event-driven 30s)")
 except Exception as _e:
     log(f"[ORACLE_AUTO] ⚠️ Worker non avviato: {_e}")
 
@@ -4441,6 +4498,49 @@ def oracle_log():
 
 
 @app.route('/oracle/run_now', methods=['POST'])
+@app.route('/capsule_eseguibili')
+def capsule_eseguibili_view():
+    """Dashboard capsule di codice eseguibili."""
+    try:
+        global bot
+        if bot and hasattr(bot, 'capsule_executor') and bot.capsule_executor:
+            data = bot.capsule_executor.get_dashboard_data()
+            return jsonify(data)
+        return jsonify({"capsule": [], "log": [], "message": "CapsuleExecutor non disponibile"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/capsule_eseguibili/set', methods=['POST'])
+def capsule_eseguibili_set():
+    """Abilita/disabilita una capsula eseguibile da dashboard."""
+    try:
+        import json as _j2
+        data = _j2.loads(request.data)
+        cap_id  = data.get("id")
+        enabled = int(data.get("enabled", 0))
+        global bot
+        if bot and hasattr(bot, 'capsule_executor') and bot.capsule_executor:
+            bot.capsule_executor.set_enabled(cap_id, enabled)
+            return jsonify({"status": "ok", "id": cap_id, "enabled": enabled})
+        return jsonify({"error": "CapsuleExecutor non disponibile"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/capsule_eseguibili/rollback', methods=['POST'])
+def capsule_eseguibili_rollback():
+    """Rollback manuale di tutte le capsule LIVE."""
+    try:
+        global bot
+        if bot and hasattr(bot, 'capsule_executor') and bot.capsule_executor:
+            bot.capsule_executor.rollback_all()
+            return jsonify({"status": "rollback_completo"})
+        return jsonify({"error": "CapsuleExecutor non disponibile"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 def oracle_run_now():
     """Forza un run Oracle immediato (modalità AUTO)."""
     try:
