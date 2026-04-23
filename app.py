@@ -4510,17 +4510,27 @@ def oracle_set_mode():
 @app.route('/oracle/log')
 def oracle_log():
     try:
-        conn = _oracle_auto_db()
-        runs = conn.execute(
-            "SELECT ts, mode, domanda, capsule_emesse, capsule_iniettate FROM oracle_runs ORDER BY id DESC LIMIT 20"
-        ).fetchall()
-        caps = conn.execute(
-            "SELECT ts, nome, sicurezza, urgenza, esito FROM oracle_capsule_log ORDER BY id DESC LIMIT 50"
-        ).fetchall()
-        conn.close()
+        with heartbeat_lock:
+            hb = dict(heartbeat_data)
+        log_list     = hb.get("oracle_log", [])
+        last         = hb.get("oracle_last_analysis", {})
+        sc_log       = hb.get("supercapsule_log", [])
+        runs = []
+        for entry in reversed(log_list):
+            runs.append({
+                "ts":           entry.get("ts", ""),
+                "trigger":      entry.get("trigger", ""),
+                "semaforo":     entry.get("semaforo", ""),
+                "l1":           entry.get("l1", ""),
+                "l2":           entry.get("l2", ""),
+                "supercapsule": entry.get("supercapsule"),
+                "elapsed_s":    entry.get("elapsed_s", 0),
+            })
         return jsonify({
-            "runs": [{"ts":r[0],"mode":r[1],"domanda":r[2],"emesse":r[3],"iniettate":r[4]} for r in runs],
-            "capsule": [{"ts":c[0],"nome":c[1],"sicurezza":c[2],"urgenza":c[3],"esito":c[4]} for c in caps]
+            "runs":             runs,
+            "last_analysis":    last,
+            "supercapsule_log": sc_log,
+            "capsule":          [],
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
