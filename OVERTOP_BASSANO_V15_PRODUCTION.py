@@ -4115,13 +4115,6 @@ class CampoGravitazionale:
             _cm_result = _cm.valuta(_veto_ctx)
             if _cm_result.get('blocca'):
                 return self._veto(_cm_result.get('reason', f"CM_TOSSICO_{self._direction}_{momentum}_{volatility}_{trend}"))
-            # Applica soglia_boost dalle SuperCapsule Oracle (ALZA/ABBASSA_SOGLIA)
-            _cm_soglia_boost = _cm_result.get('soglia_boost', 0.0)
-            if _cm_soglia_boost != 0.0:
-                self._cm_soglia_boost = _cm_soglia_boost
-                log.info(f"[CM] 📊 soglia_boost={_cm_soglia_boost:+.1f} applicato da SuperCapsule")
-            else:
-                self._cm_soglia_boost = 0.0
         else:
             # Fallback hardcodato
             veti = self.VETI_SHORT if self._direction == "SHORT" else self.VETI_LONG
@@ -7177,7 +7170,7 @@ class OvertopBassanoV15Production:
                 divorzio_set      = self.memoria.divorzio,
                 fantasma_info     = fantasma_info,
                 loss_consecutivi  = self._m2_loss_consecutivi(),
-                soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend) + getattr(self, '_cm_soglia_boost', 0.0),
+                soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend),
             )
 
             # ── CAPSULE STATIC — veto assoluto MA gestibile dalla CI ────────
@@ -7911,11 +7904,32 @@ class OvertopBassanoV15Production:
             
             # -- PROFIT LOCK: mai perdere un profitto acquisito ----------
             # Se siamo in profitto e il prezzo è tornato indietro > 40% del massimo → esci
+            # MA: rispetta profit_lock_min dalle SuperCapsule Oracle
+            # Fee = $2.00. Non chiudere mai sotto $2.50 lordo (= $0.50 netto).
+            _cm_profit_min = 0.0
+            if hasattr(self, 'capsule_manager') and self.capsule_manager:
+                _veto_ctx = {
+                    'momentum':   getattr(self, '_last_momentum', 'MEDIO'),
+                    'volatility': getattr(self, '_last_volatility', 'MEDIA'),
+                    'trend':      getattr(self, '_last_trend', 'SIDEWAYS'),
+                    'direction':  entry_direction,
+                    'regime':     self._regime_current,
+                }
+                _cm_exit = self.capsule_manager.valuta(_veto_ctx)
+                _cm_profit_min = _cm_exit.get('profit_lock_min', 0.0)
+
+            # Soglia minima assoluta: $2.50 lordo (copre fee $2.00 + $0.50 profitto reale)
+            _profit_floor = max(_cm_profit_min, 2.50)
+
             if current_pnl > 0 and max_profit > 0:
-                retreat_pct_now = retreat / max_profit
-                if retreat_pct_now > 0.40:
-                    self._close_shadow_trade(price, f"PROFIT_LOCK_E{exit_energy}_WIN_{max_profit:+.0f}")
-                    return
+                # Non chiudere se il profitto lordo corrente è sotto il floor
+                if current_pnl < _profit_floor:
+                    pass  # aspetta che il profitto raggiunga almeno il floor
+                else:
+                    retreat_pct_now = retreat / max_profit
+                    if retreat_pct_now > 0.40:
+                        self._close_shadow_trade(price, f"PROFIT_LOCK_E{exit_energy}_WIN_{max_profit:+.0f}")
+                        return
 
             # -- DECISIONE ---------------------------------------------
             if exit_energy < exit_soglia:
