@@ -420,7 +420,7 @@ FORMATO RISPOSTA:
     "motivo": "max 40 parole"
   },
   "priority": 9,
-  "durata_ore": 48,
+  "durata_ore": 0,
   "analisi_causale": "max 60 parole"
 }
 </SUPERCAPSULE>
@@ -431,7 +431,12 @@ REGOLA CRITICA SUL CAMPO "valore":
 - Per BLOCCA_ENTRY: valore = "BLOCCA" — stringa fissa
 - MAX valore per ALZA_SOGLIA = 20 (oltre blocchi tutto)
 - MAX valore per ABBASSA_SOGLIA = 10 (oltre apre troppo)
-- Se vuoi un cooldown → usa ALZA_SOGLIA con valore 15 (stesso effetto pratico)"""
+- Se vuoi un cooldown → usa ALZA_SOGLIA con valore 15 (stesso effetto pratico)
+
+REGOLA FONDAMENTALE SULLA DURATA:
+durata_ore = 0 significa PERMANENTE — la capsule vive finché il Phantom non dimostra che il pattern è cambiato.
+NON usare 24 o 48. Usa 0 per pattern tossici confermati (WR < 30%).
+La capsule muore solo quando il WR reale supera 50% su 20+ trade — non per un timer."""
 
     user = f"""TRIGGER: {trigger}
 
@@ -510,7 +515,7 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
         livello  = capsule.get("livello",  "AUTO")
         tipo     = capsule.get("tipo",     "VETO")
         priority = capsule.get("priority", 7)
-        durata_h = capsule.get("durata_ore", 24)
+        durata_h = capsule.get("durata_ore", 0)
         analisi  = capsule.get("analisi_causale", trigger)[:200]
 
         # Sanitizza azione: valore deve essere numerico per ALZA/ABBASSA_SOGLIA
@@ -529,7 +534,12 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
 
         trigger_json = json.dumps(capsule.get("trigger", []))
         azione_json  = json.dumps(capsule.get("azione",  {}))
-        scade_ts     = time.time() + durata_h * 3600
+        # durata_ore=0 → PERMANENTE (1 anno). durata_ore>0 → scade dopo N ore
+        if durata_h == 0:
+            scade_ts = time.time() + (365 * 24 * 3600)
+            _p(f"Capsule PERMANENTE — scade 1 anno")
+        else:
+            scade_ts = time.time() + durata_h * 3600
 
         conn = sqlite3.connect(db_path, timeout=10)
         c    = conn.cursor()
