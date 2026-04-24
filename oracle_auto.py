@@ -371,8 +371,13 @@ e confronta con i trigger della capsule. Se match → esegue l'azione.
 
 AZIONI DISPONIBILI (usa ESATTAMENTE questi valori nel campo azione.tipo):
 - "BLOCCA_ENTRY" → blocca entry in quel contesto (come VETO)
-- "ALZA_SOGLIA"  → aggiunge N punti alla soglia (es. valore: 10 = soglia+10)
-- "ABBASSA_SOGLIA" → sottrae N punti alla soglia (es. valore: 5 = soglia-5)
+- "ALZA_SOGLIA"  → aggiunge N punti alla soglia di entrata (es. valore: 10 = soglia+10)
+- "ABBASSA_SOGLIA" → sottrae N punti alla soglia di entrata (es. valore: 5 = soglia-5)
+- "ALZA_SOGLIA_USCITA" → imposta il PnL lordo MINIMO per chiudere in profitto
+  valore: numero float (es. 2.5 = non chiudere mai sotto $2.50 lordo)
+  REGOLA FEE: fee fissa = $2.00. Breakeven = $2.00. Profitto minimo = $2.50 lordo ($0.50 netto).
+  Usa quando vedi PROFIT_LOCK_WIN_+1 o WIN_+2 che chiudono in perdita netta.
+  Esempio: valore=2.5 significa "non uscire mai con profitto lordo < $2.50"
 
 CAMPI TRIGGER DISPONIBILI (usa ESATTAMENTE questi nomi):
 - "momentum"   → "FORTE" | "MEDIO" | "DEBOLE"
