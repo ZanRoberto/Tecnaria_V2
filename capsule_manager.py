@@ -238,7 +238,8 @@ class CapsuleManager:
             self._refresh_cache()
 
         res = {"blocca":False,"size_mult":1.0,"soglia_boost":0.0,
-               "reason":"","capsule_id":""}
+               "reason":"","capsule_id":"",
+               "profit_lock_min": 0.0}
 
         for cap in self._cache:
             if not self._check_triggers(cap["trigger"], contesto):
@@ -296,6 +297,21 @@ class CapsuleManager:
                 self._fire(cap["id"], contesto)
                 log.info(f"[CM] 🚫 BLOCCO Oracle {cap['id']}")
                 break
+
+            elif atype in ("ALZA_SOGLIA_USCITA", "alza_soglia_uscita"):
+                # SuperCapsule Oracle: imposta PnL lordo minimo per uscita profittevole
+                # Fee = $2.00. Breakeven = $2.00. Profitto minimo sicuro = $2.50 lordo.
+                val = act.get("valore", act.get("params", {}).get("valore", 2.5))
+                try:
+                    val = float(val)
+                except (TypeError, ValueError):
+                    val = 2.5
+                # Prende il valore più alto tra capsule attive
+                if val > res["profit_lock_min"]:
+                    res["profit_lock_min"] = val
+                    res["reason"] = f"SC_PROFIT_LOCK_MIN_{val:.2f}"
+                self._fire(cap["id"], contesto)
+                log.info(f"[CM] 💰 PROFIT_LOCK_MIN={val:.2f} da {cap['id']}")
 
         return res
 
