@@ -7283,10 +7283,13 @@ class OvertopBassanoV15Production:
                     # REGOLA AGGIORNATA 21/04/2026:
                     # DEBOLE|ALTA|SIDEWAYS rimosso — Signal Tracker V15 WR=73% su 1632 campioni
                     # Rimangono invalicabili solo FORTE e MEDIO con ALTA|SIDEWAYS (WR basso confermato)
+                    # INVALICABILE solo in RANGING — in EXPLOSIVE la finestra è reale
+                    # DEBOLE|ALTA|SIDEWAYS: WR < 20% in RANGING, ma in EXPLOSIVE il movimento è diverso
                     _contesto_invalicabile = (
                         volatility == "ALTA" and
                         trend == "SIDEWAYS" and
-                        momentum in ("MEDIO", "FORTE")  # DEBOLE rimosso: dati reali V15 dicono WR 73%
+                        momentum in ("MEDIO", "FORTE", "DEBOLE") and
+                        _effective_regime != "EXPLOSIVE"  # in EXPLOSIVE nessun contesto è invalicabile
                     )
                     if _contesto_invalicabile:
                         _fuoco_estremo = False
