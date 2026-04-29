@@ -1,10 +1,35 @@
 #!/usr/bin/env python3
 """
-OVERTOP BASSANO V14 PRODUCTION - FULL BUILD
+OVERTOP BASSANO V15 PRODUCTION - FULL BUILD
 BOT TRADING COMPLETO INTEGRATO - PRODUCTION READY
-Con Oracolo 2.0: memoria multi-dimensionale, context-matching,
-capsule auto-generative, duration memory, post-trade tracker.
-PAPER TRADE: imposta PAPER_TRADE = True per test sicuro
+
+╔══════════════════════════════════════════════════════════════════════════╗
+║  LEGGE FONDAMENTALE — LEGGILA PRIMA DI TOCCARE QUALSIASI CALCOLO        ║
+║                                                                          ║
+║  TUTTO è calcolato in USDC. MAI in BTC. MAI in delta prezzo puro.       ║
+║                                                                          ║
+║  PARAMETRI FISSI:                                                        ║
+║    TRADE_SIZE_USD = $1000  (margine per trade)                           ║
+║    LEVERAGE       = 5      (leva)                                        ║
+║    EXPOSURE       = $5000  (TRADE_SIZE_USD × LEVERAGE)                  ║
+║    BTC_QTY        = EXPOSURE / entry_price  (mai hardcodato)             ║
+║    FEE            = EXPOSURE × 0.0002 × 2 = $2.00 fissi per trade       ║
+║                                                                          ║
+║  FORMULA UNICA PER QUALSIASI PnL:                                        ║
+║    delta    = price - entry  (LONG) | entry - price  (SHORT)             ║
+║    pnl_lordo = delta × (EXPOSURE / entry_price)      ← USDC             ║
+║    pnl_netto = pnl_lordo - FEE                       ← USDC             ║
+║                                                                          ║
+║  DURANTE IL TRADE  → usa pnl_lordo  (il trade respira)                  ║
+║  AL CLOSE          → usa pnl_netto  (fee sottratta una sola volta)       ║
+║  STATISTICHE       → usa pnl_netto  (oracolo, phantom, capsule)          ║
+║                                                                          ║
+║  BREAKEVEN: delta BTC minimo = FEE / BTC_QTY ≈ +$30                     ║
+║  STOP LIVE: pnl_lordo < -$7  (= pnl_netto < -$5 dopo fee)               ║
+║                                                                          ║
+║  SE SCRIVI  pnl = price - entry  → È SBAGLIATO. SEMPRE.                 ║
+║  SE SCRIVI  pnl = delta * btc_qty  SENZA  / entry_price  → SBAGLIATO.   ║
+╚══════════════════════════════════════════════════════════════════════════╝
 """
 
 import json
@@ -348,6 +373,13 @@ class StabilityTelemetry:
 # Sostituisce CapsuleRuntime + ConfigHotReloader + IntelligenzaAutonoma
 # + VETI_LONG/SHORT hardcodati. Asset-aware. SQLite. Dashboard-ready.
 # ===========================================================================
+try:
+    from capsule_executor import CapsuleExecutor
+    _CE_AVAILABLE = True
+except ImportError:
+    _CE_AVAILABLE = False
+    log.warning("[CE] capsule_executor.py non trovato")
+
 try:
     from capsule_manager import CapsuleManager
     _CM_AVAILABLE = True
@@ -821,7 +853,7 @@ class IntelligenzaAutonoma:
                     log.info(f"[IA] 🔴 L2_BLOCCO {mat}/{reg}/{vol} WR={wr:.0%} pnl={pnl_avg:+.2f} vita={vita}s")
 
             # -- OPPORTUNITÀ: WR alto E PnL positivo → boost size ----------
-            elif wr > 0.68 and pnl_avg > 1.0 and s['total'] >= 10:
+            elif wr > 0.68 and pnl_avg > 2.5 and s['total'] >= 10:  # lordo > breakeven
                 boost = min(1.4, 1.0 + (wr - 0.65) * 2.0)  # max +40% size
                 cap = self._crea_capsule_boost(
                     cap_id, mat, reg, vol, wr, pnl_avg, s['total'], boost,
@@ -1071,7 +1103,7 @@ class IntelligenzaAutonoma:
             pnl    = sum(t.get('pnl', 0) for t in pool)
             pnl_avg = pnl / len(pool)
 
-            if wr >= 0.75 and pnl_avg > 2.0:
+            if wr >= 0.75 and pnl_avg > 2.5:  # lordo > breakeven
                 boost = min(1.3, 1.0 + (wr - 0.70) * 1.5)
                 vita  = int(90 + (wr - 0.70) * 600)  # 90s → 4min
                 cap_id = f"L3_OPP_{regime}_BOOST"
@@ -1941,7 +1973,7 @@ class OracoloDinamico:
     FANTASMA_WR_THRESHOLD = 0.45
     DECAY_FACTOR          = 0.95
     MIN_SAMPLES           = 5
-    MIN_PNL_EDGE          = 0.50    # abbassato per raccogliere dati - OC+CTX proteggono
+    MIN_PNL_EDGE          = 2.50    # profitto lordo minimo — lordo $2.50 = netto $0.50 dopo fee $2
     MIN_REAL_SAMPLES      = 5
 
     def __init__(self):
@@ -1955,62 +1987,62 @@ class OracoloDinamico:
         
         # -- INTELLIGENZA REALE - dati da trade veri 23 marzo 2026 ------
         self._memory = {
-            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 13.0, 'samples': 24.0, 'pnl_sum': 15.0, 'real_samples': 5,
+            "LONG|FORTE|ALTA|SIDEWAYS":   {'wins': 13.0, 'samples': 24.0, 'pnl_sum': 1.0, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0, 'pnl_sum': -15.0, 'real_samples': 5,
+            "LONG|MEDIO|ALTA|SIDEWAYS":   {'wins': 8.6,  'samples': 20.0, 'pnl_sum': -1.0, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|DEBOLE|ALTA|SIDEWAYS":  {'wins': 1.4,  'samples': 7.4,  'pnl_sum': -20.0, 'real_samples': 0,
+            "LONG|DEBOLE|ALTA|SIDEWAYS":  {'wins': 1.4,  'samples': 7.4,  'pnl_sum': -1.33, 'real_samples': 0,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|FORTE|MEDIA|SIDEWAYS":  {'wins': 4.5,  'samples': 6.0,  'pnl_sum': 8.0, 'real_samples': 0,
+            "LONG|FORTE|MEDIA|SIDEWAYS":  {'wins': 4.5,  'samples': 6.0,  'pnl_sum': 0.53, 'real_samples': 0,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|MEDIO|MEDIA|SIDEWAYS":  {'wins': 1.0,  'samples': 2.0,  'pnl_sum': -1.0, 'real_samples': 0,
+            "LONG|MEDIO|MEDIA|SIDEWAYS":  {'wins': 1.0,  'samples': 2.0,  'pnl_sum': -0.07, 'real_samples': 0,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|DEBOLE|MEDIA|SIDEWAYS": {'wins': 0.5,  'samples': 3.7,  'pnl_sum': -8.0, 'real_samples': 0,
+            "LONG|DEBOLE|MEDIA|SIDEWAYS": {'wins': 0.5,  'samples': 3.7,  'pnl_sum': -0.53, 'real_samples': 0,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "LONG|FORTE|BASSA|UP":        {'wins': 23.4, 'samples': 30.0, 'pnl_sum': 462.0, 'real_samples': 5,
+            "LONG|FORTE|BASSA|UP":        {'wins': 23.4, 'samples': 30.0, 'pnl_sum': 30.8, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
-            "LONG|FORTE|MEDIA|UP":        {'wins': 15.3, 'samples': 22.5, 'pnl_sum': 180.0, 'real_samples': 5,
+            "LONG|FORTE|MEDIA|UP":        {'wins': 15.3, 'samples': 22.5, 'pnl_sum': 12.0, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
-            "LONG|MEDIO|BASSA|UP":        {'wins': 12.2, 'samples': 18.8, 'pnl_sum': 118.0, 'real_samples': 5,
+            "LONG|MEDIO|BASSA|UP":        {'wins': 12.2, 'samples': 18.8, 'pnl_sum': 7.87, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
-            "LONG|FORTE|MEDIA|DOWN":      {'wins': 2.5,  'samples': 5.0,  'pnl_sum': 2.5,  'real_samples': 5,
+            "LONG|FORTE|MEDIA|DOWN":      {'wins': 2.5,  'samples': 5.0,  'pnl_sum': 0.17,  'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
-            "SHORT|FORTE|ALTA|DOWN":      {'wins': 5.5,  'samples': 10.0, 'pnl_sum': 54.0, 'real_samples': 5,
+            "SHORT|FORTE|ALTA|DOWN":      {'wins': 5.5,  'samples': 10.0, 'pnl_sum': 3.6, 'real_samples': 5,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=20), 'drift_loss': deque(maxlen=20)},
-            "LONG|DEBOLE|BASSA|SIDEWAYS": {'wins': 1.9,  'samples': 2.9,  'pnl_sum': 2.0, 'real_samples': 0,
+            "LONG|DEBOLE|BASSA|SIDEWAYS": {'wins': 1.9,  'samples': 2.9,  'pnl_sum': 0.13, 'real_samples': 0,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
                                            'range_pos_win': deque(maxlen=50), 'range_pos_loss': deque(maxlen=50)},
-            "SHORT|MEDIO|ALTA|SIDEWAYS":  {'wins': 0.3,  'samples': 4.0,  'pnl_sum': -16.83, 'real_samples': 2,
+            "SHORT|MEDIO|ALTA|SIDEWAYS":  {'wins': 0.3,  'samples': 4.0,  'pnl_sum': -1.12, 'real_samples': 2,
                                            'durations_win': deque(maxlen=50), 'durations_loss': deque(maxlen=50),
                                            'rsi_win': deque(maxlen=50), 'rsi_loss': deque(maxlen=50),
                                            'drift_win': deque(maxlen=50), 'drift_loss': deque(maxlen=50),
@@ -2559,15 +2591,10 @@ class PreTradeSignalTracker:
                         delta = current_price - sig['price']
                     else:
                         delta = sig['price'] - current_price
-                    # Fee simulata con size reale: ~$250 × 0.02% × 2 = $0.10
-                    # Size reale = capital × size_factor × 0.05 ≈ $250
-                    _size_sim = 250.0  # stima conservativa size reale
-                    _fee_sim  = _size_sim * 0.0002 * 2  # 0.02% maker × 2 lati
-                    pnl_sim = delta * (_size_sim / sig['price']) - _fee_sim
-                    sig['results'][key]          = round(delta, 2)
-                    sig['results'][f'pnl_{w}']   = round(pnl_sim, 2)
-                    # Fee simulata: $5000 esposti × 0.02% × 2 = $2
-                    pnl_sim = delta * (5000 / sig['price']) - 2.0
+                    # PnL LORDO: fee esclusa dal monitoring
+                    pnl_sim = delta * (5000.0 / sig['price'])
+                    sig['results'][key]        = round(delta, 2)
+                    sig['results'][f'pnl_{w}'] = round(pnl_sim, 2)
                     sig['results'][f'hit_{w}']    = delta > 0
 
             # Chiudi dopo la finestra massima
@@ -2712,7 +2739,7 @@ class PreTradeSignalTracker:
         # Fee simulata nella stessa scala di pnl_60: $250 * 0.02% * 2 = $0.10
         # hit_economica = % vicini con pnl_60 > fee_sim (coprono davvero i costi)
         # Il numero emerge dalla distribuzione storica dei vicini — non è inventato
-        FEE_SIM = 0.10  # fee nella scala simulata (size=$250)
+        FEE_SIM = 2.00  # fee futures: $5000 × 0.02% × 2 = $2.00
         pnl_vicini = [v['pnl'] for v in vicini if v.get('pnl') is not None]
 
         if pnl_vicini:
@@ -3884,7 +3911,8 @@ class CampoGravitazionale:
     VETI_LONG = {
         ("DEBOLE", "ALTA", "DOWN"),    # TRAP - WR 5% per LONG
         ("FORTE",  "ALTA", "DOWN"),    # PANIC - WR 15% per LONG
-        ("DEBOLE", "ALTA", "SIDEWAYS"),# RANGE_VOL_W - WR 19% dati reali
+        # RIMOSSO 21/04/2026: Signal Tracker V15 dice DEBOLE|ALTA|SIDEWAYS = WR 73% su 1632 campioni reali
+        # ("DEBOLE", "ALTA", "SIDEWAYS"),# era WR 19% dati V13 — ora 73% V15
         ("FORTE",  "ALTA", "SIDEWAYS"),# RANGE_VOL_F - WR 34% dati reali Oracolo
         ("MEDIO",  "ALTA", "SIDEWAYS"),# RANGE_VOL_M - WR 28% dati reali Oracolo
     }
@@ -3947,7 +3975,7 @@ class CampoGravitazionale:
     DRIFT_VETO_THRESHOLD = -0.20   # era -0.10 - phantom WR 81% bloccati, sta bloccando i migliori
 
     # -- WARMUP ---------------------------------------------------------
-    WARMUP_TICKS = 200   # tick minimi prima di operare - buffer devono riempirsi
+    WARMUP_TICKS = 50    # tick minimi prima di operare (era 200)
 
     def __init__(self):
         self._recent_results = deque(maxlen=20)
@@ -3964,7 +3992,7 @@ class CampoGravitazionale:
         # -- RSI + MACD CONSIGLIERI ----------------------------------------
         self._prices_ta = deque(maxlen=50)        # buffer prezzi CAMPIONATI per indicatori tecnici
         self._ta_tick_counter = 0                  # conta tick per campionamento
-        self._ta_sample_rate = 50                  # campiona ogni 50 tick (non ogni tick!)
+        self._ta_sample_rate = 1                   # warmup: campiona ogni tick
         self._rsi_period = 14                     # RSI standard 14 periodi
         self._macd_fast = 12                      # MACD EMA veloce
         self._macd_slow = 26                      # MACD EMA lenta
@@ -3990,7 +4018,9 @@ class CampoGravitazionale:
         # I tick sono troppo veloci - RSI su tick-by-tick va a 100/0.
         # Campionando ogni 50 tick creiamo "candele" virtuali stabili.
         self._ta_tick_counter += 1
-        if self._ta_tick_counter >= self._ta_sample_rate:
+        # Sample rate dinamico: 1 durante warmup, 5 a regime
+        _sample_now = 1 if len(self._prices_ta) < self._rsi_period else 5
+        if self._ta_tick_counter >= _sample_now:
             self._ta_tick_counter = 0
             self._prices_ta.append(price)
             if len(self._prices_ta) >= 30:
@@ -4005,7 +4035,7 @@ class CampoGravitazionale:
         Nessun veto, nessun effetto collaterale — pura osservazione.
         Chiamato ogni tick per il SignalTracker.
         """
-        if self._tick_count < 200:
+        if self._tick_count < self.WARMUP_TICKS:
             return {'score': 0, 'soglia': 60, 'valid': False}
 
         W = {"seed":25,"fp":20,"mom":12,"trend":12,"vol":8,"regime":3,"rsi":10,"mac":10}
@@ -4114,12 +4144,12 @@ class CampoGravitazionale:
         #   - prices_ta >= 35 (RSI=14 periodi + MACD=26+9=35 periodi)
         # ~6 minuti di warmup - la volpe annusa, guarda, ascolta.
         warmup_checks = []
-        if self._tick_count < 200:
-            warmup_checks.append(f"tick={self._tick_count}/200")
+        if self._tick_count < self.WARMUP_TICKS:
+            warmup_checks.append(f"tick={self._tick_count}/{self.WARMUP_TICKS}")
         if len(self._prices_long) < 50:
             warmup_checks.append(f"drift={len(self._prices_long)}/100")
-        if len(self._prices_ta) < 35:
-            warmup_checks.append(f"RSI_MACD={len(self._prices_ta)}/35")
+        if len(self._prices_ta) < 20:
+            warmup_checks.append(f"RSI_MACD={len(self._prices_ta)}/20")
         if warmup_checks:
             return self._veto(f"WARMUP_{'|'.join(warmup_checks)}")
 
@@ -4663,7 +4693,7 @@ class VeritatisTracker:
             # Hit vero: il delta deve coprire le fee reali
             # $1000 margine × 5x leva = $5000 esposti
             # Fee: $5000 × 0.02% × 2 lati = $2.00
-            pnl_sim = delta / sig['price'] * 5000 * 0.7 - 2.0
+            pnl_sim = delta * (5000.0 / sig['price'])  # lordo — fee al close
             hit     = delta > 0  # direzione corretta
             
             if elapsed >= 60:
@@ -5031,9 +5061,21 @@ class OvertopBassanoV15Production:
         # -- Persistenza --------------------------------------------------
         self._persist        = PersistenzaStato(db_path=DB_PATH)
         self.capital, self.total_trades = self._persist.load()
-        self.TRADE_SIZE_USD = 1000.0  # SIZE FISSA $1000 margine per trade
-        self.LEVERAGE = 5             # LEVA 5x - $1000 margine = $5000 esposizione
-        self.FEE_PCT = 0.0002        # 0.02% maker futures (vs 0.075% spot)
+        # ── LEGGE FONDAMENTALE — TUTTO IN USDC ──────────────────────────────
+        # MAI: pnl = price - entry         ← delta BTC puro, SBAGLIATO
+        # SEMPRE:
+        #   exposure  = TRADE_SIZE_USD x LEVERAGE   = $5000
+        #   btc_qty   = exposure / entry_price
+        #   pnl_lordo = delta x btc_qty              (live — fee esclusa)
+        #   pnl_netto = pnl_lordo - FEE_TRADE        (al close — una sola volta)
+        #   stop live = pnl_lordo < -STOP_LIVE = -$7 (netto ~-$5 dopo fee)
+        # ────────────────────────────────────────────────────────────────────
+        self.TRADE_SIZE_USD = 1000.0
+        self.LEVERAGE       = 5
+        self.EXPOSURE       = self.TRADE_SIZE_USD * self.LEVERAGE  # $5000
+        self.FEE_PCT        = 0.0002
+        self.FEE_TRADE      = self.EXPOSURE * self.FEE_PCT * 2     # $2.00 fissi
+        self.STOP_LIVE      = 7.0  # lordo live — $7 lordi = ~$5 netti dopo fee
         self.wins    = 0
         self.losses  = 0
 
@@ -5070,6 +5112,13 @@ class OvertopBassanoV15Production:
         self.position_sizer  = PositionSizer()
         self.telemetry       = StabilityTelemetry()
         self.signal_tracker  = PreTradeSignalTracker()
+
+        # ── CAPSULE EXECUTOR — ciclo di vita capsule eseguibili ──────────────
+        if _CE_AVAILABLE:
+            self.capsule_executor = CapsuleExecutor(DB_PATH, self)
+            log.info("[CE] ✅ CapsuleExecutor attivo — capsule di codice eseguibile")
+        else:
+            self.capsule_executor = None
 
         # ── CAPSULE INTELLIGENTE — Sistema Immunitario Predittivo ──────────
         self.ci = CapsuleIntelligente()
@@ -5495,17 +5544,20 @@ class OvertopBassanoV15Production:
                     if _cid in self.ci._capsule_attive:
                         _ra_bloccate.append(f"{_cid}(già_attiva)")
                         continue
-                    # Verifica scadenza
-                    try:
-                        from datetime import datetime as _dt2
-                        _cap_ts = _dt2.fromisoformat(_cap.get('ts','')).timestamp()
-                        if _now_ra - _cap_ts > _cap.get('vita', 300):
-                            _ra_bloccate.append(f"{_cid}(scaduta)")
-                            continue
-                    except Exception:
-                        pass
-                    # Inietta con forza limitata
-                    _forza = min(0.65, _cap.get('forza', 0.5))
+                    # Capsule PERMANENTE_DB non scadono mai
+                    _fonte = _cap.get('fonte', '')
+                    if _fonte != 'PERMANENTE_DB':
+                        try:
+                            from datetime import datetime as _dt2
+                            _cap_ts = _dt2.fromisoformat(_cap.get('ts','')).timestamp()
+                            _vita_cap = max(600, _cap.get('vita', 600))  # minimo 600s
+                            if _now_ra - _cap_ts > _vita_cap:
+                                _ra_bloccate.append(f"{_cid}(scaduta)")
+                                continue
+                        except Exception:
+                            pass
+                    # Forza: permanenti a piena forza, temporanee limitate
+                    _forza = min(0.85, _cap.get('forza', 0.65)) if _fonte == 'PERMANENTE_DB' else min(0.65, _cap.get('forza', 0.5))
                     self.ci._attiva_capsula(_cid, {
                         'id':     _cid,
                         'tipo':   'OPPORTUNITA',
@@ -5550,7 +5602,9 @@ class OvertopBassanoV15Production:
                         "ultima_iniettata": None, "storia": []
                     })
                     _diag["iniettate_tot"] += len(_ra_iniettate)
-                    _diag["bloccate_tot"]  += len(_ra_bloccate)
+                    _ra_bloccate_reali = [b for b in _ra_bloccate if "(già_attiva)" not in b]
+                    _diag["bloccate_tot"]  += len(_ra_bloccate_reali)
+                    _diag["attive_ci"]      = len(_ra_bloccate) - len(_ra_bloccate_reali)
                     if _ra_iniettate:
                         _diag["ultima_iniettata"] = {
                             "ids": _ra_iniettate,
@@ -5626,7 +5680,7 @@ class OvertopBassanoV15Production:
         # -- PRE-TRADE SIGNAL TRACKER: osservazione continua ogni tick ------
         # score_now() calcola senza decidere — pura mappa del segnale nel tempo.
         # Registra tutto ciò che supera 25, prima di qualsiasi filtro.
-        if self.campo._tick_count > 200 and momentum:
+        if self.campo._tick_count > self.campo.WARMUP_TICKS and momentum:
             _seed_q = self.seed_scorer.score()
             _seed_v = _seed_q.get('score', 0.0) if _seed_q.get('reason') != 'insufficient_data' else 0.0
             _fp_wr  = self.oracolo.get_wr(momentum, volatility, trend, self.campo._direction)
@@ -5785,9 +5839,9 @@ class OvertopBassanoV15Production:
             'fingerprint_n':    self.oracolo._memory.get(
                                     self.oracolo._fp(momentum, volatility, trend),
                                     {}).get('samples', 0),
-            'regime':           'trending' if momentum == 'FORTE' and volatility == 'BASSA'
-                                else ('choppy'  if volatility == 'ALTA'
-                                else ('lateral' if momentum == 'DEBOLE' else 'normal')),
+            'regime':           self._regime_current,  # FIX: regime reale per match capsule SC_
+            'oi_stato':         self._oi_stato,         # FIX: aggiunto per trigger Oracle
+            'oi_carica':        self._oi_carica,        # FIX: aggiunto per trigger Oracle
             'mode':             'PAPER' if self.paper_trade else 'LIVE',
             'loss_consecutivi': self._loss_consecutivi(),
             'ultimo_exit_type': self._last_exit_type,
@@ -5831,7 +5885,7 @@ class OvertopBassanoV15Production:
         if not self.paper_trade:
             self._place_order("BUY", price, size_factor)
 
-        _size_usdt_entry = round(self.capital * size_factor * 0.05, 2)  # 5% capitale × size_mult
+        _size_usdt_entry = self.TRADE_SIZE_USD  # margine fisso $1000
         self.trade_open = {
             "price_entry":    price,
             "matrimonio":     matrimonio_name,
@@ -5865,14 +5919,19 @@ class OvertopBassanoV15Production:
         # 1% del margine = $10 max loss per trade.
         # Il T3 drawdown 3% sul prezzo BTC è inutile: 3% BTC = ~$2100 movimento.
         # Questo stop ferma il danno PRIMA che arrivi al T3.
-        exposure_m1 = self.TRADE_SIZE_USD * self.LEVERAGE
-        btc_qty_m1  = exposure_m1 / self.trade_open["price_entry"]
-        current_pnl_m1 = (price - self.trade_open["price_entry"]) * btc_qty_m1
-        HARD_STOP_M1 = self.TRADE_SIZE_USD * 0.01  # 1% margine = $10
-        if current_pnl_m1 < -HARD_STOP_M1:
-            self._log("🛑", f"HARD_STOP M1 PnL=${current_pnl_m1:.1f} max=-${HARD_STOP_M1:.0f}")
+        # HARD STOP: PnL LORDO (fee esclusa — il trade respira)
+        # Fee pagata solo al close, non monitored live
+        _hs_entry = self.trade_open["price_entry"]
+        _hs_dir   = self.trade_open.get("direction", "LONG")
+        _hs_exp   = self.TRADE_SIZE_USD * self.LEVERAGE     # $5000
+        _hs_btc   = _hs_exp / _hs_entry
+        _hs_delta = price - _hs_entry if _hs_dir == "LONG" else _hs_entry - price
+        _hs_pnl   = _hs_delta * _hs_btc                    # lordo, senza fee
+        HARD_STOP_M1 = self.STOP_LIVE  # lordo live ($7 = netto ~$5) $2
+        if _hs_pnl < -HARD_STOP_M1:
+            self._log("🛑", f"HARD_STOP lordo=${_hs_pnl:.2f} → netto≈${_hs_pnl-2:.2f}")
             self._close_trade(price, momentum, volatility, trend,
-                              reason=f"HARD_STOP_${abs(current_pnl_m1):.1f}")
+                              reason=f"HARD_STOP_${abs(_hs_pnl):.1f}")
             return
 
         # -- MOMENTUM DECELEROMETER - exit anticipata ----------------------
@@ -5910,10 +5969,10 @@ class OvertopBassanoV15Production:
         _size_usdt    = self.trade_open.get("size_usdt", 500.0)
         _direction    = self.trade_open.get("direction", "LONG")
         if _direction == "LONG":
-            _pnl_posizione = (price - _entry_price) / _entry_price * _size_usdt
+            _pnl_posizione = (price - _entry_price) * (5000.0 / _entry_price)  # lordo
         else:
-            _pnl_posizione = (_entry_price - price) / _entry_price * _size_usdt
-        _stop_loss_usdt = _size_usdt * 0.02  # 2% della size
+            _pnl_posizione = (_entry_price - price) * (5000.0 / _entry_price)  # lordo
+        _stop_loss_usdt = self.STOP_LIVE
         if _pnl_posizione < -_stop_loss_usdt:
             triggers_attivi.append(f"T3_STOPLOSS_PNL_{_pnl_posizione:.2f}$")
         # Mantieni anche il drawdown % come riferimento (più largo)
@@ -5954,8 +6013,19 @@ class OvertopBassanoV15Production:
     # ========================================================================
 
     def _close_trade(self, price, momentum, volatility, trend, reason: str):
-        pnl    = price - self.trade_open["price_entry"]
-        is_win = pnl > 0
+        # PnL REALE USDC FUTURES
+        # Esposizione = $1000 margine × 5 leva = $5000
+        # BTC qty     = $5000 / entry_price
+        # PnL lordo   = delta × btc_qty
+        # Fee         = $5000 × 0.02% × 2 = $2.00 fissi
+        _entry   = self.trade_open["price_entry"]
+        _dir     = self.trade_open.get("direction", "LONG")
+        _exp     = self.TRADE_SIZE_USD * self.LEVERAGE          # $5000
+        _btc_qty = _exp / _entry
+        _delta   = price - _entry if _dir == "LONG" else _entry - price
+        _fee     = _exp * self.FEE_PCT * 2                      # $2.00
+        pnl      = round(_delta * _btc_qty - _fee, 4)
+        is_win   = pnl > 0
         matrimonio_name = self.current_matrimonio
         matrimonio      = MatrimonioIntelligente.get_by_name(matrimonio_name)
         wr_expected     = matrimonio.get("wr", 0.50)
@@ -6323,7 +6393,7 @@ class OvertopBassanoV15Production:
             # Sta lasciando passare cose che perdono — soglia troppo bassa
             elif wr_blocco < 0.25 and blk > 20:
                 old_base = self.campo.SOGLIA_BASE
-                new_base = min(60, old_base + 3)
+                new_base = min(55, old_base + 1)  # era max60/step3
                 if new_base != old_base:
                     self.campo.SOGLIA_BASE = new_base
                     self._log_m2("🧠",
@@ -7181,11 +7251,13 @@ class OvertopBassanoV15Production:
                         except Exception:
                             pass
 
-                    # REGOLA ASSOLUTA: DEBOLE|ALTA|SIDEWAYS non si bypassa mai
+                    # REGOLA AGGIORNATA 21/04/2026:
+                    # DEBOLE|ALTA|SIDEWAYS rimosso — Signal Tracker V15 WR=73% su 1632 campioni
+                    # Rimangono invalicabili solo FORTE e MEDIO con ALTA|SIDEWAYS (WR basso confermato)
                     _contesto_invalicabile = (
                         volatility == "ALTA" and
                         trend == "SIDEWAYS" and
-                        momentum in ("DEBOLE", "MEDIO", "FORTE")
+                        momentum in ("MEDIO", "FORTE")  # DEBOLE rimosso: dati reali V15 dicono WR 73%
                     )
                     if _contesto_invalicabile:
                         _fuoco_estremo = False
@@ -7218,7 +7290,7 @@ class OvertopBassanoV15Production:
                         # SOGLIA MINIMA ASSOLUTA nel bypass FUOCO
                         # Quando il campo restituisce soglia=0 (VETO prima del calcolo)
                         # non permettere entry sotto score 40 — sistema non può essere cieco
-                        _soglia_bypass_min = 40.0
+                        _soglia_bypass_min = 25.0
                         if _score_bypass < _soglia_bypass_min:
                             result['enter'] = False
                             self._log_m2("🛑", f"BYPASS BLOCCATO: score {_score_bypass:.1f} < soglia_min {_soglia_bypass_min:.1f}")
@@ -7243,8 +7315,8 @@ class OvertopBassanoV15Production:
             if not hasattr(self, '_warmup_done_time'):
                 self._warmup_done_time = time.time()
                 self._log_m2("✅", "BOOT_GUARD: warmup OK — aspetto 60s")
-            if time.time() - self._warmup_done_time < 60:
-                self._log_m2("⏳", f"BOOT_GUARD: {60-(time.time()-self._warmup_done_time):.0f}s al via")
+            if time.time() - self._warmup_done_time < 10:
+                self._log_m2("⏳", f"BOOT_GUARD: {10-(time.time()-self._warmup_done_time):.0f}s al via")
                 return
 
             # ── SCORE vs SOGLIA ──────────────────────────────────────────────
@@ -7266,7 +7338,8 @@ class OvertopBassanoV15Production:
                 # OI FUOCO può bypassare se il score è vicino
                 _fuoco_ok = (self._oi_stato == "FUOCO" and
                              self._oi_carica >= 0.65 and
-                             self._regime_current != "EXPLOSIVE")
+                             self._regime_current != "EXPLOSIVE" and
+                             self._m2_loss_streak < 2)
                 if not _fuoco_ok:
                     self._log_m2("🔇",
                         f"SCORE_SOTTO: {score:.1f} vs {soglia:.1f} gap={soglia-score:.1f}")
@@ -7644,7 +7717,7 @@ class OvertopBassanoV15Production:
             else:
                 current_pnl_real = (price - self._shadow["price_entry"]) * btc_qty_sl
 
-            HARD_STOP_USD = exposure_sl * 0.02  # 2% dell'esposizione = $100 su $5000
+            HARD_STOP_USD = self.STOP_LIVE
             if current_pnl_real < -HARD_STOP_USD:
                 self._close_shadow_trade(price, f"HARD_STOP_${abs(current_pnl_real):.1f}_max${HARD_STOP_USD:.0f}")
                 return
@@ -7702,13 +7775,14 @@ class OvertopBassanoV15Production:
             # ===============================================================
             
             if entry_direction == "LONG":
-                current_pnl = price - self._shadow["price_entry"]
-                max_profit = self._shadow_max_price - self._shadow["price_entry"]
-                retreat = self._shadow_max_price - price
+                _sdelta    = price - self._shadow["price_entry"]
+                max_profit = (self._shadow_max_price - self._shadow["price_entry"]) * (5000.0 / self._shadow["price_entry"])
+                retreat    = self._shadow_max_price - price
             else:
-                current_pnl = self._shadow["price_entry"] - price
-                max_profit = self._shadow["price_entry"] - self._shadow_min_price
-                retreat = price - self._shadow_min_price
+                _sdelta    = self._shadow["price_entry"] - price
+                max_profit = (self._shadow["price_entry"] - self._shadow_min_price) * (5000.0 / self._shadow["price_entry"])
+                retreat    = price - self._shadow_min_price
+            current_pnl = _sdelta * (5000.0 / self._shadow["price_entry"])  # lordo — fee al close
 
             # -- COMPONENTE 1: MOMENTUM (peso 30) ---------------------
             # FORTE=30, MEDIO=20, DEBOLE=5
@@ -7830,11 +7904,32 @@ class OvertopBassanoV15Production:
             
             # -- PROFIT LOCK: mai perdere un profitto acquisito ----------
             # Se siamo in profitto e il prezzo è tornato indietro > 40% del massimo → esci
+            # MA: rispetta profit_lock_min dalle SuperCapsule Oracle
+            # Fee = $2.00. Non chiudere mai sotto $2.50 lordo (= $0.50 netto).
+            _cm_profit_min = 0.0
+            if hasattr(self, 'capsule_manager') and self.capsule_manager:
+                _veto_ctx = {
+                    'momentum':   getattr(self, '_last_momentum', 'MEDIO'),
+                    'volatility': getattr(self, '_last_volatility', 'MEDIA'),
+                    'trend':      getattr(self, '_last_trend', 'SIDEWAYS'),
+                    'direction':  entry_direction,
+                    'regime':     self._regime_current,
+                }
+                _cm_exit = self.capsule_manager.valuta(_veto_ctx)
+                _cm_profit_min = _cm_exit.get('profit_lock_min', 0.0)
+
+            # Soglia minima assoluta: $2.50 lordo (copre fee $2.00 + $0.50 profitto reale)
+            _profit_floor = max(_cm_profit_min, 2.50)
+
             if current_pnl > 0 and max_profit > 0:
-                retreat_pct_now = retreat / max_profit
-                if retreat_pct_now > 0.40:
-                    self._close_shadow_trade(price, f"PROFIT_LOCK_E{exit_energy}_WIN_{max_profit:+.0f}")
-                    return
+                # Non chiudere se il profitto lordo corrente è sotto il floor
+                if current_pnl < _profit_floor:
+                    pass  # aspetta che il profitto raggiunga almeno il floor
+                else:
+                    retreat_pct_now = retreat / max_profit
+                    if retreat_pct_now > 0.40:
+                        self._close_shadow_trade(price, f"PROFIT_LOCK_E{exit_energy}_WIN_{max_profit:+.0f}")
+                        return
 
             # -- DECISIONE ---------------------------------------------
             if exit_energy < exit_soglia:
@@ -7870,8 +7965,12 @@ class OvertopBassanoV15Production:
         Lo scalping a 10-15s con PnL $5-17 NON è profittevole in spot.
         Serve: futures (fee 0.07% RT) con leva, oppure trade più lunghi con PnL > $150.
         """
+        if getattr(self, "_shadow_closing", False):
+            return
+        self._shadow_closing = True
         try:
             if not self._shadow:
+                self._shadow_closing = False
                 return
             # PnL REALE FUTURES = delta_prezzo × quantita BTC nella posizione
             # CRITICO: usa la direzione al momento dell'ENTRY, non quella attuale
@@ -8038,6 +8137,13 @@ class OvertopBassanoV15Production:
             # -- PERSISTI IL CERVELLO - Oracolo, Memoria, Calibratore ----------
             self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
 
+            # ── CAPSULE EXECUTOR: monitora performance LIVE ────────────────
+            try:
+                if self.capsule_executor:
+                    self.capsule_executor.record_live_result(pnl, is_win)
+            except Exception as _ce_e:
+                log.debug(f"[CE_RECORD] {_ce_e}")
+
             # -- PERSISTI STATS M2 - sopravvivono ai restart ------------------
             try:
                 conn = sqlite3.connect(DB_PATH)
@@ -8099,6 +8205,88 @@ class OvertopBassanoV15Production:
             except Exception as _nr_e:
                 log.debug(f"[NARRATORE_TRADE] {_nr_e}")
 
+            # ── ORACLE WIN TRIGGER — cattura pattern vincente ────────────
+            # Ogni trade vincente genera snapshot e trigger per Oracle Auto.
+            # Oracle analizza perché ha vinto e genera capsule che amplifica quel pattern.
+            if is_win and self.heartbeat_data is not None:
+                try:
+                    _win_snapshot = {
+                        'ts':           datetime.utcnow().isoformat(),
+                        'pnl':          round(pnl, 4),
+                        'reason':       reason,
+                        'matrimonio':   self._shadow_matrimonio,
+                        'momentum':     self._shadow_entry_momentum,
+                        'volatility':   self._shadow_entry_volatility,
+                        'trend':        self._shadow_entry_trend,
+                        'regime':       self._regime_current,
+                        'oi_stato':     self._oi_stato,
+                        'oi_carica':    round(self._oi_carica, 3),
+                        'score':        round(self._shadow.get('score', 0) if self._shadow else 0, 1),
+                        'soglia':       round(self._shadow.get('soglia', 0) if self._shadow else 0, 1),
+                        'rsi':          round(getattr(self.campo, '_last_rsi', 50), 1),
+                        'macd_hist':    round(getattr(self.campo, '_last_macd_hist', 0), 4),
+                        'direction':    entry_direction,
+                        'duration_s':   round(trade_duration, 1),
+                    }
+                    # Conserva storico vincite (max 50)
+                    _win_history = self.heartbeat_data.get('oracle_win_history', [])
+                    _win_history.append(_win_snapshot)
+                    if len(_win_history) > 50:
+                        _win_history = _win_history[-50:]
+                    self.heartbeat_data['oracle_win_history'] = _win_history
+
+                    # Trigger Oracle solo per profit significativi (> $1 netto)
+                    # I micro-profit non hanno pattern solido da amplificare
+                    if pnl > 1.0:
+                        _fingerprint = f"{self._shadow_entry_momentum}|{self._shadow_entry_volatility}|{self._shadow_entry_trend}"
+                        _trigger = f"WIN_PATTERN_{_fingerprint}_pnl{pnl:.2f}_reason{reason[:20]}"
+                        self.heartbeat_data['oracle_trigger'] = _trigger
+                        log.info(f"[ORACLE_TRIGGER] 🟢 WIN_PATTERN: {_fingerprint} PnL={pnl:.2f}")
+                except Exception as _owt_e:
+                    log.debug(f"[ORACLE_WIN_TRIGGER] {_owt_e}")
+
+            # ── ORACLE LOSS TRIGGER — cattura pattern perdita ─────────────
+            # Ogni trade in perdita genera uno snapshot completo del contesto
+            # e scrive oracle_trigger nel heartbeat per svegliare Oracle Auto.
+            # Oracle analizza, capisce il pattern, genera capsule correttiva permanente.
+            if not is_win and self.heartbeat_data is not None:
+                try:
+                    _loss_snapshot = {
+                        'ts':           datetime.utcnow().isoformat(),
+                        'pnl':          round(pnl, 4),
+                        'pnl_gross':    round(pnl_gross, 4),
+                        'reason':       reason,
+                        'matrimonio':   self._shadow_matrimonio,
+                        'momentum':     self._shadow_entry_momentum,
+                        'volatility':   self._shadow_entry_volatility,
+                        'trend':        self._shadow_entry_trend,
+                        'regime':       self._regime_current,
+                        'oi_stato':     self._oi_stato,
+                        'oi_carica':    round(self._oi_carica, 3),
+                        'score':        round(self._shadow.get('score', 0) if self._shadow else 0, 1),
+                        'soglia':       round(self._shadow.get('soglia', 0) if self._shadow else 0, 1),
+                        'rsi':          round(getattr(self.campo, '_last_rsi', 50), 1),
+                        'macd_hist':    round(getattr(self.campo, '_last_macd_hist', 0), 4),
+                        'direction':    entry_direction,
+                        'duration_s':   round(trade_duration, 1),
+                        'm2_state':     self._state,
+                        'loss_streak':  self._m2_loss_streak,
+                    }
+                    # Conserva storico perdite (max 50)
+                    _loss_history = self.heartbeat_data.get('oracle_loss_history', [])
+                    _loss_history.append(_loss_snapshot)
+                    if len(_loss_history) > 50:
+                        _loss_history = _loss_history[-50:]
+                    self.heartbeat_data['oracle_loss_history'] = _loss_history
+
+                    # Trigger Oracle — pattern da analizzare
+                    _fingerprint = f"{self._shadow_entry_momentum}|{self._shadow_entry_volatility}|{self._shadow_entry_trend}"
+                    _trigger = f"LOSS_PATTERN_{_fingerprint}_pnl{pnl:.2f}_reason{reason[:20]}"
+                    self.heartbeat_data['oracle_trigger'] = _trigger
+                    log.info(f"[ORACLE_TRIGGER] 🔴 LOSS_PATTERN: {_fingerprint} PnL={pnl:.2f} reason={reason}")
+                except Exception as _olt_e:
+                    log.debug(f"[ORACLE_LOSS_TRIGGER] {_olt_e}")
+
             # -- EXPORT LATENCY STATS all'heartbeat ----------------------
             try:
                 if self.heartbeat_data is not None:
@@ -8127,6 +8315,7 @@ class OvertopBassanoV15Production:
             self._log_m2("💥", f"ERRORE close_shadow: {e}")
             log.error(f"[M2_CLOSE_ERROR] {e}\n{traceback.format_exc()}")
         finally:
+            self._shadow_closing = False
             # Reset shadow SEMPRE - anche se c'è un errore, non lasciare trade fantasma
             self._shadow                   = None
             self._shadow_entry_time        = None
@@ -8234,16 +8423,16 @@ class OvertopBassanoV15Production:
                 ph['min_price'] = price
 
             duration = time.time() - ph['entry_time']
-            # PnL bidirezionale - come il bot reale
-            if ph.get('direction', 'LONG') == 'SHORT':
-                pnl = ph['price_entry'] - price
-            else:
-                pnl = price - ph['price_entry']
+            # PnL LORDO USDC: fee esclusa dal monitoring (come il bot reale)
+            _ph_exp = 5000.0
+            _ph_btc = _ph_exp / ph['price_entry']
+            _ph_d   = price - ph['price_entry'] if ph.get('direction','LONG') == 'LONG' else ph['price_entry'] - price
+            pnl     = round(_ph_d * _ph_btc, 4)  # lordo — fee solo al close
             pnl_pct = (pnl / ph['price_entry']) * 100
 
             # -- Stesse regole di uscita del bot reale --
-            # Stop loss 2%
-            if pnl_pct < -2.0:
+            # Stop live lordo
+            if pnl < -self.STOP_LIVE:
                 to_close.append((i, price, "HARD_STOP"))
                 continue
             # DECEL (semplificato: dopo 15s se in perdita)
@@ -8289,7 +8478,7 @@ class OvertopBassanoV15Production:
                 pnl = pnl_gross - (exposure * self.FEE_PCT * 2)
                 
                 close_reason = None
-                if pnl < -(self.TRADE_SIZE_USD * 0.02):  # stop loss
+                if pnl < -self.STOP_LIVE:  # stop lordo $7
                     close_reason = "HARD_STOP_SIM"
                 elif duration > 15 and pnl < 0:
                     close_reason = "DECEL_SIM"
@@ -8361,12 +8550,16 @@ class OvertopBassanoV15Production:
                 }
 
             stats = self._phantom_stats[reason_key]
-            if is_win:
+            # Calcola PnL netto per statistiche (fee inclusa)
+            _ph_fee_final = self.FEE_TRADE  # $2.00 fissi
+            pnl_netto = pnl - _ph_fee_final
+            is_win_netto = pnl_netto > 0
+            if is_win_netto:
                 stats['would_win'] += 1
-                stats['pnl_missed'] += pnl   # soldi che NON abbiamo guadagnato
+                stats['pnl_missed'] += pnl_netto
             else:
                 stats['would_lose'] += 1
-                stats['pnl_saved'] += abs(pnl)   # soldi che NON abbiamo perso
+                stats['pnl_saved'] += abs(pnl_netto)
 
             result = {
                 'block_reason': block,
@@ -8745,6 +8938,8 @@ class OvertopBassanoV15Production:
                     "ia_stats":           (self.capsule_manager.get_stats()
                                            if self.capsule_manager
                                            else self.realtime_engine.get_stats()),
+                    "ce_stats":           (self.capsule_executor.get_dashboard_data()
+                                           if self.capsule_executor else {}),
                     # -- PRE-TRADE SIGNAL TRACKER ---------------------------
                     "signal_tracker": {
                         "open":      self.signal_tracker.get_open_count(),
@@ -8827,32 +9022,140 @@ class OvertopBassanoV15Production:
                     pass
 
                 # ── ia_capsule_attive — lista capsule vive per dashboard ──
+                # Include: CapsuleManager + capsule_ragionatore (RA) + CI attive
                 try:
+                    _caps_all = []
+                    _now_ts   = time.time()
+
+                    # 1. CapsuleManager (file JSON o get_active_capsules)
                     _cm = self.capsule_manager
                     if _cm and hasattr(_cm, 'get_active_capsules'):
-                        self.heartbeat_data["ia_capsule_attive"] = _cm.get_active_capsules()
+                        _caps_all += _cm.get_active_capsules()
                     elif _cm and hasattr(_cm, 'capsule_file'):
                         import json as _json
                         if os.path.exists(_cm.capsule_file):
                             with open(_cm.capsule_file) as _f:
-                                _caps = _json.load(_f)
-                            _now_ts = time.time()
-                            self.heartbeat_data["ia_capsule_attive"] = [
+                                _cj = _json.load(_f)
+                            _caps_all += [
                                 {
                                     'id':          c.get('id', c.get('capsule_id', '?')),
-                                    'tipo':        c.get('tipo', c.get('type', '?')),
+                                    'tipo':        c.get('tipo', c.get('type', 'CM')),
                                     'ttl_seconds': max(0, int(c.get('scade_ts', _now_ts) - _now_ts))
                                                    if c.get('scade_ts') else 0,
                                     'enabled':     c.get('enabled', True),
+                                    'fonte':       'CM',
                                 }
-                                for c in _caps if c.get('enabled', True)
+                                for c in _cj if c.get('enabled', True)
                             ]
+
+                    # 2. Capsule Ragionatore (RA) — tutte, nessun limite
+                    _caps_ra_hb = self.heartbeat_data.get('capsule_ragionatore', [])
+                    _ids_gia    = {c.get('id') for c in _caps_all}
+                    for _c in _caps_ra_hb:
+                        _cid  = _c.get('id', '')
+                        if not _cid or _cid in _ids_gia:
+                            continue
+                        # Calcola TTL
+                        _fonte = _c.get('fonte', '')
+                        if _fonte == 'PERMANENTE_DB':
+                            _ttl = 86400  # permanenti: 24h
                         else:
-                            self.heartbeat_data["ia_capsule_attive"] = []
-                    else:
-                        self.heartbeat_data["ia_capsule_attive"] = []
+                            try:
+                                from datetime import datetime as _dt3
+                                _ts_cap = _dt3.fromisoformat(_c.get('ts', '')).timestamp()
+                                _ttl = max(0, int(_c.get('vita', 600) - (_now_ts - _ts_cap)))
+                            except Exception:
+                                _ttl = _c.get('vita', 600)
+                        if _fonte == 'PERMANENTE_DB' or _ttl > 0:
+                            _caps_all.append({
+                                'id':          _cid,
+                                'tipo':        f"RA_{_c.get('azione','?')[:8]}",
+                                'ttl_seconds': _ttl,
+                                'enabled':     True,
+                                'fonte':       _fonte or 'RA',
+                                'motivo':      _c.get('motivo', '')[:60],
+                                'forza':       _c.get('forza', 0.65),
+                            })
+                            _ids_gia.add(_cid)
+
+                    # 3. CI capsule attive
+                    try:
+                        _ci_dash = self.ci.get_dashboard()
+                        for _c in _ci_dash.get('capsule_attive', []):
+                            _cid = _c.get('id', '')
+                            if _cid and _cid not in _ids_gia:
+                                _caps_all.append({
+                                    'id':          _cid,
+                                    'tipo':        'CI_' + _c.get('tipo', '?')[:6],
+                                    'ttl_seconds': _c.get('vita', 0),
+                                    'enabled':     True,
+                                    'fonte':       'CI',
+                                })
+                    except Exception:
+                        pass
+
+                    self.heartbeat_data["ia_capsule_attive"] = _caps_all
                 except Exception:
                     self.heartbeat_data["ia_capsule_attive"] = []
+
+            # ── ORACLE TRIGGER — event-driven anomaly detection ─────────
+            # Scrive oracle_trigger nel heartbeat quando rileva un'anomalia.
+            # Oracle Auto legge questo campo ogni 30s e si sveglia solo se non vuoto.
+            try:
+                _ot = None
+                _loss_streak = self._m2_loss_streak
+                _trades      = self._m2_trades
+                _pnl         = self._m2_pnl
+                _regime      = self._regime_current
+                _oi_stato    = self._oi_stato
+                _oi_carica   = self._oi_carica
+                _soglia      = self.campo.SOGLIA_BASE
+                _state       = self._state
+                _hc          = getattr(self, '_hardening_cycles', {})
+                _last_trade_ts = getattr(self, '_last_shadow_close_ts', 0)
+                _now_ts      = time.time()
+
+                # P1: Loss streak >= 2 — priorità massima
+                if _loss_streak >= 2 and not _ot:
+                    _ot = f"LOSS_STREAK_{_loss_streak}"
+
+                # P2: OI FUOCO ma 0 trade da più di 15 minuti
+                elif _oi_stato == "FUOCO" and _oi_carica >= 0.70 and _trades == 0 and not _ot:
+                    if _now_ts - getattr(self, '_boot_time', _now_ts) > 900:
+                        _ot = f"OI_FUOCO_ZERO_TRADE_carica{_oi_carica:.2f}"
+
+                # P3: Phantom Supervisor sta irrigidendo (cicli >= 3)
+                elif any(v >= 3 for v in _hc.values()) and not _ot:
+                    _max_cicli = max(_hc.values()) if _hc else 0
+                    _ot = f"PHANTOM_IRRIGIDISCE_cicli{_max_cicli}"
+
+                # P4: PnL sessione negativo oltre -$15
+                elif _pnl < -15.0 and not _ot:
+                    _ot = f"PNL_DRAWDOWN_{abs(_pnl):.0f}usd"
+
+                # P5: Regime EXPLOSIVE ma 0 trade
+                elif _regime == "EXPLOSIVE" and _trades == 0 and not _ot:
+                    if _now_ts - getattr(self, '_boot_time', _now_ts) > 300:
+                        _ot = "EXPLOSIVE_ZERO_TRADE"
+
+                # P6: Stato DIFENSIVO da più di 10 minuti senza trade
+                elif _state == "DIFENSIVO" and _trades == 0 and not _ot:
+                    _state_since = getattr(self, '_state_since', _now_ts)
+                    if _now_ts - _state_since > 600:
+                        _ot = f"DIFENSIVO_BLOCCATO_{int((_now_ts-_state_since)/60)}min"
+
+                # Scrivi trigger (o cancella se nessuna anomalia)
+                if _ot:
+                    _existing = self.heartbeat_data.get('oracle_trigger', '')
+                    # Non sovrascrivere se stesso trigger — evita loop
+                    if _ot != _existing:
+                        self.heartbeat_data['oracle_trigger'] = _ot
+                        log.info(f"[ORACLE_TRIGGER] 🔔 {_ot}")
+                else:
+                    self.heartbeat_data['oracle_trigger'] = ''
+
+            except Exception as _ote:
+                log.warning(f"[ORACLE_TRIGGER] error: {_ote}")
 
             self.heartbeat_lock.release()
 
