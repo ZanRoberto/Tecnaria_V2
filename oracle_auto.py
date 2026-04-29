@@ -515,7 +515,14 @@ def _extract_capsule(text: str):
 def _apply_capsule(capsule: dict, trigger: str) -> bool:
     try:
         db_path  = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
-        cap_id   = capsule.get("id", f"SC_{int(time.time())}")
+        # Normalizza ID: rimuovi timestamp finale per ottenere ID stabile
+        # SC_BLOCCA_RANGING_1777449089 → SC_BLOCCA_RANGING
+        # Così lo stesso pattern genera sempre lo stesso ID — no duplicati
+        _raw_id = capsule.get("id", f"SC_{int(time.time())}")
+        import re as _re
+        cap_id = _re.sub(r'_\d{9,10}$', '', _raw_id)  # rimuove _UNIX_TS finale
+        if not cap_id:
+            cap_id = _raw_id
         asset    = capsule.get("asset",    "BTCUSDC")
         livello  = capsule.get("livello",  "AUTO")
         tipo     = capsule.get("tipo",     "VETO")
@@ -549,10 +556,22 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
         conn = sqlite3.connect(db_path, timeout=10)
         c    = conn.cursor()
 
-        if c.execute("SELECT id FROM capsule WHERE id=?", (cap_id,)).fetchone():
-            _p(f"Capsule {cap_id} gia presente — skip")
-            conn.close()
-            return False
+        _existing = c.execute(
+            "SELECT id, enabled FROM capsule WHERE id=?", (cap_id,)
+        ).fetchone()
+        if _existing:
+            if _existing[1] == 0:
+                # Era disabilitata (Phantom l'aveva rimossa) — riabilita con nuovi dati
+                c.execute("UPDATE capsule SET enabled=1, created_ts=? WHERE id=?",
+                          (time.time(), cap_id))
+                conn.commit()
+                conn.close()
+                _p(f"Capsule {cap_id} riabilitata — nuovo trigger Oracle")
+                return True
+            else:
+                _p(f"Capsule {cap_id} gia attiva — skip (ID stabile)")
+                conn.close()
+                return False
 
         # Verifica colonne disponibili nel DB (versioni diverse possono mancare di colonne)
         try:
@@ -591,7 +610,7 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
         conn.commit()
         conn.close()
 
-        _p(f"Capsule {cap_id} inserita — attiva al prossimo tick — zero deploy")
+        _p(f"Capsule {cap_id} inserita — PERMANENTE (Phantom decide la morte) — zero deploy")
 
         hb = _get_hb()
         if hb is not None:
