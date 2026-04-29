@@ -5734,6 +5734,12 @@ class OvertopBassanoV15Production:
                 self._emit_bridge_event("EVENT_FUOCO", _fuoco_payload)
                 self.telemetry.log_event_signal("FUOCO", _fuoco_payload)
                 self._last_fuoco_event_ts = _now_ev
+                # FIX FUOCO_IMMEDIATE: EVENT_FUOCO sblocca entry sul tick successivo.
+                # Senza questo il motore entry aspetta fino a 1s (ANTI_DUPLICATE).
+                # Con questo: il tick vede FUOCO → porta aperta immediatamente.
+                if not self._shadow:
+                    self._last_entry_tick = 0
+                    self._log_m2("🔥", f"FUOCO_IMMEDIATE: entry sbloccata carica={self._oi_carica:.2f}")
 
         # -- HEARTBEAT M2 - ogni 60s conferma che M2 è vivo ---------------
         if now - self._last_m2_heartbeat > 60:
