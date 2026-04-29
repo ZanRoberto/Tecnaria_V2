@@ -7159,13 +7159,32 @@ class OvertopBassanoV15Production:
                 momentum, volatility, trend).get("name", "WEAK_NEUTRAL")
             fantasma_info = self.oracolo.is_fantasma(momentum, volatility, trend, _dir)
 
+            # ── EXPLOSIVE OVERRIDE ──────────────────────────────────────────
+            # Se precursori EVENT_FUOCO + EVENT_PREBREAKOUT recenti (<30s)
+            # e OI carica >= 0.80 e regime RANGING → usa EXPLOSIVE per questo
+            # tick senza modificare _regime_current ufficiale (aggiornato ogni 60s)
+            _now_eo      = time.time()
+            _fuoco_age   = _now_eo - getattr(self, '_last_fuoco_event_ts', 0)
+            _pb_age      = _now_eo - getattr(self, '_last_pb_event_ts', 0)
+            _eo_carica   = getattr(self, '_oi_carica', 0.0)
+            if (_fuoco_age < 30 and _pb_age < 30
+                    and _eo_carica >= 0.80
+                    and self._regime_current == 'RANGING'):
+                _effective_regime = 'EXPLOSIVE'
+                self._log_m2("⚡", f"EXPLOSIVE_OVERRIDE fuoco={_fuoco_age:.1f}s "
+                                   f"pb={_pb_age:.1f}s carica={_eo_carica:.2f} "
+                                   f"→ regime locale EXPLOSIVE (ufficiale={self._regime_current})")
+            else:
+                _effective_regime = self._regime_current
+            # ────────────────────────────────────────────────────────────────
+
             result = self.campo.evaluate(
                 seed_score        = seed['score'],
                 fingerprint_wr    = fingerprint_wr,
                 momentum          = momentum,
                 volatility        = volatility,
                 trend             = trend,
-                regime            = self._regime_current,
+                regime            = _effective_regime,
                 matrimonio_name   = matrimonio_name,
                 divorzio_set      = self.memoria.divorzio,
                 fantasma_info     = fantasma_info,
