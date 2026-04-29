@@ -5734,12 +5734,6 @@ class OvertopBassanoV15Production:
                 self._emit_bridge_event("EVENT_FUOCO", _fuoco_payload)
                 self.telemetry.log_event_signal("FUOCO", _fuoco_payload)
                 self._last_fuoco_event_ts = _now_ev
-                # FIX FUOCO_IMMEDIATE: EVENT_FUOCO sblocca entry sul tick successivo.
-                # Senza questo il motore entry aspetta fino a 1s (ANTI_DUPLICATE).
-                # Con questo: il tick vede FUOCO → porta aperta immediatamente.
-                if not self._shadow:
-                    self._last_entry_tick = 0
-                    self._log_m2("🔥", f"FUOCO_IMMEDIATE: entry sbloccata carica={self._oi_carica:.2f}")
 
         # -- HEARTBEAT M2 - ogni 60s conferma che M2 è vivo ---------------
         if now - self._last_m2_heartbeat > 60:
@@ -5845,9 +5839,9 @@ class OvertopBassanoV15Production:
             'fingerprint_n':    self.oracolo._memory.get(
                                     self.oracolo._fp(momentum, volatility, trend),
                                     {}).get('samples', 0),
-            'regime':           'trending' if momentum == 'FORTE' and volatility == 'BASSA'
-                                else ('choppy'  if volatility == 'ALTA'
-                                else ('lateral' if momentum == 'DEBOLE' else 'normal')),
+            'regime':           self._regime_current,  # FIX: regime reale per match capsule SC_
+            'oi_stato':         self._oi_stato,         # FIX: aggiunto per trigger Oracle
+            'oi_carica':        self._oi_carica,        # FIX: aggiunto per trigger Oracle
             'mode':             'PAPER' if self.paper_trade else 'LIVE',
             'loss_consecutivi': self._loss_consecutivi(),
             'ultimo_exit_type': self._last_exit_type,
