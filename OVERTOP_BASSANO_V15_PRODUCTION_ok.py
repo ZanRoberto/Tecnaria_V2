@@ -7178,6 +7178,16 @@ class OvertopBassanoV15Production:
                 _effective_regime = self._regime_current
             # ────────────────────────────────────────────────────────────────
 
+            # In EXPLOSIVE override il divorzio matrimonio viene sospeso:
+            # la finestra è di 30s, il contesto è cambiato, la memoria storica
+            # non deve bloccare. Il divorzio resta nel DB — vale solo ora.
+            _divorzio_per_evaluate = (set()
+                                      if _effective_regime == 'EXPLOSIVE'
+                                      else self.memoria.divorzio)
+            if _effective_regime == 'EXPLOSIVE' and self.memoria.divorzio:
+                self._log_m2("⚡", f"EXPLOSIVE_OVERRIDE: divorzio sospeso per questo tick "
+                                   f"({list(self.memoria.divorzio)})")
+
             result = self.campo.evaluate(
                 seed_score        = seed['score'],
                 fingerprint_wr    = fingerprint_wr,
@@ -7186,7 +7196,7 @@ class OvertopBassanoV15Production:
                 trend             = trend,
                 regime            = _effective_regime,
                 matrimonio_name   = matrimonio_name,
-                divorzio_set      = self.memoria.divorzio,
+                divorzio_set      = _divorzio_per_evaluate,
                 fantasma_info     = fantasma_info,
                 loss_consecutivi  = self._m2_loss_consecutivi(),
                 soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend),
@@ -7273,10 +7283,13 @@ class OvertopBassanoV15Production:
                     # REGOLA AGGIORNATA 21/04/2026:
                     # DEBOLE|ALTA|SIDEWAYS rimosso — Signal Tracker V15 WR=73% su 1632 campioni
                     # Rimangono invalicabili solo FORTE e MEDIO con ALTA|SIDEWAYS (WR basso confermato)
+                    # INVALICABILE solo in RANGING — in EXPLOSIVE la finestra è reale
+                    # DEBOLE|ALTA|SIDEWAYS: WR < 20% in RANGING, ma in EXPLOSIVE il movimento è diverso
                     _contesto_invalicabile = (
                         volatility == "ALTA" and
                         trend == "SIDEWAYS" and
-                        momentum in ("MEDIO", "FORTE")  # DEBOLE rimosso: dati reali V15 dicono WR 73%
+                        momentum in ("MEDIO", "FORTE", "DEBOLE") and
+                        _effective_regime != "EXPLOSIVE"  # in EXPLOSIVE nessun contesto è invalicabile
                     )
                     if _contesto_invalicabile:
                         _fuoco_estremo = False
