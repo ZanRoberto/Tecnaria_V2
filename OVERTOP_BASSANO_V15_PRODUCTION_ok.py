@@ -7232,6 +7232,12 @@ class OvertopBassanoV15Production:
                             if (_pb.get('momentum','') == momentum and
                                 _pb.get('volatility','') == volatility and
                                 _pb.get('trend','') == trend):
+                                # In EXPLOSIVE override il RA_BLOCCA_CONTESTO non ha autorità
+                                # La finestra EXPLOSIVE è reale — i dati storici RANGING non valgono
+                                if _effective_regime == 'EXPLOSIVE':
+                                    self._log_m2("⚡", f"RA_BLOCCA_CONTESTO ignorato in EXPLOSIVE: "
+                                                       f"{_cap_b.get('id','')} {momentum}|{volatility}|{trend}")
+                                    continue
                                 self._log_m2("🤖", f"RA_BLOCCA_CONTESTO_PRIORITY: {_cap_b.get('id','')} "
                                                    f"blocca {momentum}|{volatility}|{trend} "
                                                    f"PRIMA del FUOCO bypass")
