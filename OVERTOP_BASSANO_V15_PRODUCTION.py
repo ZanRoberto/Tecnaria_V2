@@ -7122,13 +7122,11 @@ class OvertopBassanoV15Production:
 
     def _evaluate_shadow_entry(self, price, momentum, volatility, trend):
         """
-        MOTORE ENTRY V15+V16
+        MOTORE ENTRY V15+V16 — SEMPLIFICATO
         
-        Usa CampoGravitazionale V15 per lo score.
-        Usa CompartoEngine V16 per l'assetto.
-        Usa BreathEngine V16 per il timing.
-        
-        Zero gate silenziosi — ogni blocco ha motivo esplicito.
+        Due percorsi:
+        1. EXPLOSIVE con carica >= 0.80 → ENTRA SEMPRE, nessun gate
+        2. Tutto il resto → gate normali
         """
         try:
             # ── ANTI-DUPLICATE ─────────────────────────────────────────────
@@ -7150,43 +7148,59 @@ class OvertopBassanoV15Production:
                 self._log_m2("🔇", f"SEED_INSUFFICIENTE score={seed.get('score',0):.2f}")
                 return
 
-            # ── CAMPO GRAVITAZIONALE: calcola score e soglia ─────────────────
             _dir           = self.campo._direction
             fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend, _dir)
             self._last_fingerprint_wr = fingerprint_wr
-
             matrimonio_name = MatrimonioIntelligente.get_marriage(
                 momentum, volatility, trend).get("name", "WEAK_NEUTRAL")
-            fantasma_info = self.oracolo.is_fantasma(momentum, volatility, trend, _dir)
 
-            # ── EXPLOSIVE OVERRIDE ──────────────────────────────────────────
-            # Se precursori EVENT_FUOCO + EVENT_PREBREAKOUT recenti (<30s)
-            # e OI carica >= 0.80 e regime RANGING → usa EXPLOSIVE per questo
-            # tick senza modificare _regime_current ufficiale (aggiornato ogni 60s)
-            _now_eo      = time.time()
-            _fuoco_age   = _now_eo - getattr(self, '_last_fuoco_event_ts', 0)
-            _pb_age      = _now_eo - getattr(self, '_last_pb_event_ts', 0)
-            _eo_carica   = getattr(self, '_oi_carica', 0.0)
+            # ── CALCOLA EFFECTIVE REGIME ─────────────────────────────────────
+            _now_eo    = time.time()
+            _fuoco_age = _now_eo - getattr(self, '_last_fuoco_event_ts', 0)
+            _pb_age    = _now_eo - getattr(self, '_last_pb_event_ts', 0)
+            _eo_carica = getattr(self, '_oi_carica', 0.0)
             if (_fuoco_age < 30 and _pb_age < 30
                     and _eo_carica >= 0.80
                     and self._regime_current == 'RANGING'):
                 _effective_regime = 'EXPLOSIVE'
                 self._log_m2("⚡", f"EXPLOSIVE_OVERRIDE fuoco={_fuoco_age:.1f}s "
-                                   f"pb={_pb_age:.1f}s carica={_eo_carica:.2f} "
-                                   f"→ regime locale EXPLOSIVE (ufficiale={self._regime_current})")
+                                   f"pb={_pb_age:.1f}s carica={_eo_carica:.2f}")
             else:
                 _effective_regime = self._regime_current
-            # ────────────────────────────────────────────────────────────────
 
-            # In EXPLOSIVE override il divorzio matrimonio viene sospeso:
-            # la finestra è di 30s, il contesto è cambiato, la memoria storica
-            # non deve bloccare. Il divorzio resta nel DB — vale solo ora.
-            _divorzio_per_evaluate = (set()
-                                      if _effective_regime == 'EXPLOSIVE'
-                                      else self.memoria.divorzio)
-            if _effective_regime == 'EXPLOSIVE' and self.memoria.divorzio:
-                self._log_m2("⚡", f"EXPLOSIVE_OVERRIDE: divorzio sospeso per questo tick "
-                                   f"({list(self.memoria.divorzio)})")
+            # ═══════════════════════════════════════════════════════════════
+            # PERCORSO 1: EXPLOSIVE con carica alta — ENTRA SEMPRE
+            # Nessun gate. Nessuna capsula blocca. Solo il CapsuleManager
+            # può agire su size e soglia — mai bloccare.
+            # ═══════════════════════════════════════════════════════════════
+            if _effective_regime == 'EXPLOSIVE' and _eo_carica >= 0.80:
+                # Size proporzionale alla carica
+                size = round(min(1.0, max(0.30, _eo_carica)), 2)
+                score = 75.0
+                soglia = 50.0
+
+                # CapsuleManager può modificare size ma NON bloccare
+                if self.capsule_manager:
+                    _cm_ctx = {
+                        'momentum': momentum, 'volatility': volatility,
+                        'trend': trend, 'direction': _dir,
+                        'regime': _effective_regime,
+                        'oi_carica': _eo_carica,
+                    }
+                    _cm = self.capsule_manager.valuta(_cm_ctx)
+                    size = round(min(1.0, max(0.30, size * _cm.get('size_mult', 1.0))), 2)
+
+                self._log_m2("🚀", f"EXPLOSIVE ENTRY {_dir} carica={_eo_carica:.2f} "
+                                   f"size={size:.2f} {momentum}|{volatility}|{trend}")
+                self._open_shadow_position(price, score, soglia, seed, size,
+                                            momentum, volatility, trend,
+                                            matrimonio_name, fingerprint_wr)
+                return
+
+            # ═══════════════════════════════════════════════════════════════
+            # PERCORSO 2: tutto il resto — gate normali
+            # ═══════════════════════════════════════════════════════════════
+            fantasma_info = self.oracolo.is_fantasma(momentum, volatility, trend, _dir)
 
             result = self.campo.evaluate(
                 seed_score        = seed['score'],
@@ -7196,361 +7210,42 @@ class OvertopBassanoV15Production:
                 trend             = trend,
                 regime            = _effective_regime,
                 matrimonio_name   = matrimonio_name,
-                divorzio_set      = _divorzio_per_evaluate,
+                divorzio_set      = self.memoria.divorzio,
                 fantasma_info     = fantasma_info,
                 loss_consecutivi  = self._m2_loss_consecutivi(),
                 soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend),
             )
 
-            # ── CAPSULE STATIC — veto assoluto MA gestibile dalla CI ────────
             if result['veto']:
-                veto = result['veto']
-                is_tossico = (veto.startswith("TOSSICO") or
-                              veto.startswith("CM_TOSSICO") or
-                              veto.startswith("STATIC_TOSSICO") or
-                              veto.startswith("DIVORZIO"))
+                self._log_m2("🚫", f"VETO: {result['veto']}")
+                if len(self._phantoms_open) < 5:
+                    self._record_phantom(price, result['veto'], seed['score'],
+                                         momentum, volatility, trend)
+                return
 
-                if is_tossico:
-                    # ── BLOCCA_CONTESTO RA_ ha priorità assoluta sul FUOCO bypass ──
-                    # Il Ragionatore genera BLOCCA_CONTESTO quando vede perdite sistematiche.
-                    # Questa capsula deve prevalere anche sul FUOCO bypass — altrimenti
-                    # il sistema entra cieco ignorando la decisione del Ragionatore.
-                    try:
-                        _caps_ra_blocca = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
-                        _now_ra_blocca = time.time()
-                        for _cap_b in _caps_ra_blocca:
-                            if _cap_b.get('azione') != 'BLOCCA_CONTESTO':
-                                continue
-                            try:
-                                from datetime import datetime as _dt5
-                                _cap_ts_b = _dt5.fromisoformat(_cap_b.get('ts', '')).timestamp()
-                                if _now_ra_blocca - _cap_ts_b > _cap_b.get('vita', 600):
-                                    continue
-                            except Exception:
-                                pass
-                            _pb = _cap_b.get('params', {})
-                            if (_pb.get('momentum','') == momentum and
-                                _pb.get('volatility','') == volatility and
-                                _pb.get('trend','') == trend):
-                                # In EXPLOSIVE override il RA_BLOCCA_CONTESTO non ha autorità
-                                # La finestra EXPLOSIVE è reale — i dati storici RANGING non valgono
-                                if _effective_regime == 'EXPLOSIVE':
-                                    self._log_m2("⚡", f"RA_BLOCCA_CONTESTO ignorato in EXPLOSIVE: "
-                                                       f"{_cap_b.get('id','')} {momentum}|{volatility}|{trend}")
-                                    continue
-                                self._log_m2("🤖", f"RA_BLOCCA_CONTESTO_PRIORITY: {_cap_b.get('id','')} "
-                                                   f"blocca {momentum}|{volatility}|{trend} "
-                                                   f"PRIMA del FUOCO bypass")
-                                if len(self._phantoms_open) < 5:
-                                    self._record_phantom(price, f"RA_BLOCCA_{momentum}_{volatility}_{trend}",
-                                                         seed['score'], momentum, volatility, trend)
-                                return
-                    except Exception as _bcp_e:
-                        log.debug(f"[BLOCCA_PRIORITY] {_bcp_e}")
-
-                    # Controlla se OI FUOCO estremo può bypassare STATIC
-                    _fuoco_estremo = (self._oi_stato == "FUOCO" and
-                                      self._oi_carica >= 0.85)
-
-                    # ── CI OVERRIDE: le capsule possono ribaltare il VETO ────
-                    # Quando la CI ha evidenza live più forte del VETO storico,
-                    # la CI vince. Il VETO è una regola del passato — la CI
-                    # porta dati del presente.
-                    _ci_override = False
-                    if veto.startswith("STATIC_TOSSICO") and not veto.startswith("DIVORZIO"):
-                        try:
-                            _ci_mods_veto = self.ci.get_entry_mods()
-                            # CI può ribaltare il VETO se:
-                            # 1. Ha almeno una capsula OPPORTUNITA attiva
-                            # 2. Signal Tracker conferma hit_rate >= 0.63 su 300+ campioni
-                            # OPPURE: OI_ESTREMO >= 0.95 — il mercato urla, nessuna soglia regge
-                            _ci_caps_forti = [
-                                c for c in _ci_mods_veto.get('motivi', [])
-                                if 'RANGING_EDGE' in c or 'FUOCO_WINDOW' in c or 'OI_ESTREMO' in c
-                            ]
-                            _oi_estremo_bypass = (
-                                'CI_OI_ESTREMO' in self.ci._capsule_attive and
-                                self._oi_carica >= 0.95
-                            )
-                            _st_top = self.signal_tracker.dump_top(3)
-                            _st_edge = any(
-                                s.get('hit_60s', 0) >= 0.63 and s.get('n', 0) >= 300
-                                for s in _st_top
-                            )
-                            if _oi_estremo_bypass:
-                                _ci_override = True
-                                _motivo_ci = f"CI_OI_ESTREMO: carica={self._oi_carica:.3f} — dichiarazione fisica"
-                            elif _ci_caps_forti and _st_edge:
-                                _ci_override = True
-                                _motivo_ci = f"CI_OVERRIDE_VETO: ST_hit>63% + capsule={_ci_caps_forti}"
-                        except Exception:
-                            pass
-
-                    # REGOLA AGGIORNATA 21/04/2026:
-                    # DEBOLE|ALTA|SIDEWAYS rimosso — Signal Tracker V15 WR=73% su 1632 campioni
-                    # Rimangono invalicabili solo FORTE e MEDIO con ALTA|SIDEWAYS (WR basso confermato)
-                    # INVALICABILE solo in RANGING — in EXPLOSIVE la finestra è reale
-                    # DEBOLE|ALTA|SIDEWAYS: WR < 20% in RANGING, ma in EXPLOSIVE il movimento è diverso
-                    _contesto_invalicabile = (
-                        volatility == "ALTA" and
-                        trend == "SIDEWAYS" and
-                        momentum in ("MEDIO", "FORTE", "DEBOLE") and
-                        _effective_regime != "EXPLOSIVE"  # in EXPLOSIVE nessun contesto è invalicabile
-                    )
-                    if _contesto_invalicabile:
-                        _fuoco_estremo = False
-                        _ci_override = False
-                        self._log_m2("🧱", f"CONTESTO_INVALICABILE: {momentum}|ALTA|SIDEWAYS — nessun bypass")
-
-                    if veto.startswith("STATIC_TOSSICO") and (_fuoco_estremo or _ci_override):
-                        if _fuoco_estremo:
-                            self._log_m2("🔥", f"STATIC bypassed — FUOCO carica={self._oi_carica:.2f}")
-                        else:
-                            self._log_m2("💊", f"STATIC bypassed — CI ha autorità: {_motivo_ci}")
-
-                        # FIX: evaluate si è fermato al veto → score=0, size=0
-                        # Ricalcola score dai componenti che abbiamo già
-                        _rsi_now = getattr(self.campo, '_last_rsi', 50.0)
-                        _macd_now = getattr(self.campo, '_last_macd_hist', 0.0)
-                        _score_bypass = round(
-                            seed['score'] * 25 +
-                            fingerprint_wr * 25 +
-                            (10.0 if 40 < _rsi_now < 70 else 4.0) +
-                            (10.0 if abs(_macd_now) > 1 else 0.0),
-                            1
-                        ) if seed.get('score', 0) > 0 else 20.0
-
-                        result['enter'] = True
-                        result['score'] = _score_bypass
-                        result['size']  = max(result.get('size', 0), 0.15)
-                        self._log_m2("📊", f"Score bypass: {_score_bypass:.1f} size={result['size']:.2f}")
-
-                        # SOGLIA MINIMA ASSOLUTA nel bypass FUOCO
-                        # Quando il campo restituisce soglia=0 (VETO prima del calcolo)
-                        # non permettere entry sotto score 40 — sistema non può essere cieco
-                        _soglia_bypass_min = 25.0
-                        if _score_bypass < _soglia_bypass_min:
-                            result['enter'] = False
-                            self._log_m2("🛑", f"BYPASS BLOCCATO: score {_score_bypass:.1f} < soglia_min {_soglia_bypass_min:.1f}")
-                    else:
-                        self._log_m2("🚫", f"VETO_TOSSICO: {veto}")
-                        if len(self._phantoms_open) < 5:
-                            self._record_phantom(price, veto, seed['score'],
-                                                 momentum, volatility, trend)
-                        return
-                else:
-                    self._log_m2("🚫", f"VETO: {veto}")
-                    if len(self._phantoms_open) < 5:
-                        self._record_phantom(price, veto, seed['score'],
-                                             momentum, volatility, trend)
-                    return
-
-            # ── BOOT GUARD — warmup RSI 20 campioni + 60 secondi ────────────
+            # Warmup
             _warmup_rsi = len(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else 0
             if _warmup_rsi < 20:
                 self._log_m2("⏳", f"BOOT_GUARD: warmup RSI {_warmup_rsi}/20")
                 return
             if not hasattr(self, '_warmup_done_time'):
                 self._warmup_done_time = time.time()
-                self._log_m2("✅", "BOOT_GUARD: warmup OK — aspetto 60s")
             if time.time() - self._warmup_done_time < 10:
-                self._log_m2("⏳", f"BOOT_GUARD: {10-(time.time()-self._warmup_done_time):.0f}s al via")
                 return
 
-            # ── SCORE vs SOGLIA ──────────────────────────────────────────────
             score  = result['score']
             soglia = result['soglia']
 
             if not result['enter']:
-                # SHORT senza dati reali — blocca
-                if _dir == "SHORT":
-                    _short_key = f"SHORT|{momentum}|{volatility}|{trend}"
-                    _short_mem = self.oracolo._memory.get(_short_key, {})
-                    _short_real = _short_mem.get('real_samples', 0)
-                    _short_wr   = _short_mem.get('wr', 0)
-                    if _short_real < 5 or _short_wr < 0.40:
-                        self._log_m2("🔇",
-                            f"SHORT_NO_DATA: {_short_key} real={_short_real} wr={_short_wr:.0%}")
-                        return
+                self._log_m2("🔇", f"SCORE_SOTTO: {score:.1f} vs {soglia:.1f}")
+                if score > 50 and len(self._phantoms_open) < 5:
+                    self._record_phantom(price, f"SCORE_{score:.0f}_vs_{soglia:.0f}",
+                                         seed['score'], momentum, volatility, trend)
+                return
 
-                # OI FUOCO può bypassare se il score è vicino
-                _fuoco_ok = (self._oi_stato == "FUOCO" and
-                             self._oi_carica >= 0.65 and
-                             self._regime_current != "EXPLOSIVE" and
-                             self._m2_loss_streak < 2)
-                if not _fuoco_ok:
-                    self._log_m2("🔇",
-                        f"SCORE_SOTTO: {score:.1f} vs {soglia:.1f} gap={soglia-score:.1f}")
-                    if score > 50 and len(self._phantoms_open) < 5:
-                        self._record_phantom(price,
-                            f"SCORE_{score:.0f}_vs_{soglia:.0f}",
-                            seed['score'], momentum, volatility, trend)
-                    return
-                else:
-                    result['enter'] = True
-                    result['size']  = min(result.get('size', 1.0), 0.3)
-                    self._log_m2("🔥",
-                        f"FUOCO bypass score — carica={self._oi_carica:.2f}")
-
-            # ── BREATH ENGINE: conferma timing entry ─────────────────────────
-            # BYPASS: OI FUOCO >= 0.85 — Veritas dimostra FUOCO|BLOCCA sbagliato
-            # nel 65% dei casi. Quando l'energia di mercato è dichiarata al 85%+
-            # il breath non ha autorità di bloccare.
-            _fuoco_bypass_breath = (self._oi_stato == "FUOCO" and
-                                    self._oi_carica >= 0.85)
-            if _V16_ENGINES_OK and self._breath and not _fuoco_bypass_breath:
-                _nerv_val = getattr(self._nerv, '_nervosismo', 0.3) if self._nerv else 0.3
-                b_entry = self._breath.segnale_entry(_dir, _nerv_val)
-                if not b_entry["ok"]:
-                    self._log_m2("🌬",
-                        f"BREATH_BLOCCA: {b_entry['motivo']}")
-                    if len(self._phantoms_open) < 5:
-                        self._record_phantom(price, f"BREATH_{b_entry['fase']}",
-                                             seed['score'], momentum, volatility, trend)
-                    return
-                else:
-                    self._log_m2("🌬",
-                        f"BREATH_OK: {b_entry['motivo']} energia={b_entry.get('energia',0):.1f}")
-            elif _fuoco_bypass_breath:
-                self._log_m2("🔥",
-                    f"BREATH_BYPASS — FUOCO carica={self._oi_carica:.2f} prevale")
-
-            # ── COMPARTO: dimensiona la size in base all'assetto ─────────────
-            if _V16_ENGINES_OK and self._comparto:
-                _comp_nome   = self._comparto._attivo
-                _comp_attivo = COMPARTI.get(_comp_nome)
-                if _comp_attivo:
-                    result['size'] = min(
-                        result.get('size', 1.0),
-                        _comp_attivo.size_default
-                    )
-
-            # ── NERVOSISMO: size ridotta in RAIN ─────────────────────────────
-            if _V16_ENGINES_OK and self._nerv:
-                _gomme = getattr(self._nerv, '_gomme_attuale', 'INTER')
-                if _gomme == "RAIN":
-                    result['size'] = min(result.get('size', 1.0), 0.15)
-                    self._log_m2("🌧", "RAIN — size ridotta a 0.15x")
-                elif _gomme == "SLICK":
-                    # Pista asciutta — size piena
-                    pass
-
-            # ── BOOST_SEED dalle capsule RA_ del Ragionatore ────────────────
-            # Quando il sistema è cieco (seed basso, fp=0) il Ragionatore
-            # genera BOOST_SEED per rompere il paradosso zero-trade.
-            # Il boost viene applicato allo score direttamente.
-            try:
-                _caps_ra = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
-                _now_ra  = time.time()
-                _boost_seed_delta = 0.0
-                for _cap in _caps_ra:
-                    if _cap.get('azione') != 'BOOST_SEED':
-                        continue
-                    # Verifica scadenza
-                    try:
-                        from datetime import datetime as _dt3
-                        _cap_ts = _dt3.fromisoformat(_cap.get('ts', '')).timestamp()
-                        if _now_ra - _cap_ts > _cap.get('vita', 300):
-                            continue
-                    except Exception:
-                        pass
-                    _delta = _cap.get('params', {}).get('delta', 0)
-                    _forza = min(0.65, _cap.get('forza', 0.5))
-                    _boost_seed_delta += _delta * _forza
-                if _boost_seed_delta > 0:
-                    _score_prima = result.get('score', score)
-                    result['score'] = round(_score_prima + _boost_seed_delta, 1)
-                    score = result['score']
-                    # Se ora supera la soglia → entra
-                    # SOGLIA MINIMA ASSOLUTA: mai entrare sotto 40 anche con BOOST_SEED
-                    # Evita entry cieche quando soglia=0 (sistema non ancora calibrato)
-                    _soglia_eff = max(soglia, 40.0)
-                    if not result.get('enter') and score >= _soglia_eff:
-                        result['enter'] = True
-                        result['size']  = max(result.get('size', 0), 0.15)
-                    self._log_m2("🤖", f"RA_BOOST_SEED: score {_score_prima:.1f}→{score:.1f} "
-                                      f"(delta={_boost_seed_delta:.1f}) soglia_eff={_soglia_eff:.1f}")
-            except Exception as _bs_e:
-                log.debug(f"[BOOST_SEED_ERR] {_bs_e}")
-
-            # ── BLOCCA_CONTESTO dalle capsule RA_ del Ragionatore ────────────
-            # Quando il Ragionatore vede WR reale < 20% su un contesto specifico
-            # genera BLOCCA_CONTESTO — veto dinamico basato su dati reali.
-            # Più potente del VETO_TOSSICO statico perché nasce dall'esperienza viva.
-            try:
-                _caps_ra = (self.heartbeat_data or {}).get("capsule_ragionatore", [])
-                _now_ra  = time.time()
-                for _cap in _caps_ra:
-                    if _cap.get('azione') != 'BLOCCA_CONTESTO':
-                        continue
-                    # Verifica scadenza
-                    try:
-                        from datetime import datetime as _dt4
-                        _cap_ts = _dt4.fromisoformat(_cap.get('ts', '')).timestamp()
-                        if _now_ra - _cap_ts > _cap.get('vita', 1800):
-                            continue
-                    except Exception:
-                        pass
-                    # Controlla se il contesto corrente corrisponde
-                    _params = _cap.get('params', {})
-                    _match_mom = _params.get('momentum', '') == momentum
-                    _match_vol = _params.get('volatility', '') == volatility
-                    _match_trd = _params.get('trend', '') == trend
-                    if _match_mom and _match_vol and _match_trd:
-                        _cap_id = _cap.get('id', 'RA_BLOCCA')
-                        self._log_m2("🤖", f"RA_BLOCCA_CONTESTO: {_cap_id} "
-                                          f"blocca {momentum}|{volatility}|{trend} "
-                                          f"— {_cap.get('motivo','')[:50]}")
-                        if len(self._phantoms_open) < 5:
-                            self._record_phantom(price, f"RA_BLOCCA_{momentum}_{volatility}_{trend}",
-                                                 seed['score'], momentum, volatility, trend)
-                        return
-            except Exception as _bc_e:
-                log.debug(f"[BLOCCA_CONTESTO_ERR] {_bc_e}")
-
-            # ── CAPSULE INTELLIGENTE: modifiche predittive ───────────────────
-            try:
-                _ci_mods = self.ci.get_entry_mods()
-                if _ci_mods['n_capsule'] > 0:
-                    # Applica soglia_delta: riduce o aumenta il gap score/soglia
-                    if _ci_mods['soglia_delta'] != 0:
-                        soglia_adj = soglia + _ci_mods['soglia_delta']
-                        # Rispetta sempre il floor assoluto
-                        soglia_adj = max(48.0, soglia_adj)
-                        if not result.get('enter') and score >= soglia_adj:
-                            result['enter'] = True
-                            self._log_m2("💊", f"CI_ENTRY_UNLOCK: soglia {soglia:.1f}→{soglia_adj:.1f} "
-                                             f"motivi={_ci_mods['motivi']}")
-                        elif result.get('enter') and score < soglia_adj:
-                            result['enter'] = False
-                            self._log_m2("💊", f"CI_ENTRY_BLOCK: soglia alzata {soglia:.1f}→{soglia_adj:.1f} "
-                                             f"motivi={_ci_mods['motivi']}")
-                    # Applica size_mult
-                    if _ci_mods['size_mult'] != 1.0 and result.get('enter'):
-                        old_size = result.get('size', 0.3)
-                        result['size'] = round(
-                            min(1.0, max(0.05, old_size * _ci_mods['size_mult'])), 3
-                        )
-                        self._log_m2("💊", f"CI_SIZE: {old_size:.2f}→{result['size']:.2f} "
-                                         f"stato={_ci_mods['stato']}")
-            except Exception as _ci_e:
-                log.debug(f"[CI_ENTRY_ERR] {_ci_e}")
-
-            # ── ENTRA ────────────────────────────────────────────────────────
             size = result.get('size', 0.3)
-            self._log_m2("🚀",
-                f"ENTRY {_dir} score={score:.1f}/{soglia:.1f} "
-                f"size={size:.2f} regime={self._regime_current}")
-
-            if _V16_ENGINES_OK and self._breath:
-                self._breath.on_trade_open()
-            if _V16_ENGINES_OK and self._comparto:
-                self._comparto._attivo  # registra trade nel comparto
-
-            # ── LATENCY TRACKER: registra prezzo decisione ───────────────
-            self._decision_price  = price
-            self._decision_ts     = time.time()
-            self._decision_regime = self._regime_current
+            self._log_m2("🚀", f"ENTRY {_dir} score={score:.1f}/{soglia:.1f} "
+                               f"size={size:.2f} regime={self._regime_current}")
 
             self._open_shadow_position(price, score, soglia, seed, size,
                                         momentum, volatility, trend,
@@ -7566,7 +7261,6 @@ class OvertopBassanoV15Production:
                     self._shadow = None
             except Exception:
                 pass
-
 
     def _open_shadow_position(self, price, score, soglia, seed, size,
                                momentum, volatility, trend,
