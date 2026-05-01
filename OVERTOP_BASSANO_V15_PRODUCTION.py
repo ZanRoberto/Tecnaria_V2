@@ -4104,6 +4104,8 @@ class CampoGravitazionale:
         _bot = getattr(self, '_bot_ref', None)
         _cm  = getattr(_bot, 'capsule_manager', None) if _bot else None
         if _cm is not None:
+            _bot_oi_carica = getattr(getattr(self, '_bot_ref', None), '_oi_carica', 0.0)
+            _bot_oi_stato  = getattr(getattr(self, '_bot_ref', None), '_oi_stato',  'ATTESA')
             _veto_ctx = {
                 'momentum':   momentum,
                 'volatility': volatility,
@@ -4111,6 +4113,8 @@ class CampoGravitazionale:
                 'direction':  self._direction,
                 'regime':     getattr(self, '_regime_current', ''),
                 'drift_pct':  getattr(self, '_last_drift', 0.0),
+                'oi_carica':  _bot_oi_carica,
+                'oi_stato':   _bot_oi_stato,
             }
             _cm_result = _cm.valuta(_veto_ctx)
             if _cm_result.get('blocca'):
@@ -4946,15 +4950,17 @@ class SuperCervello:
 
         # VETO ASSOLUTO FINGERPRINT TOSSICO
         # Se il fingerprint ha 20+ campioni con WR < 45% — blocca sempre
-        # La memoria storica dell'Oracolo è il giudice più affidabile
-        if fp_samples >= 20 and fp_wr < 0.45:
-            return self._out("BLOCCA", 0.5, 0, f"FP_TOSSICO_wr={fp_wr:.0%}_n={fp_samples}", 0.95)
-
-        # BOOST PREDIZIONE: se score >85% e calibrazione >85% e Oracolo FUOCO → entra
-        # La predizione è dimostrata dal Veritas — l'Oracolo ha ragione
+        # ECCEZIONE: pred_score >= 70% + OI FUOCO = predizione attiva supera il veto storico
         _ps = getattr(self, '_pred_score_ref', 0)
         _pc = getattr(self, '_pred_calib_ref', 0)
-        if _ps >= 85 and _pc >= 85 and oi_stato == "FUOCO" and not midzone:
+        _pred_attiva = _ps >= 70 and _pc >= 50 and oi_stato == "FUOCO"
+        if fp_samples >= 20 and fp_wr < 0.45 and not _pred_attiva:
+            return self._out("BLOCCA", 0.5, 0, f"FP_TOSSICO_wr={fp_wr:.0%}_n={fp_samples}", 0.95)
+
+        # BOOST PREDIZIONE: direzione corretta >= 70% E OI FUOCO → entra
+        # La direzione è l'oro — calibrazione >= 50% (misura magnitudine, non direzione)
+        # Veritas: FUOCO|PREVISTO_ENTRA 5579 segnali HIT 56% PnL +$0.32 → edge reale
+        if _pred_attiva and not midzone:
             return self._out("ENTRA", 1.2, -5,
                 f"pred_boost score={_ps:.0f}% calib={_pc:.0f}%", 0.85)
 
@@ -4968,10 +4974,9 @@ class SuperCervello:
         v['signal_tracker'] = (1.0 if st_hit_rate>=0.65 and st_pnl>0 and st_n>=10 else
                                 0.6 if st_hit_rate>=0.55 and st_n>=10 else
                                 0.0 if (st_hit_rate<=0.40 or st_pnl<-1) and st_n>=10 else 0.5)
-        # Carica — peso dinamico basato sulla carica reale dell'Oracolo
-        # Più alta la carica → più peso all'organo che la esprime
+        # Carica — voto basato sulla carica reale dell'Oracolo
         if oi_stato == "FUOCO":
-            if oi_carica >= 0.80:   v['campo_carica'] = 1.0   # massima fiducia
+            if oi_carica >= 0.80:   v['campo_carica'] = 1.0
             elif oi_carica >= 0.65: v['campo_carica'] = 0.85
             else:                   v['campo_carica'] = 0.70
         elif oi_stato == "CARICA":
@@ -4991,8 +4996,38 @@ class SuperCervello:
         else:
             v['phantom_ratio'] = 0.5
 
-        # Score pesato
-        st = sum(v[k] * self._pesi[k] for k in v)
+        # ── PESI DINAMICI — pred_score + OI amplificano campo_carica ──────
+        # Veritas: FUOCO|PREVISTO_ENTRA 5579 segnali HIT 56% PnL +$0.32
+        # Quando pred_score >= 70% + OI FUOCO: la predizione è fisica, non statistica.
+        # campo_carica sale fino a 0.55 (da 0.30 default).
+        # Gli altri pesi si ridistribuiscono proporzionalmente.
+        _ps = getattr(self, '_pred_score_ref', 0)
+        _pc = getattr(self, '_pred_calib_ref', 0)
+        _pred_forza = 0.0
+        if oi_stato == "FUOCO" and _ps >= 70 and _pc >= 50:
+            # Forza predizione: 0.0 (ps=70%) → 1.0 (ps=100%)
+            _pred_forza = min(1.0, (_ps - 70) / 30) * min(1.0, oi_carica / 0.80)
+
+        if _pred_forza > 0:
+            # campo_carica sale da 0.30 a max 0.55 proporzionalmente alla forza
+            _peso_cc_nuovo = self._pesi['campo_carica'] + _pred_forza * 0.25
+            _peso_cc_nuovo = min(0.55, _peso_cc_nuovo)
+            _delta = _peso_cc_nuovo - self._pesi['campo_carica']
+            # Ridistribuisce il delta sottraendo proporzionalmente dagli altri
+            _altri = ['oracolo_fp', 'signal_tracker', 'matrimonio', 'phantom_ratio']
+            _tot_altri = sum(self._pesi[k] for k in _altri)
+            pesi_eff = dict(self._pesi)
+            pesi_eff['campo_carica'] = _peso_cc_nuovo
+            for k in _altri:
+                pesi_eff[k] = max(0.05, self._pesi[k] - _delta * (self._pesi[k] / _tot_altri))
+            # Rinormalizza
+            _tot = sum(pesi_eff.values())
+            pesi_eff = {k: round(v/_tot, 4) for k, v in pesi_eff.items()}
+        else:
+            pesi_eff = self._pesi
+
+        # Score pesato con pesi effettivi (dinamici o default)
+        st = sum(v[k] * pesi_eff[k] for k in v)
 
         if st >= 0.68:
             azione = "ENTRA"
@@ -5005,7 +5040,8 @@ class SuperCervello:
 
         pro    = sum(1 for x in v.values() if x >= 0.6)
         contro = sum(1 for x in v.values() if x <= 0.3)
-        motivo = f"sc={st:.2f} pro={pro}/5 contro={contro}/5"
+        _cc_eff = round(pesi_eff.get('campo_carica', self._pesi['campo_carica']), 2)
+        motivo = f"sc={st:.2f} pro={pro}/5 contro={contro}/5 cc_peso={_cc_eff:.2f} pred={_pred_forza:.2f}"
 
         return self._out(azione, sm, sa, motivo, st, v)
 
@@ -5242,6 +5278,22 @@ class OvertopBassanoV15Production:
         # -- VERITAS TRACKER: chi aveva ragione ───────────────────────────
         self.veritas        = VeritatisTracker(sc_ref=self.supercervello)
         self.veritas.load(DB_PATH)  # carica statistiche dal disco al boot
+
+        # -- PRED SCORE BOOT: inizializza dai dati Veritas storici --------
+        # Evita che pred_boost parta da 0 al restart e non scatti mai
+        # nelle prime ore. Usa hit_rate FUOCO|PREVISTO_ENTRA come proxy.
+        _vt_fuoco = self.veritas._stats.get('FUOCO|PREVISTO_ENTRA', {})
+        _vt_n     = _vt_fuoco.get('n', 0)
+        if _vt_n >= 50:
+            _vt_hits = _vt_fuoco.get('hits', 0)
+            _boot_pred = round(_vt_hits / _vt_n * 100, 1)
+            self.supercervello._pred_score_ref = _boot_pred
+            self.supercervello._pred_calib_ref = 56.0
+            log.info(f"[BOOT] pred_score inizializzato da Veritas: {_boot_pred:.0f}% n={_vt_n}")
+        else:
+            self.supercervello._pred_score_ref = 70.0
+            self.supercervello._pred_calib_ref = 56.0
+            log.info(f"[BOOT] pred_score default: 70% (Veritas n={_vt_n})")
 
         # -- ORACOLO INTERNO: sensore predittivo che vive ogni tick -------
         self._oi_carica     = 0.0        # energia accumulata 0→1
@@ -5955,8 +6007,9 @@ class OvertopBassanoV15Production:
         # -- 4 DIVORCE TRIGGERS - monitorati ogni tick ---------------------
         triggers_attivi = []
 
-        # Trigger 1: volatilita esplode (entry BASSA → ora ALTA)
-        if self.entry_volatility == "BASSA" and volatility == "ALTA":
+        # Trigger 1: volatilita esplode (entry BASSA → ora ALTA) — solo se in perdita
+        # Se siamo in profitto, la volatilità alta è movimento a nostro favore
+        if self.entry_volatility == "BASSA" and volatility == "ALTA" and _hs_pnl < 0:
             triggers_attivi.append("T1_VOLATILITÀ_ESPLOSA")
 
         # Trigger 2: trend si inverte (entry UP → ora DOWN)
@@ -5979,10 +6032,10 @@ class OvertopBassanoV15Production:
         # Mantieni anche il drawdown % come riferimento (più largo)
         drawdown_pct = ((self.max_price - price) / _entry_price) * 100
 
-        # Trigger 4: fingerprint diverge > 50% dal valore di entry
+        # Trigger 4: fingerprint diverge > 50% dal valore di entry — solo se in perdita
         current_fp = self.oracolo.get_wr(momentum, volatility, trend)
         fp_diverge = abs(current_fp - self.entry_fingerprint) / max(self.entry_fingerprint, 0.001)
-        if fp_diverge > DIVORCE_FP_DIVERGE_PCT:
+        if fp_diverge > DIVORCE_FP_DIVERGE_PCT and _hs_pnl < 0:
             triggers_attivi.append(f"T4_FP_DIVERGE_{fp_diverge:.0%}")
 
         if len(triggers_attivi) >= DIVORCE_MIN_TRIGGERS:
@@ -6594,15 +6647,26 @@ class OvertopBassanoV15Production:
         # ECCEZIONE OI SHORT FUOCO: mercato ha dichiarato la direzione
         _veritas_short_ok = False
         _drift_short_ok = drift < -0.005 and bearish_energy >= 3
+        _rsi_ipercomprato = _rsi_now >= 75 and bearish_energy >= 3
+        # Predizione indica DOWN: energia short > energia long + pred_score alto
+        _ps = getattr(self.supercervello, '_pred_score_ref', 0)
+        _pc = getattr(self.supercervello, '_pred_calib_ref', 0)
+        _oi_short_maggiore = getattr(self, '_oi_carica_short', 0) > getattr(self, '_oi_carica', 0)
+        _pred_down = (_ps >= 70 and _pc >= 50 and _oi_short_maggiore and bearish_energy >= 2)
         if _oi_short_fuoco:
-            _veritas_short_ok = True  # OI SHORT FUOCO = dichiarazione mercato
+            _veritas_short_ok = True
+        if _rsi_ipercomprato:
+            _veritas_short_ok = True
+        if _pred_down:
+            _veritas_short_ok = True
+            self._log_m2("📉", f"PRED_DOWN: short={getattr(self,'_oi_carica_short',0):.2f} > long={getattr(self,'_oi_carica',0):.2f} pred={_ps:.0f}%")
         if hasattr(self, 'veritas') and self.veritas._stats:
             for k, s in self.veritas._stats.items():
                 if 'FUOCO' in k or 'CARICA' in k:
                     deltas = s.get('deltas', [])
                     if len(deltas) >= 5:
                         avg_delta = sum(deltas) / len(deltas)
-                        if avg_delta < -20:  # prezzo scende consistentemente
+                        if avg_delta < -20:
                             _veritas_short_ok = True
                             break
 
@@ -7176,10 +7240,20 @@ class OvertopBassanoV15Production:
             # può agire su size e soglia — mai bloccare.
             # ═══════════════════════════════════════════════════════════════
             if _effective_regime == 'EXPLOSIVE' and _eo_carica >= 0.80:
-                # SIDEWAYS non genera profitto — movimento troppo piccolo per coprire fee
+                # SIDEWAYS: blocca solo se il movimento atteso non copre le fee
+                # Se RANGE CHECK conferma movimento sufficiente → entra comunque
                 if trend == 'SIDEWAYS':
-                    self._log_m2("🚫", f"EXPLOSIVE_SIDEWAYS_BLOCK: trend=SIDEWAYS fee non coperta — aspetto UP/DOWN")
-                    return
+                    _prices_buf = list(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else []
+                    if len(_prices_buf) >= 10:
+                        _expected_move = max(_prices_buf[-20:]) - min(_prices_buf[-20:])
+                        _breakeven = self._calcola_breakeven_dinamico(momentum, volatility, trend)
+                        if _expected_move < _breakeven:
+                            self._log_m2("🚫", f"EXPLOSIVE_SIDEWAYS_BLOCK: move=${_expected_move:.1f} < breakeven=${_breakeven:.1f}")
+                            return
+                        self._log_m2("✅", f"EXPLOSIVE_SIDEWAYS_OK: move=${_expected_move:.1f} >= breakeven=${_breakeven:.1f}")
+                    else:
+                        self._log_m2("🚫", f"EXPLOSIVE_SIDEWAYS_BLOCK: dati insufficienti per RANGE CHECK")
+                        return
 
                 # RANGE CHECK — breakeven calcolato dai trade reali, zero hardcode
                 _prices_buf = list(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else []
@@ -7261,8 +7335,57 @@ class OvertopBassanoV15Production:
                 return
 
             size = result.get('size', 0.3)
+
+            # ── SUPERCERVELLO: sintesi finale prima dell'entry ──────────
+            # È il giudice che legge tutti gli organi simultaneamente.
+            # Se dice BLOCCA → non entra. Se dice ENTRA → può modificare size.
+            _ph_stats  = self._phantom_stats.get('SCORE_INSUFFICIENTE', {})
+            _ph_prot   = _ph_stats.get('would_lose', 0)
+            _ph_zav    = _ph_stats.get('would_win', 0)
+            _mat       = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
+            _st_ctx    = self._get_signal_tracker_context(self._regime_current, score)
+            _midzone   = False
+            if len(self.campo._prices_long) >= 200:
+                _pr = list(self.campo._prices_long)[-200:]
+                _rh, _rl = max(_pr), min(_pr)
+                if _rh > _rl:
+                    _rpos = (price - _rl) / (_rh - _rl)
+                    _midzone = 0.40 <= _rpos <= 0.60
+
+            _sc_dec = self.supercervello.decide(
+                fp_wr          = fingerprint_wr,
+                fp_samples     = self.oracolo._memory.get(
+                                   self.oracolo._fp(momentum, volatility, trend, _dir),
+                                   {}).get('real_samples', 0),
+                st_hit_rate    = _st_ctx['hit_rate'],
+                st_n           = _st_ctx['n'],
+                st_pnl         = _st_ctx['pnl_sim'],
+                oi_carica      = self._oi_carica,
+                oi_stato       = self._oi_stato,
+                score          = score,
+                soglia         = soglia,
+                matrimonio_wr  = _mat.get('wr', 0.5),
+                matrimonio_trust = self.memoria.get_trust(_mat.get('name', '')),
+                ph_protezione  = _ph_prot,
+                ph_zavorra     = _ph_zav,
+                regime         = self._regime_current,
+                midzone        = _midzone,
+                loss_streak    = self._m2_loss_consecutivi(),
+            )
+            self._last_sc_dec = _sc_dec
+
+            if _sc_dec['azione'] == 'BLOCCA':
+                self._log_m2("🚫", f"SC_BLOCCA: {_sc_dec['motivo']}")
+                self._record_phantom(price, f"SC_BLOCCA_{_sc_dec['motivo'][:20]}",
+                                     seed['score'], momentum, volatility, trend)
+                return
+
+            # SC può modificare size
+            size = round(min(2.0, max(0.30, size * _sc_dec.get('size_mult', 1.0))), 2)
+
             self._log_m2("🚀", f"ENTRY {_dir} score={score:.1f}/{soglia:.1f} "
-                               f"size={size:.2f} regime={self._regime_current}")
+                               f"size={size:.2f} sc={_sc_dec['azione']} "
+                               f"regime={self._regime_current}")
 
             self._open_shadow_position(price, score, soglia, seed, size,
                                         momentum, volatility, trend,
