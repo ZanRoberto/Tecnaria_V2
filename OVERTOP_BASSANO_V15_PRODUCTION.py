@@ -7179,17 +7179,15 @@ class OvertopBassanoV15Production:
                     self._log_m2("🚫", f"EXPLOSIVE_SIDEWAYS_BLOCK: trend=SIDEWAYS fee non coperta — aspetto UP/DOWN")
                     return
 
-                # RANGE CHECK — movimento atteso deve coprire fee + profitto minimo
-                # Usa gli ultimi 20 prezzi per calcolare il range reale del mercato
+                # RANGE CHECK — breakeven calcolato dai trade reali, zero hardcode
                 _prices_buf = list(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else []
                 if len(_prices_buf) >= 10:
-                    _recent = _prices_buf[-20:]
-                    _expected_move = max(_recent) - min(_recent)
-                    _breakeven = 30.0  # $30 lordi = ~$2 fee + $1 profitto su size 0.90x
+                    _expected_move = max(_prices_buf[-20:]) - min(_prices_buf[-20:])
+                    _breakeven = self._calcola_breakeven_dinamico(momentum, volatility, trend)
                     if _expected_move < _breakeven:
-                        self._log_m2("🚫", f"RANGE_INSUFFICIENTE: move=${_expected_move:.1f} < ${_breakeven:.0f} — mercato fermo")
+                        self._log_m2("🚫", f"RANGE_INSUFFICIENTE: move=${_expected_move:.1f} < breakeven=${_breakeven:.1f}")
                         return
-                    self._log_m2("✅", f"RANGE_OK: move=${_expected_move:.1f} >= ${_breakeven:.0f} — opportunità reale")
+                    self._log_m2("✅", f"RANGE_OK: move=${_expected_move:.1f} >= breakeven=${_breakeven:.1f}")
 
                 # Size proporzionale alla carica
                 size = round(min(1.0, max(0.30, _eo_carica)), 2)
@@ -8112,6 +8110,60 @@ class OvertopBassanoV15Production:
             else:
                 break
         return count
+
+    def _calcola_breakeven_dinamico(self, momentum: str, volatility: str, trend: str) -> float:
+        """
+        Calcola il breakeven minimo dinamico dal DB reale.
+        Legge i trade vinti in questo contesto e usa il PnL medio come soglia.
+        Zero hardcode — il sistema impara da solo dai trade reali.
+        """
+        try:
+            import sqlite3, json
+            db_path = getattr(self, '_db_path', '/var/data/trading_data.db')
+            with sqlite3.connect(db_path) as conn:
+                rows = conn.execute("""
+                    SELECT pnl, data_json FROM trades
+                    WHERE event_type='EXIT' AND pnl > 0
+                    ORDER BY timestamp DESC LIMIT 200
+                """).fetchall()
+
+                wins_contesto = []
+                wins_simile = []
+
+                for pnl, dj in rows:
+                    try:
+                        d = json.loads(dj)
+                        m, v, t = d.get('momentum'), d.get('volatility'), d.get('trend')
+                        if m == momentum and v == volatility and t == trend:
+                            wins_contesto.append(pnl)
+                        elif v == volatility and t == trend:
+                            wins_simile.append(pnl)
+                    except Exception:
+                        pass
+
+                if len(wins_contesto) >= 5:
+                    breakeven = max(0.5, sum(wins_contesto) / len(wins_contesto) * 0.5)
+                    self._log_m2("📊", f"BREAKEVEN contesto={momentum}|{volatility}|{trend} n={len(wins_contesto)} val=${breakeven:.1f}")
+                    return breakeven
+
+                if len(wins_simile) >= 5:
+                    breakeven = max(0.5, sum(wins_simile) / len(wins_simile) * 0.5)
+                    self._log_m2("📊", f"BREAKEVEN simile={volatility}|{trend} n={len(wins_simile)} val=${breakeven:.1f}")
+                    return breakeven
+
+                # Nessun dato — usa range prezzi recenti come proxy
+                _prices_buf = list(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else []
+                if len(_prices_buf) >= 10:
+                    _range = max(_prices_buf[-20:]) - min(_prices_buf[-20:])
+                    breakeven = max(0.5, _range * 0.3)
+                    self._log_m2("📊", f"BREAKEVEN proxy range=${_range:.1f} val=${breakeven:.1f}")
+                    return breakeven
+
+                return 0.5  # fallback — non blocca mai per mancanza dati
+
+        except Exception as e:
+            self._log_m2("⚠️", f"BREAKEVEN_ERROR: {e}")
+            return 0.5
 
     # ========================================================================
     # PHANTOM TRACKER - "SE AVESSI FATTO"
