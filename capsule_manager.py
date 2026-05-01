@@ -103,18 +103,20 @@ STATIC_BTC = [
     # {"id": "STATIC_LONG_DEBOLE_ALTA_SIDEWAYS_BTC", ...},
 
     {"id": "STATIC_LONG_FORTE_ALTA_SIDEWAYS_BTC",  "asset": "BTCUSDC", "livello": "STATIC", "tipo": "VETO_LONG",
-     "descrizione": "RANGE_VOL_F: WR 34% su dati BTC reali",
+     "descrizione": "RANGE_VOL_F: WR 34% su dati BTC reali — bypassato se OI FUOCO >= 0.65",
      "trigger": [{"param":"momentum","op":"==","value":"FORTE"},{"param":"volatility","op":"==","value":"ALTA"},
-                 {"param":"trend","op":"==","value":"SIDEWAYS"},{"param":"direction","op":"==","value":"LONG"}],
+                 {"param":"trend","op":"==","value":"SIDEWAYS"},{"param":"direction","op":"==","value":"LONG"},
+                 {"param":"oi_carica","op":"<","value":0.65}],
      "azione": {"type":"blocca_entry","params":{"reason":"STATIC_TOSSICO_LONG_FORTE_ALTA_SIDEWAYS"}},
-     "priority":1, "samples":48, "wr":0.34, "note":"WR 34% RANGE_VOL_F BTC"},
+     "priority":1, "samples":48, "wr":0.34, "note":"WR 34% RANGE_VOL_F BTC — bypass se OI>=0.65"},
 
     {"id": "STATIC_LONG_MEDIO_ALTA_SIDEWAYS_BTC",  "asset": "BTCUSDC", "livello": "STATIC", "tipo": "VETO_LONG",
-     "descrizione": "RANGE_VOL_M: WR 28% su dati BTC reali",
+     "descrizione": "RANGE_VOL_M: WR 28% su dati BTC reali — bypassato se OI FUOCO >= 0.65",
      "trigger": [{"param":"momentum","op":"==","value":"MEDIO"},{"param":"volatility","op":"==","value":"ALTA"},
-                 {"param":"trend","op":"==","value":"SIDEWAYS"},{"param":"direction","op":"==","value":"LONG"}],
+                 {"param":"trend","op":"==","value":"SIDEWAYS"},{"param":"direction","op":"==","value":"LONG"},
+                 {"param":"oi_carica","op":"<","value":0.65}],
      "azione": {"type":"blocca_entry","params":{"reason":"STATIC_TOSSICO_LONG_MEDIO_ALTA_SIDEWAYS"}},
-     "priority":1, "samples":41, "wr":0.28, "note":"WR 28% RANGE_VOL_M BTC"},
+     "priority":1, "samples":41, "wr":0.28, "note":"WR 28% RANGE_VOL_M BTC — bypass se OI>=0.65"},
 
     # VETI SHORT BTC
     {"id": "STATIC_SHORT_FORTE_BASSA_UP_BTC",      "asset": "BTCUSDC", "livello": "STATIC", "tipo": "VETO_SHORT",
@@ -245,11 +247,13 @@ class CapsuleManager:
             if not self._check_triggers(cap["trigger"], contesto):
                 continue
             act  = cap["azione"]
-            atype = act.get("type","")
+            # Supporta sia "type" (formato interno) che "tipo" (formato Narratore/Oracle)
+            atype = act.get("type") or act.get("tipo", "")
 
-            if atype == "blocca_entry":
+            if atype in ("blocca_entry", "BLOCCA_ENTRY", "blocca_entry_oracle", "BLOCCA_CONTESTO", "blocca_contesto"):
                 res["blocca"]     = True
-                res["reason"]     = act.get("params",{}).get("reason", cap["id"])
+                res["reason"]     = (act.get("params",{}).get("reason") or 
+                                     act.get("motivo") or act.get("valore") or cap["id"])
                 res["capsule_id"] = cap["id"]
                 self._fire(cap["id"], contesto)
                 log.info(f"[CM] 🚫 BLOCCO {cap['id']} ({cap['livello']}) WR={cap['wr']:.0%}")
