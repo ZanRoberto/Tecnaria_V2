@@ -7174,6 +7174,11 @@ class OvertopBassanoV15Production:
             # può agire su size e soglia — mai bloccare.
             # ═══════════════════════════════════════════════════════════════
             if _effective_regime == 'EXPLOSIVE' and _eo_carica >= 0.80:
+                # SIDEWAYS non genera profitto — movimento troppo piccolo per coprire fee
+                if trend == 'SIDEWAYS':
+                    self._log_m2("🚫", f"EXPLOSIVE_SIDEWAYS_BLOCK: trend=SIDEWAYS fee non coperta — aspetto UP/DOWN")
+                    return
+
                 # Size proporzionale alla carica
                 size = round(min(1.0, max(0.30, _eo_carica)), 2)
                 score = 75.0
