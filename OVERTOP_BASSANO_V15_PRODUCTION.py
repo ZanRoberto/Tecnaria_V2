@@ -7179,6 +7179,18 @@ class OvertopBassanoV15Production:
                     self._log_m2("🚫", f"EXPLOSIVE_SIDEWAYS_BLOCK: trend=SIDEWAYS fee non coperta — aspetto UP/DOWN")
                     return
 
+                # RANGE CHECK — movimento atteso deve coprire fee + profitto minimo
+                # Usa gli ultimi 20 prezzi per calcolare il range reale del mercato
+                _prices_buf = list(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else []
+                if len(_prices_buf) >= 10:
+                    _recent = _prices_buf[-20:]
+                    _expected_move = max(_recent) - min(_recent)
+                    _breakeven = 30.0  # $30 lordi = ~$2 fee + $1 profitto su size 0.90x
+                    if _expected_move < _breakeven:
+                        self._log_m2("🚫", f"RANGE_INSUFFICIENTE: move=${_expected_move:.1f} < ${_breakeven:.0f} — mercato fermo")
+                        return
+                    self._log_m2("✅", f"RANGE_OK: move=${_expected_move:.1f} >= ${_breakeven:.0f} — opportunità reale")
+
                 # Size proporzionale alla carica
                 size = round(min(1.0, max(0.30, _eo_carica)), 2)
                 score = 75.0
