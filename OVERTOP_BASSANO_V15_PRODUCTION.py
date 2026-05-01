@@ -5727,6 +5727,7 @@ class OvertopBassanoV15Production:
                     self._emit_bridge_event("EVENT_PREBREAKOUT", _pb_payload)
                     self.telemetry.log_event_signal("PREBREAKOUT", _pb_payload)
                     self._last_pb_event_ts = _now_ev
+                    self._last_pb_factor   = _pb_f
         if self._oi_stato == "FUOCO" and self._oi_carica >= 0.80:
             _last_fuoco = getattr(self, '_last_fuoco_event_ts', 0)
             if _now_ev - _last_fuoco >= 10:
@@ -7159,12 +7160,13 @@ class OvertopBassanoV15Production:
             _fuoco_age = _now_eo - getattr(self, '_last_fuoco_event_ts', 0)
             _pb_age    = _now_eo - getattr(self, '_last_pb_event_ts', 0)
             _eo_carica = getattr(self, '_oi_carica', 0.0)
-            if (_fuoco_age < 30 and _pb_age < 30
-                    and _eo_carica >= 0.80
-                    and self._regime_current == 'RANGING'):
+            _pb_factor = getattr(self, '_last_pb_factor', 0.0)
+            _pb_solo   = _pb_age < 30 and _pb_factor >= 0.90 and _eo_carica >= 0.80
+            _fuoco_pb  = _fuoco_age < 30 and _pb_age < 30 and _eo_carica >= 0.80
+            if (_pb_solo or _fuoco_pb) and self._regime_current == 'RANGING':
                 _effective_regime = 'EXPLOSIVE'
                 self._log_m2("⚡", f"EXPLOSIVE_OVERRIDE fuoco={_fuoco_age:.1f}s "
-                                   f"pb={_pb_age:.1f}s carica={_eo_carica:.2f}")
+                                   f"pb={_pb_age:.1f}s factor={_pb_factor:.2f} carica={_eo_carica:.2f}")
             else:
                 _effective_regime = self._regime_current
 
