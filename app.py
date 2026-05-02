@@ -4665,14 +4665,18 @@ def debug_snapshot():
         conn.close()
 
         return jsonify({
-            "ts":         datetime.utcnow().isoformat(),
-            "regime":     hb.get("regime", "?"),
-            "oi_stato":   hb.get("oi_stato", "?"),
-            "oi_carica":  round(hb.get("oi_carica", 0), 3),
-            "soglia":     hb.get("m2_soglia_base", 0),
-            "state":      hb.get("m2_state", "?"),
-            "loss_streak": hb.get("m2_loss_streak", 0),
-            "pred_score": hb.get("pred_score", 0),
+            "ts":              datetime.utcnow().isoformat(),
+            "regime":          hb.get("regime", "?"),
+            "oi_stato":        hb.get("oi_stato", "?"),
+            "oi_carica":       round(hb.get("oi_carica", 0), 3),
+            "oi_carica_short": round(hb.get("oi_carica_short", 0), 3),
+            "soglia":          hb.get("m2_soglia_base", 0),
+            "state":           hb.get("m2_state", "?"),
+            "direction":       hb.get("m2_direction", "?"),
+            "loss_streak":     hb.get("m2_loss_streak", 0),
+            "pred_score":      hb.get("pred_score", 0),
+            "last_score":      hb.get("m2_last_score", 0),
+            "last_context":    hb.get("narratore_trade_stats", {}).get("last_context", "?"),
             "stats_post483": {
                 "count": stats[0],
                 "pnl":   round(stats[1] or 0, 2),
