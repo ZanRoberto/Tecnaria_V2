@@ -1071,6 +1071,7 @@ REGOLE FORMATO:
 - delta tra -15 e +15, forza 0.5-0.9, vita 120-3600
 - Se non serve capsula: CAPSULA: null
 - ANALISI in italiano, JSON in inglese
+- MAI usare "campo"/"valore" nei trigger — usa sempre "param"/"value"/"op"
 """
 
 PROMPT_CAPSULA_JSON = """Sei il generatore di capsule del sistema OVERTOP BASSANO.
@@ -1103,6 +1104,14 @@ AZIONI:
 - BOOST_SEED: {"delta": +N}
 - BLOCCA_CONTESTO: {"momentum": "X", "volatility": "Y", "trend": "Z", "durata": N}
 - ALZA_SOGLIA: {"delta": +N}
+
+FORMATO CAPSULE DB (quando generi capsule che vanno nel CapsuleManager):
+Le capsule nel DB devono usare ESATTAMENTE questo formato — MAI usare "campo"/"valore":
+trigger: [{"param": "momentum", "op": "==", "value": "DEBOLE"}, {"param": "volatility", "op": "==", "value": "ALTA"}]
+azione: {"type": "blocca_entry", "params": {"reason": "motivo"}}
+azione: {"type": "boost_soglia", "params": {"delta": 7}}
+Operatori supportati nei trigger: "==", "!=", ">=", "<=", ">", "<"
+Campi supportati nei trigger: "momentum", "volatility", "trend", "regime", "direction", "oi_carica", "oi_stato", "loss_consecutivi"
 
 Rispondi SOLO con questo JSON, nient'altro:
 {"id": "RA_NOME", "azione": "ABBASSA_SOGLIA", "params": {"delta": -8}, "motivo": "spiegazione breve", "vita": 300, "forza": 0.65}
