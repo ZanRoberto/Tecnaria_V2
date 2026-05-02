@@ -235,6 +235,15 @@ class CapsuleManager:
     # VALUTAZIONE
     # -------------------------------------------------------------------------
 
+    # Pattern vincenti confermati dal Veritas — intoccabili da capsule AUTO/LEARNED
+    _WHITELIST_VINCENTI = {
+        ("FORTE",  "BASSA",  "UP",   "LONG"),
+        ("FORTE",  "MEDIA",  "UP",   "LONG"),
+        ("MEDIO",  "BASSA",  "UP",   "LONG"),
+        ("FORTE",  "BASSA",  "DOWN", "SHORT"),
+        ("FORTE",  "MEDIA",  "DOWN", "SHORT"),
+    }
+
     def valuta(self, contesto: dict) -> dict:
         if time.time() - self._cache_ts > 10:
             self._refresh_cache()
@@ -243,14 +252,26 @@ class CapsuleManager:
                "reason":"","capsule_id":"",
                "profit_lock_min": 0.0}
 
+        # Whitelist: pattern vincenti intoccabili da capsule AUTO/LEARNED
+        _ctx_key = (
+            contesto.get("momentum",""),
+            contesto.get("volatility",""),
+            contesto.get("trend",""),
+            contesto.get("direction",""),
+        )
+        _is_vincente = _ctx_key in self._WHITELIST_VINCENTI
+
         for cap in self._cache:
             if not self._check_triggers(cap["trigger"], contesto):
                 continue
             act  = cap["azione"]
-            # Supporta sia "type" (formato interno) che "tipo" (formato Narratore/Oracle)
             atype = act.get("type") or act.get("tipo", "")
 
             if atype in ("blocca_entry", "BLOCCA_ENTRY", "blocca_entry_oracle", "BLOCCA_CONTESTO", "blocca_contesto"):
+                # Capsule AUTO/LEARNED non possono bloccare pattern vincenti
+                if _is_vincente and cap.get("livello","") in ("AUTO","LEARNED"):
+                    log.debug(f"[CM] ⚪ WHITELIST protegge {_ctx_key} da {cap['id']}")
+                    continue
                 res["blocca"]     = True
                 res["reason"]     = (act.get("params",{}).get("reason") or 
                                      act.get("motivo") or act.get("valore") or cap["id"])
