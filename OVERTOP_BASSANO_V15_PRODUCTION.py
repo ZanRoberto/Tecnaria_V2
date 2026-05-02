@@ -7270,15 +7270,22 @@ class OvertopBassanoV15Production:
                 score = 75.0
                 soglia = 50.0
 
-                # CapsuleManager può modificare size ma NON bloccare
+                # CapsuleManager: può bloccare pattern tossici anche in EXPLOSIVE
+                # DEBOLE|ALTA|SIDEWAYS WR 11% non migliora solo perché c'è energia OI
                 if self.capsule_manager:
                     _cm_ctx = {
                         'momentum': momentum, 'volatility': volatility,
                         'trend': trend, 'direction': _dir,
                         'regime': _effective_regime,
                         'oi_carica': _eo_carica,
+                        'oi_stato': self._oi_stato,
                     }
                     _cm = self.capsule_manager.valuta(_cm_ctx)
+                    if _cm.get('blocca'):
+                        self._log_m2("🚫", f"PERCORSO1_CM_BLOCCA: {_cm.get('reason')} carica={_eo_carica:.2f}")
+                        self._record_phantom(price, f"P1_CM_{_cm.get('reason','')[:20]}",
+                                             seed['score'], momentum, volatility, trend)
+                        return
                     size = round(min(1.0, max(0.30, size * _cm.get('size_mult', 1.0))), 2)
 
                 self._log_m2("🚀", f"EXPLOSIVE ENTRY {_dir} carica={_eo_carica:.2f} "
