@@ -4669,14 +4669,22 @@ def debug_snapshot():
             GROUP BY capsule_id ORDER BY n DESC LIMIT 5
         """).fetchall()
 
-        # Veritas — performance per pattern (WR reale, PnL medio)
+        # Veritas fingerprint reale dai trade chiusi
         try:
-            veritas = conn.execute("""
-                SELECT chiave, n, wr, pnl_avg, verdetto
-                FROM veritas_tracker ORDER BY n DESC LIMIT 40
+            fp = conn.execute("""
+                SELECT json_extract(data_json,'$.momentum') as m,
+                       json_extract(data_json,'$.volatility') as v,
+                       json_extract(data_json,'$.trend') as t,
+                       json_extract(data_json,'$.direction') as d,
+                       COUNT(*) as n,
+                       ROUND(AVG(pnl),2) as pnl_avg,
+                       ROUND(SUM(CASE WHEN pnl>0 THEN 1.0 ELSE 0 END)/COUNT(*)*100,1) as wr
+                FROM trades WHERE event_type='M2_EXIT' AND data_json IS NOT NULL
+                GROUP BY 1,2,3,4 ORDER BY n DESC LIMIT 30
             """).fetchall()
-            veritas_list = [{"ctx": r[0], "n": r[1], "wr": round(r[2] or 0, 3),
-                             "pnl_avg": round(r[3] or 0, 2), "verdetto": r[4]} for r in veritas]
+            veritas_list = [{"ctx": f"{r[0]}|{r[1]}|{r[2]}", "dir": r[3] or "LONG",
+                             "n": r[4], "pnl_avg": r[5] or 0, "wr": round((r[6] or 0)/100, 3)}
+                            for r in fp if r[0]]
         except:
             veritas_list = []
 
