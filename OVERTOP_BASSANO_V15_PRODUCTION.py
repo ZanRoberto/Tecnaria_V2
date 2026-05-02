@@ -6951,7 +6951,9 @@ class OvertopBassanoV15Production:
 
             # Stato SHORT
             vecchio_short = self._oi_stato_short
-            if midzone:
+            _carica_estrema_short = self._oi_carica_short >= 0.90
+            if midzone and not _carica_estrema_short:
+                # midzone azzera solo se carica < 0.90 — carica estrema override midzone
                 self._oi_stato_short = "ATTESA"
                 self._oi_tick_pronto_short = 0
             elif self._oi_carica_short >= 0.65:
