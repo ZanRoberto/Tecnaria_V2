@@ -3922,7 +3922,8 @@ class CampoGravitazionale:
         ("FORTE",  "MEDIA", "UP"),     # STRONG_MED - pericoloso per SHORT
         ("DEBOLE", "ALTA", "SIDEWAYS"),# RANGE_VOL_W - WR 10% in SHORT
         ("FORTE",  "ALTA", "SIDEWAYS"),# RANGE_VOL_F - WR 12% in SHORT
-        ("MEDIO",  "ALTA", "SIDEWAYS"),# RANGE_VOL_M - WR 8% in SHORT
+        # RIMOSSO 02/05/2026: real=0 campioni reali SHORT in questo contesto — WR 8% era simulato
+        # ("MEDIO",  "ALTA", "SIDEWAYS"),# RANGE_VOL_M - WR 8% in SHORT — da rivalutare con dati reali
     }
     FANTASMA_VETO_MIN_SAMPLES = 20
     FANTASMA_VETO_MAX_WR      = 0.30
