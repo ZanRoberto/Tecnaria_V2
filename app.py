@@ -4605,6 +4605,90 @@ def oracle_run_now():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/debug/snapshot')
+def debug_snapshot():
+    """Snapshot completo sistema — un endpoint per vedere tutto."""
+    try:
+        import sqlite3 as _sl
+        import json as _j
+
+        with heartbeat_lock:
+            hb = dict(heartbeat_data)
+
+        conn = _sl.connect(DB_PATH, timeout=5)
+
+        # Ultimi 10 trade
+        trades = conn.execute("""
+            SELECT id, timestamp, pnl, reason, data_json
+            FROM trades WHERE event_type='M2_EXIT'
+            ORDER BY id DESC LIMIT 10
+        """).fetchall()
+        trades_list = []
+        for r in trades:
+            try: dj = _j.loads(r[4]) if r[4] else {}
+            except: dj = {}
+            trades_list.append({
+                "id": r[0], "ts": r[1], "pnl": round(r[2], 2),
+                "reason": r[3],
+                "ctx": f"{dj.get('momentum','?')}|{dj.get('volatility','?')}|{dj.get('trend','?')}",
+                "score": dj.get("score", 0), "soglia": dj.get("soglia", 0),
+            })
+
+        # Capsule attive
+        caps = conn.execute("""
+            SELECT id, livello, priority, wr, trigger_json, azione_json
+            FROM capsule WHERE enabled=1 ORDER BY priority DESC LIMIT 20
+        """).fetchall()
+        caps_list = []
+        for r in caps:
+            try: trig = _j.loads(r[4]) if r[4] else []
+            except: trig = []
+            try: az = _j.loads(r[5]) if r[5] else {}
+            except: az = {}
+            caps_list.append({
+                "id": r[0], "livello": r[1], "priority": r[2],
+                "trigger": trig, "type": az.get("type","?"),
+            })
+
+        # Stats post-483
+        stats = conn.execute("""
+            SELECT COUNT(*), SUM(pnl), SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END)
+            FROM trades WHERE event_type='M2_EXIT' AND id > 483
+        """).fetchone()
+
+        # Top blocchi phantom
+        ph_log = conn.execute("""
+            SELECT capsule_id, COUNT(*) as n FROM capsule_log
+            GROUP BY capsule_id ORDER BY n DESC LIMIT 5
+        """).fetchall()
+
+        conn.close()
+
+        return jsonify({
+            "ts":         datetime.utcnow().isoformat(),
+            "regime":     hb.get("regime", "?"),
+            "oi_stato":   hb.get("oi_stato", "?"),
+            "oi_carica":  round(hb.get("oi_carica", 0), 3),
+            "soglia":     hb.get("m2_soglia_base", 0),
+            "state":      hb.get("m2_state", "?"),
+            "loss_streak": hb.get("m2_loss_streak", 0),
+            "pred_score": hb.get("pred_score", 0),
+            "stats_post483": {
+                "count": stats[0],
+                "pnl":   round(stats[1] or 0, 2),
+                "wins":  stats[2]
+            },
+            "ultimi_trade":    trades_list,
+            "capsule_attive":  caps_list,
+            "phantom_blocchi": [{"id": r[0], "n": r[1]} for r in ph_log],
+            "oracle_trigger":  hb.get("oracle_trigger", ""),
+            "narratore_ultima": hb.get("narratore_ultima_capsula", {}),
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     log(f"[MAIN] 🚀 MISSION CONTROL V6.0 + AI BRIDGE — porta {port}")
