@@ -334,7 +334,13 @@ REGOLE CRITICHE:
 - USA "type"/"params" nell'azione — MAI "tipo"/"valore"
 - delta positivo = alza soglia, negativo = abbassa
 - MAX delta = 20 (alza) o -10 (abbassa)
-- durata_ore = 0 = PERMANENTE"""
+- durata_ore = 0 = PERMANENTE
+
+VIETATO ASSOLUTO:
+- MAI blocca_entry con solo "regime"+"volatility" senza "trend" — distrugge trade vincenti
+- OGNI blocca_entry DEVE avere "trend" nel trigger: SIDEWAYS, UP o DOWN
+- FORTE|BASSA|UP WR 78% e FORTE|MEDIA|UP WR 68% NON si bloccano mai
+- Se non puoi specificare il trend usa boost_soglia invece di blocca_entry"""
 
     user = f"""TRIGGER: {trigger}
 
@@ -446,6 +452,34 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
         cap_id = _re.sub(r'_\d{9,10}$', '', _raw_id)
         if not cap_id:
             cap_id = _raw_id
+
+        # ── ID FISSI — normalizza ID varianti allo stesso pattern ──────
+        # Impedisce duplicati da nomi diversi per lo stesso contesto
+        _ID_FISSI = {
+            # DEBOLE|ALTA|SIDEWAYS — pattern più tossico WR 0.8%
+            ("DEBOLE", "ALTA",  "SIDEWAYS", "blocca_entry"): "SC_BLOCCA_DEBOLE_ALTA_SIDEWAYS",
+            ("DEBOLE", "ALTA",  "SIDEWAYS", "boost_soglia"): "SC_BOOST_DEBOLE_ALTA_SIDEWAYS",
+            # MEDIO|ALTA|SIDEWAYS — WR 5.9%
+            ("MEDIO",  "ALTA",  "SIDEWAYS", "blocca_entry"): "SC_BLOCCA_MEDIO_ALTA_SIDEWAYS",
+            ("MEDIO",  "ALTA",  "SIDEWAYS", "boost_soglia"): "SC_BOOST_MEDIO_ALTA_SIDEWAYS",
+            # DEBOLE|BASSA|SIDEWAYS — WR 10%
+            ("DEBOLE", "BASSA", "SIDEWAYS", "blocca_entry"): "SC_BLOCCA_DEBOLE_BASSA_SIDEWAYS",
+            # FORTE|ALTA|SIDEWAYS
+            ("FORTE",  "ALTA",  "SIDEWAYS", "blocca_entry"): "SC_BLOCCA_FORTE_ALTA_SIDEWAYS",
+            ("FORTE",  "ALTA",  "SIDEWAYS", "boost_soglia"): "SC_BOOST_FORTE_ALTA_SIDEWAYS",
+        }
+        # Estrai momentum/volatility/trend dai trigger per cercare ID fisso
+        _trigger_raw = capsule.get("trigger", [])
+        _trigger_norm_preview = _normalizza_trigger(_trigger_raw)
+        _tv = {t.get("param"): t.get("value") for t in _trigger_norm_preview}
+        _az_preview = _normalizza_azione(capsule.get("azione", {}))
+        _az_type = _az_preview.get("type", "")
+        _fixed_key = (_tv.get("momentum",""), _tv.get("volatility",""), _tv.get("trend",""), _az_type)
+        if _fixed_key[0] and _fixed_key[1] and _fixed_key[2] and _az_type:
+            _fixed_id = _ID_FISSI.get(_fixed_key)
+            if _fixed_id:
+                cap_id = _fixed_id
+                _p(f"ID FISSO applicato: {_raw_id} → {cap_id}")
         asset    = capsule.get("asset",    "BTCUSDC")
         livello  = capsule.get("livello",  "AUTO")
         tipo     = capsule.get("tipo",     "PARAMETRO")
@@ -456,6 +490,20 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
         # Normalizza sempre il formato — anche se DeepSeek usa vecchio formato
         trigger_norm = _normalizza_trigger(capsule.get("trigger", []))
         azione_norm  = _normalizza_azione(capsule.get("azione", {}))
+
+        # ── VALIDAZIONE WHITELIST — rifiuta capsule che bloccano pattern vincenti ──
+        _WHITELIST = [
+            {"momentum": "FORTE", "volatility": "BASSA", "trend": "UP"},
+            {"momentum": "FORTE", "volatility": "MEDIA", "trend": "UP"},
+            {"momentum": "MEDIO", "volatility": "BASSA", "trend": "UP"},
+        ]
+        if azione_norm.get("type") == "blocca_entry":
+            tvals = {t.get("param"): t.get("value") for t in trigger_norm}
+            for pattern in _WHITELIST:
+                if all(tvals.get(k) == v for k, v in pattern.items() if k in tvals):
+                    if sum(1 for k in pattern if k in tvals) >= 2:
+                        _p(f"CAPSULE RIFIUTATA — blocca pattern vincente {pattern}: {cap_id}")
+                        return False
 
         # Sanitizza delta boost_soglia
         if azione_norm.get("type") == "boost_soglia":
