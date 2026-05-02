@@ -5501,6 +5501,47 @@ class OvertopBassanoV15Production:
                 self._phantom_per_livello = _ph.get('per_livello', {})
         self._phantom_supervisor()
 
+        # ── PULIZIA CAPSULE DUPLICATE — ogni 5 minuti ────────────────────
+        _now_clean = time.time()
+        if _now_clean - getattr(self, '_last_capsule_cleanup', 0) > 300:
+            self._last_capsule_cleanup = _now_clean
+            try:
+                import sqlite3 as _sc
+                import json as _jc
+                _conn = _sc.connect(DB_PATH, timeout=5)
+                _rows = _conn.execute(
+                    "SELECT id, trigger_json, azione_json, samples FROM capsule "
+                    "WHERE enabled=1 AND livello='AUTO'"
+                ).fetchall()
+                _gruppi = {}
+                for _rid, _trj, _azj, _smp in _rows:
+                    try:
+                        _tr = _jc.loads(_trj or '[]')
+                        _az = _jc.loads(_azj or '{}')
+                        _key = (
+                            tuple(sorted((t.get('param',''), t.get('op',''), str(t.get('value',''))) for t in _tr)),
+                            _az.get('type','')
+                        )
+                        if _key not in _gruppi:
+                            _gruppi[_key] = []
+                        _gruppi[_key].append((_rid, _smp or 0))
+                    except Exception:
+                        pass
+                _eliminati = 0
+                for _key, _lista in _gruppi.items():
+                    if len(_lista) <= 1:
+                        continue
+                    _lista.sort(key=lambda x: x[1], reverse=True)
+                    for _del_id in [r[0] for r in _lista[1:]]:
+                        _conn.execute("DELETE FROM capsule WHERE id=?", (_del_id,))
+                        _eliminati += 1
+                if _eliminati > 0:
+                    _conn.commit()
+                    self._log_m2("🧹", f"PULIZIA_CAPSULE: {_eliminati} duplicati AUTO eliminati")
+                _conn.close()
+            except Exception:
+                pass
+
         # ── V16: NervosismoEngine + CompartoEngine ad ogni tick ──────────
         if _V16_ENGINES_OK and self._nerv and self._comparto:
             _regime_now = self._regime_current
