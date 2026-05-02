@@ -4635,10 +4635,11 @@ def debug_snapshot():
                 "score": dj.get("score", 0), "soglia": dj.get("soglia", 0),
             })
 
-        # Capsule attive
+        # Capsule attive con dati performance completi
         caps = conn.execute("""
-            SELECT id, livello, priority, wr, trigger_json, azione_json
-            FROM capsule WHERE enabled=1 ORDER BY priority DESC LIMIT 20
+            SELECT id, livello, priority, wr, trigger_json, azione_json,
+                   hits, hits_saved, samples, pnl_avg
+            FROM capsule WHERE enabled=1 ORDER BY priority DESC LIMIT 30
         """).fetchall()
         caps_list = []
         for r in caps:
@@ -4648,7 +4649,12 @@ def debug_snapshot():
             except: az = {}
             caps_list.append({
                 "id": r[0], "livello": r[1], "priority": r[2],
+                "wr": round(r[3] or 0, 2),
                 "trigger": trig, "type": az.get("type","?"),
+                "hits":       r[6] or 0,
+                "hits_saved": r[7] or 0,
+                "samples":    r[8] or 0,
+                "pnl_avg":    round(r[9] or 0, 2),
             })
 
         # Stats post-483
@@ -4662,6 +4668,17 @@ def debug_snapshot():
             SELECT capsule_id, COUNT(*) as n FROM capsule_log
             GROUP BY capsule_id ORDER BY n DESC LIMIT 5
         """).fetchall()
+
+        # Veritas — performance per pattern (WR reale, PnL medio)
+        try:
+            veritas = conn.execute("""
+                SELECT chiave, n, wr, pnl_avg, verdetto
+                FROM veritas_tracker ORDER BY n DESC LIMIT 40
+            """).fetchall()
+            veritas_list = [{"ctx": r[0], "n": r[1], "wr": round(r[2] or 0, 3),
+                             "pnl_avg": round(r[3] or 0, 2), "verdetto": r[4]} for r in veritas]
+        except:
+            veritas_list = []
 
         conn.close()
 
@@ -4688,6 +4705,7 @@ def debug_snapshot():
             "phantom_blocchi": [{"id": r[0], "n": r[1]} for r in ph_log],
             "oracle_trigger":  hb.get("oracle_trigger", ""),
             "narratore_ultima": hb.get("narratore_ultima_capsula", {}),
+            "veritas":         veritas_list,
         })
 
     except Exception as e:
