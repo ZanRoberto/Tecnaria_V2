@@ -9145,9 +9145,12 @@ class OvertopBassanoV15Production:
                     _max_cicli = max(_hc.values()) if _hc else 0
                     _ot = f"PHANTOM_IRRIGIDISCE_cicli{_max_cicli}"
 
-                # P4: PnL sessione negativo oltre -$15
+                # P4: PnL sessione negativo oltre -$15 — cooldown 30 min
                 elif _pnl < -15.0 and not _ot:
-                    _ot = f"PNL_DRAWDOWN_{abs(_pnl):.0f}usd"
+                    _last_p4_ts = getattr(self, '_last_oracle_p4_ts', 0)
+                    if _now_ts - _last_p4_ts > 1800:
+                        _ot = f"PNL_DRAWDOWN_{abs(_pnl):.0f}usd"
+                        self._last_oracle_p4_ts = _now_ts
 
                 # P5: Regime EXPLOSIVE ma 0 trade
                 elif _regime == "EXPLOSIVE" and _trades == 0 and not _ot:
