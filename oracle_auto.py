@@ -348,7 +348,8 @@ def _call_l1(ctx: dict, trigger: str) -> str:
         f"PHANTOM (USDC):\n{json.dumps(ctx['phantom'], indent=2)}\n\n"
         f"ULTIMI TRADE:\n{json.dumps(ctx['storia_trade'][-5:], indent=2)}\n\n"
         f"PERDITE RECENTI:\n{json.dumps(ctx['loss_history'], indent=2)}\n\n"
-        f"PATTERN WR<55%:\n{json.dumps(ctx['bad_patterns'][:5], indent=2)}"
+        f"CLASSIFICAZIONE PERDITA: {json.dumps(ctx.get('classificazione', {}), indent=2)}\n\n"
+        f"ULTIME 5 PERDITE:\n{json.dumps(ctx.get('perdite_recenti', []), indent=2)}"
     )
     return _deepseek(system, user, max_tokens=500)
 
