@@ -4473,6 +4473,7 @@ try:
         _saved_mode = _oa_row[0] if _oa_row else "AUTO"
     except Exception:
         _saved_mode = "AUTO"
+    _oa._running = False  # reset — evita "già in esecuzione" da import precedente
     _oracle_auto_thread = _oa.start_background(
         heartbeat_data=heartbeat_data,
         bot_instance=None  # aggiornato da bot_thread_launcher dopo init
