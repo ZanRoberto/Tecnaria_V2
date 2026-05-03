@@ -7331,10 +7331,36 @@ class OvertopBassanoV15Production:
 
                 # Size proporzionale alla carica
                 size = round(min(1.0, max(0.30, _eo_carica)), 2)
-                score = 75.0
-                soglia = 50.0
 
-                # CapsuleManager può modificare size ma NON bloccare
+                # ── CAMPO GRAVITAZIONALE REALE — no hardcode ─────────────
+                # PERCORSO 1 usa il campo reale invece di score=75 fisso.
+                # OI alto è il gate di ingresso, il campo giudica la qualità.
+                _fantasma_p1 = self.oracolo.is_fantasma(momentum, volatility, trend, _dir)
+                _result_p1 = self.campo.evaluate(
+                    seed_score        = seed['score'],
+                    fingerprint_wr    = fingerprint_wr,
+                    momentum          = momentum,
+                    volatility        = volatility,
+                    trend             = trend,
+                    regime            = _effective_regime,
+                    matrimonio_name   = matrimonio_name,
+                    divorzio_set      = self.memoria.divorzio,
+                    fantasma_info     = _fantasma_p1,
+                    loss_consecutivi  = self._m2_loss_consecutivi(),
+                    soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend),
+                )
+                if _result_p1['veto']:
+                    self._log_m2("🚫", f"PERCORSO1_VETO: {_result_p1['veto']} "
+                                       f"carica={_eo_carica:.2f} {momentum}|{volatility}|{trend}")
+                    self._record_phantom(price, f"PERCORSO1_{_result_p1['veto'][:20]}",
+                                         seed['score'], momentum, volatility, trend)
+                    return
+                score  = _result_p1['score']
+                soglia = _result_p1['soglia']
+                self._log_m2("📊", f"PERCORSO1_CAMPO: score={score:.1f} soglia={soglia:.1f} "
+                                   f"carica={_eo_carica:.2f} {momentum}|{volatility}|{trend}")
+
+                # CapsuleManager può modificare size
                 if self.capsule_manager:
                     _cm_ctx = {
                         'momentum': momentum, 'volatility': volatility,
