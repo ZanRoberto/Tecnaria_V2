@@ -5814,7 +5814,7 @@ class OvertopBassanoV15Production:
         _now_ev = time.time()
         if len(self.campo._prices_short) >= 30:
             _pb_f, _pb_d, _pb_sigs = self.campo._pre_breakout_factor()
-            if _pb_sigs >= 2:
+            if _pb_sigs >= 1:  # abbassato da 2 a 1 — più sensibile
                 _last_pb = getattr(self, '_last_pb_event_ts', 0)
                 if _now_ev - _last_pb >= 10:
                     _pb_payload = {'signals': _pb_sigs, 'factor': round(_pb_f, 3), 'regime': self._regime_current}
@@ -9145,12 +9145,9 @@ class OvertopBassanoV15Production:
                     _max_cicli = max(_hc.values()) if _hc else 0
                     _ot = f"PHANTOM_IRRIGIDISCE_cicli{_max_cicli}"
 
-                # P4: PnL sessione negativo oltre -$15 — cooldown 30 min
+                # P4: PnL sessione negativo oltre -$15
                 elif _pnl < -15.0 and not _ot:
-                    _last_p4_ts = getattr(self, '_last_oracle_p4_ts', 0)
-                    if _now_ts - _last_p4_ts > 1800:
-                        _ot = f"PNL_DRAWDOWN_{abs(_pnl):.0f}usd"
-                        self._last_oracle_p4_ts = _now_ts
+                    _ot = f"PNL_DRAWDOWN_{abs(_pnl):.0f}usd"
 
                 # P5: Regime EXPLOSIVE ma 0 trade
                 elif _regime == "EXPLOSIVE" and _trades == 0 and not _ot:
