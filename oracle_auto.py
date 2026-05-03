@@ -405,7 +405,9 @@ def _call_l2(ctx: dict, trigger: str, l1: str) -> str:
         "- MAI blocca_entry senza trend nel trigger\n"
         "- MAI bloccare FORTE|BASSA|UP o FORTE|MEDIA|UP\n"
         "- durata_ore = 0 = permanente\n"
-        "- delta boost_soglia: tra -20 e +20"
+        "- delta boost_soglia: tra -20 e +20\n"
+        "- CAMPI TRIGGER VALIDI (solo questi): momentum, volatility, trend, regime, direction, oi_carica, oi_stato, loss_consecutivi, matrimonio\n"
+        "- MAI usare score, soglia, pnl, seed, fingerprint_wr come parametri trigger — il CapsuleManager non li legge"
     )
 
     # Costruisce il messaggio centrato sulla PARTITA REALE
@@ -572,6 +574,19 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
         # Normalizza sempre il formato — anche se DeepSeek usa vecchio formato
         trigger_norm = _normalizza_trigger(capsule.get("trigger", []))
         azione_norm  = _normalizza_azione(capsule.get("azione", {}))
+
+        # ── VALIDAZIONE CAMPI TRIGGER — lista bianca definitiva ────────────
+        # Solo questi campi sono letti dal CapsuleManager. Tutto il resto viene rifiutato.
+        _CAMPI_VALIDI = {
+            "momentum", "volatility", "trend", "regime", "direction",
+            "oi_carica", "oi_stato", "loss_consecutivi", "matrimonio",
+            "breath", "comparto"
+        }
+        for _t in trigger_norm:
+            _param = _t.get("param", "")
+            if _param and _param not in _CAMPI_VALIDI:
+                _p(f"RIFIUTATA: capsule {cap_id} usa campo non valido '{_param}'")
+                return False
 
         # ── VALIDAZIONE TREND OBBLIGATORIO ─────────────────────────────────
         # MAI blocca_entry senza trend nel trigger — blocca UP vincenti
