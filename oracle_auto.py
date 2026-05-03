@@ -573,6 +573,14 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
         trigger_norm = _normalizza_trigger(capsule.get("trigger", []))
         azione_norm  = _normalizza_azione(capsule.get("azione", {}))
 
+        # ── VALIDAZIONE TREND OBBLIGATORIO ─────────────────────────────────
+        # MAI blocca_entry senza trend nel trigger — blocca UP vincenti
+        if azione_norm.get("type") == "blocca_entry":
+            _has_trend = any(t.get("param") == "trend" for t in trigger_norm)
+            if not _has_trend:
+                _p(f"RIFIUTATA: capsule {cap_id} senza trend nel trigger — pericolosa")
+                return False
+
         # ── VALIDAZIONE WHITELIST — rifiuta capsule che bloccano pattern vincenti ──
         _WHITELIST = [
             {"momentum": "FORTE", "volatility": "BASSA", "trend": "UP"},
