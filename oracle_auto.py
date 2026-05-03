@@ -590,10 +590,16 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
 
         # ── VALIDAZIONE TREND OBBLIGATORIO ─────────────────────────────────
         # MAI blocca_entry senza trend nel trigger — blocca UP vincenti
-        if azione_norm.get("type") == "blocca_entry":
-            _has_trend = any(t.get("param") == "trend" for t in trigger_norm)
-            if not _has_trend:
-                _p(f"RIFIUTATA: capsule {cap_id} senza trend nel trigger — pericolosa")
+        # MAI boost_soglia con delta alto senza trend — alza soglia anche su UP
+        _az_type = azione_norm.get("type")
+        _has_trend = any(t.get("param") == "trend" for t in trigger_norm)
+        if _az_type == "blocca_entry" and not _has_trend:
+            _p(f"RIFIUTATA: capsule {cap_id} blocca_entry senza trend — pericolosa")
+            return False
+        if _az_type == "boost_soglia" and not _has_trend:
+            _delta = abs(azione_norm.get("params", {}).get("delta", 0))
+            if _delta >= 10:
+                _p(f"RIFIUTATA: capsule {cap_id} boost_soglia delta={_delta} senza trend — pericolosa")
                 return False
 
         # ── VALIDAZIONE WHITELIST — rifiuta capsule che bloccano pattern vincenti ──
