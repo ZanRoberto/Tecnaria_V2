@@ -402,7 +402,8 @@ def _call_l2(ctx: dict, trigger: str, l1: str) -> str:
         "}\n"
         "</SUPERCAPSULE>\n\n"
         "REGOLE ASSOLUTE:\n"
-        "- MAI blocca_entry senza trend nel trigger\n"
+        "- MAI blocca_entry senza trend nel trigger — SEMPRE includere {\"param\": \"trend\", \"op\": \"==\", \"value\": \"SIDEWAYS\"} in RANGING\n"
+        "  ESEMPIO CORRETTO: [{\"param\": \"regime\", \"op\": \"==\", \"value\": \"RANGING\"}, {\"param\": \"trend\", \"op\": \"==\", \"value\": \"SIDEWAYS\"}]\n"
         "- MAI bloccare FORTE|BASSA|UP o FORTE|MEDIA|UP\n"
         "- durata_ore = 0 = permanente\n"
         "- delta boost_soglia: tra -20 e +20\n"
@@ -593,17 +594,16 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
         trigger_norm = _trigger_filtrato
         if azione_norm.get("type") == "blocca_entry" and \
            not any(t.get("param") == "trend" for t in trigger_norm):
-            _p(f"RIFIUTATA: {cap_id} blocca_entry senza trend valido dopo filtraggio")
-            return False
-
+            trigger_norm.append({"param": "trend", "op": "==", "value": "SIDEWAYS"})  # FIX: inject trend mancante
+            _p(f"TREND INIETTATO: {cap_id} blocca_entry senza trend — aggiunto SIDEWAYS automaticamente")
         # ── VALIDAZIONE TREND OBBLIGATORIO ─────────────────────────────────
         # MAI blocca_entry senza trend nel trigger — blocca UP vincenti
         # MAI boost_soglia con delta alto senza trend — alza soglia anche su UP
         _az_type = azione_norm.get("type")
         _has_trend = any(t.get("param") == "trend" for t in trigger_norm)
         if _az_type == "blocca_entry" and not _has_trend:
-            _p(f"RIFIUTATA: capsule {cap_id} blocca_entry senza trend — pericolosa")
-            return False
+            trigger_norm.append({"param": "trend", "op": "==", "value": "SIDEWAYS"})  # FIX: inject trend
+            _p(f"TREND INIETTATO (validazione): {cap_id} — aggiunto SIDEWAYS")
         if _az_type == "boost_soglia" and not _has_trend:
             _delta = abs(azione_norm.get("params", {}).get("delta", 0))
             if _delta >= 10:
