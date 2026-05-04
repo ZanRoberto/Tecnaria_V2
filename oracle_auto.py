@@ -355,60 +355,71 @@ def _call_l1(ctx: dict, trigger: str) -> str:
 
 
 def _call_l2(ctx: dict, trigger: str, l1: str) -> str:
+    # Legge capsule AUTO esistenti dal DB per passarle al prompt — previene duplicati
+    _existing_ids = []
+    try:
+        import sqlite3 as _sq, os as _os
+        _db = _os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
+        _conn = _sq.connect(_db, timeout=5)
+        _rows = _conn.execute(
+            "SELECT id FROM capsule WHERE livello='AUTO' AND enabled=1 LIMIT 20"
+        ).fetchall()
+        _conn.close()
+        _existing_ids = [r[0] for r in _rows]
+    except Exception:
+        pass
+    _existing_str = ", ".join(_existing_ids) if _existing_ids else "nessuna"
+
     system = (
         "Sei il Superrisponditore L2 di OVERTOP BASSANO V15.\n\n"
-        "IL PERNO: ogni trade perso contiene le informazioni per non perderlo piu.\n"
-        "Esistono DUE sole verita possibili:\n\n"
-        "EVITA: il contesto non aveva edge. Nessuna gestione poteva salvarlo.\n"
-        "  Criteri: nessun WIN_+N, pnl_lordo < $2, WR contesto < 10%\n"
-        "  Azione: blocca_entry — non entrare mai piu in quel contesto\n\n"
-        "MIGLIORA: il mercato si era mosso a favore ma abbiamo gestito male.\n"
-        "  Criteri: WIN_+N nel motivo con PnL negativo, OPPURE pnl_lordo > fee ma netto negativo\n"
-        "  Azione: boost_soglia negativo — entra ma con soglia corretta\n\n"
-        "La classificazione EVITA/MIGLIORA e gia nel contesto — usala come base.\n\n"
+        "COMPITO UNICO: leggere UNA partita persa e produrre UNA sola SuperCapsule chirurgica.\n\n"
+        "REGOLA FONDAMENTALE — UNA CAPSULE SOLA:\n"
+        "Produci SEMPRE e SOLO una capsule. Mai due. Mai varianti. Una.\n"
+        "Se il contesto e gia coperto da capsule esistenti nel DB, rispondi con boost_soglia delta=5\n"
+        "invece di blocca_entry — non duplicare blocchi gia esistenti.\n\n"
+        "CAPSULE GIA ESISTENTI NEL DB (non duplicare questi pattern):\n"
+        f"{_existing_str}\\n\\n"
+        "DUE SOLE VERITA:\n"
+        "EVITA: nessun WIN_+N nei motivi di uscita, pnl_lordo < $2, WR < 10%\n"
+        "  → blocca_entry con trigger SPECIFICI: momentum + volatility + trend obbligatori\n"
+        "MIGLIORA: WIN_+N presente ma PnL negativo, oppure pnl_lordo > $2 ma netto negativo\n"
+        "  → boost_soglia con delta tra -15 e +15\n\n"
         "LEGGI FISICHE:\n"
-        "- FEE = $2 fissi. BREAKEVEN ~$30 movimento BTC.\n"
-        "- WIN_+N con PnL negativo = movimento c era ma gestione sbagliata = MIGLIORA\n"
-        "- Nessun WIN_+N, PnL sempre -$2 = nessun edge = EVITA\n\n"
-        "FORMATO TRIGGER (obbligatorio):\n"
-        "[{\"param\": \"momentum\", \"op\": \"==\", \"value\": \"DEBOLE\"}, ...]\n"
-        "CAMPI: momentum(FORTE/MEDIO/DEBOLE) volatility(ALTA/MEDIA/BASSA) trend(UP/SIDEWAYS/DOWN)\n"
-        "OPERATORI: == != < > <= >=\n\n"
-        "FORMATO AZIONE:\n"
-        "EVITA:   {\"type\": \"blocca_entry\", \"params\": {\"reason\": \"spiegazione\"}}\n"
-        "MIGLIORA: {\"type\": \"boost_soglia\", \"params\": {\"delta\": -8}}\n\n"
-        "PATTERN TOSSICI (WR reale dai trade):\n"
-        "- DEBOLE|ALTA|SIDEWAYS: WR 0.8% su 126 trade reali -> blocca_entry priority 10\n"
-        "- MEDIO|ALTA|SIDEWAYS: WR 5.9% su 51 trade reali -> blocca_entry priority 9\n\n"
-        "PATTERN VINCENTI (MAI bloccare):\n"
-        "- FORTE|BASSA|UP: WR 78% -> se bloccato: boost_soglia delta -8\n"
-        "- FORTE|MEDIA|UP: WR 68%\n"
-        "- MEDIO|BASSA|UP: WR 65%\n\n"
-        "FORMATO RISPOSTA:\n"
+        "- FEE = $2 fissi. BREAKEVEN = $30 movimento BTC minimo.\n"
+        "- WIN_+1 o WIN_+2 = lordo < $2 = perdita netta certa = EVITA, non MIGLIORA\n"
+        "- WIN_+10 o piu con PnL negativo = MIGLIORA\n\n"
+        "TRIGGER — REGOLE FERRO:\n"
+        "1. blocca_entry DEVE avere SEMPRE: momentum + volatility + trend\n"
+        "2. trigger MINIMO: 3 parametri. trigger MASSIMO: 4 parametri\n"
+        "3. NON aggiungere regime se momentum+volatility+trend gia specificano il contesto\n"
+        "4. CAMPI VALIDI SOLI: momentum, volatility, trend, direction, oi_carica, oi_stato, loss_consecutivi\n"
+        "5. VIETATO: score, soglia, pnl, seed, fingerprint_wr, regime come unico trigger\n\n"
+        "PATTERN TOSSICI CERTIFICATI (usa questi trigger esatti):\n"
+        "- DEBOLE|ALTA|SIDEWAYS: [{momentum==DEBOLE},{volatility==ALTA},{trend==SIDEWAYS}]\n"
+        "- MEDIO|ALTA|SIDEWAYS: [{momentum==MEDIO},{volatility==ALTA},{trend==SIDEWAYS}]\n"
+        "- FORTE|ALTA|DOWN: [{momentum==FORTE},{volatility==ALTA},{trend==DOWN}]\n\n"
+        "PATTERN VINCENTI — MAI bloccare:\n"
+        "- FORTE|BASSA|UP, FORTE|MEDIA|UP, MEDIO|BASSA|UP\n\n"
+        "ID CAPSULE — REGOLA:\n"
+        "Usa formato: SC_[MOMENTUM]_[VOLATILITY]_[TREND]\n"
+        "Esempio: SC_DEBOLE_ALTA_SIDEWAYS\n"
+        "Questo previene duplicati — stesso contesto = stesso ID = update, non insert.\n\n"
+        "FORMATO RISPOSTA (rispetta esattamente):\n"
         "CLASSIFICAZIONE: [EVITA o MIGLIORA]\n"
-        "LETTURA PARTITA: [cosa dice la partita reale in 2 righe]\n"
-        "CAPSULE: [perche questa azione]\n"
+        "LETTURA: [1 frase sulla partita reale]\n"
         "<SUPERCAPSULE>\n"
         "{\n"
-        "  \"id\": \"SC_[NOME_BREVE]\",\n"
+        "  \"id\": \"SC_[MOMENTUM]_[VOLATILITY]_[TREND]\",\n"
         "  \"asset\": \"BTCUSDC\",\n"
         "  \"livello\": \"AUTO\",\n"
         "  \"tipo\": \"PARAMETRO\",\n"
-        "  \"trigger\": [...],\n"
-        "  \"azione\": {\"type\": \"blocca_entry|boost_soglia\", \"params\": {...}},\n"
-        "  \"priority\": 10,\n"
+        "  \"trigger\": [{\"param\":\"momentum\",\"op\":\"==\",\"value\":\"DEBOLE\"},{\"param\":\"volatility\",\"op\":\"==\",\"value\":\"ALTA\"},{\"param\":\"trend\",\"op\":\"==\",\"value\":\"SIDEWAYS\"}],\n"
+        "  \"azione\": {\"type\": \"blocca_entry\", \"params\": {\"reason\": \"max 80 caratteri\"}},\n"
+        "  \"priority\": 8,\n"
         "  \"durata_ore\": 0,\n"
         "  \"analisi_causale\": \"cita la partita reale max 60 parole\"\n"
         "}\n"
-        "</SUPERCAPSULE>\n\n"
-        "REGOLE ASSOLUTE:\n"
-        "- MAI blocca_entry senza trend nel trigger — SEMPRE includere {\"param\": \"trend\", \"op\": \"==\", \"value\": \"SIDEWAYS\"} in RANGING\n"
-        "  ESEMPIO CORRETTO: [{\"param\": \"regime\", \"op\": \"==\", \"value\": \"RANGING\"}, {\"param\": \"trend\", \"op\": \"==\", \"value\": \"SIDEWAYS\"}]\n"
-        "- MAI bloccare FORTE|BASSA|UP o FORTE|MEDIA|UP\n"
-        "- durata_ore = 0 = permanente\n"
-        "- delta boost_soglia: tra -20 e +20\n"
-        "- CAMPI TRIGGER VALIDI (solo questi): momentum, volatility, trend, regime, direction, oi_carica, oi_stato, loss_consecutivi, matrimonio\n"
-        "- MAI usare score, soglia, pnl, seed, fingerprint_wr come parametri trigger — il CapsuleManager non li legge"
+        "</SUPERCAPSULE>"
     )
 
     # Costruisce il messaggio centrato sulla PARTITA REALE
@@ -529,42 +540,85 @@ def _extract_capsule(text: str):
         return None
 
 
+
+def canonical_capsule_id(asset: str, classification: str, direction: str,
+                          momentum: str, volatility: str, trend: str,
+                          action_type: str, regime: str = "", matrimonio: str = "") -> str:
+    """
+    Produce ID canonico deterministico dalla forma del pattern.
+    Stesso pattern = stesso ID sempre. Previene duplicati da nomi DeepSeek liberi.
+    
+    Formato: SC_{CLASSIFICATION}_{ASSET}_{DIRECTION}_{MOMENTUM}_{VOLATILITY}_{TREND}
+    Esempio: SC_EVITA_BTCUSDC_LONG_DEBOLE_ALTA_SIDEWAYS
+    """
+    parts = ["SC"]
+    # Classificazione
+    cl = (classification or "").upper()
+    if cl in ("EVITA", "MIGLIORA"):
+        parts.append(cl)
+    # Asset (solo BTC o SOL)
+    a = (asset or "BTCUSDC").upper().replace("USDC", "").replace("USDT", "")
+    parts.append(a if a else "BTC")
+    # Direction
+    d = (direction or "").upper()
+    if d in ("LONG", "SHORT"):
+        parts.append(d)
+    # Momentum
+    m = (momentum or "").upper()
+    if m in ("FORTE", "MEDIO", "DEBOLE"):
+        parts.append(m)
+    # Volatility
+    v = (volatility or "").upper()
+    if v in ("ALTA", "MEDIA", "BASSA"):
+        parts.append(v)
+    # Trend
+    t = (trend or "").upper()
+    if t in ("UP", "SIDEWAYS", "DOWN"):
+        parts.append(t)
+    return "_".join(parts)
+
+
 def _apply_capsule(capsule: dict, trigger: str) -> bool:
     try:
         db_path  = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
         _raw_id = capsule.get("id", f"SC_{int(time.time())}")
         import re as _re
-        cap_id = _re.sub(r'_\d{9,10}$', '', _raw_id)
-        if not cap_id:
-            cap_id = _raw_id
 
-        # ── ID FISSI — normalizza ID varianti allo stesso pattern ──────
-        # Impedisce duplicati da nomi diversi per lo stesso contesto
-        _ID_FISSI = {
-            # DEBOLE|ALTA|SIDEWAYS — pattern più tossico WR 0.8%
-            ("DEBOLE", "ALTA",  "SIDEWAYS", "blocca_entry"): "SC_BLOCCA_DEBOLE_ALTA_SIDEWAYS",
-            ("DEBOLE", "ALTA",  "SIDEWAYS", "boost_soglia"): "SC_BOOST_DEBOLE_ALTA_SIDEWAYS",
-            # MEDIO|ALTA|SIDEWAYS — WR 5.9%
-            ("MEDIO",  "ALTA",  "SIDEWAYS", "blocca_entry"): "SC_BLOCCA_MEDIO_ALTA_SIDEWAYS",
-            ("MEDIO",  "ALTA",  "SIDEWAYS", "boost_soglia"): "SC_BOOST_MEDIO_ALTA_SIDEWAYS",
-            # DEBOLE|BASSA|SIDEWAYS — WR 10%
-            ("DEBOLE", "BASSA", "SIDEWAYS", "blocca_entry"): "SC_BLOCCA_DEBOLE_BASSA_SIDEWAYS",
-            # FORTE|ALTA|SIDEWAYS
-            ("FORTE",  "ALTA",  "SIDEWAYS", "blocca_entry"): "SC_BLOCCA_FORTE_ALTA_SIDEWAYS",
-            ("FORTE",  "ALTA",  "SIDEWAYS", "boost_soglia"): "SC_BOOST_FORTE_ALTA_SIDEWAYS",
-        }
-        # Estrai momentum/volatility/trend dai trigger per cercare ID fisso
+        # ── ID CANONICO — deriva dalla forma del pattern, non dal nome DeepSeek ──
+        # Normalizza prima per estrarre i valori dal trigger
         _trigger_raw = capsule.get("trigger", [])
         _trigger_norm_preview = _normalizza_trigger(_trigger_raw)
         _tv = {t.get("param"): t.get("value") for t in _trigger_norm_preview}
         _az_preview = _normalizza_azione(capsule.get("azione", {}))
         _az_type = _az_preview.get("type", "")
-        _fixed_key = (_tv.get("momentum",""), _tv.get("volatility",""), _tv.get("trend",""), _az_type)
-        if _fixed_key[0] and _fixed_key[1] and _fixed_key[2] and _az_type:
-            _fixed_id = _ID_FISSI.get(_fixed_key)
-            if _fixed_id:
-                cap_id = _fixed_id
-                _p(f"ID FISSO applicato: {_raw_id} → {cap_id}")
+
+        # Estrai classificazione dal testo della capsule
+        _classif = "EVITA" if _az_type == "blocca_entry" else "MIGLIORA"
+
+        # Calcola ID canonico se abbiamo momentum+volatility+trend
+        _mom = _tv.get("momentum", "")
+        _vol = _tv.get("volatility", "")
+        _trd = _tv.get("trend", "")
+        _dir = _tv.get("direction", "")
+        _asset = capsule.get("asset", "BTCUSDC")
+
+        if _mom and _vol and _trd:
+            cap_id = canonical_capsule_id(
+                asset=_asset,
+                classification=_classif,
+                direction=_dir,
+                momentum=_mom,
+                volatility=_vol,
+                trend=_trd,
+                action_type=_az_type,
+            )
+            _p(f"[CAPSULE_MEMORY] ID CANONICO: {_raw_id} → {cap_id}")
+        else:
+            # Fallback: usa ID DeepSeek pulito da timestamp
+            cap_id = _re.sub(r'_\d{9,10}$', '', _raw_id)
+            if not cap_id:
+                cap_id = _raw_id
+            _p(f"[CAPSULE_MEMORY] ID FALLBACK (trigger incompleto): {cap_id}")
         asset    = capsule.get("asset",    "BTCUSDC")
         livello  = capsule.get("livello",  "AUTO")
         tipo     = capsule.get("tipo",     "PARAMETRO")
@@ -575,6 +629,18 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
         # Normalizza sempre il formato — anche se DeepSeek usa vecchio formato
         trigger_norm = _normalizza_trigger(capsule.get("trigger", []))
         azione_norm  = _normalizza_azione(capsule.get("azione", {}))
+
+        # ── EVITA / MIGLIORA VINCOLANTE ────────────────────────────────
+        # Se classificazione è MIGLIORA, blocca_entry è vietata — corregge in boost_soglia
+        # Se classificazione è EVITA, boost_entry è vietata — corregge in blocca_entry
+        _classif_final = "EVITA" if azione_norm.get("type") == "blocca_entry" else "MIGLIORA"
+        _analisi_text = (capsule.get("analisi_causale", "") or "").upper()
+        if "MIGLIORA" in _analisi_text and azione_norm.get("type") == "blocca_entry":
+            _p(f"[CAPSULE_MEMORY] MIGLIORA→blocca_entry CORRETTO in boost_soglia: {cap_id}")
+            azione_norm = {"type": "boost_soglia", "params": {"delta": -8, "reason": "MIGLIORA_corretto_da_blocca"}}
+        elif "EVITA" in _analisi_text and azione_norm.get("type") == "boost_entry":
+            _p(f"[CAPSULE_MEMORY] EVITA→boost_entry CORRETTO in blocca_entry: {cap_id}")
+            azione_norm = {"type": "blocca_entry", "params": {"reason": "EVITA_corretto_da_boost"}}
 
         # ── VALIDAZIONE CAMPI TRIGGER — lista bianca definitiva ────────────
         # Solo questi campi sono letti dal CapsuleManager. Tutto il resto viene rifiutato.
@@ -649,10 +715,10 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
                 c.execute("UPDATE capsule SET enabled=1, created_ts=? WHERE id=?", (time.time(), cap_id))
                 conn.commit()
                 conn.close()
-                _p(f"Capsule {cap_id} riabilitata")
+                _p(f"[CAPSULE_MEMORY] UPDATE id={cap_id} (riabilitata)")
                 return True
             else:
-                _p(f"Capsule {cap_id} gia attiva — skip")
+                _p(f"[CAPSULE_MEMORY] DUPLICATE_SKIP id={cap_id} — gia attiva nel DB")
                 conn.close()
                 return False
 
@@ -717,7 +783,7 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
         conn.commit()
         conn.close()
 
-        _p(f"Capsule {cap_id} inserita — trigger={json.dumps(trigger_norm)[:80]}")
+        _p(f"[CAPSULE_MEMORY] INSERT id={cap_id} trigger={json.dumps(trigger_norm)[:80]}")
 
         hb = _get_hb()
         if hb is not None:
