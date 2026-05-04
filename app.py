@@ -5952,6 +5952,16 @@ class OvertopBassanoV15Production:
             self.telemetry.log_capsule_load([caps_check.get('reason','?')])
             return
 
+        # FIX E01: applica soglia_boost dal CapsuleManager
+        _caps_soglia_boost = caps_check.get('soglia_boost', 0.0)
+        if _caps_soglia_boost > 0:
+            # boost_soglia in punti score (0-100), normalizzato su scala fp_wr (0-1)
+            _fp_soglia_aumentata = p['cap1_soglia_buona'] + (_caps_soglia_boost / 100.0)
+            if fingerprint_wr < _fp_soglia_aumentata:
+                self._log("💊", f"[CAPSULE_BOOST_SOGLIA] fp_wr={fingerprint_wr:.2f} < soglia_aumentata={_fp_soglia_aumentata:.2f} (+{_caps_soglia_boost:.0f}pts) — entry bloccata")
+                return
+            self._log("💊", f"[CAPSULE_APPLY] soglia_boost=+{_caps_soglia_boost:.0f}pts fp_wr={fingerprint_wr:.2f} >= {_fp_soglia_aumentata:.2f} — passa")
+
         # -- ENTRY CONFERMATA ----------------------------------------------
         # Position sizing continuo - funzione dell'impulso × regime
         regime_mults = self.regime_detector.get_multipliers()
@@ -9175,7 +9185,8 @@ class OvertopBassanoV15Production:
             except Exception as _ote:
                 log.warning(f"[ORACLE_TRIGGER] error: {_ote}")
 
-            self.heartbeat_lock.release()
+            if self.heartbeat_lock:
+                self.heartbeat_lock.release()  # FIX P3
 
     def _get_shadow_short_report(self):
         """Report aggregato degli SHORT evitati in RANGING."""
