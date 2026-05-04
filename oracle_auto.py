@@ -582,11 +582,19 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
             "oi_carica", "oi_stato", "loss_consecutivi", "matrimonio",
             "breath", "comparto"
         }
+        # FIX P1: rimuove campi non validi invece di rifiutare tutta la capsule
+        _trigger_filtrato = []
         for _t in trigger_norm:
             _param = _t.get("param", "")
             if _param and _param not in _CAMPI_VALIDI:
-                _p(f"RIFIUTATA: capsule {cap_id} usa campo non valido '{_param}'")
-                return False
+                _p(f"CAMPO RIMOSSO: '{_param}' non letto da CM — capsule salvata senza quel trigger")
+            else:
+                _trigger_filtrato.append(_t)
+        trigger_norm = _trigger_filtrato
+        if azione_norm.get("type") == "blocca_entry" and \
+           not any(t.get("param") == "trend" for t in trigger_norm):
+            _p(f"RIFIUTATA: {cap_id} blocca_entry senza trend valido dopo filtraggio")
+            return False
 
         # ── VALIDAZIONE TREND OBBLIGATORIO ─────────────────────────────────
         # MAI blocca_entry senza trend nel trigger — blocca UP vincenti
