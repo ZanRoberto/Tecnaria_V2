@@ -7296,6 +7296,7 @@ class OvertopBassanoV15Production:
                         'oi_carica':       _eo_carica,
                         'oi_stato':        self._oi_stato,
                         'loss_consecutivi': self._m2_loss_consecutivi(),
+                        'matrimonio':      matrimonio_name,
                     }
                     _cm_p1 = self.capsule_manager.valuta(_cm_ctx_p1)
                     if _cm_p1.get('blocca'):
