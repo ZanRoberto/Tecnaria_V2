@@ -648,6 +648,39 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
                 conn.close()
                 return False
 
+        # ── CHECK TRIGGER DUPLICATO — il pattern esiste già con nome diverso ──
+        # Normalizza trigger a chiave unica e cerca nel DB
+        import json as _jj
+        _trigger_key = _jj.dumps(
+            sorted([(t.get("param",""), t.get("op",""), str(t.get("value",""))) 
+                    for t in trigger_norm]),
+            sort_keys=True
+        )
+        _azione_type = azione_norm.get("type", "")
+        _dup = c.execute(
+            "SELECT id FROM capsule WHERE enabled=1 AND livello='AUTO' "
+            "AND azione_json LIKE ? LIMIT 1",
+            (f'%{_azione_type}%',)
+        ).fetchall()
+        for _row in _dup:
+            try:
+                _existing_trig = c.execute(
+                    "SELECT trigger_json FROM capsule WHERE id=?", (_row[0],)
+                ).fetchone()
+                if _existing_trig:
+                    _ex_tr = _jj.loads(_existing_trig[0] or '[]')
+                    _ex_key = _jj.dumps(
+                        sorted([(t.get("param",""), t.get("op",""), str(t.get("value","")))
+                                for t in _ex_tr]),
+                        sort_keys=True
+                    )
+                    if _ex_key == _trigger_key:
+                        _p(f"TRIGGER DUPLICATO: {cap_id} ha stesso trigger di {_row[0]} — skip")
+                        conn.close()
+                        return False
+            except Exception:
+                pass
+
         try:
             cols = [r[1] for r in c.execute("PRAGMA table_info(capsule)").fetchall()]
         except:
