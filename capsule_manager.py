@@ -604,7 +604,7 @@ class CapsuleManager:
                 """, (self.asset,)).fetchall()
             result = []
             for r in rows:
-                scade_in = int(max(0, r[12]-ora)) if r[12] else None
+                scade_in = int(max(0, float(r[12])-ora)) if r[12] and str(r[12]) not in ("None","") else None  # FIX P2
                 result.append({
                     "id":r[0],"asset":r[1],"livello":r[2],"tipo":r[3],
                     "descrizione":r[4],"enabled":bool(r[5]),
