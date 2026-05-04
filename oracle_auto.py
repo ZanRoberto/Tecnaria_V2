@@ -432,6 +432,7 @@ def _call_l2(ctx: dict, trigger: str, l1: str) -> str:
         f"DIAGNOSI L1:\n{l1}\n\n"
         f"=== PARTITA REALE (quella che ha generato il trigger) ===\n"
         f"Contesto: {ultima_perdita.get('ctx', '?')}\n"
+        f"Direction: {ultima_perdita.get('direction', ctx.get('stato_bot', {}).get('direction', 'LONG'))}\n"
         f"Score: {ultima_perdita.get('score', 0)} / Soglia: {ultima_perdita.get('soglia', 0)}\n"
         f"PnL netto: ${ultima_perdita.get('pnl', 0):.2f}\n"
         f"Motivo uscita: {ultima_perdita.get('reason', '?')}\n\n"
