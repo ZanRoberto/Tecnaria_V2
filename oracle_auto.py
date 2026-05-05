@@ -540,6 +540,28 @@ def _extract_capsule(text: str):
 
 
 
+
+def _has_migliora_attiva(c, trigger_norm: list) -> bool:
+    """Verifica se esiste una capsule MIGLIORA attiva per questo contesto."""
+    try:
+        trigger_key = set()
+        for t in trigger_norm:
+            trigger_key.add((t.get("param",""), str(t.get("value",""))))
+        rows = c.execute(
+            "SELECT trigger_json FROM capsule WHERE tipo LIKE 'MIGLIORA%' AND enabled=1"
+        ).fetchall()
+        for row in rows:
+            try:
+                trigs = _jj.loads(row[0] or '[]')
+                m_key = set((t.get("param",""), str(t.get("value",""))) for t in trigs)
+                if trigger_key and m_key and trigger_key.issubset(m_key):
+                    return True
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return False
+
 def canonical_capsule_id(asset: str, classification: str, direction: str,
                           momentum: str, volatility: str, trend: str,
                           action_type: str, regime: str = "", matrimonio: str = "") -> str:
@@ -745,7 +767,13 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
             new_note    = (_ex_note + f" | {analisi[:80]}")[-500:]  # max 500 chars
 
             if _ex_enabled == 0:
-                # Era disabilitata — riabilita e aggiorna
+                # Era disabilitata — controlla se esiste MIGLIORA attiva
+                if _has_migliora_attiva(c, trigger_norm):
+                    _p(f"[CAPSULE_MEMORY] SKIP riabilitazione {cap_id!r} — MIGLIORA attiva per stesso contesto")
+                    conn.commit()
+                    conn.close()
+                    return True
+                # Riabilita e aggiorna
                 c.execute("""UPDATE capsule SET enabled=1, samples=?, pnl_avg=?,
                              note=?, scade_ts=? WHERE id=?""",
                           (new_samples, round(new_pnl_avg, 4), new_note, scade_ts, cap_id))
@@ -796,6 +824,12 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
                 pass
 
         # ── INSERT nuova capsule — prima perdita su questa forma ──────────────
+        # Protezione MIGLIORA: non inserire EVITA se esiste MIGLIORA attiva per stesso contesto
+        if az_type in ("blocca_entry", "BLOCCA_ENTRY") and _has_migliora_attiva(c, trigger_norm):
+            _p(f"[CAPSULE_MEMORY] SKIP insert {cap_id!r} — MIGLIORA attiva per stesso contesto")
+            conn.commit()
+            conn.close()
+            return True
         try:
             cols = [r[1] for r in c.execute("PRAGMA table_info(capsule)").fetchall()]
         except Exception:
