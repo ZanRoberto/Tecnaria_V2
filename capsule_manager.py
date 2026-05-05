@@ -155,7 +155,7 @@ class CapsuleManager:
     Drop-in replacement per CapsuleRuntime + IntelligenzaAutonoma.
     """
 
-    MIN_SAMPLES_L2   = 8
+    MIN_SAMPLES_L2   = 3   # era 8 — 3 prove bastano per dichiarare un contesto tossico
     MIN_SAMPLES_L3   = 3
     MAX_AGE_L2       = 86400   # 24h
     MAX_AGE_L3       = 3600    # 1h
@@ -172,6 +172,7 @@ class CapsuleManager:
         self._init_db()
         self._seed_static()
         self._refresh_cache()
+        self._carica_storia_dal_db()
         log.info(f"[CM] ✅ CapsuleManager pronto — asset={asset}")
 
     # -------------------------------------------------------------------------
@@ -208,6 +209,50 @@ class CapsuleManager:
                          cap.get("samples",0), cap.get("wr",0.0), 0.0,
                          time.time(), cap.get("note","")))
                     log.info(f"[CM] 🌱 Statica inserita: {cap['id']}")
+
+    def _carica_storia_dal_db(self):
+        """Al boot carica gli ultimi 200 trade dal DB nel buffer e analizza subito."""
+        try:
+            with sqlite3.connect(self.db_path) as c:
+                rows = c.execute("""
+                    SELECT direction, pnl, reason, data_json
+                    FROM trades
+                    WHERE event_type='M2_EXIT'
+                    ORDER BY id DESC LIMIT 200
+                """).fetchall()
+            if not rows:
+                return
+            import json as _j
+            loaded = 0
+            for direction, pnl, reason, dj in reversed(rows):
+                try:
+                    d = _j.loads(dj) if dj else {}
+                except Exception:
+                    d = {}
+                trade = {
+                    'is_win':     pnl > 0 if pnl is not None else False,
+                    'pnl':        float(pnl or 0),
+                    'direction':  d.get('direction', direction or 'LONG'),
+                    'momentum':   d.get('momentum', ''),
+                    'volatility': d.get('volatility', ''),
+                    'trend':      d.get('trend', ''),
+                    'regime':     d.get('regime', ''),
+                    'matrimonio': d.get('matrimonio', ''),
+                    'asset':      self.asset,
+                    '_ts':        0,
+                }
+                if trade['momentum'] and trade['volatility'] and trade['trend']:
+                    self._trade_buffer.append(trade)
+                    loaded += 1
+            self._trade_count = loaded
+            log.info(f"[CM] 📚 Caricati {loaded} trade storici dal DB")
+            # Analizza subito — genera capsule LEARNED dalla storia
+            if loaded >= self.MIN_SAMPLES_L3:
+                nuove = self.analizza_e_genera()
+                if nuove:
+                    log.info(f"[CM] 🧬 {len(nuove)} capsule LEARNED generate al boot")
+        except Exception as e:
+            log.error(f"[CM] _carica_storia_dal_db: {e}")
 
     def _refresh_cache(self):
         try:
