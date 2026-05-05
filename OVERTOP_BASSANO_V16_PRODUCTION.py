@@ -8316,9 +8316,9 @@ class OvertopBassanoV16Production:
 
 
 
-        score  = result['score']
-
-        soglia = result['soglia']
+        score     = result['score']
+        soglia    = result['soglia']
+        breakdown = result.get('breakdown', {})
 
 
 
@@ -8406,6 +8406,8 @@ class OvertopBassanoV16Production:
 
             fingerprint_wr=fingerprint_wr,
 
+            breakdown=breakdown,
+
         )
 
 
@@ -8414,7 +8416,7 @@ class OvertopBassanoV16Production:
 
                     matrimonio_name, score, soglia, size,
 
-                    seed_score=0.5, fingerprint_wr=0.5):
+                    seed_score=0.5, fingerprint_wr=0.5, breakdown=None):
 
         direction = self.campo._direction
 
@@ -8447,6 +8449,8 @@ class OvertopBassanoV16Production:
             'ts_entry':     time.time(),
 
             'duration_avg': 60.0,
+
+            'breakdown':    breakdown or {},
 
         }
 
@@ -8744,11 +8748,36 @@ class OvertopBassanoV16Production:
             """, ('M2_EXIT', self.symbol, price, self._trade.get('size', 0.5),
                   round(pnl_netto, 4), direction, reason,
                   json.dumps({
-                      'momentum': entry_momentum, 'volatility': entry_volatility,
-                      'trend': entry_trend, 'regime': regime,
-                      'matrimonio': matrimonio_name,
-                      'score': score, 'soglia': soglia,
-                      'duration': round(duration, 1), 'is_win': is_win,
+                      # ── CONTESTO ENTRY ──────────────────────────
+                      'momentum':    entry_momentum,
+                      'volatility':  entry_volatility,
+                      'trend':       entry_trend,
+                      'regime':      regime,
+                      'matrimonio':  matrimonio_name,
+                      'direction':   direction,
+                      # ── SCORE TOTALE ─────────────────────────────
+                      'score':       round(score, 2),
+                      'soglia':      round(soglia, 2),
+                      # ── COMPONENTI SCORE (PROVA FORENSE) ─────────
+                      'sc_seed':     round(self._trade.get('breakdown', {}).get('seed', 0), 2),
+                      'sc_fp':       round(self._trade.get('breakdown', {}).get('fp', 0), 2),
+                      'sc_mom':      round(self._trade.get('breakdown', {}).get('mom', 0), 2),
+                      'sc_trend':    round(self._trade.get('breakdown', {}).get('trend', 0), 2),
+                      'sc_vol':      round(self._trade.get('breakdown', {}).get('vol', 0), 2),
+                      'sc_regime':   round(self._trade.get('breakdown', {}).get('regime', 0), 2),
+                      'sc_rsi':      round(self._trade.get('breakdown', {}).get('rsi', 0), 2),
+                      'sc_macd':     round(self._trade.get('breakdown', {}).get('macd', 0), 2),
+                      'rsi_val':     round(self._trade.get('breakdown', {}).get('rsi_val', 0), 1),
+                      'macd_val':    round(self._trade.get('breakdown', {}).get('macd_val', 0), 4),
+                      # ── SEED E FINGERPRINT RAW ───────────────────
+                      'seed_raw':    round(self._trade.get('seed', 0), 4),
+                      'fp_wr_raw':   round(self._trade.get('fp_wr', 0), 4),
+                      # ── TRADE EXECUTION ──────────────────────────
+                      'duration':    round(duration, 1),
+                      'is_win':      is_win,
+                      'pnl_netto':   round(pnl_netto, 4),
+                      'pnl_lordo':   round(pnl_lordo, 4),
+                      # ── PICCO INTRA-TRADE ─────────────────────────
                       'peak_pnl':     round(self._trade_peak_pnl, 4),
                       'peak_delta_s': round(self._trade_peak_ts - self._trade_entry_time, 1) if self._trade_peak_ts and self._trade_entry_time else 0,
                       'peak_energia': round(self._trade_peak_energia, 2),
