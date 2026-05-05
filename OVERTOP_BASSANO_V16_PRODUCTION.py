@@ -1958,7 +1958,7 @@ class OracoloDinamico:
 
     DECAY_FACTOR          = 0.95
 
-    MIN_SAMPLES           = 5
+    MIN_SAMPLES           = 30   # era 5 — servono almeno 30 campioni prima di bloccare
 
     MIN_PNL_EDGE          = 2.50    # profitto lordo minimo — lordo $2.50 = netto $0.50 dopo fee $2
 
