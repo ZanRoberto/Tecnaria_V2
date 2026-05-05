@@ -384,15 +384,19 @@ class OracleClassifier:
 
     def classify(self, trade: dict) -> dict:
         """
-        trade contiene: pnl, pnl_lordo, reason, direction, regime,
-                        momentum, volatility, trend, matrimonio
-        Ritorna: {
-            'tipo': 'EVITA'|'MIGLIORA'|'WIN',
-            'azione': str,
-            'sotto_tipo': str,
-            'motivo': str,
-            'params': dict  # parametri specifici per CapsuleMemory
-        }
+        Classificazione chirurgica basata su:
+        1. Presenza WIN_+N (edge esisteva o no)
+        2. Motivo di uscita (DIVORZIO trigger, PROFIT_LOCK, EXIT_E, SMORZ)
+        3. Numero di trigger divorzio (1 = timing, 2+ = contesto sbagliato)
+
+        MATRICE DIVORZIO:
+          T1 solo + PnL>0  → nessuna capsule (uscita corretta)
+          T1 solo + PnL<0  → blocca_entry (VOL_BASSA instabile)
+          T2 solo + PnL>0  → nessuna capsule (mercato cambiato, era in profitto)
+          T2 solo + PnL<0  → boost_soglia +5 (timing entry sbagliato)
+          T3 solo          → boost_soglia +8 (entry troppo aggressiva)
+          T4 solo          → boost_soglia +6 (fingerprint instabile)
+          2+ trigger       → blocca_entry (contesto strutturalmente sbagliato)
         """
         import re
 
@@ -400,19 +404,100 @@ class OracleClassifier:
         pnl_lordo = float(trade.get('pnl_lordo', pnl_netto + FEE_TRADE))
         reason    = str(trade.get('reason', ''))
 
-        # ── WIN — non classificare ──────────────────────────────────
+        # ── WIN — nessuna capsule ───────────────────────────────────
         if pnl_netto > 0:
             return {
                 'tipo': 'WIN', 'azione': '', 'sotto_tipo': '',
                 'motivo': 'trade vincente', 'params': {}
             }
 
-        # ── Estrai WIN_+N dal motivo ────────────────────────────────
-        win_m = re.search(r'WIN_\+(\d+)', reason)
+        win_m     = re.search(r'WIN_\+(\d+)', reason)
         win_ticks = int(win_m.group(1)) if win_m else 0
+        has_edge  = win_ticks >= 3 or pnl_lordo > FEE_TRADE * 1.5
+
+        # ── DIVORZIO — matrice decisionale ─────────────────────────
+        if 'DIVORZIO' in reason:
+            triggers = []
+            if 'T1_VOL'   in reason: triggers.append('T1')
+            if 'T2_TREND' in reason: triggers.append('T2')
+            if 'T3_DD'    in reason: triggers.append('T3')
+            if 'T4_FP'    in reason: triggers.append('T4')
+            n_triggers = len(triggers)
+
+            # 2+ trigger = contesto strutturalmente sbagliato
+            if n_triggers >= 2:
+                return {
+                    'tipo': 'EVITA',
+                    'azione': 'blocca_entry',
+                    'sotto_tipo': f"DIVORZIO_MULTIPLO_{'_'.join(triggers)}",
+                    'motivo': f"{n_triggers} trigger divorzio — contesto sbagliato strutturalmente",
+                    'params': {}
+                }
+
+            # 1 trigger solo — analisi specifica
+            t = triggers[0] if triggers else 'T_UNKNOWN'
+
+            if t == 'T1':
+                if pnl_netto > 0:
+                    # VOL esplosa MA eri in profitto — uscita corretta, niente capsule
+                    return {'tipo': 'WIN', 'azione': '', 'sotto_tipo': 'T1_CORRETTO',
+                            'motivo': 'T1 VOL esplosa ma trade in profitto — uscita corretta', 'params': {}}
+                else:
+                    # VOL BASSA instabile — non entrare in quel regime con VOL BASSA
+                    return {
+                        'tipo': 'EVITA',
+                        'azione': 'blocca_entry',
+                        'sotto_tipo': 'T1_VOL_INSTABILE',
+                        'motivo': 'VOL esplosa contro — VOL BASSA in quel regime è trappola',
+                        'params': {}
+                    }
+
+            if t == 'T2':
+                if pnl_netto > 0:
+                    # Trend invertito MA eri in profitto — mercato normale, niente capsule
+                    return {'tipo': 'WIN', 'azione': '', 'sotto_tipo': 'T2_CORRETTO',
+                            'motivo': 'T2 trend invertito ma trade in profitto — uscita corretta', 'params': {}}
+                else:
+                    # Timing sbagliato — entra solo con trend più consolidato
+                    return {
+                        'tipo': 'MIGLIORA',
+                        'azione': 'boost_soglia',
+                        'sotto_tipo': 'T2_TIMING',
+                        'motivo': 'trend invertito contro — entrare solo con trend più consolidato',
+                        'params': {'delta': 5}
+                    }
+
+            if t == 'T3':
+                # Drawdown troppo grande — entry troppo aggressiva
+                return {
+                    'tipo': 'MIGLIORA',
+                    'azione': 'boost_soglia',
+                    'sotto_tipo': 'T3_ENTRY_AGGRESSIVA',
+                    'motivo': f"drawdown 3% — entry troppo aggressiva, segnale insufficiente",
+                    'params': {'delta': 8}
+                }
+
+            if t == 'T4':
+                # Fingerprint instabile — aspetta FP più solido
+                return {
+                    'tipo': 'MIGLIORA',
+                    'azione': 'boost_soglia',
+                    'sotto_tipo': 'T4_FP_INSTABILE',
+                    'motivo': 'fingerprint diverge — entrare solo con FP stabile e campioni solidi',
+                    'params': {'delta': 6}
+                }
+
+        # ── PROFIT_LOCK ─────────────────────────────────────────────
+        if 'PROFIT_LOCK' in reason:
+            return {
+                'tipo': 'MIGLIORA',
+                'azione': 'adjust_profit_lock',
+                'sotto_tipo': 'PROFIT_LOCK_STRETTO',
+                'motivo': f"profit lock troppo stretto — WIN_+{win_ticks} ma lock ha chiuso in perdita",
+                'params': {'delta_tolleranza': 0.10}
+            }
 
         # ── EVITA: nessun edge reale ────────────────────────────────
-        has_edge = win_ticks >= 3 or pnl_lordo > FEE_TRADE * 1.5
         if not has_edge:
             return {
                 'tipo': 'EVITA',
@@ -422,63 +507,37 @@ class OracleClassifier:
                 'params': {}
             }
 
-        # ── MIGLIORA: c'era edge, diagnosi del problema ─────────────
-
-        # Caso 1: PROFIT_LOCK — uscito dopo aver visto profitto
-        if 'PROFIT_LOCK' in reason:
-            return {
-                'tipo': 'MIGLIORA',
-                'azione': 'adjust_profit_lock',
-                'sotto_tipo': 'PROFIT_LOCK_STRETTO',
-                'motivo': f"profit lock troppo stretto — WIN_+{win_ticks} ma lock ha chiuso in perdita",
-                'params': {'delta_tolleranza': 0.10}  # alza tolleranza retreat del 10%
-            }
-
-        # Caso 2: EXIT con energia bassa (SMORZ o EXIT_E basso)
+        # ── MIGLIORA: edge c'era, problema di gestione ──────────────
         exit_e_m = re.search(r'EXIT_E(\d+)_S(\d+)', reason)
         if exit_e_m:
             exit_e = int(exit_e_m.group(1))
-            exit_s = int(exit_e_m.group(2))
             if exit_e < 35 and win_ticks >= 3:
-                # Uscito con energia ancora presente ma soglia troppo alta
                 return {
                     'tipo': 'MIGLIORA',
                     'azione': 'adjust_exit_soglia',
                     'sotto_tipo': 'USCITA_PRESTO',
-                    'motivo': f"uscito a energia {exit_e} < 35 con WIN_+{win_ticks} — soglia uscita troppo alta",
-                    'params': {'delta_exit_soglia': -5}  # abbassa soglia uscita di 5 punti
+                    'motivo': f"uscito a energia {exit_e} con WIN_+{win_ticks} — soglia uscita troppo alta",
+                    'params': {'delta_exit_soglia': -5}
                 }
             elif exit_e >= 35 and win_ticks >= 5:
-                # Energia c'era ma non abbastanza per coprire fee — ingresso sbagliato
                 return {
                     'tipo': 'MIGLIORA',
                     'azione': 'boost_soglia',
                     'sotto_tipo': 'INGRESSO_DEBOLE',
-                    'motivo': f"energia {exit_e} sufficiente ma WIN_+{win_ticks} non ha coperto fee — ingresso debole",
+                    'motivo': f"energia {exit_e} ok ma fee non coperta — ingresso troppo debole",
                     'params': {'delta': 5}
                 }
 
-        # Caso 3: DIVORZIO con movimento a favore
-        if 'DIVORZIO' in reason and win_ticks >= 3:
-            return {
-                'tipo': 'MIGLIORA',
-                'azione': 'adjust_exit_soglia',
-                'sotto_tipo': 'DIVORZIO_PREMATURO',
-                'motivo': f"divorzio prematuro con WIN_+{win_ticks} — trigger troppo sensibile",
-                'params': {'delta_exit_soglia': -3}
-            }
-
-        # Caso 4: WIN alto ma PnL negativo → fee problema → ingresso
         if win_ticks >= 8:
             return {
                 'tipo': 'MIGLIORA',
                 'azione': 'boost_soglia',
                 'sotto_tipo': 'INGRESSO_TARDIVO',
-                'motivo': f"WIN_+{win_ticks} ma fee ha mangiato tutto — entrare più tardi su segnale più forte",
+                'motivo': f"WIN_+{win_ticks} ma fee ha mangiato tutto — segnale più forte",
                 'params': {'delta': 8}
             }
 
-        # Default MIGLIORA
+        # Default
         return {
             'tipo': 'MIGLIORA',
             'azione': 'boost_soglia',
@@ -3998,6 +4057,24 @@ class OvertopBassanoV16Production:
         )
         if not momentum:
             return
+
+        # -- FLIP DIRECTION LONG/SHORT ────────────────────────────────────
+        # Regola: SHORT solo quando il mercato è chiaramente ribassista.
+        # Non si flippano direzioni su noise — servono segnali convergenti.
+        # Durante un trade aperto la direction non cambia.
+        if not self._trade:
+            _prev_dir = self.campo._direction
+            if (regime == 'TRENDING_BEAR' and trend == 'DOWN' and
+                    momentum in ('FORTE', 'MEDIO')):
+                self.campo._direction = 'SHORT'
+            elif (regime == 'EXPLOSIVE' and trend == 'DOWN' and
+                    momentum == 'FORTE'):
+                self.campo._direction = 'SHORT'
+            else:
+                self.campo._direction = 'LONG'
+            if self.campo._direction != _prev_dir:
+                self._log("🔄", f"FLIP {_prev_dir}→{self.campo._direction} "
+                               f"regime={regime} momentum={momentum} trend={trend}")
 
         # -- Trade aperto: valuta uscita ----------------------------------
         if self._trade:
