@@ -176,8 +176,8 @@ class CapsuleMemory:
             rows = conn.execute(
                 "SELECT id,direction,regime,momentum,volatility,trend,matrimonio,"
                 "action,samples,wr,pnl_avg,enabled FROM capsule_memory "
-                "WHERE asset=? AND enabled=1 AND samples>=?",
-                (self.asset, self.MIN_SAMPLES_TO_BLOCK)
+                "WHERE asset=? AND enabled=1",
+                (self.asset,)
             ).fetchall()
             conn.close()
             self._cache = rows
@@ -222,7 +222,44 @@ class CapsuleMemory:
                     'wr': rwr,
                     'samples': rsamples,
                 }
-        return {'blocca': False, 'reason': '', 'action': ''}
+        return {'blocca': False, 'reason': '', 'action': '', 'adjustments': {}}
+
+    def get_exit_adjustments(self, direction: str, regime: str, momentum: str,
+                              volatility: str, trend: str) -> dict:
+        """
+        Ritorna le correzioni ai parametri di uscita da capsule MIGLIORA.
+        adjust_exit_soglia: delta da applicare alla soglia di uscita
+        adjust_profit_lock: delta tolleranza retreat
+        """
+        if time.time() - self._last_reload > 30:
+            self._reload_cache()
+
+        exit_delta = 0
+        lock_delta = 0.0
+
+        for row in self._cache:
+            rid, rdir, rreg, rmom, rvol, rtrd, rmat, ract, rsamples, rwr, rpnl, renabled = row
+            if ract not in ('adjust_exit_soglia', 'adjust_profit_lock'):
+                continue
+            if rsamples < self.MIN_SAMPLES_TO_BLOCK:
+                continue
+            match = True
+            if rdir and rdir != direction: match = False
+            if rreg and rreg != regime: match = False
+            if rmom and rmom != momentum: match = False
+            if rvol and rvol != volatility: match = False
+            if rtrd and rtrd != trend: match = False
+            if not match:
+                continue
+            if ract == 'adjust_exit_soglia':
+                exit_delta += int(rpnl * -2)  # pnl negativo → abbassa soglia
+            elif ract == 'adjust_profit_lock':
+                lock_delta += 0.10  # alza tolleranza retreat del 10%
+
+        return {
+            'exit_soglia_delta': max(-15, min(0, exit_delta)),   # mai sopra 0
+            'profit_lock_delta': min(0.30, lock_delta),           # max +30%
+        }
 
     def get_soglia_boost(self, direction: str, regime: str, momentum: str,
                          volatility: str, trend: str) -> float:
@@ -327,56 +364,128 @@ class CapsuleMemory:
 class OracleClassifier:
     """
     Classifica ogni trade chiuso in EVITA o MIGLIORA.
-    
+    Identifica COSA era sbagliato e propone la correzione giusta.
+
     EVITA: il contesto non aveva edge.
       - nessun WIN_+N nel motivo uscita
-      - pnl_lordo < FEE_TRADE ($2)
-      - non si poteva fare di meglio
-      Azione: crea/aggiorna capsule blocca_entry per quella forma
+      - pnl_lordo < FEE_TRADE
+      Azione: blocca_entry — non entrare su quella forma
 
     MIGLIORA: il mercato si era mosso a favore ma gestione sbagliata.
-      - WIN_+N presente nel motivo uscita
-      - pnl_lordo > FEE_TRADE ma pnl_netto negativo
-      - si poteva fare di meglio
-      Azione: crea/aggiorna capsule boost_soglia (non blocca)
+      - WIN_+N presente oppure pnl_lordo > FEE_TRADE*2
+      Sotto-casi:
+        MIGLIORA_USCITA_PRESTO  → uscito troppo presto (SMORZ o EXIT con energy bassa)
+          Azione: adjust_exit_soglia — abbassa la soglia di uscita
+        MIGLIORA_PROFIT_LOCK    → profit lock troppo stretto
+          Azione: adjust_profit_lock — alza la tolleranza retreat
+        MIGLIORA_INGRESSO       → segnale c'era ma ingresso tardivo/debole
+          Azione: boost_soglia — seleziona meglio l'ingresso
     """
 
     def classify(self, trade: dict) -> dict:
         """
         trade contiene: pnl, pnl_lordo, reason, direction, regime,
                         momentum, volatility, trend, matrimonio
-        Ritorna: {'tipo': 'EVITA'|'MIGLIORA', 'azione': str, 'motivo': str}
+        Ritorna: {
+            'tipo': 'EVITA'|'MIGLIORA'|'WIN',
+            'azione': str,
+            'sotto_tipo': str,
+            'motivo': str,
+            'params': dict  # parametri specifici per CapsuleMemory
+        }
         """
-        pnl_netto  = float(trade.get('pnl', 0.0))
-        pnl_lordo  = float(trade.get('pnl_lordo', pnl_netto + FEE_TRADE))
-        reason     = str(trade.get('reason', ''))
-
-        # Trade vincente — non classificare
-        if pnl_netto > 0:
-            return {'tipo': 'WIN', 'azione': '', 'motivo': 'trade vincente'}
-
-        # Cerca WIN_+N nel motivo
         import re
-        win_ticks = 0
-        m = re.search(r'WIN_\+(\d+)', reason)
-        if m:
-            win_ticks = int(m.group(1))
 
-        # Classificazione
-        if win_ticks >= 5 or (win_ticks > 0 and pnl_lordo > FEE_TRADE * 2):
-            # C'era movimento vero ma gestione sbagliata
+        pnl_netto = float(trade.get('pnl', 0.0))
+        pnl_lordo = float(trade.get('pnl_lordo', pnl_netto + FEE_TRADE))
+        reason    = str(trade.get('reason', ''))
+
+        # ── WIN — non classificare ──────────────────────────────────
+        if pnl_netto > 0:
             return {
-                'tipo': 'MIGLIORA',
-                'azione': 'boost_soglia',
-                'motivo': f"WIN_+{win_ticks} presente ma pnl={pnl_netto:.2f} — gestione da correggere"
+                'tipo': 'WIN', 'azione': '', 'sotto_tipo': '',
+                'motivo': 'trade vincente', 'params': {}
             }
-        else:
-            # Nessun edge reale
+
+        # ── Estrai WIN_+N dal motivo ────────────────────────────────
+        win_m = re.search(r'WIN_\+(\d+)', reason)
+        win_ticks = int(win_m.group(1)) if win_m else 0
+
+        # ── EVITA: nessun edge reale ────────────────────────────────
+        has_edge = win_ticks >= 3 or pnl_lordo > FEE_TRADE * 1.5
+        if not has_edge:
             return {
                 'tipo': 'EVITA',
                 'azione': 'blocca_entry',
-                'motivo': f"nessun edge — pnl_lordo={pnl_lordo:.2f} WIN_ticks={win_ticks}"
+                'sotto_tipo': 'NO_EDGE',
+                'motivo': f"nessun edge — lordo=${pnl_lordo:.2f} WIN_ticks={win_ticks}",
+                'params': {}
             }
+
+        # ── MIGLIORA: c'era edge, diagnosi del problema ─────────────
+
+        # Caso 1: PROFIT_LOCK — uscito dopo aver visto profitto
+        if 'PROFIT_LOCK' in reason:
+            return {
+                'tipo': 'MIGLIORA',
+                'azione': 'adjust_profit_lock',
+                'sotto_tipo': 'PROFIT_LOCK_STRETTO',
+                'motivo': f"profit lock troppo stretto — WIN_+{win_ticks} ma lock ha chiuso in perdita",
+                'params': {'delta_tolleranza': 0.10}  # alza tolleranza retreat del 10%
+            }
+
+        # Caso 2: EXIT con energia bassa (SMORZ o EXIT_E basso)
+        exit_e_m = re.search(r'EXIT_E(\d+)_S(\d+)', reason)
+        if exit_e_m:
+            exit_e = int(exit_e_m.group(1))
+            exit_s = int(exit_e_m.group(2))
+            if exit_e < 35 and win_ticks >= 3:
+                # Uscito con energia ancora presente ma soglia troppo alta
+                return {
+                    'tipo': 'MIGLIORA',
+                    'azione': 'adjust_exit_soglia',
+                    'sotto_tipo': 'USCITA_PRESTO',
+                    'motivo': f"uscito a energia {exit_e} < 35 con WIN_+{win_ticks} — soglia uscita troppo alta",
+                    'params': {'delta_exit_soglia': -5}  # abbassa soglia uscita di 5 punti
+                }
+            elif exit_e >= 35 and win_ticks >= 5:
+                # Energia c'era ma non abbastanza per coprire fee — ingresso sbagliato
+                return {
+                    'tipo': 'MIGLIORA',
+                    'azione': 'boost_soglia',
+                    'sotto_tipo': 'INGRESSO_DEBOLE',
+                    'motivo': f"energia {exit_e} sufficiente ma WIN_+{win_ticks} non ha coperto fee — ingresso debole",
+                    'params': {'delta': 5}
+                }
+
+        # Caso 3: DIVORZIO con movimento a favore
+        if 'DIVORZIO' in reason and win_ticks >= 3:
+            return {
+                'tipo': 'MIGLIORA',
+                'azione': 'adjust_exit_soglia',
+                'sotto_tipo': 'DIVORZIO_PREMATURO',
+                'motivo': f"divorzio prematuro con WIN_+{win_ticks} — trigger troppo sensibile",
+                'params': {'delta_exit_soglia': -3}
+            }
+
+        # Caso 4: WIN alto ma PnL negativo → fee problema → ingresso
+        if win_ticks >= 8:
+            return {
+                'tipo': 'MIGLIORA',
+                'azione': 'boost_soglia',
+                'sotto_tipo': 'INGRESSO_TARDIVO',
+                'motivo': f"WIN_+{win_ticks} ma fee ha mangiato tutto — entrare più tardi su segnale più forte",
+                'params': {'delta': 8}
+            }
+
+        # Default MIGLIORA
+        return {
+            'tipo': 'MIGLIORA',
+            'azione': 'boost_soglia',
+            'sotto_tipo': 'GENERICO',
+            'motivo': f"WIN_+{win_ticks} presente ma pnl={pnl_netto:.2f}",
+            'params': {'delta': 5}
+        }
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -4119,7 +4228,8 @@ class OvertopBassanoV16Production:
                 self._trade_entry_trend or trend,
                 direction=entry_direction
             )) or 5.0
-            tolleranza = min(0.70, max(0.40, 0.40 + (pnl_win_avg / 50.0) * 0.30))
+            _lock_delta = _exit_adj.get('profit_lock_delta', 0.0)
+            tolleranza = min(0.85, max(0.40, 0.40 + (pnl_win_avg / 50.0) * 0.30 + _lock_delta))
             retreat_ratio = retreat / max_profit if max_profit > 0 else 0
             if retreat_ratio > tolleranza:
                 self._close_trade(price,
@@ -4139,8 +4249,15 @@ class OvertopBassanoV16Production:
         profit_comp = 15 if max_profit <= 0 else max(5, int((1.0 - min(1.0, retreat/max(max_profit,0.01))) * 25))
         exit_energy = mom_score + trend_score + decel_comp + profit_comp
 
-        # Soglia uscita adattiva
+        # Soglia uscita adattiva — corretta da capsule MIGLIORA
         exit_soglia = max(30, 60 - int(duration / 10) * 2)
+        _exit_adj = self.capsule_memory.get_exit_adjustments(
+            entry_direction, self._trade.get('regime', self._regime_current),
+            self._trade_entry_momentum or momentum,
+            self._trade_entry_volatility or volatility,
+            self._trade_entry_trend or trend,
+        )
+        exit_soglia = max(20, exit_soglia + _exit_adj['exit_soglia_delta'])
         wins_ticks  = max(0, int((pnl_lordo / max(1, abs(self.FEE_TRADE))) * 5))
         win_tag     = f"_WIN_+{wins_ticks}" if wins_ticks > 0 else ""
 
