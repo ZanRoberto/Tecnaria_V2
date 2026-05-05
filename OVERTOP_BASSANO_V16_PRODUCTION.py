@@ -7942,6 +7942,10 @@ class OvertopBassanoV16Production:
 
         self._trade_entry_fingerprint = None
 
+        self._trade_peak_pnl      = 0.0
+        self._trade_peak_ts       = None
+        self._trade_peak_energia  = 0.0
+
 
 
         # -- Contatori performance M -----------------------------------------
@@ -8166,7 +8170,7 @@ class OvertopBassanoV16Production:
 
             self._evaluate_exit(price, momentum, volatility, trend)
 
-            self._update_heartbeat(price, momentum, volatility, trend)
+            self._update_heartbeat()
 
             return
 
@@ -8176,7 +8180,7 @@ class OvertopBassanoV16Production:
 
         self._evaluate_entry(price, volume, momentum, volatility, trend, regime)
 
-        self._update_heartbeat(price, momentum, volatility, trend)
+        self._update_heartbeat()
 
 
 
@@ -8872,6 +8876,35 @@ class OvertopBassanoV16Production:
             log.error(f"[V16_BOOT_STORIA] {e}")
 
 
+
+    def _update_heartbeat(self):
+        if not self.heartbeat_lock or self.heartbeat_data is None:
+            return
+        try:
+            tot = self.wins + self.losses
+            with self.heartbeat_lock:
+                self.heartbeat_data.update({
+                    "status":           "RUNNING",
+                    "mode":             "PAPER" if self.paper_trade else "LIVE",
+                    "capital":          round(self.capital, 2),
+                    "trades":           self.total_trades,
+                    "wins":             self.wins,
+                    "losses":           self.losses,
+                    "wr":               round(self.wins / tot, 4) if tot > 0 else 0,
+                    "last_seen":        datetime.utcnow().isoformat(),
+                    "regime":           self._regime_current,
+                    "posizione_aperta": self._trade is not None,
+                    "m2_direction":     self._trade.get('direction', 'LONG') if self._trade else 'LONG',
+                    "m2_loss_streak":   self._loss_streak,
+                    "m2_last_score":    round(getattr(self.campo, '_last_score', 0), 1),
+                    "m2_soglia_base":   round(getattr(self.campo, 'SOGLIA_BASE', 48), 1),
+                    "m2_pnl":           round(self._m_pnl, 4),
+                    "m2_trades":        self._m_trades,
+                    "m2_wins":          self._m_wins,
+                    "oracolo_snapshot": self.oracolo.dump() if hasattr(self.oracolo, 'dump') else {},
+                })
+        except Exception as e:
+            log.error(f"[V16_HB] {e}")
 
     def connect_binance(self):
         def on_message(ws, msg):
