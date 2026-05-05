@@ -600,24 +600,47 @@ class CapsuleManager:
     def _persisti(self, nuove):
         try:
             with sqlite3.connect(self.db_path) as c:
-                existing = {r[0] for r in c.execute("SELECT id FROM capsule").fetchall()}
+                existing = {r[0]: r[1] for r in c.execute("SELECT id, enabled FROM capsule").fetchall()}
+                # Contesti con capsule MIGLIORA attive — non creare EVITA per questi
+                migliora_contesti = set()
+                for r in c.execute("SELECT trigger_json FROM capsule WHERE tipo LIKE 'MIGLIORA%' AND enabled=1").fetchall():
+                    try:
+                        trigs = json.loads(r[0])
+                        key = tuple(sorted((t.get("param",""), str(t.get("value",""))) for t in trigs))
+                        migliora_contesti.add(key)
+                    except Exception:
+                        pass
+
                 for cap in nuove:
+                    # Se esiste già nel DB — aggiorna solo stats, non toccare enabled
                     if cap["id"] in existing:
                         c.execute("UPDATE capsule SET samples=?,wr=?,pnl_avg=?,scade_ts=? WHERE id=?",
                             (cap["samples"],cap["wr"],cap["pnl_avg"],cap.get("scade_ts"),cap["id"]))
-                    else:
-                        c.execute("""INSERT INTO capsule
-                            (id,asset,livello,tipo,descrizione,trigger_json,azione_json,
-                             priority,enabled,samples,wr,pnl_avg,created_ts,scade_ts)
-                            VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?)""",
-                            (cap["id"],cap["asset"],cap["livello"],cap["tipo"],
-                             cap.get("descrizione",""),
-                             json.dumps(cap.get("trigger",[])),
-                             json.dumps(cap["azione"]),
-                             cap.get("priority",5),
-                             cap["samples"],cap["wr"],cap["pnl_avg"],
-                             time.time(),cap.get("scade_ts")))
-                        log.info(f"[CM] 💾 Nuova: {cap['id']} ({cap['livello']})")
+                        continue
+
+                    # Nuova capsule EVITA — non creare se esiste MIGLIORA per stesso contesto
+                    if cap["azione"].get("type") in ("blocca_entry", "BLOCCA_ENTRY"):
+                        try:
+                            trigs = cap.get("trigger", [])
+                            key = tuple(sorted((t.get("param",""), str(t.get("value",""))) for t in trigs))
+                            if key in migliora_contesti:
+                                log.info(f"[CM] ⚪ MIGLIORA protegge {cap['id']} — non creo EVITA")
+                                continue
+                        except Exception:
+                            pass
+
+                    c.execute("""INSERT INTO capsule
+                        (id,asset,livello,tipo,descrizione,trigger_json,azione_json,
+                         priority,enabled,samples,wr,pnl_avg,created_ts,scade_ts)
+                        VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?)""",
+                        (cap["id"],cap["asset"],cap["livello"],cap["tipo"],
+                         cap.get("descrizione",""),
+                         json.dumps(cap.get("trigger",[])),
+                         json.dumps(cap["azione"]),
+                         cap.get("priority",5),
+                         cap["samples"],cap["wr"],cap["pnl_avg"],
+                         time.time(),cap.get("scade_ts")))
+                    log.info(f"[CM] 💾 Nuova: {cap['id']} ({cap['livello']})")
         except Exception as e:
             log.error(f"[CM] persisti: {e}")
 
