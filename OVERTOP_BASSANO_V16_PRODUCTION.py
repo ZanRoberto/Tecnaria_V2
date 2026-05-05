@@ -4082,7 +4082,7 @@ class PersistenzaStato:
 
                 'blacklist':  dict(memoria.blacklist),
 
-                'divorzio':   list(memoria.divorzio),
+                'divorzio':   [],  # V16: divorzi non persistiti — solo RAM di sessione
 
                 'wins':       dict(memoria.wins),
 
@@ -4602,9 +4602,7 @@ class PersistenzaStato:
 
                     memoria.blacklist[k] = v
 
-                for mat in md.get('divorzio', []):
-
-                    memoria.divorzio.add(mat)
+                # V16: divorzi non caricati dal DB — ripartono sempre vuoti
 
                 for k, v in md.get('wins', {}).items():
 
@@ -4618,7 +4616,7 @@ class PersistenzaStato:
 
                     memoria.wr_history[k] = list(v)
 
-                restored.append(f"Memoria: {len(memoria.divorzio)} divorzi, "
+                restored.append(f"Memoria: divorzi=0 (RAM only), "
 
                                f"{sum(1 for v in memoria.blacklist.values() if v > 0)} separazioni")
 
