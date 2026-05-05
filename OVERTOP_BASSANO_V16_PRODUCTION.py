@@ -4076,19 +4076,19 @@ class PersistenzaStato:
 
             memoria_data = {
 
-                'trust':      dict(memoria.trust),
+                'trust':      {},  # V16: trust non persistito — riparte da default 50
 
-                'separazione':dict(memoria.separazione),
+                'separazione':{},  # V16: non persistito
 
-                'blacklist':  dict(memoria.blacklist),
+                'blacklist':  {},   # V16: non persistito
 
                 'divorzio':   [],  # V16: divorzi non persistiti — solo RAM di sessione
 
-                'wins':       dict(memoria.wins),
+                'wins':       {},   # V16: non persistito
 
-                'losses':     dict(memoria.losses),
+                'losses':     {},   # V16: non persistito
 
-                'wr_history': {k: list(v) for k, v in memoria.wr_history.items()},
+                'wr_history': {},   # V16: non persistito
 
             }
 
@@ -4590,33 +4590,21 @@ class PersistenzaStato:
 
                 md = json.loads(rows['memoria'])
 
-                for k, v in md.get('trust', {}).items():
+                # V16: trust non caricato dal DB — riparte sempre da default 50
 
-                    memoria.trust[k] = v
+                # V16: separazione non caricata dal DB — riparte vuota
 
-                for k, v in md.get('separazione', {}).items():
-
-                    memoria.separazione[k] = v
-
-                for k, v in md.get('blacklist', {}).items():
-
-                    memoria.blacklist[k] = v
+                # V16: blacklist non caricata dal DB — riparte vuota
 
                 # V16: divorzi non caricati dal DB — ripartono sempre vuoti
 
-                for k, v in md.get('wins', {}).items():
+                # V16: wins storici non caricati — storia riparte da zero
 
-                    memoria.wins[k] = v
+                # V16: losses storici non caricati — storia riparte da zero
 
-                for k, v in md.get('losses', {}).items():
+                # V16: wr_history non caricato — riparte da zero
 
-                    memoria.losses[k] = v
-
-                for k, v in md.get('wr_history', {}).items():
-
-                    memoria.wr_history[k] = list(v)
-
-                restored.append(f"Memoria: divorzi=0 (RAM only), "
+                restored.append(f"Memoria: {len(memoria.divorzio)} divorzi, "
 
                                f"{sum(1 for v in memoria.blacklist.values() if v > 0)} separazioni")
 
