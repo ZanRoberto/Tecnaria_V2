@@ -4547,7 +4547,6 @@ def oracle_log():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/oracle/run_now', methods=['POST'])
 @app.route('/capsule_eseguibili')
 def capsule_eseguibili_view():
     """Dashboard capsule di codice eseguibili."""
@@ -4591,6 +4590,7 @@ def capsule_eseguibili_rollback():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route('/oracle/run_now', methods=['POST'])
 def oracle_run_now():
     """Forza un run Oracle immediato (modalità AUTO)."""
     try:
