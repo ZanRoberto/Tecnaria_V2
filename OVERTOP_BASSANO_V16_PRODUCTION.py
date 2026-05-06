@@ -5459,29 +5459,40 @@ class OvertopBassanoV16Production:
             self._last_regime_check = now
 
             # ── AUTOCORRETTORE REGIME ─────────────────────────────────────
-            # Se il rilevatore dice RANGING ma il prezzo si muove davvero
-            # → corregge il regime in tempo reale senza aspettare nessuno
+            # Finestra LUNGA (200 tick ~3-4 min) per trend sostenuto
+            # Finestra BREVE (50 tick ~1 min) per reattività
             if regime == 'RANGING' and len(self.regime_detector.prices) >= 50:
-                _prezzi = list(self.regime_detector.prices)
-                _p_start = _prezzi[0]
-                _p_end   = _prezzi[-1]
-                _move_pct = (_p_end - _p_start) / _p_start * 100
-                _changes  = [_prezzi[i+1] - _prezzi[i] for i in range(len(_prezzi)-1)]
-                _up       = sum(1 for c in _changes if c > 0)
-                _dir      = _up / len(_changes)
+                _prezzi_all = list(self.regime_detector.prices)
 
-                # Prezzo salito > 0.4% con dir_ratio > 0.54 → TRENDING_BULL reale
-                if _move_pct > 0.4 and _dir > 0.54:
+                # Finestra breve — movimento rapido
+                _p50     = _prezzi_all[-50:]
+                _move50  = (_p50[-1] - _p50[0]) / _p50[0] * 100
+                _up50    = sum(1 for i in range(len(_p50)-1) if _p50[i+1] > _p50[i])
+                _dir50   = _up50 / max(len(_p50)-1, 1)
+
+                # Finestra lunga — trend sostenuto (se disponibile)
+                _p200    = _prezzi_all[-200:] if len(_prezzi_all) >= 200 else _prezzi_all
+                _move200 = (_p200[-1] - _p200[0]) / _p200[0] * 100
+                _up200   = sum(1 for i in range(len(_p200)-1) if _p200[i+1] > _p200[i])
+                _dir200  = _up200 / max(len(_p200)-1, 1)
+
+                # TRENDING_BULL: movimento sostenuto in entrambe le finestre
+                # oppure movimento forte in finestra breve
+                _bull = ((_move200 > 0.15 and _dir200 > 0.54) or
+                         (_move50  > 0.40 and _dir50  > 0.56))
+                _bear = ((_move200 < -0.15 and _dir200 < 0.46) or
+                         (_move50  < -0.40 and _dir50  < 0.44))
+
+                if _bull:
                     self._regime_current = 'TRENDING_BULL'
-                    self._regime_conf    = min(1.0, _move_pct / 1.0)
+                    self._regime_conf    = min(1.0, abs(_move200) / 0.5)
                     self._log(f"🔄 AUTOCORRETTORE: RANGING→TRENDING_BULL "
-                             f"(move={_move_pct:+.2f}% dir={_dir:.2f})")
-                # Prezzo sceso > 0.4% con dir_ratio < 0.46 → TRENDING_BEAR reale
-                elif _move_pct < -0.4 and _dir < 0.46:
+                             f"(m50={_move50:+.2f}% m200={_move200:+.2f}% dir={_dir200:.2f})")
+                elif _bear:
                     self._regime_current = 'TRENDING_BEAR'
-                    self._regime_conf    = min(1.0, abs(_move_pct) / 1.0)
+                    self._regime_conf    = min(1.0, abs(_move200) / 0.5)
                     self._log(f"🔄 AUTOCORRETTORE: RANGING→TRENDING_BEAR "
-                             f"(move={_move_pct:+.2f}% dir={_dir:.2f})")
+                             f"(m50={_move50:+.2f}% m200={_move200:+.2f}% dir={_dir200:.2f})")
 
         # Persistenza ogni 5 minuti
         if now - self.last_persist > 300:
@@ -8351,7 +8362,9 @@ class OvertopBassanoV16Production:
                 if triggers and not all(self.capsule_runtime._check_trigger(t, ctx) for t in triggers):
                     continue
                 boost += azione.get('params', {}).get('delta', 0.0)
-            return boost
+            # V16: cap massimo boost soglia = +5 punti
+            # La soglia non può essere alzata di più di 5 punti dalle capsule streak
+            return min(boost, 5.0)
         except Exception:
             return 0.0
 
