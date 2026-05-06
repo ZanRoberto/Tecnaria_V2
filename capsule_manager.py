@@ -318,6 +318,25 @@ class CapsuleManager:
                 if _is_vincente and cap.get("livello","") in ("AUTO","LEARNED"):
                     log.debug(f"[CM] ⚪ WHITELIST protegge {_ctx_key} da {cap['id']}")
                     continue
+
+                # ── PRECURSORE ESPLOSIVO — bypass matrimoni tossici ────────────
+                # OI SHORT >= 0.90 + BreathEngine INALAZIONE/PICCO
+                # = energia compressa che inizia a muoversi — condizione eccezionale
+                # Non si applica alle capsule contesto (CTX) — solo ai matrimoni
+                _cap_id = cap.get("id","")
+                _is_matrimonio = any(x in _cap_id for x in ("RANGE_VOL_W","RANGE_VOL_M","MAT_TOSSICO"))
+                if _is_matrimonio:
+                    _regime    = contesto.get("regime", "")
+                    _oi_short  = contesto.get("oi_short", 0.0)
+                    _bf        = contesto.get("breath_fase", "NEUTRO")
+                    _ben       = contesto.get("breath_energia", 0.0)
+                    if (_regime == "RANGING" and
+                            _oi_short >= 0.90 and
+                            _bf in ("INALAZIONE","PICCO") and
+                            _ben >= 0.5):
+                        log.info(f"[PRECURSORE] ⚡ Bypass {_cap_id} — regime={_regime} OI_SHORT={_oi_short:.2f} breath={_bf} en={_ben:.2f}")
+                        continue
+
                 res["blocca"]     = True
                 res["reason"]     = (act.get("params",{}).get("reason") or 
                                      act.get("motivo") or act.get("valore") or cap["id"])
@@ -687,7 +706,10 @@ class CapsuleManager:
                 """, (self.asset,)).fetchall()
             result = []
             for r in rows:
-                scade_in = int(max(0, float(r[12])-ora)) if r[12] and str(r[12]) not in ("None","") else None  # FIX P2
+                try:
+                    scade_in = int(max(0, float(r[12])-ora)) if r[12] and str(r[12]) not in ("None","","null") else None
+                except (TypeError, ValueError):
+                    scade_in = None
                 result.append({
                     "id":r[0],"asset":r[1],"livello":r[2],"tipo":r[3],
                     "descrizione":r[4],"enabled":bool(r[5]),
