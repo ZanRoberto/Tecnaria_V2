@@ -4114,32 +4114,14 @@ class CampoGravitazionale:
                 'drift_pct':     getattr(self, '_last_drift', 0.0),
                 'oi_carica':     _bot_oi_carica,
                 'oi_stato':      _bot_oi_stato,
-                # V16: precursore esplosivo
+                # V16: precursore esplosivo — passa ai CapsuleManager per bypass matrimoni
                 'oi_short':      getattr(getattr(self, '_bot_ref', None), '_oi_carica_short', 0.0),
                 'breath_fase':   getattr(getattr(getattr(self,'_bot_ref',None),'_breath',None),'_fase','NEUTRO'),
                 'breath_energia':getattr(getattr(getattr(self,'_bot_ref',None),'_breath',None),'_energia',0.0),
             }
             _cm_result = _cm.valuta(_veto_ctx)
             if _cm_result.get('blocca'):
-                # ── PRECURSORE ESPLOSIVO — bypass matrimonio tossico ──────────
-                # Se OI SHORT >= 0.90 + BreathEngine INALAZIONE/PICCO:
-                # la condizione fisica è diversa dalla storia tossica
-                # RANGE_VOL_W e RANGE_VOL_M possono essere superati
-                _reason = _cm_result.get('reason', '')
-                _bot_oi_short  = getattr(getattr(self, '_bot_ref', None), '_oi_carica_short', 0.0)
-                _bot_breath    = getattr(getattr(self, '_bot_ref', None), '_breath', None)
-                _bot_bf        = _bot_breath._fase    if _bot_breath else 'NEUTRO'
-                _bot_ben       = _bot_breath._energia if _bot_breath else 0.0
-                _precursore_ok = (
-                    _bot_oi_short >= 0.90 and
-                    _bot_bf in ('INALAZIONE', 'PICCO') and
-                    _bot_ben >= 0.5 and
-                    any(x in _reason for x in ('RANGE_VOL_W', 'RANGE_VOL_M', 'MAT_TOSSICO'))
-                )
-                if _precursore_ok:
-                    log.info(f"[PRECURSORE] Bypass veto {_reason} — OI_SHORT={_bot_oi_short:.2f} breath={_bot_bf} en={_bot_ben:.2f}")
-                else:
-                    return self._veto(_reason or f"CM_TOSSICO_{self._direction}_{momentum}_{volatility}_{trend}")
+                return self._veto(_cm_result.get('reason', f"CM_TOSSICO_{self._direction}_{momentum}_{volatility}_{trend}"))
         else:
             # Fallback hardcodato
             veti = self.VETI_SHORT if self._direction == "SHORT" else self.VETI_LONG
