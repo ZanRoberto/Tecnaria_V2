@@ -7416,6 +7416,24 @@ class OvertopBassanoV16Production:
             score  = result['score']
             soglia = result['soglia']
 
+            # ── PRECURSORE ESPLOSIVO — OI SHORT + BreathEngine ──────────────
+            # Non è una manopola — è fisica del mercato:
+            # OI SHORT carico + INALAZIONE = energia compressa che inizia a muoversi
+            # Il mercato sta per esplodere — abbassa la soglia per entrare prima
+            _oi_short_now  = getattr(self, '_oi_carica_short', 0.0)
+            _breath_fase   = self._breath._fase if self._breath else 'NEUTRO'
+            _breath_en     = self._breath._energia if self._breath else 0.0
+
+            if (_effective_regime == 'RANGING' and
+                    _oi_short_now >= 0.90 and
+                    _breath_fase in ('INALAZIONE', 'PICCO') and
+                    _breath_en >= 0.5):
+                _boost_precursore = 8.0
+                soglia = max(44, soglia - _boost_precursore)
+                self._log_m2("⚡", f"PRECURSORE_ESPLOSIVO: OI_SHORT={_oi_short_now:.2f} "
+                                   f"breath={_breath_fase} en={_breath_en:.2f} "
+                                   f"soglia {soglia+_boost_precursore:.1f}→{soglia:.1f}")
+
             if not result['enter']:
                 self._log_m2("🔇", f"SCORE_SOTTO: {score:.1f} vs {soglia:.1f}")
                 if score > 50 and len(self._phantoms_open) < 5:
