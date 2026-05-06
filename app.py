@@ -3418,8 +3418,15 @@ function update() {
           const status = wr100>=60?'<span style="color:var(--green)">●</span>':
                          wr100>=45?'<span style="color:var(--yellow)">◐</span>':
                          '<span style="color:var(--red)">○</span>';
-          return `<tr>
-            <td style="font-size:9px;color:var(--dim)">${fp.replace('LONG|','').replace('SHORT|','<span style="color:var(--red)">S</span> ')}${realTag}</td>
+          // Lampeggio fingerprint attivo
+          const _dir = hb.direction||'LONG';
+          const _ctx = hb.last_context||'';
+          const _activeFp = (_dir==='LONG'?'LONG|':'SHORT|')+_ctx;
+          const _isActive = fp === _activeFp;
+          const _rowClass = _isActive ? ' class="active-fp"' : '';
+          const _activeIcon = _isActive ? ' <span style="color:var(--gold);font-size:10px">⚡</span>' : '';
+          return `<tr${_rowClass}>
+            <td style="font-size:9px;color:var(--dim)">${fp.replace('LONG|','').replace('SHORT|','<span style="color:var(--red)">S</span> ')}${realTag}${_activeIcon}</td>
             <td><span style="color:${wrCol};font-weight:700">${wr100.toFixed(0)}%</span>
                 <div class="wr-bar" style="width:${Math.round(wr100/2)}px;background:${wrCol}"></div></td>
             <td style="color:var(--dim)">${v.samples?.toFixed(1)||'0'}</td>
