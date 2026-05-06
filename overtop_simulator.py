@@ -120,38 +120,56 @@ class MiniCampo:
     """
     W = {"seed":25,"fp":20,"mom":12,"trend":12,"vol":8,"regime":3,"rsi":10,"macd":10}
 
-    def score(self, momentum, volatility, trend, regime, fp_wr, seed_score, rsi=50.0, macd=0.0):
+    def score(self, momentum, volatility, trend, regime, fp_wr, seed_score,
+              rsi=50.0, macd=0.0, direction="LONG"):
+        # Pesi LONG
         MOM_L  = {"FORTE":1.0, "MEDIO":0.67, "DEBOLE":0.20}
         TRD_L  = {"UP":1.0, "SIDEWAYS":0.47, "DOWN":0.0}
+        # Pesi SHORT — invertiti
+        MOM_S  = {"FORTE":0.20, "MEDIO":0.67, "DEBOLE":1.0}
+        TRD_S  = {"UP":0.0, "SIDEWAYS":0.47, "DOWN":1.0}
+
         VOL_S  = {"BASSA":1.0, "MEDIA":0.60, "ALTA":0.20}
         REG_L  = {"TRENDING_BULL":1.0,"EXPLOSIVE":0.80,"RANGING":0.20,"TRENDING_BEAR":0.0}
+        REG_S  = {"TRENDING_BULL":0.0,"EXPLOSIVE":0.80,"RANGING":0.20,"TRENDING_BEAR":1.0}
         REG_F  = {"TRENDING_BULL":0.80,"EXPLOSIVE":0.85,"RANGING":1.00,"TRENDING_BEAR":1.10}
+
+        is_short = (direction == "SHORT")
+        MOM = MOM_S if is_short else MOM_L
+        TRD = TRD_S if is_short else TRD_L
+        REG = REG_S if is_short else REG_L
 
         s_seed = min(1.0, max(0.0, (seed_score-0.20)/0.60)) * self.W["seed"]
         s_fp   = min(1.0, max(0.0, (fp_wr-0.30)/0.50))      * self.W["fp"]
-        s_mom  = MOM_L.get(momentum, 0.5)  * self.W["mom"]
-        s_trd  = TRD_L.get(trend, 0.5)     * self.W["trend"]
+        s_mom  = MOM.get(momentum, 0.5)    * self.W["mom"]
+        s_trd  = TRD.get(trend, 0.5)       * self.W["trend"]
         s_vol  = VOL_S.get(volatility, 0.5)* self.W["vol"]
-        s_reg  = REG_L.get(regime, 0.2)    * self.W["regime"]
+        s_reg  = REG.get(regime, 0.2)      * self.W["regime"]
 
-        # RSI score
-        if rsi < 30:   s_rsi = 1.0
-        elif rsi < 45: s_rsi = 0.7
-        elif rsi < 55: s_rsi = 0.4
-        else:          s_rsi = 0.15
+        # RSI score — invertito per SHORT
+        if is_short:
+            if rsi > 70:   s_rsi = 1.0
+            elif rsi > 55: s_rsi = 0.7
+            elif rsi > 45: s_rsi = 0.4
+            else:          s_rsi = 0.15
+        else:
+            if rsi < 30:   s_rsi = 1.0
+            elif rsi < 45: s_rsi = 0.7
+            elif rsi < 55: s_rsi = 0.4
+            else:          s_rsi = 0.15
         s_rsi *= self.W["rsi"]
 
-        # MACD score
-        s_macd = (0.7 if macd > 0 else 0.3) * self.W["macd"]
+        # MACD score — invertito per SHORT
+        s_macd = (0.7 if (macd < 0) == is_short else 0.3) * self.W["macd"]
 
         total = s_seed + s_fp + s_mom + s_trd + s_vol + s_reg + s_rsi + s_macd
 
         # Soglia dinamica
         score_max = (self.W["seed"] + self.W["fp"] +
-                     MOM_L.get(momentum,0.5)*self.W["mom"] +
-                     TRD_L.get(trend,0.5)*self.W["trend"] +
+                     MOM.get(momentum,0.5)*self.W["mom"] +
+                     TRD.get(trend,0.5)*self.W["trend"] +
                      VOL_S.get(volatility,0.5)*self.W["vol"] +
-                     REG_L.get(regime,0.2)*self.W["regime"] +
+                     REG.get(regime,0.2)*self.W["regime"] +
                      self.W["rsi"] + self.W["macd"])
         ctx = score_max / 100.0
         rf  = REG_F.get(regime, 1.0)
@@ -304,9 +322,16 @@ def simula_regime(regime: str, n_cicli: int, oracolo: MiniOracolo, campo: MiniCa
             seed_scorer_prices.pop(0)
 
         momentum, volatility, trend = classifica_contesto(prezzi, i)
-        fp_wr = oracolo.get_wr(momentum, volatility, trend)
 
-        # Seed score semplificato
+        # 1. Decide direzione
+        if regime == "TRENDING_BEAR":
+            direction = "SHORT" if trend in ("DOWN", "SIDEWAYS") else "LONG"
+        elif regime == "EXPLOSIVE":
+            direction = "SHORT" if (trend == "DOWN" and momentum == "FORTE") else "LONG"
+        else:
+            direction = "LONG"
+
+        # 2. Seed score
         if len(seed_scorer_prices) >= 20:
             recent = seed_scorer_prices[-5:]
             up = sum(1 for j in range(len(recent)-1) if recent[j+1] > recent[j])
@@ -314,7 +339,7 @@ def simula_regime(regime: str, n_cicli: int, oracolo: MiniOracolo, campo: MiniCa
         else:
             seed_score = 0.45
 
-        # RSI semplificato
+        # 3. RSI
         if len(seed_scorer_prices) >= 15:
             changes = [seed_scorer_prices[j+1]-seed_scorer_prices[j]
                       for j in range(len(seed_scorer_prices)-1)][-14:]
@@ -326,15 +351,16 @@ def simula_regime(regime: str, n_cicli: int, oracolo: MiniOracolo, campo: MiniCa
         else:
             rsi = 50.0
 
+        # 4. Score con direzione corretta
+        fp_wr = oracolo.get_wr(momentum, volatility, trend, direction)
         score, soglia = campo.score(momentum, volatility, trend, regime,
-                                     fp_wr, seed_score, rsi)
+                                    fp_wr, seed_score, rsi, direction=direction)
 
         if score < soglia:
             continue  # no entry
 
         # Simula trade
         entry_price = price
-        direction   = "LONG"
 
         # Genera movimento post-entry
         n_exit = min(i + random.randint(10, 60), len(prezzi)-1)
@@ -343,25 +369,40 @@ def simula_regime(regime: str, n_cicli: int, oracolo: MiniOracolo, campo: MiniCa
             continue
 
         max_price = max(exit_prices)
+        min_price = min(exit_prices)
         exit_price = exit_prices[-1]
 
-        # PROFIT_LOCK: se il prezzo retreata >30% dal massimo
-        peak_pnl = (max_price - entry_price) * (EXPOSURE / entry_price)
+        # PROFIT_LOCK con direzione corretta
         used_profit_lock = False
-        if peak_pnl > 0:
-            for ep in exit_prices:
-                retreat = (max_price - ep) / max(max_price - entry_price, 0.001)
-                if retreat > 0.30 and (ep - entry_price) * (EXPOSURE/entry_price) > FEE_TRADE:
-                    exit_price = ep
-                    used_profit_lock = True
-                    break
+        if direction == "LONG":
+            peak_pnl = (max_price - entry_price) * (EXPOSURE / entry_price)
+            if peak_pnl > 0:
+                for ep in exit_prices:
+                    retreat = (max_price - ep) / max(max_price - entry_price, 0.001)
+                    if retreat > 0.30 and (ep - entry_price) * (EXPOSURE/entry_price) > FEE_TRADE:
+                        exit_price = ep
+                        used_profit_lock = True
+                        break
+        else:  # SHORT
+            peak_pnl = (entry_price - min_price) * (EXPOSURE / entry_price)
+            if peak_pnl > 0:
+                for ep in exit_prices:
+                    retreat = (ep - min_price) / max(entry_price - min_price, 0.001)
+                    if retreat > 0.30 and (entry_price - ep) * (EXPOSURE/entry_price) > FEE_TRADE:
+                        exit_price = ep
+                        used_profit_lock = True
+                        break
 
-        delta    = exit_price - entry_price
+        if direction == "LONG":
+            delta = exit_price - entry_price
+        else:
+            delta = entry_price - exit_price
+
         pnl_lordo = delta * (EXPOSURE / entry_price)
         pnl_netto = pnl_lordo - FEE_TRADE
         is_win    = pnl_netto > 0
 
-        key = f"{regime}|{momentum}|{volatility}|{trend}"
+        key = f"{regime}|{direction}|{momentum}|{volatility}|{trend}"
         stats[key]["n"] += 1
         stats[key]["pnl_tot"] += pnl_netto
         stats[key]["pnl_list"].append(pnl_netto)
