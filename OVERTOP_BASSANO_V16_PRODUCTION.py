@@ -4106,14 +4106,18 @@ class CampoGravitazionale:
             _bot_oi_carica = getattr(getattr(self, '_bot_ref', None), '_oi_carica', 0.0)
             _bot_oi_stato  = getattr(getattr(self, '_bot_ref', None), '_oi_stato',  'ATTESA')
             _veto_ctx = {
-                'momentum':   momentum,
-                'volatility': volatility,
-                'trend':      trend,
-                'direction':  self._direction,
-                'regime':     getattr(self, '_regime_current', ''),
-                'drift_pct':  getattr(self, '_last_drift', 0.0),
-                'oi_carica':  _bot_oi_carica,
-                'oi_stato':   _bot_oi_stato,
+                'momentum':      momentum,
+                'volatility':    volatility,
+                'trend':         trend,
+                'direction':     self._direction,
+                'regime':        getattr(self, '_regime_current', ''),
+                'drift_pct':     getattr(self, '_last_drift', 0.0),
+                'oi_carica':     _bot_oi_carica,
+                'oi_stato':      _bot_oi_stato,
+                # V16: precursore esplosivo
+                'oi_short':      getattr(getattr(self, '_bot_ref', None), '_oi_carica_short', 0.0),
+                'breath_fase':   getattr(getattr(getattr(self,'_bot_ref',None),'_breath',None),'_fase','NEUTRO'),
+                'breath_energia':getattr(getattr(getattr(self,'_bot_ref',None),'_breath',None),'_energia',0.0),
             }
             _cm_result = _cm.valuta(_veto_ctx)
             if _cm_result.get('blocca'):
