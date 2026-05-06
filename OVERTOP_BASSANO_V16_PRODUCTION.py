@@ -7299,6 +7299,10 @@ class OvertopBassanoV16Production:
                         'oi_stato':        self._oi_stato,
                         'loss_consecutivi': self._m2_loss_consecutivi(),
                         'matrimonio':      matrimonio_name,
+                        # V16: precursore esplosivo
+                        'oi_short':        getattr(self, '_oi_carica_short', 0.0),
+                        'breath_fase':     (self._breath._fase    if self._breath else 'NEUTRO'),
+                        'breath_energia':  (self._breath._energia if self._breath else 0.0),
                     }
                     _cm_p1 = self.capsule_manager.valuta(_cm_ctx_p1)
                     if _cm_p1.get('blocca'):
