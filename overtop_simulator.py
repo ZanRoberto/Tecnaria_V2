@@ -179,6 +179,37 @@ class MiniCampo:
         return round(total, 2), round(soglia, 2)
 
 
+
+class MiniBreath:
+    """BreathEngine semplificato per simulatore."""
+    def __init__(self):
+        self._energia       = 0.0
+        self._accelerazione = 0.0
+        self._fase          = "NEUTRO"
+        self._prezzi        = []
+
+    def on_tick(self, price: float):
+        self._prezzi.append(price)
+        if len(self._prezzi) > 10:
+            self._prezzi.pop(0)
+        if len(self._prezzi) < 5:
+            return
+        n = min(5, len(self._prezzi)-1)
+        if n < 2: return
+        moves = [abs(self._prezzi[-j]-self._prezzi[-j-1])/max(self._prezzi[-j-1],1)
+                 for j in range(1, n+1)]
+        en_now = sum(moves)/len(moves)*10000
+        self._accelerazione = en_now - self._energia
+        self._energia = round(en_now, 4)
+        if self._accelerazione > 0.5 and self._energia > 0.3:
+            self._fase = "INALAZIONE"
+        elif self._energia > 3.0 and abs(self._accelerazione) < 0.3:
+            self._fase = "PICCO"
+        elif self._accelerazione < -0.3:
+            self._fase = "ESALAZIONE"
+        else:
+            self._fase = "NEUTRO"
+
 class MiniOracolo:
     """Fingerprint WR memory semplificata."""
     DECAY = 0.95
@@ -300,7 +331,7 @@ def genera_capsule_dal_report(report: dict, db_path: str):
 # ─────────────────────────────────────────────────────────────────────────────
 # SIMULATORE PRINCIPALE
 # ─────────────────────────────────────────────────────────────────────────────
-def simula_regime(regime: str, n_cicli: int, oracolo: MiniOracolo, campo: MiniCampo) -> dict:
+def simula_regime(regime: str, n_cicli: int, oracolo: MiniOracolo, campo: MiniCampo, breath: 'MiniBreath' = None) -> dict:
     """
     Simula n_cicli trade per un regime specifico.
     Ritorna statistiche complete.
@@ -314,6 +345,8 @@ def simula_regime(regime: str, n_cicli: int, oracolo: MiniOracolo, campo: MiniCa
 
     trade_log = []
     seed_scorer_prices = []
+    precursori_attivati = 0
+    oi_short = 0.50  # OI SHORT sintetico
 
     for i in range(50, n_cicli + 50):
         price = prezzi[i]
@@ -322,6 +355,27 @@ def simula_regime(regime: str, n_cicli: int, oracolo: MiniOracolo, campo: MiniCa
             seed_scorer_prices.pop(0)
 
         momentum, volatility, trend = classifica_contesto(prezzi, i)
+
+        # Aggiorna OI SHORT sintetico
+        # In RANGING: oscilla tra 0.40 e 0.95 — simula accumulo speculativo
+        # In TRENDING_BEAR: sale aggressivamente
+        # In TRENDING_BULL/EXPLOSIVE: scende
+        if regime == "RANGING":
+            # Ciclo lento — ogni ~200 tick arriva a 0.90+
+            oi_short = oi_short + random.gauss(0, 0.008)
+            oi_short = max(0.40, min(0.98, oi_short))
+        elif regime == "TRENDING_BEAR":
+            oi_short = min(0.99, oi_short + 0.003)
+        elif trend == "DOWN":
+            oi_short = min(0.99, oi_short * 0.98 + 0.02 * 1.5)
+        elif trend == "UP":
+            oi_short = max(0.20, oi_short * 0.98)
+        else:
+            oi_short = oi_short * 0.99 + 0.50 * 0.01
+
+        # Aggiorna BreathEngine
+        if breath:
+            breath.on_tick(price)
 
         # 1. Decide direzione
         if regime == "TRENDING_BEAR":
@@ -355,6 +409,16 @@ def simula_regime(regime: str, n_cicli: int, oracolo: MiniOracolo, campo: MiniCa
         fp_wr = oracolo.get_wr(momentum, volatility, trend, direction)
         score, soglia = campo.score(momentum, volatility, trend, regime,
                                     fp_wr, seed_score, rsi, direction=direction)
+
+        # ── PRECURSORE ESPLOSIVO ────────────────────────────────────────
+        _bf   = breath._fase if breath else 'NEUTRO'
+        _ben  = breath._energia if breath else 0.0
+        if (regime == 'RANGING' and
+                oi_short >= 0.90 and
+                _bf in ('INALAZIONE', 'PICCO') and
+                _ben >= 0.5):
+            soglia = max(44, soglia - 8)
+            precursori_attivati += 1
 
         if score < soglia:
             continue  # no entry
@@ -443,6 +507,7 @@ def simula_regime(regime: str, n_cicli: int, oracolo: MiniOracolo, campo: MiniCa
     tot_trade = sum(s["n"] for s in stats.values())
     tot_wins  = sum(s["wins"] for s in stats.values())
     tot_pnl   = sum(s["pnl_tot"] for s in stats.values())
+    tot_precursori = precursori_attivati
 
     return {
         "regime":       regime,
@@ -452,7 +517,8 @@ def simula_regime(regime: str, n_cicli: int, oracolo: MiniOracolo, campo: MiniCa
         "wr_globale":   round(tot_wins/max(tot_trade,1), 3),
         "pnl_totale":   round(tot_pnl, 2),
         "per_contesto": per_contesto,
-        "trade_log":    trade_log[:100],  # primi 100 per debug
+        "trade_log":    trade_log[:100],
+        "precursori":   tot_precursori,
     }
 
 
@@ -564,8 +630,9 @@ def main():
     print(f"   DB: {args.db}")
     print(f"   Seed: {args.seed}\n")
 
-    oracolo = MiniOracolo()
-    campo   = MiniCampo()
+    oracolo  = MiniOracolo()
+    campo    = MiniCampo()
+    breath   = MiniBreath()
     risultati = []
 
     regimi = ["RANGING", "TRENDING_BULL", "TRENDING_BEAR", "EXPLOSIVE"]
@@ -573,7 +640,7 @@ def main():
     for regime in regimi:
         print(f"  ⏳ Simulazione {regime}...", end="", flush=True)
         t0 = time.time()
-        r = simula_regime(regime, args.cicli, oracolo, campo)
+        r = simula_regime(regime, args.cicli, oracolo, campo, breath)
         print(f" {time.time()-t0:.1f}s → {r['tot_trade']} trade WR={r['wr_globale']:.0%} PnL=${r['pnl_totale']:+.2f}")
         risultati.append(r)
 
