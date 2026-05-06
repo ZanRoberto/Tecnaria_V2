@@ -1931,6 +1931,7 @@ canvas.spark { width:100%; height:40px; }
           Fingerprint = (momentum × volatilità × trend × direction). WR pesato con decay 0.95.
           🟢 ≥60% vincente  🟡 45-60% neutro  🔴 &lt;45% tossico
         </div>
+        <div id="active-fp-label" style="font-family:'Share Tech Mono',monospace;font-size:10px;color:var(--gold);margin-bottom:6px;letter-spacing:1px;">▶ —</div>
         <table class="oracolo-table" id="oracolo-tbl">
           <thead>
             <tr>
@@ -3404,6 +3405,12 @@ function update() {
     // ORACOLO TABLE
     const orac = hb.oracolo_snapshot||{};
     const fps = Object.entries(orac).filter(([k])=>!k.startsWith('_'));
+    // Mostra fingerprint attivo sopra tabella
+    const _dir2 = hb.direction||'LONG';
+    const _ctx2 = hb.last_context||'';
+    const _activeFp2 = (_dir2==='LONG'?'LONG|':'SHORT|')+_ctx2;
+    const _fpLabel = document.getElementById('active-fp-label');
+    if(_fpLabel) _fpLabel.textContent = '▶ ' + _activeFp2.replace('LONG|','').replace('SHORT|','S ');
     if(fps.length>0) {
       const rows = fps
         .filter(([k,v]) => v.samples > 0.5)
