@@ -334,9 +334,9 @@ class CapsuleManager:
                     # Precursore 1: OI SHORT + BreathEngine
                     _prec1 = (_oi_short >= 0.90 and _bf in ("INALAZIONE","PICCO") and _ben >= 0.5)
                     # Precursore 2: OI LONG quasi a FUOCO completo
-                    _prec2 = (_oi_carica >= 0.85 or _oi_short >= 0.85)
+                    _prec2 = (_oi_carica >= 0.80 or _oi_short >= 0.80)
                     if _regime == "RANGING" and (_prec1 or _prec2):
-                        log.info(f"[PRECURSORE] ⚡ Bypass {_cap_id} — OI={_oi_carica:.2f} OI_S={_oi_short:.2f} p1={_prec1} p2={_prec2}")
+                        log.info(f"[PRECURSORE] ⚡ Bypass {_cap_id} — OI={_oi_carica:.2f} OI_S={_oi_short:.2f} breath={_bf} p1={_prec1} p2={_prec2}")
                         continue
 
                 res["blocca"]     = True
@@ -432,6 +432,8 @@ class CapsuleManager:
             if not p or not op:
                 continue
             if p not in ctx:
+                if op in ('<', '<=', '>', '>='):
+                    return False
                 continue
             if op not in OPS:
                 continue
