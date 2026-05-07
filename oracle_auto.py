@@ -545,7 +545,6 @@ def _has_migliora_attiva(c, trigger_norm: list) -> bool:
     """Verifica se esiste una capsule MIGLIORA attiva per questo contesto.
     Confronto ordine-insensitive, esclude direction/oi_carica."""
     try:
-        # Solo parametri contestuali — escludi direction e oi
         ESCLUDI = {"direction", "oi_carica", "oi_stato"}
         trigger_key = frozenset(
             (t.get("param",""), str(t.get("value","")))
@@ -565,7 +564,6 @@ def _has_migliora_attiva(c, trigger_norm: list) -> bool:
                     for t in trigs
                     if t.get("param","") not in ESCLUDI
                 )
-                # MIGLIORA matcha se i suoi trigger sono subset del contesto corrente
                 if m_key and m_key.issubset(trigger_key):
                     return True
             except Exception:
@@ -791,7 +789,13 @@ def _apply_capsule(capsule: dict, trigger: str) -> bool:
                           (new_samples, round(new_pnl_avg, 4), new_note, scade_ts, cap_id))
                 _p(f"[CAPSULE_MEMORY] UPDATE id={cap_id!r} riabilitata samples={new_samples} pnl_avg={new_pnl_avg:.2f}")
             else:
-                # Già attiva — aggiorna memoria
+                # Già attiva — controlla se MIGLIORA attiva protegge questo contesto
+                if az_type in ("blocca_entry", "BLOCCA_ENTRY") and _has_migliora_attiva(c, trigger_norm):
+                    _p(f"[CAPSULE_MEMORY] SKIP update {cap_id!r} — MIGLIORA attiva protegge contesto")
+                    conn.commit()
+                    conn.close()
+                    return True
+                # Aggiorna memoria
                 c.execute("""UPDATE capsule SET samples=?, pnl_avg=?,
                              note=?, scade_ts=? WHERE id=?""",
                           (new_samples, round(new_pnl_avg, 4), new_note, scade_ts, cap_id))
