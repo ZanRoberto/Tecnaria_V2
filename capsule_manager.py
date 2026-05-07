@@ -335,7 +335,7 @@ class CapsuleManager:
                     _prec1 = (_oi_short >= 0.90 and _bf in ("INALAZIONE","PICCO") and _ben >= 0.5)
                     # Precursore 2: OI LONG quasi a FUOCO completo
                     _prec2 = (_oi_carica >= 0.80 or _oi_short >= 0.80)
-                    if _regime == "RANGING" and (_prec1 or _prec2):
+                    if _regime in ("RANGING", "EXPLOSIVE") and (_prec1 or _prec2):
                         log.info(f"[PRECURSORE] ⚡ Bypass {_cap_id} — OI={_oi_carica:.2f} OI_S={_oi_short:.2f} breath={_bf} p1={_prec1} p2={_prec2}")
                         continue
 
