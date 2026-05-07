@@ -5683,7 +5683,8 @@ class OvertopBassanoV16Production:
                     _last_ctx = (self.heartbeat_data or {}).get('narratore_trade_stats', {}).get('last_context', '')
                     _trade_analisi = (self.heartbeat_data or {}).get('trade_analisi', [])
                     _ultima_analisi = _trade_analisi[-1].get('analisi', '') if _trade_analisi else ''
-                    _salva = True  # ogni capsula salvata nel DB — il sistema non dimentica
+                    # V16: BLOCCA_CONTESTO non viene mai salvata permanentemente — genera loop vizioso
+                    _salva = (_azione_cap not in ('BLOCCA_CONTESTO', 'blocca_entry', 'BLOCCA_ENTRY'))
                     if _salva:
                         _prompt_ctx = (
                             f"MEMORIA per {_last_ctx}: {_azione_cap} "
