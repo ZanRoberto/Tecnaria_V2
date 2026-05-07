@@ -542,19 +542,31 @@ def _extract_capsule(text: str):
 
 
 def _has_migliora_attiva(c, trigger_norm: list) -> bool:
-    """Verifica se esiste una capsule MIGLIORA attiva per questo contesto."""
+    """Verifica se esiste una capsule MIGLIORA attiva per questo contesto.
+    Confronto ordine-insensitive, esclude direction/oi_carica."""
     try:
-        trigger_key = set()
-        for t in trigger_norm:
-            trigger_key.add((t.get("param",""), str(t.get("value",""))))
+        # Solo parametri contestuali — escludi direction e oi
+        ESCLUDI = {"direction", "oi_carica", "oi_stato"}
+        trigger_key = frozenset(
+            (t.get("param",""), str(t.get("value","")))
+            for t in trigger_norm
+            if t.get("param","") not in ESCLUDI
+        )
+        if not trigger_key:
+            return False
         rows = c.execute(
             "SELECT trigger_json FROM capsule WHERE tipo LIKE 'MIGLIORA%' AND enabled=1"
         ).fetchall()
         for row in rows:
             try:
                 trigs = _jj.loads(row[0] or '[]')
-                m_key = set((t.get("param",""), str(t.get("value",""))) for t in trigs)
-                if trigger_key and m_key and trigger_key.issubset(m_key):
+                m_key = frozenset(
+                    (t.get("param",""), str(t.get("value","")))
+                    for t in trigs
+                    if t.get("param","") not in ESCLUDI
+                )
+                # MIGLIORA matcha se i suoi trigger sono subset del contesto corrente
+                if m_key and m_key.issubset(trigger_key):
                     return True
             except Exception:
                 pass
