@@ -328,13 +328,15 @@ class CapsuleManager:
                 if _is_matrimonio:
                     _regime    = contesto.get("regime", "")
                     _oi_short  = contesto.get("oi_short", 0.0)
+                    _oi_carica = contesto.get("oi_carica", 0.0)
                     _bf        = contesto.get("breath_fase", "NEUTRO")
                     _ben       = contesto.get("breath_energia", 0.0)
-                    if (_regime == "RANGING" and
-                            _oi_short >= 0.90 and
-                            _bf in ("INALAZIONE","PICCO") and
-                            _ben >= 0.5):
-                        log.info(f"[PRECURSORE] ⚡ Bypass {_cap_id} — regime={_regime} OI_SHORT={_oi_short:.2f} breath={_bf} en={_ben:.2f}")
+                    # Precursore 1: OI SHORT + BreathEngine
+                    _prec1 = (_oi_short >= 0.90 and _bf in ("INALAZIONE","PICCO") and _ben >= 0.5)
+                    # Precursore 2: OI LONG quasi a FUOCO completo
+                    _prec2 = (_oi_carica >= 0.95 or _oi_short >= 0.95)
+                    if _regime == "RANGING" and (_prec1 or _prec2):
+                        log.info(f"[PRECURSORE] ⚡ Bypass {_cap_id} — OI={_oi_carica:.2f} OI_S={_oi_short:.2f} breath={_bf} p1={_prec1} p2={_prec2}")
                         continue
 
                 res["blocca"]     = True
