@@ -7368,7 +7368,7 @@ class OvertopBassanoV16Production:
                     loss_consecutivi  = self._m2_loss_consecutivi(),
                     soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend),
                 )
-                if _result_p1['veto']:
+                if _result_p1['veto'] and _eo_carica < 0.80:
                     self._log_m2("🚫", f"PERCORSO1_VETO: {_result_p1['veto']} "
                                        f"carica={_eo_carica:.2f} {momentum}|{volatility}|{trend}")
                     self._record_phantom(price, f"PERCORSO1_{_result_p1['veto'][:20]}",
