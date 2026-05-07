@@ -5683,7 +5683,8 @@ class OvertopBassanoV16Production:
                     _last_ctx = (self.heartbeat_data or {}).get('narratore_trade_stats', {}).get('last_context', '')
                     _trade_analisi = (self.heartbeat_data or {}).get('trade_analisi', [])
                     _ultima_analisi = _trade_analisi[-1].get('analisi', '') if _trade_analisi else ''
-                    _salva = True  # ogni capsula salvata nel DB — il sistema non dimentica
+                    # V16: BLOCCA_CONTESTO non viene mai salvata permanentemente — genera loop vizioso
+                    _salva = (_azione_cap not in ('BLOCCA_CONTESTO', 'blocca_entry', 'BLOCCA_ENTRY'))
                     if _salva:
                         _prompt_ctx = (
                             f"MEMORIA per {_last_ctx}: {_azione_cap} "
@@ -7399,6 +7400,14 @@ class OvertopBassanoV16Production:
             # ═══════════════════════════════════════════════════════════════
             # PERCORSO 2: tutto il resto — gate normali
             # ═══════════════════════════════════════════════════════════════
+            # PRECURSORE P2
+            if self.capsule_manager and self._oi_carica >= 0.80:
+                _p2_ctx = {"momentum":momentum,"volatility":volatility,"trend":trend,"direction":_dir,"regime":_effective_regime,"oi_carica":self._oi_carica,"oi_stato":self._oi_stato,"matrimonio":matrimonio_name,"oi_short":getattr(self,"_oi_carica_short",0.0),"breath_fase":(self._breath._fase if self._breath else "NEUTRO"),"breath_energia":(self._breath._energia if self._breath else 0.0)}
+                _p2_res = self.capsule_manager.valuta(_p2_ctx)
+                if not _p2_res.get("blocca"):
+                    self._log_m2("⚡", f"PRECURSORE_P2 OI={self._oi_carica:.2f} bypass — entra")
+                    self._open_shadow_position(price, score, soglia, seed, size, momentum, volatility, trend, matrimonio_name, fingerprint_wr)
+                    return
             fantasma_info = self.oracolo.is_fantasma(momentum, volatility, trend, _dir)
 
             result = self.campo.evaluate(
