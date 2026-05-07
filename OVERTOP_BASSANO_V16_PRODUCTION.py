@@ -5683,8 +5683,7 @@ class OvertopBassanoV16Production:
                     _last_ctx = (self.heartbeat_data or {}).get('narratore_trade_stats', {}).get('last_context', '')
                     _trade_analisi = (self.heartbeat_data or {}).get('trade_analisi', [])
                     _ultima_analisi = _trade_analisi[-1].get('analisi', '') if _trade_analisi else ''
-                    # V16: BLOCCA_CONTESTO non viene mai salvata permanentemente — genera loop vizioso
-                    _salva = (_azione_cap not in ('BLOCCA_CONTESTO', 'blocca_entry', 'BLOCCA_ENTRY'))
+                    _salva = True  # ogni capsula salvata nel DB — il sistema non dimentica
                     if _salva:
                         _prompt_ctx = (
                             f"MEMORIA per {_last_ctx}: {_azione_cap} "
@@ -8080,6 +8079,23 @@ class OvertopBassanoV16Production:
                 self._m2_wins  += 1
             else:
                 self._m2_losses += 1
+                # ── SOSPENSIONE: prima perdita → sospendi pattern per osservazione ──
+                try:
+                    if hasattr(self, 'capsule_manager') and self.capsule_manager:
+                        _mom = getattr(self, '_shadow_entry_momentum', '') or ''
+                        _vol = self._shadow_entry_volatility or ''
+                        _trd = self._shadow_entry_trend or ''
+                        _dir = entry_direction or 'LONG'
+                        if _mom and _vol and _trd:
+                            _pattern = f"{_mom}|{_vol}|{_trd}|{_dir}"
+                            self.capsule_manager.sospendi_pattern(
+                                pattern   = _pattern,
+                                oi_carica = self._oi_carica,
+                                regime    = self._regime_current,
+                                motivo    = f"Perdita netta ${pnl:.2f} — in osservazione shadow"
+                            )
+                except Exception as _sp_e:
+                    pass
             self._m2_pnl += pnl
 
             # FIX: aggiorna _m2_recent_trades — usato dal gate CESPUGLIO_AVVELENATO
@@ -8642,6 +8658,24 @@ class OvertopBassanoV16Production:
                 'verdict':      "PROTEZIONE" if not is_win else "ZAVORRA",
             }
             self._phantoms_closed.append(result)
+
+            # ── SOSPENSIONE: collega Phantom al meccanismo di osservazione ──
+            # Ogni fantasma chiuso aggiorna lo shadow della sospensione attiva
+            try:
+                if hasattr(self, 'capsule_manager') and self.capsule_manager:
+                    _ph_momentum  = ph.get('momentum', '')
+                    _ph_volatility = ph.get('volatility', '')
+                    _ph_trend     = ph.get('trend', '')
+                    _ph_dir       = ph.get('direction', 'LONG')
+                    if _ph_momentum and _ph_volatility and _ph_trend:
+                        _ph_pattern = f"{_ph_momentum}|{_ph_volatility}|{_ph_trend}|{_ph_dir}"
+                        self.capsule_manager.registra_shadow(
+                            pattern   = _ph_pattern,
+                            pnl       = round(pnl_netto, 2),
+                            oi_carica = self._oi_carica
+                        )
+            except Exception as _ph_e:
+                pass  # non bloccare mai per errori shadow
 
             # Log solo se il fantasma è significativo
             _dir = ph.get('direction', 'LONG')
