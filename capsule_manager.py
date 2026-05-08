@@ -559,21 +559,9 @@ class CapsuleManager:
         return caps
 
     def _l3_streak(self, trades):
-        caps = []
-        streak = 0
-        for t in reversed(list(trades)[-10:]):
-            if not t.get("is_win"): streak += 1
-            else: break
-        if streak >= 3:
-            pnl = sum(t.get("pnl",0) for t in list(trades)[-streak:])
-            caps.append(self._build(
-                f"AUTO_LOSS_STREAK_{self.asset}", "AUTO", "LOSS_STREAK",
-                f"Loss streak {streak} su {self.asset} (PnL={pnl:+.2f}$)",
-                [],
-                {"type":"boost_soglia","params":{"delta":min(15,streak*4),"reason":f"STREAK_{streak}"}},
-                streak, 0.0, pnl/max(1,streak), time.time()+1800))
-            log.info(f"[CM] ⚠️ L3 LOSS STREAK {streak}")
-        return caps
+        # V16: disabilitato — genera AUTO_LOSS_STREAK che alza soglia creando loop vizioso
+        # La sospensione gestisce le perdite consecutive in modo intelligente
+        return []
 
     def _l3_regime(self, trades):
         caps = []
