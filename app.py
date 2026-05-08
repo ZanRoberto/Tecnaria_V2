@@ -654,6 +654,10 @@ log("[MAIN] ✅ Bot thread + AI Bridge avviati")
 #
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 NARRATORE_INTERVAL = 60  # secondi tra ogni ciclo narrativo
+# FIX V16: Narratore disabilitato finche' V16 non ha 50+ trade reali.
+# Su bot vergine il Ragionatore genera solo RA_ABBASSA_ paralizzanti.
+# Riattivare cambiando False -> True quando ci sono dati validi.
+NARRATORE_ENABLED = False
 
 PROMPT_OSSERVATORE = """Sei l'Osservatore di un sistema di trading algoritmico su BTC/USDC.
 Hai accesso allo status completo del sistema in questo momento.
@@ -1628,11 +1632,13 @@ Spiega perché ha vinto/perso e cosa imparare."""
 
         time.sleep(15)
 
-# Avvia narratore solo se DeepSeek è configurato
-if DEEPSEEK_API_KEY:
+# Avvia narratore solo se DeepSeek e' configurato E flag attivo
+if DEEPSEEK_API_KEY and NARRATORE_ENABLED:
     threading.Thread(target=narratore_thread, daemon=True, name='narratore_ai').start()
     threading.Thread(target=analizzatore_trade_thread, daemon=True, name='analizzatore_trade').start()
     log("[MAIN] ✅ Narratore AI + Analizzatore Trade avviati")
+elif not NARRATORE_ENABLED:
+    log("[MAIN] 🚫 Narratore AI DISABILITATO (NARRATORE_ENABLED=False) — V16 in caccia pura")
 else:
     log("[MAIN] ⚠️ DEEPSEEK_API_KEY mancante — Narratore AI disabilitato")
 
