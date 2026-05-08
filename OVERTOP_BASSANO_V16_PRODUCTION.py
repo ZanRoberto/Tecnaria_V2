@@ -125,7 +125,7 @@ class StabilityTelemetry:
 
     def __init__(self):
         self._start_time = time.time()
-        self._events = []    # TUTTI gli eventi, schema uniforme
+        self._events = deque(maxlen=10000)    # FIX V16: cap RAM (era list illimitata)
 
     def _base(self, event_type, regime, direction, open_position):
         """Campi minimi obbligatori su OGNI evento."""
@@ -342,22 +342,35 @@ class StabilityTelemetry:
         }
 
     def persist_to_db(self, db_path):
-        """Salva telemetria su SQLite - eventi singoli + report."""
+        """Salva telemetria su SQLite - eventi singoli + report.
+
+        FIX V16:
+        - Drena self._events dopo il commit (era N²: riscriveva tutto ad ogni chiamata)
+        - Auto-pruning a 50.000 righe (era unbounded: 6.4M righe = 3.8 GB)
+        """
         try:
+            # Drena eventi accumulati: copia + svuota subito,
+            # cosi' le append concorrenti non perdono dati.
+            events_to_save = list(self._events)
+            self._events.clear()
+
             conn = sqlite3.connect(db_path)
             conn.execute("""CREATE TABLE IF NOT EXISTS telemetry (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
                 event_type TEXT, data_json TEXT
             )""")
-            # Salva ogni evento non ancora persistito
-            for e in self._events:
+            # Salva eventi drenati (lista locale, immutabile)
+            for e in events_to_save:
                 conn.execute("INSERT INTO telemetry (event_type, data_json) VALUES (?, ?)",
                             (e['event_type'], json.dumps(e)))
             # Salva report aggregato
             report = self.generate_report()
             conn.execute("INSERT INTO telemetry (event_type, data_json) VALUES (?, ?)",
                         ("STABILITY_REPORT", json.dumps(report)))
+            # AUTO-PRUNING: tieni solo ultime 50.000 righe (cap ~30 MB)
+            conn.execute("""DELETE FROM telemetry
+                            WHERE id < (SELECT MAX(id) - 50000 FROM telemetry)""")
             conn.commit()
             conn.close()
         except Exception as e:
