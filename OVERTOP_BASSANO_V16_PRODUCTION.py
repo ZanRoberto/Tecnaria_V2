@@ -9039,7 +9039,7 @@ class OvertopBassanoV16Production:
                         "macd":   round(self.campo._macd_score()*10, 1),
                         "regime": self._regime_current,
                         "warmup_rsi": len(self.campo._prices_ta),
-                        "warmup_needed": 35,
+                        "warmup_needed": max(0, 50 - len(self.campo._prices_ta)),
                     },
                     "oi_stato":           self._oi_stato,
                     "oi_carica":          round(self._oi_carica, 3),
