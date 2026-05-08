@@ -113,8 +113,14 @@ def _loop():
             mode    = _mode
             _p(f"tick mode={mode} hb={_heartbeat is not None} trigger={trigger or 'nessuno'}")
             if mode == "AUTO" and trigger:
-                _p(f"Trigger rilevato: {trigger}")
-                _pipeline(trigger)
+                # Cooldown 20 minuti tra una pipeline e l'altra — evita spam DeepSeek
+                _cooldown_ok = (time.time() - _last_ts) >= 1200  # 20 minuti
+                if _cooldown_ok:
+                    _p(f"Trigger rilevato: {trigger}")
+                    _pipeline(trigger)
+                else:
+                    _remaining = int(1200 - (time.time() - _last_ts))
+                    _p(f"Cooldown attivo — {_remaining}s rimanenti — trigger={trigger} ignorato")
         except Exception as e:
             _p(f"Errore loop: {e}")
         time.sleep(30)
@@ -351,7 +357,7 @@ def _call_l1(ctx: dict, trigger: str) -> str:
         f"CLASSIFICAZIONE PERDITA: {json.dumps(ctx.get('classificazione', {}), indent=2)}\n\n"
         f"ULTIME 5 PERDITE:\n{json.dumps(ctx.get('perdite_recenti', []), indent=2)}"
     )
-    return _deepseek(system, user, max_tokens=500)
+    return _deepseek(system, user, max_tokens=250)
 
 
 def _call_l2(ctx: dict, trigger: str, l1: str) -> str:
@@ -454,7 +460,7 @@ def _call_l2(ctx: dict, trigger: str, l1: str) -> str:
         f"{json.dumps(ctx['phantom'], indent=2)}"
     )
 
-    return _deepseek(system, user, max_tokens=900)
+    return _deepseek(system, user, max_tokens=400)
 
 
 # ═══════════════════════════════════════════════════════════════
