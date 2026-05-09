@@ -3011,11 +3011,11 @@ def _calcola_soglia_da_signal_tracker(bot) -> dict:
     """
     try:
         if not hasattr(bot, 'signal_tracker'):
-            return {'base': 52, 'min': 48, 'motivo': 'NO_TRACKER'}
+            return {'base': 40, 'min': 34, 'motivo': 'NO_TRACKER'}
 
         stats = getattr(bot.signal_tracker, '_stats', {})
         if not stats:
-            return {'base': 52, 'min': 48, 'motivo': 'NO_DATA'}
+            return {'base': 40, 'min': 34, 'motivo': 'NO_DATA'}
 
         # Raccoglie tutti i contesti con abbastanza campioni
         contesti = []
@@ -3034,36 +3034,36 @@ def _calcola_soglia_da_signal_tracker(bot) -> dict:
             })
 
         if not contesti:
-            return {'base': 52, 'min': 48, 'motivo': 'POCHI_DATI'}
+            return {'base': 40, 'min': 34, 'motivo': 'POCHI_DATI'}
 
         # Media pesata per n campioni
         tot_n    = sum(c['n'] for c in contesti)
         avg_hit  = sum(c['hit_rate'] * c['n'] for c in contesti) / tot_n
         avg_pnl  = sum(c['pnl_avg']  * c['n'] for c in contesti) / tot_n
 
-        # Soglia proporzionale all'hit rate reale
-        # hit 65%+ → soglia 46/42  (mercato favorevole)
-        # hit 60%+  → soglia 48/44
-        # hit 55%+  → soglia 50/46
-        # hit <55%  → soglia 52/48 (conservativo)
+        # Soglia proporzionale all'hit rate reale (L1 — allineata a comparti)
+        # hit 65%+ → soglia 38/32  (mercato favorevole)
+        # hit 60%+  → soglia 40/34
+        # hit 55%+  → soglia 44/38
+        # hit <55%  → soglia 48/42 (conservativo)
         if avg_hit >= 0.65 and avg_pnl > 0:
-            base, min_s = 46, 42
+            base, min_s = 38, 32
             motivo = f"OTTIMO hit={avg_hit:.0%} pnl={avg_pnl:+.2f} n={tot_n}"
         elif avg_hit >= 0.60 and avg_pnl > 0:
-            base, min_s = 48, 44
+            base, min_s = 40, 34
             motivo = f"BUONO hit={avg_hit:.0%} pnl={avg_pnl:+.2f} n={tot_n}"
         elif avg_hit >= 0.55:
-            base, min_s = 50, 46
+            base, min_s = 44, 38
             motivo = f"DISCRETO hit={avg_hit:.0%} n={tot_n}"
         else:
-            base, min_s = 52, 48
+            base, min_s = 48, 42
             motivo = f"STANDARD hit={avg_hit:.0%} n={tot_n}"
 
         return {'base': base, 'min': min_s, 'motivo': motivo}
 
     except Exception as e:
         log.error(f"[SOGLIA_DINAMICA] Errore: {e}")
-        return {'base': 52, 'min': 48, 'motivo': 'ERRORE fallback'}
+        return {'base': 40, 'min': 34, 'motivo': 'ERRORE fallback'}
 
 
 class PersistenzaStato:
@@ -3968,7 +3968,12 @@ class CampoGravitazionale:
     VOL_SCORE       = {"BASSA": 1.0,  "MEDIA": 0.60, "ALTA": 0.20}
 
     # -- SOGLIA DINAMICA ---------------------------------------------------
-    SOGLIA_BASE = 50
+    # NOTA L1: SOGLIA_BASE/MIN sono FALLBACK. CompartoEngine li sovrascrive
+    # ad ogni tick con valori del comparto attivo (NEUTRO=40/34, ATTACCO=44/40,
+    # DIFENSIVO=38/32, TRENDING_BULL=46/42, TRENDING_BEAR=50/46).
+    # Se CompartoEngine non parte, questi default permettono al sistema di
+    # continuare a funzionare invece di bloccarsi a 50/48.
+    SOGLIA_BASE = 40   # era 50 - fallback coerente con NEUTRO comparto
     REGIME_FACTOR = {"TRENDING_BULL": 0.80, "EXPLOSIVE": 0.85,
                      "RANGING": 1.00, "TRENDING_BEAR": 1.10}
     # RANGING: era 1.10, ora 1.00 - soglia formula 75.9 irraggiungibile, score max realistico 64
@@ -3976,7 +3981,7 @@ class CampoGravitazionale:
     VOL_FACTOR    = {"BASSA": 0.90, "MEDIA": 1.0, "ALTA": 1.00}
     # ALTA: era 1.05, ora 1.00 - phantom SCORE_INSUFF WR 65% R/R 2.04, profittevoli
     # Soglia RANGING+ALTA: 60 × 1.00 × 1.00 = 60.0 (trade score 58-63 passano)
-    SOGLIA_MIN    = 44    # Abbassato da 48 — calibrato sulla sessione 3 aprile WR 58.5%
+    SOGLIA_MIN    = 34    # era 44 - fallback coerente con NEUTRO comparto
     SOGLIA_MAX    = 80    # era 90 - phantom SCORE_INSUFFICIENTE dice -$3871, troppo alto in RANGING
 
     # -- SIZE CONTINUA -----------------------------------------------------
@@ -4086,7 +4091,8 @@ class CampoGravitazionale:
         ctx   = sm/100.0
         rf    = REG_F.get(regime,1.0)
         soglia_raw = 60*ctx*rf
-        soglia = max(max(48,58*ctx), min(80,soglia_raw))
+        # Soglia proporzionale pura: sanity floor 24, allineato a evaluate()
+        soglia = max(24, min(80, soglia_raw))
 
         return {
             'score':  round(score,1),
@@ -4253,16 +4259,24 @@ class CampoGravitazionale:
 
         soglia_raw = self.SOGLIA_BASE * context_ratio * regime_f * vol_f * history_f * prebreak_f * drift_f * loss_f
 
-        SOGLIA_FLOOR_ASSOLUTO = 48
-        soglia_min_ctx = max(SOGLIA_FLOOR_ASSOLUTO, self.SOGLIA_MIN * context_ratio)
-        
+        # ════════════════════════════════════════════════════════════════════
+        # LAVORO 1 — DEMOLIZIONE TRIPLE-SOGLIA (8 maggio 2026)
+        # ════════════════════════════════════════════════════════════════════
+        # CompartoEngine è UNICA FONTE di verità per la soglia. Il pavimento
+        # fisso 48 hardcoded ammazzava RANGING (score max ~39). Eliminato.
+        # Resta solo SANITY_FLOOR=24 — anti-rumore puro, non punitivo.
+        # SOGLIA_BASE/MIN arrivano dal Comparto attivo (sovrascritti ogni tick).
+        # ════════════════════════════════════════════════════════════════════
+        SANITY_FLOOR = 24  # sotto questo è puro rumore in qualunque regime
+        soglia_min_ctx = max(SANITY_FLOOR, self.SOGLIA_MIN * context_ratio)
+
         # SOGLIA_MAX ADATTIVA PER REGIME - non più fissa
         dynamic_max = self._get_dynamic_soglia_max(regime, volatility)
         soglia = max(soglia_min_ctx, min(dynamic_max, soglia_raw))
 
-        # -- BOOST SOGLIA DA CAPSULE L3 (IntelligenzaAutonoma) -------------
-        # Le capsule L3 possono alzare la soglia proporzionalmente alla gravità.
-        # Il pavimento SOGLIA_FLOOR_ASSOLUTO=48 rimane inviolabile.
+        # -- BOOST SOGLIA DA CAPSULE L3 (Narratore/IntelligenzaAutonoma) ----
+        # Le capsule generate da DeepSeek possono alzare la soglia in base
+        # all'osservazione del mercato. Il pavimento proporzionale resta valido.
         soglia_boost = kwargs.get('soglia_boost', 0.0)
         if soglia_boost > 0:
             soglia = max(soglia_min_ctx, min(dynamic_max, soglia + soglia_boost))
@@ -6381,8 +6395,9 @@ class OvertopBassanoV16Production:
         recent_losses = sum(1 for t in recent if not t.get('is_win', False))
         if recent_losses >= 3 and len(recent) >= 3:
             step = base_step
-            new_min  = min(52, self.campo.SOGLIA_MIN  + step)
-            new_base = min(55, self.campo.SOGLIA_BASE + step)
+            # L1: tetti coerenti con nuovi comparti (max ATTACCO=44, BULL=46)
+            new_min  = min(50, self.campo.SOGLIA_MIN  + step)
+            new_base = min(58, self.campo.SOGLIA_BASE + step)
             old_min  = self.campo.SOGLIA_MIN
             old_base = self.campo.SOGLIA_BASE
             self.campo.SOGLIA_MIN  = new_min
@@ -6421,20 +6436,24 @@ class OvertopBassanoV16Production:
 
         step = base_step * 2 if delta_wr > 0.75 else base_step
 
+        # L1: pavimenti SANITY coerenti con nuovi comparti, non più 50/55 hardcoded
+        SOGLIA_MIN_SANITY  = 28   # MIN può scendere fino a 28 (era 50)
+        SOGLIA_BASE_SANITY = 34   # BASE può scendere fino a 34 (era 55)
+
         if delta_wr > 0.60:
-            new_min = max(50, old_min - step)
-            new_base = max(55, old_base - step)
+            new_min = max(SOGLIA_MIN_SANITY, old_min - step)
+            new_base = max(SOGLIA_BASE_SANITY, old_base - step)
             action = "ABBASSA"
         elif delta_wr < 0.40:
-            new_min = min(52, old_min + step)
-            new_base = min(55, old_base + step)
+            new_min = min(50, old_min + step)
+            new_base = min(58, old_base + step)
             action = "ALZA"
         elif bilancio < -100:
             # WR nella zona morta (40-60%) MA bilancio molto negativo
             # I WIN phantom sono più grossi dei LOSS → la soglia costa troppo
             # Abbassa con step ridotto (1) - cautela nella zona morta
-            new_min = max(50, old_min - 1)
-            new_base = max(55, old_base - 1)
+            new_min = max(SOGLIA_MIN_SANITY, old_min - 1)
+            new_base = max(SOGLIA_BASE_SANITY, old_base - 1)
             action = "ABBASSA_PNL"
         else:
             self._last_soglia_autotune = now
@@ -6498,7 +6517,8 @@ class OvertopBassanoV16Production:
                 if not existing:
                     # Abbassa soglia di 3 punti per 30 minuti
                     old_base = self.campo.SOGLIA_BASE
-                    new_base = max(40, old_base - 3)
+                    # L1: floor 32 coerente con sanity (era 40)
+                    new_base = max(32, old_base - 3)
                     self.campo.SOGLIA_BASE = new_base
                     self._log_m2("🧠",
                         f"PHANTOM_SUP: {blocco_id} WR={wr_blocco:.0%} blk={blk} "
@@ -6516,7 +6536,8 @@ class OvertopBassanoV16Production:
             # Sta lasciando passare cose che perdono — soglia troppo bassa
             elif wr_blocco < 0.25 and blk > 20:
                 old_base = self.campo.SOGLIA_BASE
-                new_base = min(55, old_base + 1)  # era max60/step3
+                # L1: tetto 58 coerente (era 55)
+                new_base = min(58, old_base + 1)
                 if new_base != old_base:
                     self.campo.SOGLIA_BASE = new_base
                     self._log_m2("🧠",
