@@ -4678,10 +4678,12 @@ def debug_snapshot():
                 "pnl_avg":    round(r[9] or 0, 2),
             })
 
-        # Stats post-483
+        # Stats — L2 fix: rimosso filtro id > 483 che bloccava i trade post-reset
+        # Adesso conta TUTTI i trade M2_EXIT, così PhantomSupervisor e AUTO_TUNE
+        # si auto-correggono in base ai dati reali del sistema corrente.
         stats = conn.execute("""
             SELECT COUNT(*), SUM(pnl), SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END)
-            FROM trades WHERE event_type='M2_EXIT' AND id > 483
+            FROM trades WHERE event_type='M2_EXIT'
         """).fetchone()
 
         # Top blocchi phantom
