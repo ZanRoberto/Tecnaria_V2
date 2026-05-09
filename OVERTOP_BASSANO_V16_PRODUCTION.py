@@ -4274,6 +4274,37 @@ class CampoGravitazionale:
         dynamic_max = self._get_dynamic_soglia_max(regime, volatility)
         soglia = max(soglia_min_ctx, min(dynamic_max, soglia_raw))
 
+        # ════════════════════════════════════════════════════════════════════
+        # FIX 2026-05-09 OPZIONE C — SOGLIA FLOOR DINAMICO basato su PRED_SCORE
+        # ════════════════════════════════════════════════════════════════════
+        # La predizione comanda sull'auto-difesa.
+        # Quando pred_score sale, la soglia floor scende automaticamente —
+        # il sistema "scopre da solo" che può fidarsi della propria predizione.
+        # Quando pred_score scende, la soglia si rialza per sicurezza.
+        # Tutto SENZA deploy, SENZA manopole, SENZA mio intervento.
+        #
+        #   pred_score  0%  →  floor 50  (cold start, cauto)
+        #   pred_score 30%  →  floor 47
+        #   pred_score 50%  →  floor 44
+        #   pred_score 70%  →  floor 38  (predizione viva, si fida)
+        #   pred_score 85%+ →  floor 34  (predizione molto viva, ottimo)
+        # ════════════════════════════════════════════════════════════════════
+        _pred_score_floor = kwargs.get('pred_score', 0.0)
+        if _pred_score_floor >= 85:
+            _floor_dyn = 34
+        elif _pred_score_floor >= 70:
+            _floor_dyn = 38
+        elif _pred_score_floor >= 50:
+            _floor_dyn = 44
+        elif _pred_score_floor >= 30:
+            _floor_dyn = 47
+        else:
+            _floor_dyn = 50  # cold start: prudenza
+
+        # Applica il floor dinamico SOLO se è più alto del soglia_min_ctx
+        # (così non strangola il sistema sotto sanity_floor)
+        soglia = max(_floor_dyn, soglia)
+
         # -- BOOST SOGLIA DA CAPSULE L3 (Narratore/IntelligenzaAutonoma) ----
         # Le capsule generate da DeepSeek possono alzare la soglia in base
         # all'osservazione del mercato. Il pavimento proporzionale resta valido.
@@ -5414,6 +5445,30 @@ class OvertopBassanoV16Production:
             self._nerv      = NervosismoEngine()
             self._breath    = BreathEngine()
             log.info("[V16] CompartoEngine + NervosismoEngine + BreathEngine attivi")
+
+            # ════════════════════════════════════════════════════════════
+            # FIX 2026-05-09 OPZIONE C — BOOT cauto + soglia adattiva
+            # ════════════════════════════════════════════════════════════
+            # Filosofia "volpe":
+            # - Cold start (pred_score=0): soglia parte a 50 (cauta)
+            # - Pred score sale: soglia floor scende automaticamente
+            # - Pred score >= 70%: soglia può andare giù fino al comparto base
+            # Il sistema NON è una manopola — si auto-calibra in base ai
+            # propri dati Veritas/pred_score, senza intervento esterno.
+            # ════════════════════════════════════════════════════════════
+            try:
+                if hasattr(self, 'campo'):
+                    _old_base = getattr(self.campo, 'SOGLIA_BASE', None)
+                    _old_min  = getattr(self.campo, 'SOGLIA_MIN',  None)
+                    # Boot CAUTO: 50/44 (non scende a 38 finché pred non si è calibrata)
+                    self.campo.SOGLIA_BASE = 50
+                    self.campo.SOGLIA_MIN  = 44
+                    log.info(f"[BOOT_RESET] SOGLIA boot CAUTO (pred_score=0): "
+                             f"base {_old_base}→50  min {_old_min}→44")
+                    log.info(f"[BOOT_RESET] La soglia floor si abbasserà automaticamente "
+                             f"man mano che pred_score sale (50%→44, 70%→38).")
+            except Exception as _br_e:
+                log.warning(f"[BOOT_RESET] Errore: {_br_e}")
         else:
             self._comparto  = None
             self._nerv      = None
@@ -6452,21 +6507,53 @@ class OvertopBassanoV16Production:
 
         stats = self._phantom_stats.get("SCORE_INSUFFICIENTE")
 
+        # ════════════════════════════════════════════════════════════════
+        # FIX 2026-05-09 — PREDIZIONE COMANDA SU AUTO-DIFESA
+        # ════════════════════════════════════════════════════════════════
+        # Se pred_score >= 70% E veritas conferma edge positivo,
+        # la predizione è "viva" e l'auto-tune NON deve irrigidire la soglia.
+        # Altrimenti la difesa storica strangola la predizione attiva.
+        # ════════════════════════════════════════════════════════════════
+        _pred_score = getattr(self.supercervello, '_pred_score_ref', 0) \
+                      if hasattr(self, 'supercervello') else 0
+        _vt_pnl_avg = 0.0
+        if hasattr(self, 'veritas') and self.veritas._stats:
+            # Media pnl_avg dei segnali FUOCO|PREVISTO_ENTRA (l'edge predittivo principale)
+            _fuoco_pe = self.veritas._stats.get('FUOCO|PREVISTO_ENTRA', {})
+            _vt_pnl_avg = _fuoco_pe.get('pnl_avg', 0.0)
+        _pred_attiva = _pred_score >= 70.0 and _vt_pnl_avg > 0.0
+
+        # Cap comparto-relativo: la soglia non può salire più di +6 dalla base del comparto attivo
+        _comp_attivo_now = None
+        if hasattr(self, '_comparto') and self._comparto:
+            from comparto_engine import COMPARTI
+            _comp_attivo_now = COMPARTI.get(self._comparto._attivo)
+        _cap_base_max = (_comp_attivo_now.soglia_base + 6) if _comp_attivo_now else 50
+        _cap_min_max  = (_comp_attivo_now.soglia_min  + 6) if _comp_attivo_now else 44
+
         # FIX: AutoCalibratore guarda anche i trade reali persi consecutivi
         recent = list(self._m2_recent_trades)[-5:] if self._m2_recent_trades else []
         recent_losses = sum(1 for t in recent if not t.get('is_win', False))
         if recent_losses >= 3 and len(recent) >= 3:
+            # ── Skip irrigidimento se predizione attiva ─────────────
+            if _pred_attiva:
+                self._last_soglia_autotune = now
+                self._log_m2("🦊", f"AUTO-TUNE LOSS_REAL: {recent_losses}/5 loss reali "
+                                  f"MA PRED_ATTIVA ps={_pred_score:.0f}% "
+                                  f"vt_pnl={_vt_pnl_avg:+.2f} → NO irrigidimento")
+                return
             step = base_step
-            # L1: tetti coerenti con nuovi comparti (max ATTACCO=44, BULL=46)
-            new_min  = min(50, self.campo.SOGLIA_MIN  + step)
-            new_base = min(58, self.campo.SOGLIA_BASE + step)
+            # Cap relativo al comparto attivo invece di hardcoded 50/58
+            new_min  = min(_cap_min_max,  self.campo.SOGLIA_MIN  + step)
+            new_base = min(_cap_base_max, self.campo.SOGLIA_BASE + step)
             old_min  = self.campo.SOGLIA_MIN
             old_base = self.campo.SOGLIA_BASE
             self.campo.SOGLIA_MIN  = new_min
             self.campo.SOGLIA_BASE = new_base
             self._last_soglia_autotune = now
             self._log_m2("🎯", f"AUTO-TUNE LOSS_REAL: {recent_losses}/5 loss reali → ALZA soglia "
-                              f"MIN {old_min}→{new_min} BASE {old_base}→{new_base}")
+                              f"MIN {old_min}→{new_min} BASE {old_base}→{new_base} "
+                              f"(cap_base={_cap_base_max})")
             return
 
         if not stats:
@@ -6507,8 +6594,15 @@ class OvertopBassanoV16Production:
             new_base = max(SOGLIA_BASE_SANITY, old_base - step)
             action = "ABBASSA"
         elif delta_wr < 0.40:
-            new_min = min(50, old_min + step)
-            new_base = min(58, old_base + step)
+            # ── FIX 2026-05-09 — Skip ALZA se predizione attiva ──
+            if _pred_attiva:
+                self._last_soglia_autotune = now
+                self._log_m2("🦊", f"AUTO-TUNE PHANTOM: WR={delta_wr:.0%} basso "
+                                  f"MA PRED_ATTIVA → NO ALZA (predizione comanda)")
+                return
+            # Cap relativo al comparto invece di hardcoded 58/50
+            new_min = min(_cap_min_max,  old_min  + step)
+            new_base = min(_cap_base_max, old_base + step)
             action = "ALZA"
         elif bilancio < -100:
             # WR nella zona morta (40-60%) MA bilancio molto negativo
@@ -7512,6 +7606,8 @@ class OvertopBassanoV16Production:
                     fantasma_info     = _fantasma_p1,
                     loss_consecutivi  = self._m2_loss_consecutivi(),
                     soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend),
+                    # FIX OPZIONE C: pred_score abbassa il floor della soglia
+                    pred_score        = getattr(self.supercervello, '_pred_score_ref', 0.0),
                 )
                 if _result_p1['veto'] and _eo_carica < 0.80:
                     self._log_m2("🚫", f"PERCORSO1_VETO: {_result_p1['veto']} "
@@ -7563,6 +7659,8 @@ class OvertopBassanoV16Production:
                 fantasma_info     = fantasma_info,
                 loss_consecutivi  = self._m2_loss_consecutivi(),
                 soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend),
+                # FIX OPZIONE C: pred_score abbassa il floor della soglia automaticamente
+                pred_score        = getattr(self.supercervello, '_pred_score_ref', 0.0),
             )
 
             if result['veto']:
@@ -8400,6 +8498,34 @@ class OvertopBassanoV16Production:
                 'regime':   self._regime_current,
                 'soglia':   self._shadow.get('soglia', 60) if self._shadow else 60,
             })
+
+            # ════════════════════════════════════════════════════════════════
+            # FIX 2026-05-09 — Aggancio CompartoEngine + Engine V16 al close
+            # ════════════════════════════════════════════════════════════════
+            # I metodi on_trade_closed di Comparto/Nervosismo/Breath erano orfani:
+            # esistono ma non venivano mai chiamati. Li aggancio qui.
+            # Comparto riceve anche pred_score e veritas_pnl_avg per skip
+            # irrigidimento se la predizione è viva.
+            # ════════════════════════════════════════════════════════════════
+            try:
+                _ps_close = getattr(self.supercervello, '_pred_score_ref', 0) \
+                            if hasattr(self, 'supercervello') else 0
+                _vt_pnl_close = 0.0
+                if hasattr(self, 'veritas') and self.veritas._stats:
+                    _fpe = self.veritas._stats.get('FUOCO|PREVISTO_ENTRA', {})
+                    _vt_pnl_close = _fpe.get('pnl_avg', 0.0)
+
+                if hasattr(self, '_comparto') and self._comparto:
+                    self._comparto.on_trade_closed(pnl,
+                                                    pred_score=_ps_close,
+                                                    veritas_pnl_avg=_vt_pnl_close)
+                if hasattr(self, '_nerv') and self._nerv:
+                    self._nerv.on_trade_closed(pnl)
+                if hasattr(self, '_breath') and self._breath:
+                    self._breath.on_trade_close(pnl)
+            except Exception as _eng_e:
+                log.debug(f"[ENGINES_CLOSE] {_eng_e}")
+            # ════════════════════════════════════════════════════════════════
 
             m2_tot = self._m2_wins + self._m2_losses
             m2_wr  = (self._m2_wins / m2_tot * 100) if m2_tot > 0 else 0
