@@ -5179,6 +5179,16 @@ class OvertopBassanoV16Production:
         self.telemetry       = StabilityTelemetry()
         self.signal_tracker  = PreTradeSignalTracker()
 
+        # ── L1.1 FIX: Init attributi _trade_peak_* ─────────────────────────
+        # Bug pre-esistente latente: _trade_peak_pnl/ts/energia erano definiti
+        # solo dentro _open_shadow_position. Se _evaluate_shadow_exit veniva
+        # chiamato prima della prima open (caso impossibile con soglia 48 fissa,
+        # ma possibile dopo L1 quando il bot inizia a tradare), AttributeError.
+        # Soluzione: inizializzati a 0.0/None in __init__.
+        self._trade_peak_pnl     = 0.0
+        self._trade_peak_ts      = None
+        self._trade_peak_energia = 0.0
+
         # ── CAPSULE EXECUTOR — ciclo di vita capsule eseguibili ──────────────
         if _CE_AVAILABLE:
             self.capsule_executor = CapsuleExecutor(DB_PATH, self)
