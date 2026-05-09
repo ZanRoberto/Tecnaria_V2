@@ -297,22 +297,51 @@ class CompartoEngine:
                  f"soglia={comp.soglia_base} size={comp.size_default} "
                  f"long={comp.long_ok} short={comp.short_ok}")
 
-    def on_trade_closed(self, pnl: float):
-        """Registra risultato nel comparto attivo."""
+    def on_trade_closed(self, pnl: float, pred_score: float = 0.0,
+                         veritas_pnl_avg: float = 0.0):
+        """
+        Registra risultato nel comparto attivo.
+
+        FIX 2026-05-09 — La predizione comanda sull'auto-difesa.
+        Se pred_score >= 70% E veritas_pnl_avg > 0 → la predizione è viva,
+        non irrigidire la soglia (anche dopo loss).
+
+        Cap: soglia non può salire più di +6 dalla base originale del comparto,
+        per evitare che l'auto-difesa storica strangoli il sistema.
+        """
         with self._lock:
             comp = COMPARTI.get(self._attivo)
             if comp:
                 comp.registra_trade(pnl)
-                # Se comparto perde troppo → irrigidisce soglia
+
+                # Memorizza la base originale al primo uso (per il cap relativo)
+                if not hasattr(comp, '_soglia_base_originale'):
+                    comp._soglia_base_originale = comp.soglia_base
+                if not hasattr(comp, '_soglia_min_originale'):
+                    comp._soglia_min_originale = comp.soglia_min
+
+                # PREDIZIONE COMANDA: se la previsione è attiva, no irrigidimento
+                pred_attiva = pred_score >= 70.0 and veritas_pnl_avg > 0.0
+
+                # Se comparto perde troppo → irrigidisce soglia (con cap relativo)
                 if comp.trades_osservati >= 5 and comp.wr() < 0.30:
-                    comp.soglia_base = min(comp.soglia_base + 2, 60)
-                    log.warning(f"[COMPARTO] {self._attivo} WR={comp.wr():.0%} → "
-                                f"soglia alzata a {comp.soglia_base}")
+                    if pred_attiva:
+                        log.info(f"[COMPARTO] {self._attivo} WR={comp.wr():.0%} ma "
+                                 f"PRED_ATTIVA ps={pred_score:.0f}% pnl={veritas_pnl_avg:+.2f} "
+                                 f"→ NO irrigidimento (predizione comanda)")
+                    else:
+                        # Cap: max +6 dalla base ORIGINALE, non da quella corrente
+                        cap_max = comp._soglia_base_originale + 6
+                        comp.soglia_base = min(comp.soglia_base + 2, cap_max)
+                        log.warning(f"[COMPARTO] {self._attivo} WR={comp.wr():.0%} → "
+                                    f"soglia alzata a {comp.soglia_base} (cap={cap_max})")
+
                 # Se comparto funziona → ammorbidisce soglia
                 elif comp.trades_osservati >= 10 and comp.wr() >= 0.60:
-                    comp.soglia_base = max(comp.soglia_base - 1, 30)
+                    floor = max(30, comp._soglia_base_originale - 4)
+                    comp.soglia_base = max(comp.soglia_base - 1, floor)
                     log.info(f"[COMPARTO] {self._attivo} WR={comp.wr():.0%} → "
-                             f"soglia abbassata a {comp.soglia_base}")
+                             f"soglia abbassata a {comp.soglia_base} (floor={floor})")
 
     def get_attivo(self) -> dict:
         with self._lock:
