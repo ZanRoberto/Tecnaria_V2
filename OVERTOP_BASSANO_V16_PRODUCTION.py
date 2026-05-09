@@ -5283,6 +5283,47 @@ class OvertopBassanoV16Production:
         self._m2_last_loss_time = 0               # timestamp dell'ultimo loss
         self._m2_loss_streak = 0                  # loss consecutivi correnti
         self._m2_cooldown_until = 0               # non entrare fino a questo timestamp
+
+        # ── L1.5 — VERITAS GATE: stats per contesto (mom|vol|trend) ─────
+        # Traccia n, wins, pnl_sum per ogni contesto incontrato.
+        # Permette di bloccare entry su contesti che hanno dato WR<20%
+        # e pnl_avg<-1.0 dopo almeno 10 trade reali.
+        self._m2_ctx_stats = {}   # {ctx_str: {'n', 'wins', 'pnl_sum'}}
+
+        # L1.5 — Caricamento storico ctx_stats dal DB
+        # Senza questo, dopo restart il gate Veritas riparte da 0.
+        # Con questo, il gate è subito operativo basandosi su tutto lo storico.
+        try:
+            _conn_v = sqlite3.connect(DB_PATH)
+            _ctx_rows = _conn_v.execute("""
+                SELECT json_extract(data_json,'$.momentum') as m,
+                       json_extract(data_json,'$.volatility') as v,
+                       json_extract(data_json,'$.trend') as t,
+                       COUNT(*) as n,
+                       SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END) as wins,
+                       SUM(pnl) as pnl_sum
+                FROM trades
+                WHERE event_type='M2_EXIT' AND data_json IS NOT NULL
+                GROUP BY 1,2,3
+                HAVING n >= 1
+            """).fetchall()
+            _conn_v.close()
+            for _row in _ctx_rows:
+                if _row[0] and _row[1] and _row[2]:
+                    _key = f"{_row[0]}|{_row[1]}|{_row[2]}"
+                    self._m2_ctx_stats[_key] = {
+                        'n':       _row[3],
+                        'wins':    _row[4] or 0,
+                        'pnl_sum': float(_row[5] or 0),
+                    }
+            if self._m2_ctx_stats:
+                log.info(f"[VERITAS_LOAD] Caricati {len(self._m2_ctx_stats)} contesti dal DB:")
+                for _k, _s in self._m2_ctx_stats.items():
+                    _wr = _s['wins'] / _s['n'] if _s['n'] > 0 else 0
+                    _pnl_avg = _s['pnl_sum'] / _s['n'] if _s['n'] > 0 else 0
+                    log.info(f"[VERITAS_LOAD]   {_k}: n={_s['n']} wr={_wr:.0%} pnl_avg=${_pnl_avg:+.2f}")
+        except Exception as _ve:
+            log.warning(f"[VERITAS_LOAD] Errore caricamento storico: {_ve}")
         # -- AUTO-TUNING SOGLIA - impara dai phantom ----------------------
         # Il sistema legge i propri phantom e aggiusta SOGLIA_MIN automaticamente.
         # Se i phantom bloccati hanno WR > 60% su 10+ campioni → soglia troppo alta.
@@ -6276,6 +6317,17 @@ class OvertopBassanoV16Production:
             'soglia': self._shadow.get('soglia', 60) if self._shadow else 60,
             'regime': self._shadow.get('regime_entry', self._regime_current) if self._shadow else self._regime_current,
         })
+
+        # ── L1.5 — Aggiorna VERITAS GATE per contesto ────────────────────
+        if self._shadow:
+            _ctx_str = (f"{self._shadow.get('momentum_entry', 'MEDIO')}|"
+                       f"{self._shadow.get('volatility_entry', 'MEDIA')}|"
+                       f"{self._shadow.get('trend_entry', 'SIDEWAYS')}")
+            if _ctx_str not in self._m2_ctx_stats:
+                self._m2_ctx_stats[_ctx_str] = {'n': 0, 'wins': 0, 'pnl_sum': 0.0}
+            self._m2_ctx_stats[_ctx_str]['n']       += 1
+            self._m2_ctx_stats[_ctx_str]['wins']    += 1 if is_win else 0
+            self._m2_ctx_stats[_ctx_str]['pnl_sum'] += pnl
 
         if is_win:
             self._m2_loss_streak = 0
@@ -7315,11 +7367,60 @@ class OvertopBassanoV16Production:
                 self._log_m2("🔇", f"SEED_INSUFFICIENTE score={seed.get('score',0):.2f}")
                 return
 
+            # ── L1.5 — VERITAS GATE: blocca contesti tossici ───────────────
+            # Su 38 trade reali, contesti DEBOLE|ALTA|SIDEWAYS e MEDIO|ALTA|SIDEWAYS
+            # hanno avuto WR<10% e pnl_avg<-1.50. Il sistema TRADE LO STESSO lì
+            # perché Veritas non era usato come gate. Adesso lo è.
+            #
+            # Soglie:
+            # - serve almeno n=10 trade nel contesto (no falsi positivi)
+            # - blocca se WR<20% E pnl_avg<-1.0
+            # - se passano 24h dall'ultima loss, riaprire gate (mercato cambia)
+            _ctx_key = f"{momentum}|{volatility}|{trend}"
+            _ctx_st  = self._m2_ctx_stats.get(_ctx_key)
+            if _ctx_st and _ctx_st['n'] >= 10:
+                _ctx_wr      = _ctx_st['wins'] / _ctx_st['n']
+                _ctx_pnl_avg = _ctx_st['pnl_sum'] / _ctx_st['n']
+                if _ctx_wr < 0.20 and _ctx_pnl_avg < -1.0:
+                    self._log_m2("🚫", f"VERITAS_GATE {_ctx_key} "
+                                       f"n={_ctx_st['n']} wr={_ctx_wr:.0%} "
+                                       f"pnl_avg=${_ctx_pnl_avg:+.2f} → blocca")
+                    return
+
             _dir           = self.campo._direction
             fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend, _dir)
             self._last_fingerprint_wr = fingerprint_wr
             matrimonio_name = MatrimonioIntelligente.get_marriage(
                 momentum, volatility, trend).get("name", "WEAK_NEUTRAL")
+
+            # ── L2 — CAPSULE LEARNED GATE: secondo guardiano ──────────────
+            # Le capsule LEARNED del CapsuleManager hanno appreso che certi
+            # matrimoni sono tossici (es. RANGE_VOL_W pnl_avg=-1.74 su 19 sample).
+            # Adesso erano interrogate solo in EXPLOSIVE+OI>=0.80.
+            # Adesso lo facciamo SEMPRE prima dell'entry, in qualsiasi regime.
+            #
+            # Differenza con Veritas Gate:
+            # - Veritas Gate: contesto (mom|vol|trend) — granularità alta
+            # - LEARNED: matrimonio (RANGE_VOL_W ecc.) — granularità famiglia
+            # Operano in OR: basta che uno dei due dica "tossico" → blocca
+            if hasattr(self, 'capsule_manager') and self.capsule_manager:
+                try:
+                    _learned_ctx = {
+                        'momentum':   momentum,
+                        'volatility': volatility,
+                        'trend':      trend,
+                        'direction':  _dir,
+                        'regime':     self._regime_current,
+                        'matrimonio': matrimonio_name,
+                        'oi_carica':  getattr(self, '_oi_carica', 0.0),
+                    }
+                    _learned_check = self.capsule_manager.valuta(_learned_ctx)
+                    if _learned_check.get("blocca"):
+                        _reason = _learned_check.get("reason", "CM_TOSSICO")
+                        self._log_m2("🚫", f"LEARNED_GATE {matrimonio_name} → {_reason}")
+                        return
+                except Exception as _le:
+                    log.debug(f"[LEARNED_GATE_ERR] {_le}")
 
             # ── CALCOLA EFFECTIVE REGIME ─────────────────────────────────────
             _now_eo    = time.time()
@@ -7444,14 +7545,10 @@ class OvertopBassanoV16Production:
             # ═══════════════════════════════════════════════════════════════
             # PERCORSO 2: tutto il resto — gate normali
             # ═══════════════════════════════════════════════════════════════
-            # PRECURSORE P2
-            if self.capsule_manager and self._oi_carica >= 0.80:
-                _p2_ctx = {"momentum":momentum,"volatility":volatility,"trend":trend,"direction":_dir,"regime":_effective_regime,"oi_carica":self._oi_carica,"oi_stato":self._oi_stato,"matrimonio":matrimonio_name,"oi_short":getattr(self,"_oi_carica_short",0.0),"breath_fase":(self._breath._fase if self._breath else "NEUTRO"),"breath_energia":(self._breath._energia if self._breath else 0.0)}
-                _p2_res = self.capsule_manager.valuta(_p2_ctx)
-                if not _p2_res.get("blocca"):
-                    self._log_m2("⚡", f"PRECURSORE_P2 OI={self._oi_carica:.2f} bypass — entra")
-                    self._open_shadow_position(price, score, soglia, seed, size, momentum, volatility, trend, matrimonio_name, fingerprint_wr)
-                    return
+            # NOTA L2: Il PRECURSORE_P2 era qui sopra ma usava variabili
+            # score/soglia/size non ancora definite (bug latente). Spostato
+            # DOPO `result = evaluate()` quando le variabili esistono.
+
             fantasma_info = self.oracolo.is_fantasma(momentum, volatility, trend, _dir)
 
             result = self.campo.evaluate(
@@ -7496,6 +7593,43 @@ class OvertopBassanoV16Production:
                 return
 
             size = result.get('size', 0.3)
+
+            # ════════════════════════════════════════════════════════════════
+            # VOLPE BOOST — riconosci i contesti dove devi colpire forte
+            # ════════════════════════════════════════════════════════════════
+            # Dai trade vincenti storici (STATUS.md):
+            # - Trade 764: FORTE|ALTA|SIDEWAYS pnl=+$2.05 → bonus moderato
+            # - Trade 516: DEBOLE|BASSA|SIDEWAYS pnl=+$6.22 → bonus alto
+            # - Trade 557/655: MEDIO|ALTA|SIDEWAYS pnl=+$1.37/$1.47 → standard
+            #
+            # Pattern profittevoli identificati:
+            # 1. FORTE + UP/MEDIA (impulso vivo + volume)        → +30% size
+            # 2. DEBOLE + BASSA + SIDEWAYS (range dead, lungo)   → +50% size
+            # 3. FORTE + ALTA + SIDEWAYS (squeeze breakout)      → +20% size
+            #
+            # Veritas storico permette il boost SOLO se WR>=20% o n<5 (no abusi)
+            _volpe_boost = 1.0
+            _volpe_reason = ""
+            _ctx_v = self._m2_ctx_stats.get(f"{momentum}|{volatility}|{trend}", {})
+            _v_n = _ctx_v.get('n', 0)
+            _v_wr = (_ctx_v.get('wins', 0) / _v_n) if _v_n > 0 else 0.5
+            
+            # Boost solo se contesto non è dimostrato perdente
+            if _v_n < 5 or _v_wr >= 0.20:
+                if momentum == "FORTE" and trend == "UP" and volatility in ("MEDIA","ALTA"):
+                    _volpe_boost = 1.30
+                    _volpe_reason = "FORTE_UP_VOL"
+                elif momentum == "DEBOLE" and volatility == "BASSA" and trend == "SIDEWAYS":
+                    _volpe_boost = 1.50
+                    _volpe_reason = "RANGE_DEAD_LONG"
+                elif momentum == "FORTE" and volatility == "ALTA" and trend == "SIDEWAYS":
+                    _volpe_boost = 1.20
+                    _volpe_reason = "SQUEEZE_BREAK"
+            
+            if _volpe_boost > 1.0:
+                _new_size = round(min(2.0, size * _volpe_boost), 2)
+                self._log_m2("🦊", f"VOLPE_BOOST {_volpe_reason} {size:.2f}→{_new_size:.2f}")
+                size = _new_size
 
             # ── SUPERCERVELLO: sintesi finale prima dell'entry ──────────
             # È il giudice che legge tutti gli organi simultaneamente.
@@ -7588,6 +7722,10 @@ class OvertopBassanoV16Production:
                 "fingerprint_wr": round(fingerprint_wr, 3),
                 "seed":          round(seed.get('score', 0), 3),
                 "ts_entry":      time.time(),
+                # L1.5: contesto entry per VERITAS GATE
+                "momentum_entry":   momentum,
+                "volatility_entry": volatility,
+                "trend_entry":      trend,
             }
             self._shadow_entry_time        = time.time()
             self._shadow_max_price         = price
@@ -7730,7 +7868,7 @@ class OvertopBassanoV16Production:
                 except Exception as _ci_ex:
                     log.debug(f"[CI_EXIT_ERR] {_ci_ex}")
 
-            # ── BREATH EXIT — priorità alta ─────────────────────────────────
+            # ── BREATH EXIT — priorità alta + L2 medium-protect ─────────────
             if _V16_ENGINES_OK and self._breath and duration > 10:
                 _nerv_val = getattr(self._nerv, '_nervosismo', 0.3) if self._nerv else 0.3
 
@@ -7740,11 +7878,44 @@ class OvertopBassanoV16Production:
                     entry_time  = self._shadow_entry_time
 
                 b_exit = self._breath.segnale_exit(_FakePos(), _nerv_val)
-                if b_exit["ok"] and b_exit.get("urgenza") in ("ALTA", "CRITICA"):
+
+                # Calcolo profit lordo per decidere se attivare anche urgenza MEDIA
+                if entry_direction == "SHORT":
+                    _pl_brth = (self._shadow["price_entry"] - price) * (5000.0 / self._shadow["price_entry"])
+                else:
+                    _pl_brth = (price - self._shadow["price_entry"]) * (5000.0 / self._shadow["price_entry"])
+
+                # ALTA/CRITICA → exit sempre (ESALAZIONE forte, peak superato)
+                # MEDIA → exit SOLO se profit nel range calibrato per momentum:
+                #   FORTE: range $1.50-$3.00 (lascia correre fino $1.50, poi proteggi)
+                #   MEDIO: range $1.00-$2.50 (protezione standard)
+                #   DEBOLE: range $0.50-$2.00 (esci appena puoi)
+                # Sopra il range superiore: lascia gestire al PROFIT_LOCK
+                # Sotto il range inferiore: aspetta che il trade respiri
+                _entry_mom_breath = self._shadow_entry_momentum or momentum
+                if _entry_mom_breath == "FORTE":
+                    _br_min, _br_max = 1.50, 3.00
+                elif _entry_mom_breath == "MEDIO":
+                    _br_min, _br_max = 1.00, 2.50
+                else:  # DEBOLE
+                    _br_min, _br_max = 0.50, 2.00
+                
+                _b_urg = b_exit.get("urgenza", "")
+                _b_ok  = b_exit.get("ok", False)
+
+                _exit_now = False
+                if _b_ok:
+                    if _b_urg in ("ALTA", "CRITICA"):
+                        _exit_now = True
+                    elif _b_urg == "MEDIA" and _br_min < _pl_brth < _br_max:
+                        _exit_now = True
+                        b_exit["motivo"] = f"VOLPE_BREATH_{_entry_mom_breath}+pf ${_pl_brth:+.2f} | {b_exit.get('motivo','')}"
+
+                if _exit_now:
                     self._log_m2("🌬", f"BREATH_EXIT: {b_exit['motivo']}")
                     self._close_shadow_position(
                         price, momentum, volatility, trend,
-                        reason=f"BREATH_{b_exit.get('urgenza','')}"
+                        reason=f"BREATH_{_b_urg}"
                     )
                     return
 
@@ -7946,9 +8117,13 @@ class OvertopBassanoV16Production:
                 exit_soglia = exit_soglia_base
             
             # -- PROFIT LOCK: mai perdere un profitto acquisito ----------
-            # Se siamo in profitto e il prezzo è tornato indietro > 40% del massimo → esci
-            # MA: rispetta profit_lock_min dalle SuperCapsule Oracle
-            # Fee = $2.00. Non chiudere mai sotto $2.50 lordo (= $0.50 netto).
+            # L1.5 FIX: protezione anti-evaporazione su 2 livelli
+            # Livello 1 (PROTECT): profit grande raggiunto → retreat 40%
+            # Livello 2 (LOCK_LOW): profit medio raggiunto → retreat 25% (più aggressivo)
+            # Livello 3 (EVAPORATION): max raggiunto era WIN ma ora torna sotto fee → exit subito
+            #
+            # Background: il 56% dei loss recenti aveva max_profit > 0 (WIN_+0/+3)
+            # ma poi è evaporato. Servono trigger di exit più aggressivi.
             _cm_profit_min = 0.0
             if hasattr(self, 'capsule_manager') and self.capsule_manager:
                 _veto_ctx = {
@@ -7964,17 +8139,81 @@ class OvertopBassanoV16Production:
             else:
                 _cm_retreat = 0.40
 
-            # Soglia minima assoluta: $2.50 lordo (copre fee $2.00 + $0.50 profitto reale)
-            _profit_floor = max(_cm_profit_min, 2.50)
+            # FEE = $2.00 — soglie di profitto in lordo
+            FEE = 2.00
+            
+            # ════════════════════════════════════════════════════════════════
+            # CALIBRAZIONE VOLPE — soglie scalate per momentum entry
+            # ════════════════════════════════════════════════════════════════
+            # Il momentum dell'entry dice quanto può durare il trade.
+            # FORTE: lascia correre, può fare $4-8
+            # MEDIO: protezione bilanciata
+            # DEBOLE: chiudi presto, ogni $0.50 vale oro
+            # ════════════════════════════════════════════════════════════════
+            _entry_mom = self._shadow_entry_momentum or momentum
+            
+            if _entry_mom == "FORTE":
+                # FORTE = trade che corre. Soglie alte, retreat permissivo.
+                PROFIT_FLOOR_LOW     = 2.30   # +$0.30 netto minimo
+                PROFIT_FLOOR_HIGH    = 3.00   # +$1.00 netto
+                PROFIT_BIG_THRESHOLD = 4.50   # qui scatta PROTECT_HI permissivo
+                LOCK_LOW_RETREAT     = 0.35   # 35% retreat (più tollerante)
+                BREATH_MEDIA_RANGE   = (1.50, 3.00)  # solo range medio
+            elif _entry_mom == "MEDIO":
+                # MEDIO = trade ordinario. Soglie standard.
+                PROFIT_FLOOR_LOW     = 2.20
+                PROFIT_FLOOR_HIGH    = 2.80
+                PROFIT_BIG_THRESHOLD = 4.00
+                LOCK_LOW_RETREAT     = 0.25
+                BREATH_MEDIA_RANGE   = (1.00, 2.50)
+            else:  # DEBOLE
+                # DEBOLE = trade fragile. Soglie basse, prendi quello che dà.
+                PROFIT_FLOOR_LOW     = 2.10   # +$0.10 netto basta
+                PROFIT_FLOOR_HIGH    = 2.40
+                PROFIT_BIG_THRESHOLD = 3.50
+                LOCK_LOW_RETREAT     = 0.18   # retreat aggressivo (chiudi presto)
+                BREATH_MEDIA_RANGE   = (0.50, 2.00)
+            
+            # Override da SuperCapsule Oracle se presente
+            PROFIT_FLOOR_HIGH = max(_cm_profit_min, PROFIT_FLOOR_HIGH)
 
             if current_pnl > 0 and max_profit > 0:
-                # Non chiudere se il profitto lordo corrente è sotto il floor
-                if current_pnl < _profit_floor:
-                    pass  # aspetta che il profitto raggiunga almeno il floor
-                else:
+                # ═══════════════════════════════════════════════════════════
+                # VOLPE — PROFIT_LOCK A 4 LIVELLI calibrati per momentum
+                # ═══════════════════════════════════════════════════════════
+
+                # ─ Livello 4 PROTECT_HI: WIN grosso, lascia correre ─
+                # FORTE: scatta a $4.50, retreat 40% (lascia correre fino a $6+)
+                # MEDIO: scatta a $4.00, retreat 40%
+                # DEBOLE: scatta a $3.50, retreat 35%
+                if max_profit >= PROFIT_BIG_THRESHOLD:
+                    retreat_pct_now = retreat / max_profit
+                    _big_retreat = 0.40 if _entry_mom != "DEBOLE" else 0.35
+                    if retreat_pct_now > _big_retreat:
+                        self._close_shadow_trade(price,
+                            f"PROTECT_HI_E{exit_energy}_{_entry_mom}_max{max_profit:+.1f}_keep{current_pnl:+.1f}")
+                        return
+
+                # ─ Livello 3 EVAPORATION: max stava sopra, ora torna sotto floor low ─
+                elif max_profit >= (PROFIT_FLOOR_LOW + 0.10) and current_pnl < PROFIT_FLOOR_LOW:
+                    self._close_shadow_trade(price,
+                        f"LOCK_EVAP_E{exit_energy}_{_entry_mom}_max{max_profit:+.1f}_now{current_pnl:+.1f}")
+                    return
+
+                # ─ Livello 2 LOCK_LOW: profit medio, retreat calibrato ─
+                elif current_pnl >= PROFIT_FLOOR_LOW and current_pnl < PROFIT_FLOOR_HIGH:
+                    retreat_pct_now = retreat / max_profit
+                    if retreat_pct_now > LOCK_LOW_RETREAT:
+                        self._close_shadow_trade(price,
+                            f"LOCK_LOW_E{exit_energy}_{_entry_mom}_WIN_{current_pnl:+.1f}")
+                        return
+
+                # ─ Livello 1 PROTECT: profit alto, retreat normale ─
+                elif current_pnl >= PROFIT_FLOOR_HIGH:
                     retreat_pct_now = retreat / max_profit
                     if retreat_pct_now > _cm_retreat:
-                        self._close_shadow_trade(price, f"PROFIT_LOCK_E{exit_energy}_WIN_{max_profit:+.0f}")
+                        self._close_shadow_trade(price, 
+                            f"PROFIT_LOCK_E{exit_energy}_{_entry_mom}_WIN_{max_profit:+.0f}")
                         return
 
             # -- DECISIONE ---------------------------------------------
