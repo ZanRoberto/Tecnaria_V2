@@ -105,8 +105,8 @@ COMPARTI = {
         nome         = "DIFENSIVO",
         descrizione  = "RANGING alta volatilità — aspetto, non gioco",
         colore       = "#6b7280",
-        soglia_base  = 55,
-        soglia_min   = 52,
+        soglia_base  = 38,
+        soglia_min   = 32,
         size_default = 0.2,
         size_max     = 0.3,
         long_ok      = True,
@@ -123,8 +123,8 @@ COMPARTI = {
         nome         = "NEUTRO",
         descrizione  = "RANGING normale — entro solo su setup pulito",
         colore       = "#3b82f6",
-        soglia_base  = 50,
-        soglia_min   = 48,
+        soglia_base  = 40,
+        soglia_min   = 34,
         size_default = 0.3,
         size_max     = 0.5,
         long_ok      = True,
@@ -305,12 +305,12 @@ class CompartoEngine:
                 comp.registra_trade(pnl)
                 # Se comparto perde troppo → irrigidisce soglia
                 if comp.trades_osservati >= 5 and comp.wr() < 0.30:
-                    comp.soglia_base = min(comp.soglia_base + 2, 65)
+                    comp.soglia_base = min(comp.soglia_base + 2, 60)
                     log.warning(f"[COMPARTO] {self._attivo} WR={comp.wr():.0%} → "
                                 f"soglia alzata a {comp.soglia_base}")
                 # Se comparto funziona → ammorbidisce soglia
                 elif comp.trades_osservati >= 10 and comp.wr() >= 0.60:
-                    comp.soglia_base = max(comp.soglia_base - 1, 38)
+                    comp.soglia_base = max(comp.soglia_base - 1, 30)
                     log.info(f"[COMPARTO] {self._attivo} WR={comp.wr():.0%} → "
                              f"soglia abbassata a {comp.soglia_base}")
 
