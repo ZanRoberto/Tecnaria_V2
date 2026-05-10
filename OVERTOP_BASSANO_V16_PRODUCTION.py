@@ -9406,97 +9406,108 @@ class OvertopBassanoV16Production:
             self.heartbeat_lock.acquire()
         try:
             if self.heartbeat_data is not None:
+                # ─── PATCH 10MAG: scritture singole protette ────────────
+                # Prima era un .update({...}) monolitico: se UNA chiave crashava,
+                # TUTTE le altre saltavano (phantom, telemetry, m2_*, ecc. spariscono
+                # dall'heartbeat). Ora ogni chiave è isolata: se una crasha, logga
+                # [HB_KEY:nome] {errore}, le altre passano lo stesso.
+                # Volpe non mucca: zero refactor, zero numeri arbitrari, solo robustezza.
+                def _hb_set(key, fn):
+                    try:
+                        self.heartbeat_data[key] = fn()
+                    except Exception as _e:
+                        log.error(f"[HB_KEY:{key}] {_e}")
+
                 tot = self.wins + self.losses
-                self.heartbeat_data.update({
-                    "status":          "RUNNING",
-                    "mode":            "PAPER" if self.paper_trade else "LIVE",
-                    "capital":         round(self.capital, 2),
-                    "trades":          self.total_trades,
-                    "wins":            self.wins,
-                    "losses":          self.losses,
-                    "wr":              round(self.wins / tot, 4) if tot > 0 else 0,
-                    "last_seen":       datetime.utcnow().isoformat(),
-                    "matrimoni_divorzio": list(self.memoria.divorzio),
-                    "oracolo_snapshot":   self.oracolo.dump(),
-                    "posizione_aperta":   self.trade_open is not None,
-                    "live_log":           list(self._live_log),
-                    "calibra_params":     self.calibratore.get_params(),
-                    "calibra_log":        self.calibratore.get_log(),
-                    "regime":             self._regime_current,
-                    "regime_conf":        round(self._regime_conf, 3),
-                    # -- MOTORE 2: CAMPO GRAVITAZIONALE stats ----------
-                    "m2_trades":          self._m2_trades,
-                    "m2_wins":            self._m2_wins,
-                    "m2_losses":          self._m2_losses,
-                    "m2_wr":              round(self._m2_wins / max(1, self._m2_wins + self._m2_losses), 4),
-                    "m2_pnl":             round(self._m2_pnl, 4),
-                    "m2_shadow_open":     self._shadow is not None,
-                    "m2_direction":       self.campo._direction,
-                    "m2_entry_price":     round(self._shadow["price_entry"], 4) if self._shadow else 0,
-                    "m2_state":           self._state,
-                    "m2_loss_streak":     self._m2_loss_streak,
-                    "m2_cooldown":        max(0, self._m2_cooldown_until - time.time()),
-                    "m2_log":             list(self._m2_log),
-                    "m2_campo_stats":     self.campo.get_stats(),
-                    "m2_last_score":      round(getattr(self.campo, '_last_score', 0), 1),
-                    "m2_last_soglia":     round(getattr(self.campo, '_last_soglia', 60), 1),
-                    "m2_buy_distance":    round(getattr(self.campo, '_last_soglia', 60) - getattr(self.campo, '_last_score', 0), 1),
-                    "m2_score_components": {
-                        "seed":   round(min(1.0,max(0.0,(self.seed_scorer.score().get('score',0)-0.20)/0.60))*25, 1),
-                        "fp":     round(getattr(self.campo, '_last_fp_score', 0), 1),
-                        "rsi":    round(self.campo._rsi_score()*10, 1),
-                        "macd":   round(self.campo._macd_score()*10, 1),
-                        "regime": self._regime_current,
-                        "warmup_rsi": len(self.campo._prices_ta),
-                        "warmup_needed": max(0, 50 - len(self.campo._prices_ta)),
-                    },
-                    "oi_stato":           self._oi_stato,
-                    "oi_carica":          round(self._oi_carica, 3),
-                    "veritas":            self.veritas.dump_dashboard(),
-                    # -- PHANTOM TRACKER - zavorra o protezione? -------
-                    "phantom":            self._get_phantom_summary(),
-                    # -- INTELLIGENZA AUTONOMA - capsule vive -----------
-                    "ia_stats":           (self.capsule_manager.get_stats()
-                                           if self.capsule_manager
-                                           else self.realtime_engine.get_stats()),
-                    "ce_stats":           (self.capsule_executor.get_dashboard_data()
-                                           if self.capsule_executor else {}),
-                    # -- PRE-TRADE SIGNAL TRACKER ---------------------------
-                    "signal_tracker": {
-                        "open":      self.signal_tracker.get_open_count(),
-                        "closed":    len(self.signal_tracker._closed),
-                        "top":       self.signal_tracker.dump_top(8),
-                        "stats_keys": list(self.signal_tracker._stats.keys()),
-                        "stats_n":   {k: v['n'] for k,v in self.signal_tracker._stats.items()},
-                    },
-                    # -- SOGLIA DINAMICA MONITOR -----------------------
-                    "m2_soglia_min":      self.campo.SOGLIA_MIN,
-                    "m2_soglia_base":     self.campo.SOGLIA_BASE,
-                    "diagnosis":          self._build_diagnosis(),
-                    # -- SHORT EVITATI IN RANGING ----------------------
-                    "shadow_short_ranging": self._get_shadow_short_report(),
-                    # -- DATI GRANULARI PER BRIDGE (B3) -------------
-                    # -- HEARTBEAT ENRICHED telemetria --------
-                    "bridge_feed": {
-                        "drift_history":   list(self.campo._prices_long)[-20:] and [
-                            round((list(self.campo._prices_long)[-20:][i+1] - list(self.campo._prices_long)[-20:][i]) /
-                                  max(list(self.campo._prices_long)[-20:][i], 1) * 100, 4)
-                            for i in range(len(list(self.campo._prices_long)[-20:])-1)
-                        ] if len(self.campo._prices_long) >= 20 else [],
-                        "compression_now": round((max(list(self.campo._prices_short)[-5:]) - min(list(self.campo._prices_short)[-5:])) /
-                                                  max(max(list(self.campo._prices_short)[-20:]) - min(list(self.campo._prices_short)[-20:]), 0.01), 4)
-                                           if len(self.campo._prices_short) >= 20 else 1.0,
-                        "seed_history":    list(self.campo._seed_history),
-                        "oi_carica":       round(self._oi_carica, 3),
-                        "oi_stato":        self._oi_stato,
-                        "regime":          self._regime_current,
-                        "rsi":             round(self.campo._last_rsi, 1),
-                        "macd_hist":       round(self.campo._last_macd_hist, 4),
-                        "pb_signals":      self.campo._pre_breakout_factor()[2] if len(self.campo._prices_short) >= 30 else 0,
-                    },
-                    # -- STABILITY TELEMETRY ------------------------
-                    "telemetry":          self.telemetry.generate_report(),
+
+                _hb_set("status",              lambda: "RUNNING")
+                _hb_set("mode",                lambda: "PAPER" if self.paper_trade else "LIVE")
+                _hb_set("capital",             lambda: round(self.capital, 2))
+                _hb_set("trades",              lambda: self.total_trades)
+                _hb_set("wins",                lambda: self.wins)
+                _hb_set("losses",              lambda: self.losses)
+                _hb_set("wr",                  lambda: round(self.wins / tot, 4) if tot > 0 else 0)
+                _hb_set("last_seen",           lambda: datetime.utcnow().isoformat())
+                _hb_set("matrimoni_divorzio",  lambda: list(self.memoria.divorzio))
+                _hb_set("oracolo_snapshot",    lambda: self.oracolo.dump())
+                _hb_set("posizione_aperta",    lambda: self.trade_open is not None)
+                _hb_set("live_log",            lambda: list(self._live_log))
+                _hb_set("calibra_params",      lambda: self.calibratore.get_params())
+                _hb_set("calibra_log",         lambda: self.calibratore.get_log())
+                _hb_set("regime",              lambda: self._regime_current)
+                _hb_set("regime_conf",         lambda: round(self._regime_conf, 3))
+                # -- MOTORE 2: CAMPO GRAVITAZIONALE stats ----------
+                _hb_set("m2_trades",           lambda: self._m2_trades)
+                _hb_set("m2_wins",             lambda: self._m2_wins)
+                _hb_set("m2_losses",           lambda: self._m2_losses)
+                _hb_set("m2_wr",               lambda: round(self._m2_wins / max(1, self._m2_wins + self._m2_losses), 4))
+                _hb_set("m2_pnl",              lambda: round(self._m2_pnl, 4))
+                _hb_set("m2_shadow_open",      lambda: self._shadow is not None)
+                _hb_set("m2_direction",        lambda: self.campo._direction)
+                _hb_set("m2_entry_price",      lambda: round(self._shadow["price_entry"], 4) if self._shadow else 0)
+                _hb_set("m2_state",            lambda: self._state)
+                _hb_set("m2_loss_streak",      lambda: self._m2_loss_streak)
+                _hb_set("m2_cooldown",         lambda: max(0, self._m2_cooldown_until - time.time()))
+                _hb_set("m2_log",              lambda: list(self._m2_log))
+                _hb_set("m2_campo_stats",      lambda: self.campo.get_stats())
+                _hb_set("m2_last_score",       lambda: round(getattr(self.campo, '_last_score', 0), 1))
+                _hb_set("m2_last_soglia",      lambda: round(getattr(self.campo, '_last_soglia', 60), 1))
+                _hb_set("m2_buy_distance",     lambda: round(getattr(self.campo, '_last_soglia', 60) - getattr(self.campo, '_last_score', 0), 1))
+                _hb_set("m2_score_components", lambda: {
+                    "seed":   round(min(1.0,max(0.0,(self.seed_scorer.score().get('score',0)-0.20)/0.60))*25, 1),
+                    "fp":     round(getattr(self.campo, '_last_fp_score', 0), 1),
+                    "rsi":    round(self.campo._rsi_score()*10, 1),
+                    "macd":   round(self.campo._macd_score()*10, 1),
+                    "regime": self._regime_current,
+                    "warmup_rsi": len(self.campo._prices_ta),
+                    "warmup_needed": max(0, 50 - len(self.campo._prices_ta)),
                 })
+                _hb_set("oi_stato",            lambda: self._oi_stato)
+                _hb_set("oi_carica",           lambda: round(self._oi_carica, 3))
+                _hb_set("veritas",             lambda: self.veritas.dump_dashboard())
+                # -- PHANTOM TRACKER - zavorra o protezione? -------
+                _hb_set("phantom",             lambda: self._get_phantom_summary())
+                # -- INTELLIGENZA AUTONOMA - capsule vive -----------
+                _hb_set("ia_stats",            lambda: (self.capsule_manager.get_stats()
+                                                       if self.capsule_manager
+                                                       else self.realtime_engine.get_stats()))
+                _hb_set("ce_stats",            lambda: (self.capsule_executor.get_dashboard_data()
+                                                       if self.capsule_executor else {}))
+                # -- PRE-TRADE SIGNAL TRACKER ---------------------------
+                _hb_set("signal_tracker",      lambda: {
+                    "open":      self.signal_tracker.get_open_count(),
+                    "closed":    len(self.signal_tracker._closed),
+                    "top":       self.signal_tracker.dump_top(8),
+                    "stats_keys": list(self.signal_tracker._stats.keys()),
+                    "stats_n":   {k: v['n'] for k,v in self.signal_tracker._stats.items()},
+                })
+                # -- SOGLIA DINAMICA MONITOR -----------------------
+                _hb_set("m2_soglia_min",       lambda: self.campo.SOGLIA_MIN)
+                _hb_set("m2_soglia_base",      lambda: self.campo.SOGLIA_BASE)
+                _hb_set("diagnosis",           lambda: self._build_diagnosis())
+                # -- SHORT EVITATI IN RANGING ----------------------
+                _hb_set("shadow_short_ranging", lambda: self._get_shadow_short_report())
+                # -- DATI GRANULARI PER BRIDGE (B3) -------------
+                # -- HEARTBEAT ENRICHED telemetria --------
+                _hb_set("bridge_feed",         lambda: {
+                    "drift_history":   list(self.campo._prices_long)[-20:] and [
+                        round((list(self.campo._prices_long)[-20:][i+1] - list(self.campo._prices_long)[-20:][i]) /
+                              max(list(self.campo._prices_long)[-20:][i], 1) * 100, 4)
+                        for i in range(len(list(self.campo._prices_long)[-20:])-1)
+                    ] if len(self.campo._prices_long) >= 20 else [],
+                    "compression_now": round((max(list(self.campo._prices_short)[-5:]) - min(list(self.campo._prices_short)[-5:])) /
+                                              max(max(list(self.campo._prices_short)[-20:]) - min(list(self.campo._prices_short)[-20:]), 0.01), 4)
+                                       if len(self.campo._prices_short) >= 20 else 1.0,
+                    "seed_history":    list(self.campo._seed_history),
+                    "oi_carica":       round(self._oi_carica, 3),
+                    "oi_stato":        self._oi_stato,
+                    "regime":          self._regime_current,
+                    "rsi":             round(self.campo._last_rsi, 1),
+                    "macd_hist":       round(self.campo._last_macd_hist, 4),
+                    "pb_signals":      self.campo._pre_breakout_factor()[2] if len(self.campo._prices_short) >= 30 else 0,
+                })
+                # -- STABILITY TELEMETRY ------------------------
+                _hb_set("telemetry",           lambda: self.telemetry.generate_report())
         except Exception as e:
             log.error(f"[HEARTBEAT_ERROR] {e}")
         finally:
