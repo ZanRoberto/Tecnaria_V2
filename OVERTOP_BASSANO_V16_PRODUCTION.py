@@ -8340,9 +8340,14 @@ class OvertopBassanoV16Production:
             if duration > duration_avg * 5 and drawdown_pct > 1.0:
                 self._close_shadow_trade(price, "TIMEOUT_DD")
                 return
-            # TIMEOUT ASSOLUTO: max 3 minuti per trade
-            if duration > 180:
-                self._close_shadow_trade(price, "TIMEOUT_MAX")
+            # FIX 11mag-notte: timeout assoluto da 3 min → 30 min
+            # MOTIVAZIONE: la simulazione del 9mag mostra che holding 20-60 min
+            # avrebbe portato +$32 invece di -$30. Test empirico: 1 sola posizione
+            # alla volta (verificato self._shadow è singola), TIMEOUT_DD a 1%
+            # drawdown lavora come circuit breaker intelligente. Se il test
+            # produce risultati negativi nei log, ripristinare a 180.
+            if duration > 1800:
+                self._close_shadow_trade(price, "TIMEOUT_MAX_30M")
                 return
 
         except Exception as e:
