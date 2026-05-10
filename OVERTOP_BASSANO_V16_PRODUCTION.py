@@ -7479,6 +7479,12 @@ class OvertopBassanoV16Production:
                     self._log_m2("🚫", f"VERITAS_GATE {_ctx_key} "
                                        f"n={_ctx_st['n']} wr={_ctx_wr:.0%} "
                                        f"pnl_avg=${_ctx_pnl_avg:+.2f} → blocca")
+                    # PATCH 10MAG: registra fantasma anche per VERITAS_GATE
+                    # (in V15 questo gate non esisteva, è stato aggiunto in V16
+                    # senza la chiamata phantom — pattern identico ai 5 gate originali)
+                    if len(self._phantoms_open) < 5:
+                        self._record_phantom(price, f"VERITAS_GATE_{_ctx_key[:18]}",
+                                             seed['score'], momentum, volatility, trend)
                     return
 
             _dir           = self.campo._direction
@@ -7512,6 +7518,12 @@ class OvertopBassanoV16Production:
                     if _learned_check.get("blocca"):
                         _reason = _learned_check.get("reason", "CM_TOSSICO")
                         self._log_m2("🚫", f"LEARNED_GATE {matrimonio_name} → {_reason}")
+                        # PATCH 10MAG: registra fantasma anche per LEARNED_GATE
+                        # (in V15 questo gate non esisteva, è stato aggiunto in V16
+                        # senza la chiamata phantom — pattern identico ai 5 gate originali)
+                        if len(self._phantoms_open) < 5:
+                            self._record_phantom(price, f"LEARNED_{_reason[:20]}",
+                                                 seed['score'], momentum, volatility, trend)
                         return
                 except Exception as _le:
                     log.debug(f"[LEARNED_GATE_ERR] {_le}")
