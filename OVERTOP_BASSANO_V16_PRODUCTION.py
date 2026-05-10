@@ -9065,9 +9065,13 @@ class OvertopBassanoV16Production:
                 }
 
             stats = self._phantom_stats[reason_key]
-            # Calcola PnL netto per statistiche (fee inclusa)
-            _ph_fee_final = self.FEE_TRADE  # $2.00 fissi
-            pnl_netto = pnl - _ph_fee_final
+            # FIX 11MAG: rimossa doppia-fee.
+            # `pnl` ha GIÀ le fee tolte: `total_fees = exposure * FEE_PCT * 2 = $2.00`
+            # sottratte alla riga `pnl = pnl_gross - total_fees` (vedi sopra).
+            # Prima qui si sottraeva ANCORA self.FEE_TRADE ($2.00) → fee contata 2 volte.
+            # Effetto del bug: phantom WR=0% sistematico in RANGING, pnl_saved gonfiato,
+            # Phantom Supervisor irrigidiva i gate basandosi su numeri fasulli.
+            pnl_netto = pnl
             is_win_netto = pnl_netto > 0
             if is_win_netto:
                 stats['would_win'] += 1
