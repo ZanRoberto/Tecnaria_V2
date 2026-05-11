@@ -15,7 +15,7 @@
 | # | Bug | Gravità | Stato | Risolto in |
 |---|-----|---------|-------|------------|
 | 0 | Doppia-fee phantom | 🔴 era CRITICA | ✅ RISOLTO | 10mag2026 (riga 9114) |
-| 1 | `_place_order` PLACEHOLDER vuoto | 🔴 MORTALE in LIVE | 🔴 APERTO | — |
+| 1 | `_place_order` PLACEHOLDER vuoto | 🔴 MORTALE in LIVE | ✅ RISOLTO 12mag (safety guard + NotImplementedError) | righe 62-79 + 9402-9430 |
 | 2 | Phantom Sup vs Comparto sulla SOGLIA_BASE | 🟠 ALTA | 🟡 MITIGATO 12mag (cooldown 10min) | parziale |
 | 3 | NervosismoEngine DISATTIVATO | 🟠 ALTA | 🔴 APERTO | — |
 | 4 | Phantom Sup scrive globale per problema locale | 🟠 ALTA | 🟡 MITIGATO 12mag (cooldown 10min) | parziale |
@@ -31,7 +31,7 @@
 | TEST-1 | Holding 30 min (timeout 180→1800s) | 🟢 TEST | 🟡 IN VALIDAZIONE | riga 8396 |
 | TEST-2 | SHORT attivato in RANGING/DIFENSIVO/ATTACCO | 🟢 TEST | 🟡 IN VALIDAZIONE | 12mag — 6 capsule + sblocco riga 6966 |
 
-**Totale:** 3 risolti, 2 mitigati, 10 aperti, 2 test in corso.
+**Totale:** 4 risolti, 2 mitigati, 9 aperti, 2 test in corso.
 **Ultimo aggiornamento referto:** Roberto+Claude, 11mag2026 — sessione audit sistematico.
 
 ---
@@ -556,6 +556,7 @@ Il bot oggi conosce le prime 3 (parzialmente). La 4ª è completamente assente.
 | 11mag2026-notte | 1.4 | Roberto+Claude | Scoperta INTUIZIONE #4: SUPPORTI E RESISTENZE — dimensione SPAZIALE completamente assente nel bot. Verificato nel codice: zero logica di livelli di prezzo. Roberto ha posto la domanda dopo 6 ore di lavoro. Spiegate le 4 dimensioni di mercato: tempo + magnitudo + timing + spazio. |
 | 12mag2026-mattina | 1.5 | Claude (decisione autonoma) | Analizzati dati notturni: ZERO trade in 14 ore. Bot strangolato da regime instabile + Phantom Sup. Applicate 2 modifiche: (a) RegimeDetector isteresi 30 tick + clamp confidence (Bug #9 ✅ RISOLTO); (b) Phantom Supervisor cooldown 10 min su irrigidimento (Bug #2/#4 🟡 MITIGATI). Conferma del fix doppia-fee: phantom mostra ora 635 would_win (prima 0 con bug). |
 | 12mag2026-mattina | 1.6 | Roberto+Claude | AUDIT SHORT COMPLETO + ATTIVAZIONE: (a) 3 nuove capsule STATIC SHORT per zone tossiche scoperte; (b) SHORT sbloccato in RANGING con 5 condizioni stretto (riga 6966 OVERTOP); (c) SHORT abilitato in DIFENSIVO e ATTACCO. Conseguenza: ora possibile flip SHORT quando indicatori bearish veri. Bug #13 fixato: CompartoEngine cooldown 60s→300s + conferma 5 tick (Bug #13 ✅ RISOLTO). |
+| 12mag2026-mattina | 1.7 | Roberto+Claude | Bug #1 RISOLTO: safety guard anti-LIVE (righe 62-79) + `_place_order` ora solleva NotImplementedError invece di mentire silenziosamente (riga 9425). Il placeholder URLA invece di simulare. PAPER_TRADE=False ora CRASHA il bot all'avvio finché _PLACE_ORDER_IMPLEMENTED=False. |
 
 ---
 
