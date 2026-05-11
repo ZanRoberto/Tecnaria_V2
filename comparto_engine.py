@@ -110,7 +110,9 @@ COMPARTI = {
         size_default = 0.2,
         size_max     = 0.3,
         long_ok      = True,
-        short_ok     = False,
+        short_ok     = True,   # FIX 12mag: in RANGING|ALTA spesso SC SHORT in FUOCO
+                               # I gate stretti (riga 6966 OVERTOP) impediscono entry
+                               # spurie; le 6 capsule SHORT proteggono dai contesti tossici.
         exit_min_secs= 20,
         exit_max_secs= 300,
         stop_loss_pct= 0.015,
@@ -146,7 +148,8 @@ COMPARTI = {
         size_default = 0.5,
         size_max     = 0.8,
         long_ok      = True,
-        short_ok     = False,
+        short_ok     = True,   # FIX 12mag: in EXPLOSIVE serve poter shortare
+                               # (SHORT|FORTE|ALTA|DOWN ha WR 55% PnL +$0.04)
         exit_min_secs= 15,
         exit_max_secs= 180,
         stop_loss_pct= 0.025,
