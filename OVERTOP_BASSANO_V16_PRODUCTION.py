@@ -3501,6 +3501,15 @@ class RegimeDetector:
         self.volumes   = deque(maxlen=self.WINDOW)
         self._regime   = 'RANGING'   # default conservativo
         self._confidence = 0.0
+        # FIX 12mag: stabilizzazione cambi regime
+        # Problema originale: detect() chiamato ogni tick → cambi regime ogni 60s
+        # se vol_accel oscilla intorno alla soglia. Confidence -42% era impossibile
+        # ma derivava da formule senza isteresi.
+        # Fix: il NUOVO regime deve essere osservato per CHANGE_TICKS consecutivi
+        # prima di sostituire quello corrente. Stabilizza la realtà che il bot vede.
+        self._pending_regime = 'RANGING'  # regime candidato in osservazione
+        self._pending_count  = 0          # quanti tick consecutivi col candidato
+        self.CHANGE_TICKS    = 30         # ~30 secondi di conferma prima di switchare
 
     def add_tick(self, price: float, volume: float = 1.0):
         self.prices.append(price)
@@ -3566,14 +3575,39 @@ class RegimeDetector:
             regime     = 'RANGING'
             confidence = min(1.0, 1.0 - abs(dir_ratio - 0.5) * 4)
 
-        self._regime     = regime
+        # FIX 12mag: applico isteresi per evitare flip ogni 60s.
+        # Il regime CALCOLATO va in pending. Solo se rimane lo stesso per
+        # CHANGE_TICKS consecutivi, sostituisce quello effettivo.
+        # Effetto: stabilità del sistema decisionale, ZERO flip da rumore.
+        # Confidence viene clampata a [0, 1] per evitare -42% impossibili.
+        confidence = max(0.0, min(1.0, confidence))
+        
+        if regime == self._regime:
+            # Il regime calcolato coincide con quello attivo → reset pending
+            self._pending_regime = regime
+            self._pending_count = 0
+        elif regime == self._pending_regime:
+            # Stesso candidato visto prima → incrementa contatore
+            self._pending_count += 1
+            if self._pending_count >= self.CHANGE_TICKS:
+                # Cambio confermato dopo CHANGE_TICKS tick
+                self._regime = regime
+                self._pending_count = 0
+        else:
+            # Nuovo candidato diverso → resetta
+            self._pending_regime = regime
+            self._pending_count = 1
+
         self._confidence = confidence
 
-        return regime, confidence, {
-            'trend_pct':  round(trend_pct, 3),
-            'dir_ratio':  round(dir_ratio, 3),
-            'vol_accel':  round(vol_accel, 3),
-            'vol_ratio':  round(vol_ratio, 3),
+        return self._regime, self._confidence, {
+            'trend_pct':       round(trend_pct, 3),
+            'dir_ratio':       round(dir_ratio, 3),
+            'vol_accel':       round(vol_accel, 3),
+            'vol_ratio':       round(vol_ratio, 3),
+            'regime_calcolato': regime,
+            'pending_regime':  self._pending_regime,
+            'pending_count':   self._pending_count,
         }
 
     @property
@@ -6694,8 +6728,21 @@ class OvertopBassanoV16Production:
                 old_base = self.campo.SOGLIA_BASE
                 # L1: tetto 58 coerente (era 55)
                 new_base = min(58, old_base + 1)
-                if new_base != old_base:
+                # FIX 12mag: cooldown irrigidimento.
+                # Bug originale: Phantom Sup irrigidiva ogni 60s portando SOGLIA_BASE
+                # al massimo (58) e strangolando tutto. Confermato dai dati 11mag
+                # (zero trade per 14 ore). Causa: nessun cooldown tra irrigidimenti
+                # sullo stesso blocco. Phantom Sup vede sempre WR<25% e continua a
+                # salire anche se inutile (gli stessi phantom contano per sempre).
+                # Fix: minimo 10 minuti tra irrigidimenti dello STESSO blocco_id.
+                if not hasattr(self, '_phantom_sup_cooldown'):
+                    self._phantom_sup_cooldown = {}
+                last_hardening = self._phantom_sup_cooldown.get(blocco_id, 0)
+                cooldown_ok = (time.time() - last_hardening) > 600  # 10 minuti
+                
+                if new_base != old_base and cooldown_ok:
                     self.campo.SOGLIA_BASE = new_base
+                    self._phantom_sup_cooldown[blocco_id] = time.time()
                     self._log_m2("🧠",
                         f"PHANTOM_SUP: {blocco_id} WR={wr_blocco:.0%} blk={blk} "
                         f"→ AUTO_IRRIGIDISCE soglia {old_base}→{new_base}")
