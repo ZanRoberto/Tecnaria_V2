@@ -54,6 +54,32 @@ import sys
 # False = ordini reali → SOLO dopo paper test soddisfacente
 PAPER_TRADE = True
 
+# --- SAFETY GUARD ANTI-LIVE -------------------------------------------------
+# Fix Bug #1 (12mag2026): impedisce avvio LIVE finché _place_order è placeholder.
+# Se PAPER_TRADE=False per errore o intenzione prematura, il bot CRASHA all'avvio
+# invece di simulare ordini fittizi facendo credere all'utente di guadagnare.
+# Per rimuovere questa guardia: implementare _place_order con python-binance,
+# testare con micro-size ($10-20) per 1 settimana, POI cambiare _PLACE_ORDER_IMPLEMENTED=True.
+_PLACE_ORDER_IMPLEMENTED = False  # cambiare a True SOLO dopo implementazione Binance API reale
+
+if not PAPER_TRADE and not _PLACE_ORDER_IMPLEMENTED:
+    raise RuntimeError(
+        "\n" + "="*70 + "\n"
+        "🚨 LIVE MODE BLOCCATO — SICUREZZA ANTI-PLACEHOLDER 🚨\n"
+        "="*70 + "\n"
+        "PAPER_TRADE=False richiede _place_order IMPLEMENTATA con Binance API.\n"
+        "Attualmente _place_order è un placeholder (riga ~9374).\n"
+        "\n"
+        "Per andare LIVE:\n"
+        "  1. Implementare _place_order con python-binance\n"
+        "  2. BINANCE_API_KEY + BINANCE_API_SECRET come env Render\n"
+        "  3. Test micro-size ($10-20) per 1 settimana minimo\n"
+        "  4. Solo dopo, settare _PLACE_ORDER_IMPLEMENTED = True\n"
+        "\n"
+        "Bot terminato per sicurezza.\n"
+        + "="*70
+    )
+
 # --- SEED SCORER ------------------------------------------------------------
 SEED_ENTRY_THRESHOLD = 0.45   # soglia minima per entrare
 
@@ -9373,15 +9399,33 @@ class OvertopBassanoV16Production:
 
     def _place_order(self, side: str, price: float, size_mult: float = 1.0):
         """
-        Placeholder per ordini reali su Binance.
-        Da completare con python-binance o requests REST API.
-        ATTIVO SOLO quando PAPER_TRADE = False.
+        🚨 PLACEHOLDER NON IMPLEMENTATO 🚨
+        
+        Questa funzione DOVREBBE inviare ordini a Binance via REST API quando
+        PAPER_TRADE=False. Attualmente NON è implementata.
+        
+        Se viene chiamata in LIVE mode → solleva NotImplementedError per evitare
+        la "menzogna silenziosa" del placeholder che fingeva di funzionare.
+        
+        Per implementare LIVE:
+          1. pip install python-binance (aggiungere a requirements.txt)
+          2. BINANCE_API_KEY + BINANCE_API_SECRET come env var su Render
+          3. Calcolare qty = (TRADE_SIZE_USD * LEVERAGE * size_mult) / price
+             arrotondata a lot_size del symbol
+          4. Wrap try/except con retry e log degli errori HTTP
+          5. Restituire order_id per tracciare l'esecuzione
+          6. Test con micro-size ($10-20) per 1 settimana prima di scalare
         """
-        log.info(f"[ORDER] 📤 {side} {SYMBOL} @ {price:.2f} size_mult={size_mult:.1f}")
-        # TODO: implementa chiamata Binance REST API
-        # import requests
-        # payload = {"symbol": SYMBOL, "side": side, "type": "MARKET", ...}
-        # requests.post("https://api.binance.com/api/v3/order", ...)
+        # Log l'intento (utile per debug anche in PAPER se viene chiamata per errore)
+        log.error(
+            f"🚨 [ORDER_NOT_IMPLEMENTED] Tentativo di inviare ordine reale: "
+            f"{side} {SYMBOL} @ {price:.2f} size_mult={size_mult:.1f} "
+            f"— FUNZIONE NON IMPLEMENTATA"
+        )
+        raise NotImplementedError(
+            f"_place_order è un placeholder. Bot in modalità PAPER ma _place_order "
+            f"non dovrebbe MAI essere chiamata. Per LIVE: implementare con python-binance."
+        )
 
     # ========================================================================
     # HEARTBEAT → app.py (Mission Control)
