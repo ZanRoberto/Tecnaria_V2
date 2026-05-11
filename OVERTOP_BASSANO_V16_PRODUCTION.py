@@ -6934,10 +6934,20 @@ class OvertopBassanoV16Production:
             campo._direction_bearish_streak = 0
             self._log_m2("🔄", f"FLIP → LONG in EXPLOSIVE (bullish_energy={_bullish_energy} drift={drift:+.3f}%)")
 
-        # -- RANGING GATE: in laterale NON flippare a SHORT --------------
-        # ECCEZIONE VERITAS: se il Veritas vede movimento ribassista reale
-        # con delta_60s < -20 su almeno 5 segnali → lo SHORT è legittimo
-        # ECCEZIONE OI SHORT FUOCO: mercato ha dichiarato la direzione
+        # -- RANGING GATE: in laterale flip a SHORT solo con criteri stretti
+        # 
+        # FIX 12mag2026 — SBLOCCO CONDIZIONALE SHORT IN RANGING
+        # Prima: nessun flip SHORT in RANGING anche se SC_short carica al 99%.
+        # Dopo: flip permesso SE almeno UNA condizione forte è vera:
+        #   - OI_SHORT_FUOCO (carica >= 0.85) → mercato dichiara direzione
+        #   - RSI ipercomprato (>= 75) + bearish_energy >= 3
+        #   - Veritas conferma con delta_60s < -20 su >=5 segnali
+        #   - Predizione DOWN (pred_score >= 70 + carica_short > carica_long + energy >= 2)
+        #   - Drift fortemente negativo (< -0.5%) + bearish_energy >= 3
+        # 
+        # PROTEZIONE: anche con flip, le 6 capsule SHORT (3 STATIC vecchie + 3 nuove
+        # 11mag) bloccano l'entry nei contesti tossici scoperti dall'oracolo.
+        # Se ENTRA, lo fa solo nei contesti positivi o ignoti.
         _veritas_short_ok = False
         _drift_short_ok = drift < -0.005 and bearish_energy >= 3
         _rsi_ipercomprato = _rsi_now >= 75 and bearish_energy >= 3
@@ -6963,7 +6973,26 @@ class OvertopBassanoV16Production:
                             _veritas_short_ok = True
                             break
 
-        if self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok and not _veritas_short_ok and not _drift_short_ok:
+        # FIX 12mag2026 — CONDIZIONE NUOVA: flip a SHORT in RANGING
+        # PERMESSO se almeno un segnale forte è vero (veritas, rsi, pred, drift)
+        if (self._regime_current == "RANGING" and
+                campo._direction == "LONG" and
+                campo._direction_bearish_streak >= 3 and
+                cooldown_ok and
+                (_veritas_short_ok or _drift_short_ok)):
+            # FLIP a SHORT in RANGING (con criteri stretti)
+            campo._direction = "SHORT"
+            campo._direction_last_change = now
+            campo._direction_bearish_streak = 0
+            _motivo_short = []
+            if _oi_short_fuoco: _motivo_short.append("OI_SHORT_FUOCO")
+            if _rsi_ipercomprato: _motivo_short.append("RSI_IPERCOMPR")
+            if _pred_down: _motivo_short.append("PRED_DOWN")
+            if _drift_short_ok: _motivo_short.append(f"DRIFT_{drift:+.2f}%")
+            self._log_m2("🔄", f"FLIP → SHORT in RANGING ({'+'.join(_motivo_short)} bearish={bearish_energy})")
+        
+        elif self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
+            # Streak bearish ma nessun segnale forte → SHORT EVITATO (come prima)
             # NON flippare - logga come SHORT evitato
             if not hasattr(self, '_shadow_short_log'):
                 self._shadow_short_log = []
