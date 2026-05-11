@@ -839,19 +839,24 @@ class IntelligenzaAutonoma:
 
     def _analisi_l2_matrimoni(self, trades: list) -> list:
         """
-        Ogni combinazione (matrimonio, regime, volatilità) ha una sua firma.
+        Ogni combinazione (matrimonio, regime, volatilità, direction) ha una sua firma.
         Se la firma mostra WR < soglia_gravita su N campioni → BLOCCA.
         Se mostra WR > soglia_opportunita → BOOST size.
         La soglia non è fissa: scala con la gravità del danno.
+        
+        FIX #16 (12mag2026): aggiunta direction al raggruppamento.
+        Bug originale: MAT_TOSSICO bloccava sia LONG che SHORT.
+        Risultato: SHORT castrato da capsule LEARNED senza direction.
         """
         nuove = []
-        # Raggruppa per (matrimonio, regime, volatility)
+        # FIX #16: Raggruppa per (matrimonio, regime, volatility, direction)
         pattern: dict = defaultdict(lambda: {'wins': 0, 'total': 0, 'pnl': 0.0, 'trades': []})
         for t in trades:
             key = (
                 t.get('matrimonio', 'UNKNOWN'),
                 t.get('regime', 'RANGING'),
                 t.get('volatility', 'MEDIA'),
+                t.get('direction', 'LONG'),  # FIX #16
             )
             pattern[key]['total'] += 1
             pattern[key]['pnl']   += t.get('pnl', 0)
@@ -859,13 +864,13 @@ class IntelligenzaAutonoma:
                 pattern[key]['wins'] += 1
             pattern[key]['trades'].append(t)
 
-        for (mat, reg, vol), s in pattern.items():
+        for (mat, reg, vol, direction), s in pattern.items():
             if s['total'] < self.MIN_SAMPLES_L2:
                 continue
 
             wr       = s['wins'] / s['total']
             pnl_avg  = s['pnl'] / s['total']
-            cap_id   = f"L2_MAT_{mat}_{reg}_{vol}"
+            cap_id   = f"L2_MAT_{mat}_{reg}_{vol}_{direction}"  # FIX #16: direction nell'id
 
             # -- GRAVITÀ: WR basso E PnL negativo → blocca -----------------
             # Soglia non fissa: più campioni → più fiducia → soglia meno severa
@@ -876,22 +881,24 @@ class IntelligenzaAutonoma:
                 vita = self._calcola_vita_l2(wr, pnl_avg, s['total'])
                 cap = self._crea_capsule_blocco(
                     cap_id, mat, reg, vol, wr, pnl_avg, s['total'], vita,
-                    f"L2_MAT: WR={wr:.0%} pnl={pnl_avg:+.2f} su {s['total']} trade (fiducia={fiducia:.0%})"
+                    f"L2_MAT: {direction} WR={wr:.0%} pnl={pnl_avg:+.2f} su {s['total']} trade (fiducia={fiducia:.0%})",
+                    direction=direction  # FIX #16: passo direction
                 )
                 if cap:
                     nuove.append(cap)
-                    log.info(f"[IA] 🔴 L2_BLOCCO {mat}/{reg}/{vol} WR={wr:.0%} pnl={pnl_avg:+.2f} vita={vita}s")
+                    log.info(f"[IA] 🔴 L2_BLOCCO {mat}/{reg}/{vol}/{direction} WR={wr:.0%} pnl={pnl_avg:+.2f} vita={vita}s")
 
             # -- OPPORTUNITÀ: WR alto E PnL positivo → boost size ----------
             elif wr > 0.68 and pnl_avg > 2.5 and s['total'] >= 10:  # lordo > breakeven
                 boost = min(1.4, 1.0 + (wr - 0.65) * 2.0)  # max +40% size
                 cap = self._crea_capsule_boost(
                     cap_id, mat, reg, vol, wr, pnl_avg, s['total'], boost,
-                    f"L2_OPP: WR={wr:.0%} pnl={pnl_avg:+.2f} boost={boost:.2f}x"
+                    f"L2_OPP: {direction} WR={wr:.0%} pnl={pnl_avg:+.2f} boost={boost:.2f}x",
+                    direction=direction  # FIX #16
                 )
                 if cap:
                     nuove.append(cap)
-                    log.info(f"[IA] 🟢 L2_BOOST {mat}/{reg}/{vol} WR={wr:.0%} boost={boost:.2f}x")
+                    log.info(f"[IA] 🟢 L2_BOOST {mat}/{reg}/{vol}/{direction} WR={wr:.0%} boost={boost:.2f}x")
 
         return nuove
 
@@ -1205,7 +1212,8 @@ class IntelligenzaAutonoma:
         except Exception:
             return True
 
-    def _crea_capsule_blocco(self, cap_id, mat, reg, vol, wr, pnl_avg, samples, vita, desc) -> dict | None:
+    def _crea_capsule_blocco(self, cap_id, mat, reg, vol, wr, pnl_avg, samples, vita, desc, direction='LONG') -> dict | None:
+        """FIX #16: ora accetta direction obbligatoria nel trigger."""
         if not self._è_nuova(cap_id):
             return None
         return {
@@ -1218,8 +1226,9 @@ class IntelligenzaAutonoma:
                 {'param': 'matrimonio', 'op': '==', 'value': mat},
                 {'param': 'regime',     'op': '==', 'value': reg},
                 {'param': 'volatility', 'op': '==', 'value': vol},
+                {'param': 'direction',  'op': '==', 'value': direction},  # FIX #16
             ],
-            'azione':      {'type': 'blocca_entry', 'params': {'reason': f'L2_TOSSICO_{mat}_{reg}_{vol}'}},
+            'azione':      {'type': 'blocca_entry', 'params': {'reason': f'L2_TOSSICO_{mat}_{reg}_{vol}_{direction}'}},
             'priority':    2,
             'enabled':     True,
             'scade_ts':    time.time() + vita,
@@ -1229,7 +1238,8 @@ class IntelligenzaAutonoma:
             'samples':     samples,
         }
 
-    def _crea_capsule_boost(self, cap_id, mat, reg, vol, wr, pnl_avg, samples, boost, desc) -> dict | None:
+    def _crea_capsule_boost(self, cap_id, mat, reg, vol, wr, pnl_avg, samples, boost, desc, direction='LONG') -> dict | None:
+        """FIX #16: ora accetta direction obbligatoria nel trigger."""
         if not self._è_nuova(cap_id):
             return None
         return {
@@ -1242,8 +1252,9 @@ class IntelligenzaAutonoma:
                 {'param': 'matrimonio', 'op': '==', 'value': mat},
                 {'param': 'regime',     'op': '==', 'value': reg},
                 {'param': 'volatility', 'op': '==', 'value': vol},
+                {'param': 'direction',  'op': '==', 'value': direction},  # FIX #16
             ],
-            'azione':      {'type': 'modifica_size', 'params': {'mult': boost, 'reason': f'L2_OPP_{mat}'}},
+            'azione':      {'type': 'modifica_size', 'params': {'mult': boost, 'reason': f'L2_OPP_{mat}_{direction}'}},
             'priority':    3,
             'enabled':     True,
             'scade_ts':    time.time() + 14400,  # 4 ore
