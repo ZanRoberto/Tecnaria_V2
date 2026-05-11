@@ -1,162 +1,124 @@
-"""
-═══════════════════════════════════════════════════════════════════════════
-🧹 RESET MEMORIA VECCHIA — OVERTOP V16
-═══════════════════════════════════════════════════════════════════════════
-
-OBIETTIVO:
-  Cancellare le statistiche e le capsule LEARNED accumulate quando il bot
-  era ROTTO (doppia-fee, regime instabile, phantom sup impazzito, timeout 3min,
-  SHORT castrato). Mantenere il codice (intelligenza) e le capsule STATIC
-  (memoria di lungo termine sul mercato BTC).
-
-COSA CANCELLA:
-  ✗ Tutte le capsule LEARNED (memoria del bot rotto)
-  ✗ Tutte le capsule AUTO generate dall'Oracle (basate su dati vecchi)
-  ✗ Tutte le SUPERCAPSULE (idem)
-  ✗ Phantom stats (10.075 osservazioni inflazionate da bug doppia-fee)
-  ✗ Veritas stats (500 segnali sotto vecchia logica)
-  ✗ Oracolo Dinamico fingerprint (22 contesti con WR sbagliati)
-  ✗ Bot state cumulativo (PnL, WR, n_trades)
-
-COSA NON CANCELLA:
-  ✓ Tutto il codice (nessuna modifica al .py)
-  ✓ Le 10 capsule STATIC (memoria sul mercato BTC reale)
-  ✓ Le 3 capsule STATIC SHORT nuove (12mag)
-  ✓ La struttura del DB
-
-USO:
-  Carica questo file su Render via shell:
-    python reset_memoria_vecchia.py
-  
-  Poi RIAVVIA il bot da Render dashboard (Manual Deploy / Restart).
-  Bot riparte con codice nuovo + zero pregiudizi statistici.
-═══════════════════════════════════════════════════════════════════════════
-"""
-import sqlite3
-import os
-import sys
+"""RESET MEMORIA OVERTOP V16 - v2"""
+import sqlite3, os, sys, shutil
 
 DB_PATH = os.environ.get("DB_PATH", "/var/data/trading_data.db")
-
 print("="*70)
-print("🧹 RESET MEMORIA OVERTOP V16")
+print("RESET MEMORIA OVERTOP V16 - v2 (TABELLE CORRETTE)")
 print("="*70)
 print(f"DB target: {DB_PATH}")
 print()
 
 if not os.path.exists(DB_PATH):
-    print(f"❌ DB non trovato: {DB_PATH}")
-    print("   Controlla DB_PATH env variable")
+    print(f"DB non trovato: {DB_PATH}")
     sys.exit(1)
 
-# Backup prima
-backup_path = DB_PATH + ".backup_pre_reset"
-if not os.path.exists(backup_path):
-    import shutil
-    shutil.copy2(DB_PATH, backup_path)
-    print(f"✅ Backup creato: {backup_path}")
-else:
-    print(f"⚠️  Backup gia esistente: {backup_path} (NON sovrascritto)")
+backup_v2 = DB_PATH + ".backup_pre_reset_v2"
+shutil.copy2(DB_PATH, backup_v2)
+print(f"OK Backup v2: {backup_v2}")
 print()
 
-# Apertura DB
 conn = sqlite3.connect(DB_PATH)
 cur = conn.cursor()
 
-# Lista tabelle presenti
+print("STATO INIZIALE:")
 cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
 tabelle = [r[0] for r in cur.fetchall()]
-print(f"📋 Tabelle trovate: {len(tabelle)}")
-for t in tabelle:
-    cur.execute(f"SELECT COUNT(*) FROM {t}")
-    n = cur.fetchone()[0]
-    print(f"   • {t}: {n} righe")
+for t in sorted(tabelle):
+    try:
+        cur.execute(f"SELECT COUNT(*) FROM {t}")
+        print(f"   - {t}: {cur.fetchone()[0]} righe")
+    except Exception as e:
+        print(f"   - {t}: ERR {e}")
 print()
 
-# ═══════════════════════════════════════════════════════════
-# RESET 1: capsule_permanenti — mantieni solo STATIC
-# ═══════════════════════════════════════════════════════════
-if 'capsule_permanenti' in tabelle:
-    cur.execute("SELECT COUNT(*) FROM capsule_permanenti")
+if 'capsule' in tabelle:
+    cur.execute("PRAGMA table_info(capsule)")
+    cols = [r[1] for r in cur.fetchall()]
+    print(f"Schema 'capsule': {cols}")
+    cur.execute("SELECT COUNT(*) FROM capsule")
     prima = cur.fetchone()[0]
-    # Mantieni solo le STATIC (livello scolpito sul mercato reale)
-    cur.execute("""
-        DELETE FROM capsule_permanenti 
-        WHERE id NOT LIKE 'STATIC_%'
-    """)
+    cur.execute("SELECT * FROM capsule LIMIT 3")
+    for s in cur.fetchall():
+        print(f"   Sample: {str(s)[:150]}")
+    if 'livello' in cols:
+        cur.execute("DELETE FROM capsule WHERE livello != 'STATIC'")
+    elif 'id' in cols:
+        cur.execute("DELETE FROM capsule WHERE id NOT LIKE 'STATIC_%'")
+    else:
+        print("ATT: schema sconosciuto")
     eliminati = cur.rowcount
-    cur.execute("SELECT COUNT(*) FROM capsule_permanenti")
-    dopo = cur.fetchone()[0]
-    print(f"✅ capsule_permanenti: {prima} → {dopo} (eliminati {eliminati} LEARNED/AUTO)")
+    cur.execute("SELECT COUNT(*) FROM capsule")
+    print(f"OK capsule: {prima} -> {cur.fetchone()[0]} ({eliminati} eliminate)")
+    print()
 
-# ═══════════════════════════════════════════════════════════
-# RESET 2: bot_state — pulisci stato cumulativo
-# ═══════════════════════════════════════════════════════════
-if 'bot_state' in tabelle:
-    keys_da_resettare = [
-        'phantom_stats',
-        'veritas_stats',
-        'veritas_closed',
-        'm2_recent_trades',
-        'oracolo_fingerprints',
-        'matrimonio_stats',
-        'signal_tracker_stats',
-        'sc_pesi',  # pesi adattativi imparati su dati vecchi
-        # NON resettiamo: capital (preserva 10000), total_trades (info storica)
-    ]
-    for k in keys_da_resettare:
-        cur.execute("DELETE FROM bot_state WHERE key = ?", (k,))
-        if cur.rowcount > 0:
-            print(f"✅ bot_state: eliminata chiave '{k}'")
-
-# ═══════════════════════════════════════════════════════════
-# RESET 3: telemetry — pulisci log eventi vecchi (opzionale)
-# ═══════════════════════════════════════════════════════════
-if 'telemetry' in tabelle:
-    cur.execute("SELECT COUNT(*) FROM telemetry")
+if 'capsule_log' in tabelle:
+    cur.execute("SELECT COUNT(*) FROM capsule_log")
     n = cur.fetchone()[0]
     if n > 0:
-        cur.execute("DELETE FROM telemetry")
-        print(f"✅ telemetry: {n} righe eliminate (log storici puliti)")
+        cur.execute("DELETE FROM capsule_log")
+        print(f"OK capsule_log: {n} eliminate")
+
+if 'veritas_stats' in tabelle:
+    cur.execute("SELECT COUNT(*) FROM veritas_stats")
+    n = cur.fetchone()[0]
+    if n > 0:
+        cur.execute("DELETE FROM veritas_stats")
+        print(f"OK veritas_stats: {n} eliminate")
+
+if 'veritas_closed' in tabelle:
+    cur.execute("SELECT COUNT(*) FROM veritas_closed")
+    n = cur.fetchone()[0]
+    if n > 0:
+        cur.execute("DELETE FROM veritas_closed")
+        print(f"OK veritas_closed: {n} eliminate")
+
+if 'bot_state' in tabelle:
+    cur.execute("SELECT key FROM bot_state")
+    chiavi = [r[0] for r in cur.fetchall()]
+    print(f"bot_state chiavi: {chiavi}")
+    da_pulire = ['phantom_stats','veritas_stats','veritas_closed',
+                 'm2_recent_trades','oracolo_fingerprints',
+                 'matrimonio_stats','signal_tracker_stats',
+                 'sc_pesi','phantom_sup_log','m2_log']
+    for k in da_pulire:
+        if k in chiavi:
+            cur.execute("DELETE FROM bot_state WHERE key = ?", (k,))
+            print(f"   OK bot_state: '{k}' eliminata")
 
 conn.commit()
+
+print()
+print("STATO FINALE:")
+for t in sorted(tabelle):
+    try:
+        cur.execute(f"SELECT COUNT(*) FROM {t}")
+        print(f"   - {t}: {cur.fetchone()[0]} righe")
+    except:
+        pass
+
 conn.close()
 
-# ═══════════════════════════════════════════════════════════
-# RESET 4: file JSON
-# ═══════════════════════════════════════════════════════════
+print()
 data_dir = os.path.dirname(DB_PATH)
-files_da_resettare = [
-    'capsule_attive.json',     # capsule runtime (LEARNED/AUTO)
-    'phantom_state.json',      # se esiste
-    'veritas_state.json',      # se esiste
-]
-for fname in files_da_resettare:
+for fname in ['capsule_attive.json','phantom_state.json','veritas_state.json']:
     full = os.path.join(data_dir, fname)
     if os.path.exists(full):
-        # Backup e svuota
-        backup = full + ".backup_pre_reset"
-        if not os.path.exists(backup):
-            import shutil
-            shutil.copy2(full, backup)
-        with open(full, 'w') as f:
+        shutil.copy2(full, full + ".backup_pre_reset_v2")
+        with open(full,'w') as f:
             f.write('{}')
-        print(f"✅ {fname}: svuotato (backup → {os.path.basename(backup)})")
+        print(f"OK {fname}: svuotato")
 
 print()
 print("="*70)
-print("🦊 RESET COMPLETATO")
+print("RESET v2 COMPLETATO")
 print("="*70)
 print()
 print("PROSSIMI PASSI:")
-print("  1. Vai su Render Dashboard")
-print("  2. Clicca 'Manual Deploy' → 'Clear build cache & deploy'")
-print("     (oppure 'Restart' se preferisci)")
-print("  3. Il bot riparte SENZA memoria statistica vecchia")
-print("  4. Mantiene le STATIC capsule (10 totali) come muraglia")
-print("  5. Comincia ad accumulare NUOVI dati con la logica fixata")
+print("  1. Render Dashboard -> Manual Deploy -> Clear build cache & deploy")
+print("  2. Bot riparte pulito")
 print()
-print(f"BACKUP DISPONIBILE: {backup_path}")
-print("(se qualcosa va storto, lo ripristini con:")
-print(f"  cp {backup_path} {DB_PATH})")
+print(f"BACKUP v2: {backup_v2}")
+print(f"BACKUP v1: {DB_PATH}.backup_pre_reset")
 print()
+print("Per tornare indietro:")
+print(f"  cp {backup_v2} {DB_PATH}")
