@@ -54,13 +54,11 @@ import sys
 # False = ordini reali → SOLO dopo paper test soddisfacente
 PAPER_TRADE = True
 
-# --- SAFETY GUARD ANTI-LIVE -------------------------------------------------
-# Fix Bug #1 (12mag2026): impedisce avvio LIVE finché _place_order è placeholder.
-# Se PAPER_TRADE=False per errore o intenzione prematura, il bot CRASHA all'avvio
-# invece di simulare ordini fittizi facendo credere all'utente di guadagnare.
-# Per rimuovere questa guardia: implementare _place_order con python-binance,
-# testare con micro-size ($10-20) per 1 settimana, POI cambiare _PLACE_ORDER_IMPLEMENTED=True.
-_PLACE_ORDER_IMPLEMENTED = False  # cambiare a True SOLO dopo implementazione Binance API reale
+# --- SAFETY GUARD ANTI-LIVE (Bug #1) ----------------------------------------
+# Fix 12mag2026: impedisce avvio LIVE finché _place_order è placeholder.
+# Se PAPER_TRADE=False per errore, il bot CRASHA all'avvio invece di
+# simulare ordini fittizi facendo credere all'utente di guadagnare.
+_PLACE_ORDER_IMPLEMENTED = False  # True SOLO dopo implementazione Binance API reale
 
 if not PAPER_TRADE and not _PLACE_ORDER_IMPLEMENTED:
     raise RuntimeError(
@@ -68,14 +66,7 @@ if not PAPER_TRADE and not _PLACE_ORDER_IMPLEMENTED:
         "🚨 LIVE MODE BLOCCATO — SICUREZZA ANTI-PLACEHOLDER 🚨\n"
         "="*70 + "\n"
         "PAPER_TRADE=False richiede _place_order IMPLEMENTATA con Binance API.\n"
-        "Attualmente _place_order è un placeholder (riga ~9374).\n"
-        "\n"
-        "Per andare LIVE:\n"
-        "  1. Implementare _place_order con python-binance\n"
-        "  2. BINANCE_API_KEY + BINANCE_API_SECRET come env Render\n"
-        "  3. Test micro-size ($10-20) per 1 settimana minimo\n"
-        "  4. Solo dopo, settare _PLACE_ORDER_IMPLEMENTED = True\n"
-        "\n"
+        "Per LIVE: implementare python-binance + test micro-size 1 settimana.\n"
         "Bot terminato per sicurezza.\n"
         + "="*70
     )
@@ -932,11 +923,15 @@ class IntelligenzaAutonoma:
 
             if wr < 0.38 and pnl_avg < -1.0:
                 vita = self._calcola_vita_l2(wr, pnl_avg, s['total'])
-                # Genera trigger per il contesto JSON
+                # FIX #14 (12mag): aggiunto 'direction' al trigger.
+                # Bug originale: la direction veniva raggruppata ma non inserita
+                # nei trigger → capsule bloccavano sia LONG che SHORT.
+                # Effetto pre-fix: SHORT castrato perché LEARNED LONG bloccavano anche SHORT.
                 trigger = [
                     {'param': 'regime',    'op': '==', 'value': reg},
                     {'param': 'volatility','op': '==', 'value': vol},
                     {'param': 'trend_dir', 'op': '==', 'value': trend},
+                    {'param': 'direction', 'op': '==', 'value': direction},  # FIX #14
                 ]
                 cap = {
                     'capsule_id':   cap_id,
@@ -945,7 +940,7 @@ class IntelligenzaAutonoma:
                     'version':      1,
                     'descrizione':  f"L2_CTX: {reg}/{vol}/{trend}/{direction} WR={wr:.0%} pnl={pnl_avg:+.2f}",
                     'trigger':      trigger,
-                    'azione':       {'type': 'blocca_entry', 'params': {'reason': f'CTX_TOSSICO_{reg}_{vol}_{trend}'}},
+                    'azione':       {'type': 'blocca_entry', 'params': {'reason': f'CTX_TOSSICO_{reg}_{vol}_{trend}_{direction}'}},
                     'priority':     2,
                     'enabled':      True,
                     'scade_ts':     time.time() + vita,
@@ -1077,20 +1072,29 @@ class IntelligenzaAutonoma:
     def _analisi_l3_regime_tossico(self, trades: list) -> list:
         """
         Se il regime corrente sta sistematicamente perdendo ADESSO
-        (ultimi 5 trade nello stesso regime) → capsule evento.
+        (ultimi 10 trade nello stesso regime+direction) → capsule evento.
+        
+        FIX #14/15 (12mag2026):
+          - Raggruppa per (regime, direction) invece di solo regime
+          - Soglia minima 10 trade (era MIN_SAMPLES_L3 = 3 → troppo aggressivo)
+          - Genera capsula con direction nel trigger (era bloccava anche SHORT)
+        Bug originale: AUTO_REGIME_TOSSICO_RANGING bloccava TUTTO in RANGING
+        su 3-6 samples. Eliminato col reset 12mag.
         """
         nuove = []
-        recenti = list(trades)[-8:]
-        if len(recenti) < 3:
+        recenti = list(trades)[-12:]
+        if len(recenti) < 5:
             return nuove
 
-        # Raggruppa per regime
-        per_regime: dict = defaultdict(list)
+        # FIX #14: Raggruppa per (regime, direction)
+        per_regime_dir: dict = defaultdict(list)
         for t in recenti:
-            per_regime[t.get('regime', 'RANGING')].append(t)
+            key = (t.get('regime', 'RANGING'), t.get('direction', 'LONG'))
+            per_regime_dir[key].append(t)
 
-        for regime, pool in per_regime.items():
-            if len(pool) < self.MIN_SAMPLES_L3:
+        for (regime, direction), pool in per_regime_dir.items():
+            # FIX #15: minimo 10 trade (non 3) per generare blocco regime
+            if len(pool) < 10:
                 continue
             wins   = sum(1 for t in pool if t.get('is_win'))
             wr     = wins / len(pool)
@@ -1099,16 +1103,19 @@ class IntelligenzaAutonoma:
             if wr <= 0.25 and pnl < -2.0:
                 gravita = min(1.0, abs(pnl) / 10.0)
                 vita    = int(120 + gravita * 360)  # 2min → 8min
-                cap_id  = f"L3_REGIME_{regime}_TOSSICO"
+                cap_id  = f"L3_REGIME_{regime}_{direction}_TOSSICO"
                 if self._è_nuova(cap_id):
                     cap = {
                         'capsule_id': cap_id,
                         'livello':    'L3',
                         'tipo':       'REGIME_TOSSICO_EVENTO',
                         'version':    1,
-                        'descrizione': f"L3_REGIME: {regime} WR={wr:.0%} pnl={pnl:+.2f} su {len(pool)} trade recenti",
-                        'trigger':    [{'param': 'regime', 'op': '==', 'value': regime}],
-                        'azione':     {'type': 'blocca_entry', 'params': {'reason': f'REGIME_TOSSICO_{regime}_WR{wr:.0%}'}},
+                        'descrizione': f"L3_REGIME: {regime}/{direction} WR={wr:.0%} pnl={pnl:+.2f} su {len(pool)} trade recenti",
+                        'trigger':    [
+                            {'param': 'regime',    'op': '==', 'value': regime},
+                            {'param': 'direction', 'op': '==', 'value': direction},  # FIX #14
+                        ],
+                        'azione':     {'type': 'blocca_entry', 'params': {'reason': f'REGIME_TOSSICO_{regime}_{direction}_WR{wr:.0%}'}},
                         'priority':   2,
                         'enabled':    True,
                         'scade_ts':   time.time() + vita,
@@ -1116,7 +1123,7 @@ class IntelligenzaAutonoma:
                         'wr_snapshot': round(wr, 3),
                     }
                     nuove.append(cap)
-                    log.info(f"[IA] 🔴 L3_REGIME {regime} tossico WR={wr:.0%} pnl={pnl:+.2f} vita={vita}s")
+                    log.info(f"[IA] 🔴 L3_REGIME {regime}/{direction} tossico WR={wr:.0%} pnl={pnl:+.2f} vita={vita}s")
 
         return nuove
 
@@ -3525,17 +3532,14 @@ class RegimeDetector:
     def __init__(self):
         self.prices    = deque(maxlen=self.WINDOW)
         self.volumes   = deque(maxlen=self.WINDOW)
-        self._regime   = 'RANGING'   # default conservativo
+        self._regime   = 'RANGING'
         self._confidence = 0.0
-        # FIX 12mag: stabilizzazione cambi regime
-        # Problema originale: detect() chiamato ogni tick → cambi regime ogni 60s
-        # se vol_accel oscilla intorno alla soglia. Confidence -42% era impossibile
-        # ma derivava da formule senza isteresi.
-        # Fix: il NUOVO regime deve essere osservato per CHANGE_TICKS consecutivi
-        # prima di sostituire quello corrente. Stabilizza la realtà che il bot vede.
-        self._pending_regime = 'RANGING'  # regime candidato in osservazione
-        self._pending_count  = 0          # quanti tick consecutivi col candidato
-        self.CHANGE_TICKS    = 30         # ~30 secondi di conferma prima di switchare
+        # FIX Bug #9 (12mag): isteresi cambi regime
+        # Problema: detect() ogni tick → flip ogni 60s + confidence -42% impossibile
+        # Fix: nuovo regime deve essere stabile per CHANGE_TICKS tick consecutivi
+        self._pending_regime = 'RANGING'
+        self._pending_count  = 0
+        self.CHANGE_TICKS    = 30  # ~30s di conferma per switchare regime
 
     def add_tick(self, price: float, volume: float = 1.0):
         self.prices.append(price)
@@ -3601,26 +3605,18 @@ class RegimeDetector:
             regime     = 'RANGING'
             confidence = min(1.0, 1.0 - abs(dir_ratio - 0.5) * 4)
 
-        # FIX 12mag: applico isteresi per evitare flip ogni 60s.
-        # Il regime CALCOLATO va in pending. Solo se rimane lo stesso per
-        # CHANGE_TICKS consecutivi, sostituisce quello effettivo.
-        # Effetto: stabilità del sistema decisionale, ZERO flip da rumore.
-        # Confidence viene clampata a [0, 1] per evitare -42% impossibili.
+        # FIX Bug #9 (12mag): clamp confidence + isteresi cambio regime
         confidence = max(0.0, min(1.0, confidence))
         
         if regime == self._regime:
-            # Il regime calcolato coincide con quello attivo → reset pending
             self._pending_regime = regime
             self._pending_count = 0
         elif regime == self._pending_regime:
-            # Stesso candidato visto prima → incrementa contatore
             self._pending_count += 1
             if self._pending_count >= self.CHANGE_TICKS:
-                # Cambio confermato dopo CHANGE_TICKS tick
                 self._regime = regime
                 self._pending_count = 0
         else:
-            # Nuovo candidato diverso → resetta
             self._pending_regime = regime
             self._pending_count = 1
 
@@ -3632,7 +3628,6 @@ class RegimeDetector:
             'vol_accel':       round(vol_accel, 3),
             'vol_ratio':       round(vol_ratio, 3),
             'regime_calcolato': regime,
-            'pending_regime':  self._pending_regime,
             'pending_count':   self._pending_count,
         }
 
@@ -6752,20 +6747,15 @@ class OvertopBassanoV16Production:
             # Sta lasciando passare cose che perdono — soglia troppo bassa
             elif wr_blocco < 0.25 and blk > 20:
                 old_base = self.campo.SOGLIA_BASE
-                # L1: tetto 58 coerente (era 55)
                 new_base = min(58, old_base + 1)
-                # FIX 12mag: cooldown irrigidimento.
-                # Bug originale: Phantom Sup irrigidiva ogni 60s portando SOGLIA_BASE
-                # al massimo (58) e strangolando tutto. Confermato dai dati 11mag
-                # (zero trade per 14 ore). Causa: nessun cooldown tra irrigidimenti
-                # sullo stesso blocco. Phantom Sup vede sempre WR<25% e continua a
-                # salire anche se inutile (gli stessi phantom contano per sempre).
-                # Fix: minimo 10 minuti tra irrigidimenti dello STESSO blocco_id.
+                # FIX Bug #2/4 (12mag): cooldown 10 min per IRRIGIDISCE.
+                # Bug originale: ogni 60s alza soglia anche se inutile (max 58 raggiunto).
+                # Risultato: 9-10 IRRIGIDISCI consecutivi che strangolavano operatività.
                 if not hasattr(self, '_phantom_sup_cooldown'):
                     self._phantom_sup_cooldown = {}
-                last_hardening = self._phantom_sup_cooldown.get(blocco_id, 0)
-                cooldown_ok = (time.time() - last_hardening) > 600  # 10 minuti
-                
+                last_h = self._phantom_sup_cooldown.get(blocco_id, 0)
+                cooldown_ok = (time.time() - last_h) > 600  # 10 min
+
                 if new_base != old_base and cooldown_ok:
                     self.campo.SOGLIA_BASE = new_base
                     self._phantom_sup_cooldown[blocco_id] = time.time()
@@ -6960,20 +6950,10 @@ class OvertopBassanoV16Production:
             campo._direction_bearish_streak = 0
             self._log_m2("🔄", f"FLIP → LONG in EXPLOSIVE (bullish_energy={_bullish_energy} drift={drift:+.3f}%)")
 
-        # -- RANGING GATE: in laterale flip a SHORT solo con criteri stretti
-        # 
-        # FIX 12mag2026 — SBLOCCO CONDIZIONALE SHORT IN RANGING
-        # Prima: nessun flip SHORT in RANGING anche se SC_short carica al 99%.
-        # Dopo: flip permesso SE almeno UNA condizione forte è vera:
-        #   - OI_SHORT_FUOCO (carica >= 0.85) → mercato dichiara direzione
-        #   - RSI ipercomprato (>= 75) + bearish_energy >= 3
-        #   - Veritas conferma con delta_60s < -20 su >=5 segnali
-        #   - Predizione DOWN (pred_score >= 70 + carica_short > carica_long + energy >= 2)
-        #   - Drift fortemente negativo (< -0.5%) + bearish_energy >= 3
-        # 
-        # PROTEZIONE: anche con flip, le 6 capsule SHORT (3 STATIC vecchie + 3 nuove
-        # 11mag) bloccano l'entry nei contesti tossici scoperti dall'oracolo.
-        # Se ENTRA, lo fa solo nei contesti positivi o ignoti.
+        # -- RANGING GATE: in laterale NON flippare a SHORT --------------
+        # ECCEZIONE VERITAS: se il Veritas vede movimento ribassista reale
+        # con delta_60s < -20 su almeno 5 segnali → lo SHORT è legittimo
+        # ECCEZIONE OI SHORT FUOCO: mercato ha dichiarato la direzione
         _veritas_short_ok = False
         _drift_short_ok = drift < -0.005 and bearish_energy >= 3
         _rsi_ipercomprato = _rsi_now >= 75 and bearish_energy >= 3
@@ -6999,26 +6979,7 @@ class OvertopBassanoV16Production:
                             _veritas_short_ok = True
                             break
 
-        # FIX 12mag2026 — CONDIZIONE NUOVA: flip a SHORT in RANGING
-        # PERMESSO se almeno un segnale forte è vero (veritas, rsi, pred, drift)
-        if (self._regime_current == "RANGING" and
-                campo._direction == "LONG" and
-                campo._direction_bearish_streak >= 3 and
-                cooldown_ok and
-                (_veritas_short_ok or _drift_short_ok)):
-            # FLIP a SHORT in RANGING (con criteri stretti)
-            campo._direction = "SHORT"
-            campo._direction_last_change = now
-            campo._direction_bearish_streak = 0
-            _motivo_short = []
-            if _oi_short_fuoco: _motivo_short.append("OI_SHORT_FUOCO")
-            if _rsi_ipercomprato: _motivo_short.append("RSI_IPERCOMPR")
-            if _pred_down: _motivo_short.append("PRED_DOWN")
-            if _drift_short_ok: _motivo_short.append(f"DRIFT_{drift:+.2f}%")
-            self._log_m2("🔄", f"FLIP → SHORT in RANGING ({'+'.join(_motivo_short)} bearish={bearish_energy})")
-        
-        elif self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok:
-            # Streak bearish ma nessun segnale forte → SHORT EVITATO (come prima)
+        if self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok and not _veritas_short_ok and not _drift_short_ok:
             # NON flippare - logga come SHORT evitato
             if not hasattr(self, '_shadow_short_log'):
                 self._shadow_short_log = []
@@ -9400,31 +9361,16 @@ class OvertopBassanoV16Production:
     def _place_order(self, side: str, price: float, size_mult: float = 1.0):
         """
         🚨 PLACEHOLDER NON IMPLEMENTATO 🚨
-        
-        Questa funzione DOVREBBE inviare ordini a Binance via REST API quando
-        PAPER_TRADE=False. Attualmente NON è implementata.
-        
-        Se viene chiamata in LIVE mode → solleva NotImplementedError per evitare
-        la "menzogna silenziosa" del placeholder che fingeva di funzionare.
-        
-        Per implementare LIVE:
-          1. pip install python-binance (aggiungere a requirements.txt)
-          2. BINANCE_API_KEY + BINANCE_API_SECRET come env var su Render
-          3. Calcolare qty = (TRADE_SIZE_USD * LEVERAGE * size_mult) / price
-             arrotondata a lot_size del symbol
-          4. Wrap try/except con retry e log degli errori HTTP
-          5. Restituire order_id per tracciare l'esecuzione
-          6. Test con micro-size ($10-20) per 1 settimana prima di scalare
+        Fix Bug #1 (12mag2026): solleva NotImplementedError invece di
+        mentire silenziosamente. Se chiamata in LIVE → bot crasha visibilmente.
+        Per implementare: python-binance + API keys + test micro-size.
         """
-        # Log l'intento (utile per debug anche in PAPER se viene chiamata per errore)
         log.error(
-            f"🚨 [ORDER_NOT_IMPLEMENTED] Tentativo di inviare ordine reale: "
-            f"{side} {SYMBOL} @ {price:.2f} size_mult={size_mult:.1f} "
-            f"— FUNZIONE NON IMPLEMENTATA"
+            f"🚨 [ORDER_NOT_IMPLEMENTED] {side} {SYMBOL} @ {price:.2f} "
+            f"size_mult={size_mult:.1f} — FUNZIONE NON IMPLEMENTATA"
         )
         raise NotImplementedError(
-            f"_place_order è un placeholder. Bot in modalità PAPER ma _place_order "
-            f"non dovrebbe MAI essere chiamata. Per LIVE: implementare con python-binance."
+            f"_place_order è un placeholder. Implementare con python-binance prima di LIVE."
         )
 
     # ========================================================================
