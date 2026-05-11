@@ -139,6 +139,37 @@ STATIC_BTC = [
                  {"param":"trend","op":"==","value":"SIDEWAYS"},{"param":"direction","op":"==","value":"SHORT"}],
      "azione": {"type":"blocca_entry","params":{"reason":"STATIC_TOSSICO_SHORT_DEBOLE_ALTA_SIDEWAYS"}},
      "priority":1, "samples":21, "wr":0.10, "note":"WR 10% SHORT RANGE_VOL_W BTC"},
+
+    # ───────────────────────────────────────────────────────────────────
+    # NUOVE 11mag2026 — capsule SHORT mancanti dalla MAPPA_DEL_TESORO.
+    # Coprono 3 zone tossiche scoperte dai dati oracolo:
+    #   - DEBOLE|ALTA|DOWN     PnL -$1.87 medio
+    #   - MEDIO|MEDIA|SIDEWAYS PnL -$2.89 medio
+    #   - FORTE|MEDIA|SIDEWAYS PnL -$2.67 medio
+    # Servono ADESSO perché stiamo per sbloccare SHORT in RANGING
+    # (riga 6966 OVERTOP_BASSANO_V16_PRODUCTION.py). Senza queste,
+    # SHORT entrerebbe in contesti perdenti senza protezione.
+    # ───────────────────────────────────────────────────────────────────
+    {"id": "STATIC_SHORT_DEBOLE_ALTA_DOWN_BTC", "asset": "BTCUSDC", "livello": "STATIC", "tipo": "VETO_SHORT",
+     "descrizione": "WEAK_BEAR SHORT: WR 40% PnL -$1.87 su BTC",
+     "trigger": [{"param":"momentum","op":"==","value":"DEBOLE"},{"param":"volatility","op":"==","value":"ALTA"},
+                 {"param":"trend","op":"==","value":"DOWN"},{"param":"direction","op":"==","value":"SHORT"}],
+     "azione": {"type":"blocca_entry","params":{"reason":"STATIC_TOSSICO_SHORT_DEBOLE_ALTA_DOWN"}},
+     "priority":1, "samples":15, "wr":0.40, "note":"WR 40% PnL-$1.87 SHORT WEAK_BEAR BTC"},
+
+    {"id": "STATIC_SHORT_MEDIO_MEDIA_SIDEWAYS_BTC", "asset": "BTCUSDC", "livello": "STATIC", "tipo": "VETO_SHORT",
+     "descrizione": "MED_SIDE SHORT: WR 20% PnL -$2.89 su BTC",
+     "trigger": [{"param":"momentum","op":"==","value":"MEDIO"},{"param":"volatility","op":"==","value":"MEDIA"},
+                 {"param":"trend","op":"==","value":"SIDEWAYS"},{"param":"direction","op":"==","value":"SHORT"}],
+     "azione": {"type":"blocca_entry","params":{"reason":"STATIC_TOSSICO_SHORT_MEDIO_MEDIA_SIDEWAYS"}},
+     "priority":1, "samples":15, "wr":0.20, "note":"WR 20% PnL-$2.89 SHORT MED_SIDE BTC"},
+
+    {"id": "STATIC_SHORT_FORTE_MEDIA_SIDEWAYS_BTC", "asset": "BTCUSDC", "livello": "STATIC", "tipo": "VETO_SHORT",
+     "descrizione": "STRONG_SIDE SHORT: WR 25% PnL -$2.67 su BTC",
+     "trigger": [{"param":"momentum","op":"==","value":"FORTE"},{"param":"volatility","op":"==","value":"MEDIA"},
+                 {"param":"trend","op":"==","value":"SIDEWAYS"},{"param":"direction","op":"==","value":"SHORT"}],
+     "azione": {"type":"blocca_entry","params":{"reason":"STATIC_TOSSICO_SHORT_FORTE_MEDIA_SIDEWAYS"}},
+     "priority":1, "samples":13, "wr":0.25, "note":"WR 25% PnL-$2.67 SHORT STRONG_SIDE BTC"},
 ]
 
 # SOL: zero veti statici — impara dai dati reali propri
