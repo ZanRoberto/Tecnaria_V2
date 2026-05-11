@@ -220,6 +220,14 @@ class CompartoEngine:
         self._last_vol:    str   = ""
         self._last_trend:  str   = ""
         self._switch_cooldown: float = 0.0  # evita switch troppo rapidi
+        # FIX Bug #13 (12mag): conferma tick consecutivi prima di switchare
+        # Problema: cooldown 60s non bastava — appena scade, primo tick diverso = switch.
+        # Effetto: comparto flippava ogni 60s tra DIFENSIVO/NEUTRO se volatilità oscillava.
+        # Fix: anche dopo cooldown, serve CONFIRM_TICKS dello STESSO nuovo comparto.
+        self._pending_comp: str   = ""
+        self._pending_count: int  = 0
+        self.CONFIRM_TICKS:  int  = 5    # 5 tick = ~5s consecutivi
+        self.COOLDOWN_SECS:  int  = 300  # 5 min tra switch (era 60s)
 
     def on_tick(self, regime: str, volatilita: str, trend: str, skills: dict) -> str:
         """
@@ -227,8 +235,8 @@ class CompartoEngine:
         Restituisce il nome del comparto attivo.
         """
         with self._lock:
-            # Cooldown switch — minimo 60 secondi tra switch
-            if time.time() - self._switch_cooldown < 60:
+            # FIX Bug #13: Cooldown switch — minimo 5 minuti tra switch (era 60s)
+            if time.time() - self._switch_cooldown < self.COOLDOWN_SECS:
                 return self._attivo
 
             # Stessa condizione → nessun switch
@@ -240,8 +248,28 @@ class CompartoEngine:
             # Trova il comparto giusto
             nuovo = self._seleziona(regime, volatilita, trend)
 
+            # FIX Bug #13: conferma tick consecutivi prima di switchare
+            # Anche se cooldown scaduto, il nuovo comparto deve essere stabile
+            # per CONFIRM_TICKS tick di fila. Evita flip su flicker volatilità.
+            if nuovo == self._attivo:
+                # Già su questo comparto → reset pending
+                self._pending_comp = nuovo
+                self._pending_count = 0
+            elif nuovo == self._pending_comp:
+                # Stesso candidato → incrementa
+                self._pending_count += 1
+                if self._pending_count < self.CONFIRM_TICKS:
+                    # Non ancora confermato — resta dove sei
+                    return self._attivo
+            else:
+                # Nuovo candidato diverso → resetta
+                self._pending_comp = nuovo
+                self._pending_count = 1
+                return self._attivo  # primo tick del nuovo candidato, aspetta conferme
+
             if nuovo != self._attivo:
                 self._switcha(nuovo, regime, volatilita, trend, skills)
+                self._pending_count = 0
 
             self._last_regime = regime
             self._last_vol    = volatilita
