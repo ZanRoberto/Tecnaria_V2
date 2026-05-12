@@ -3260,6 +3260,26 @@ class PersistenzaStato:
                     for s in list(bot.veritas._closed)[-200:]
                 ] if hasattr(bot, 'veritas') else [],
                 'veritas_stats': bot.veritas._stats if hasattr(bot, 'veritas') else {},
+                
+                # ════════════════════════════════════════════════════════════
+                # FIX #18 (12mag2026): PERSISTENZA BUFFER PREZZI
+                # ════════════════════════════════════════════════════════════
+                # Bug pre-fix: ad ogni restart il bot perdeva la sua memoria
+                # fisica (prices_long, prices_short, prices_ta = vuoti) e doveva
+                # rifare 10+ minuti di warmup cieco. In quei minuti:
+                #   - RSI/MACD non disponibili
+                #   - SeedScorer ritorna 'insufficient_data'
+                #   - Bot non poteva tradare
+                # Effetto: 14 mesi di lavoro che potrebbero NON essersi 
+                # accumulati perché ogni restart resetta la memoria fisica.
+                # 
+                # Fix: salvo i 3 buffer prezzi essenziali ogni 5 min.
+                # Al boot li ripristino → ZERO warmup → bot OPERATIVO subito.
+                # ════════════════════════════════════════════════════════════
+                'prices_long':  list(bot.campo._prices_long)  if hasattr(bot, 'campo') else [],
+                'prices_short': list(bot.campo._prices_short) if hasattr(bot, 'campo') else [],
+                'prices_ta':    list(bot.campo._prices_ta)    if hasattr(bot, 'campo') else [],
+                'tick_count':   getattr(bot.campo, '_tick_count', 0) if hasattr(bot, 'campo') else 0,
             }
             conn = sqlite3.connect(self.db_path)
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('runtime_state', ?)",
@@ -3341,6 +3361,48 @@ class PersistenzaStato:
                 for k,v in data['veritas_stats'].items():
                     if k not in bot.veritas._stats:
                         bot.veritas._stats[k] = v
+
+            # ════════════════════════════════════════════════════════════
+            # FIX #18 (12mag2026): RIPRISTINO BUFFER PREZZI
+            # ════════════════════════════════════════════════════════════
+            # Ripristina la memoria fisica del bot per evitare warmup cieco
+            # ad ogni restart. Critico per:
+            #   - RSI/MACD disponibili subito
+            #   - SeedScorer operativo subito  
+            #   - Drift detection accurate
+            #   - (Futuro) TsunamiDetector multi-finestra
+            # ════════════════════════════════════════════════════════════
+            if hasattr(bot, 'campo'):
+                try:
+                    if 'prices_long' in data and data['prices_long']:
+                        for p in data['prices_long']:
+                            bot.campo._prices_long.append(float(p))
+                        restored.append(f"prices_long:{len(data['prices_long'])}")
+                    
+                    if 'prices_short' in data and data['prices_short']:
+                        for p in data['prices_short']:
+                            bot.campo._prices_short.append(float(p))
+                        restored.append(f"prices_short:{len(data['prices_short'])}")
+                    
+                    if 'prices_ta' in data and data['prices_ta']:
+                        for p in data['prices_ta']:
+                            bot.campo._prices_ta.append(float(p))
+                        restored.append(f"prices_ta:{len(data['prices_ta'])}")
+                        # IMPORTANTE: ricalcola RSI e MACD subito sui dati ripristinati
+                        if len(bot.campo._prices_ta) >= 30:
+                            try:
+                                bot.campo._update_rsi()
+                                bot.campo._update_macd()
+                                log.info(f"[RUNTIME_LOAD] 🎯 RSI/MACD ricalcolati su buffer ripristinato "
+                                        f"({len(bot.campo._prices_ta)} prezzi)")
+                            except Exception as _e:
+                                log.warning(f"[RUNTIME_LOAD] RSI/MACD recompute failed: {_e}")
+                    
+                    if 'tick_count' in data:
+                        bot.campo._tick_count = int(data.get('tick_count', 0))
+                        restored.append(f"tick_count:{bot.campo._tick_count}")
+                except Exception as _bex:
+                    log.error(f"[RUNTIME_LOAD] errore ripristino buffer prezzi: {_bex}")
 
             # Soglia calcolata dinamicamente dal Signal Tracker — mai dal DB
             # Il DB non salva la soglia: viene ricalcolata ad ogni boot
