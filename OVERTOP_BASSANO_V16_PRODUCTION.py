@@ -418,6 +418,19 @@ except ImportError:
     _CM_AVAILABLE = False
     log.warning("[CM] ⚠️ capsule_manager.py non trovato — uso fallback CapsuleRuntime")
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 🌊 TSUNAMI DETECTOR — invenzione Roberto Zanardo (12mag2026)
+# Misura forza strutturata multi-scala (30s + 2min + 10min) per distinguere
+# TSUNAMI (energia accumulata su tutte le scale) da SCHIUMA (rumore localizzato).
+# ═══════════════════════════════════════════════════════════════════════════
+try:
+    from tsunami_detector import TsunamiEngine
+    _TSUNAMI_AVAILABLE = True
+    log.info("[TSUNAMI] 🌊 TsunamiEngine disponibile")
+except ImportError:
+    _TSUNAMI_AVAILABLE = False
+    log.warning("[TSUNAMI] ⚠️ tsunami_detector.py non trovato — modulo disabilitato")
+
 class CapsuleRuntime:
     """Valuta e applica capsule da capsule_attive.json - hot reload senza restart."""
 
@@ -3280,6 +3293,18 @@ class PersistenzaStato:
                 'prices_short': list(bot.campo._prices_short) if hasattr(bot, 'campo') else [],
                 'prices_ta':    list(bot.campo._prices_ta)    if hasattr(bot, 'campo') else [],
                 'tick_count':   getattr(bot.campo, '_tick_count', 0) if hasattr(bot, 'campo') else 0,
+                
+                # ════════════════════════════════════════════════════════════
+                # FIX #20 (12mag2026): PERSISTENZA CANDELE TSUNAMI
+                # ════════════════════════════════════════════════════════════
+                # Le candele 30s/2min/10min richiedono tempo per costruirsi:
+                #   - 30s × 30 candele = 15 min
+                #   - 2min × 30 candele = 1 ora
+                #   - 10min × 30 candele = 5 ore
+                # Senza persistenza, ad ogni restart si perdono ore di storia
+                # e il TsunamiDetector resta cieco per ore. Inaccettabile.
+                # ════════════════════════════════════════════════════════════
+                'tsunami_state': bot.tsunami.to_persist() if (hasattr(bot, 'tsunami') and bot.tsunami is not None) else None,
             }
             conn = sqlite3.connect(self.db_path)
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('runtime_state', ?)",
@@ -3403,6 +3428,23 @@ class PersistenzaStato:
                         restored.append(f"tick_count:{bot.campo._tick_count}")
                 except Exception as _bex:
                     log.error(f"[RUNTIME_LOAD] errore ripristino buffer prezzi: {_bex}")
+
+            # ════════════════════════════════════════════════════════════
+            # FIX #20 (12mag2026): RIPRISTINO CANDELE TSUNAMI
+            # ════════════════════════════════════════════════════════════
+            if hasattr(bot, 'tsunami') and bot.tsunami is not None:
+                try:
+                    ts_state = data.get('tsunami_state')
+                    if ts_state:
+                        bot.tsunami.from_persist(ts_state)
+                        c30 = len(ts_state.get('30s', []))
+                        c2 = len(ts_state.get('2min', []))
+                        c10 = len(ts_state.get('10min', []))
+                        restored.append(f"tsunami:30s={c30},2min={c2},10min={c10}")
+                        log.info(f"[RUNTIME_LOAD] 🌊 Tsunami candele ripristinate: "
+                                f"30s={c30} 2min={c2} 10min={c10}")
+                except Exception as _tex:
+                    log.error(f"[RUNTIME_LOAD] errore ripristino tsunami: {_tex}")
 
             # Soglia calcolata dinamicamente dal Signal Tracker — mai dal DB
             # Il DB non salva la soglia: viene ricalcolata ad ogni boot
@@ -5309,6 +5351,13 @@ class OvertopBassanoV16Production:
         self.seed_scorer     = SeedScorer(window=50)
         self.oracolo         = OracoloDinamico()
         self.memoria         = MemoriaMatrimoni()
+        
+        # 🌊 TSUNAMI ENGINE — forza strutturata multi-scala
+        if _TSUNAMI_AVAILABLE:
+            self.tsunami = TsunamiEngine()
+            log.info("[TSUNAMI] 🌊 TsunamiEngine inizializzato (30s + 2min + 10min)")
+        else:
+            self.tsunami = None
 
         # -- CAPSULE MANAGER UNIFICATO ------------------------------------
         if _CM_AVAILABLE:
@@ -5628,6 +5677,9 @@ class OvertopBassanoV16Production:
                 if price > 0:
                     self.analyzer.add_price(price)
                     self.seed_scorer.add_tick(price, volume)
+                    # 🌊 TSUNAMI: alimenta candele multi-scala
+                    if self.tsunami is not None:
+                        self.tsunami.feed_tick(price, volume)
                     self._last_volume = volume
                     self._process_tick(price)
             except Exception as e:
@@ -7596,6 +7648,55 @@ class OvertopBassanoV16Production:
             if seed.get('reason') == 'insufficient_data':
                 self._log_m2("🔇", f"SEED_INSUFFICIENTE score={seed.get('score',0):.2f}")
                 return
+
+            # ════════════════════════════════════════════════════════════════
+            # 🌊 TSUNAMI GATE — invenzione Roberto Zanardo (12mag2026)
+            # ════════════════════════════════════════════════════════════════
+            # PRINCIPIO FISICO: uno tsunami vero è coerente a TUTTE le scale
+            # temporali. Se è visibile solo a 30s ma non a 2min/10min →
+            # è SCHIUMA, rumore localizzato.
+            #
+            # REGOLE:
+            #   - 3/3 timeframe TSUNAMI → entry full size
+            #   - 2/3 timeframe TSUNAMI → entry size ridotta (0.5x)
+            #   - 1/3 o discordi → SCHIUMA → NO entry
+            #
+            # NOTA: TsunamiGate è VETO ADDIZIONALE — non sostituisce gli altri
+            # gate (Veritas, Capsule, ecc.) ma li precede. Solo dopo che
+            # Tsunami dice OK passiamo a controlli successivi.
+            #
+            # Direction del tsunami: deve coincidere con _dir corrente del campo,
+            # altrimenti significa che il bot vorrebbe LONG mentre il mercato 
+            # va DOWN (o viceversa) — blocchiamo.
+            # ════════════════════════════════════════════════════════════════
+            if self.tsunami is not None:
+                _ts_decision = self.tsunami.evaluate()
+                _campo_dir = self.campo._direction  # LONG o SHORT corrente
+                
+                if _ts_decision.azione == 'NO_ENTRY':
+                    self._log_m2("🌊", f"TSUNAMI_VETO: {_ts_decision.motivo}")
+                    if len(self._phantoms_open) < 5:
+                        self._record_phantom(price, "TSUNAMI_NO_ENTRY",
+                                             seed['score'], momentum, volatility, trend)
+                    return
+                
+                # Verifica coerenza direzione tsunami vs direction del campo
+                _ts_dir = 'LONG' if _ts_decision.azione == 'ENTRA_LONG' else 'SHORT'
+                if _ts_dir != _campo_dir:
+                    self._log_m2("🌊", f"TSUNAMI_DISCORDE: campo={_campo_dir} vs tsunami={_ts_dir} "
+                                       f"({_ts_decision.confidenza}/3) → blocca")
+                    if len(self._phantoms_open) < 5:
+                        self._record_phantom(price, f"TSUNAMI_DISCORDE_{_ts_dir}",
+                                             seed['score'], momentum, volatility, trend)
+                    return
+                
+                # Tsunami concorda con campo → log positivo e salvo size_mult
+                self._log_m2("🌊", f"TSUNAMI_OK: {_ts_dir} confidenza={_ts_decision.confidenza}/3 "
+                                   f"size_mult={_ts_decision.size_mult:.2f}")
+                # Conserva size_mult per usarlo dopo (sarà moltiplicato a fine entry)
+                self._tsunami_size_mult = _ts_decision.size_mult
+            else:
+                self._tsunami_size_mult = 1.0  # fallback se modulo non disponibile
 
             # ── L1.5 — VERITAS GATE: blocca contesti tossici ───────────────
             # Su 38 trade reali, contesti DEBOLE|ALTA|SIDEWAYS e MEDIO|ALTA|SIDEWAYS
