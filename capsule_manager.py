@@ -139,37 +139,6 @@ STATIC_BTC = [
                  {"param":"trend","op":"==","value":"SIDEWAYS"},{"param":"direction","op":"==","value":"SHORT"}],
      "azione": {"type":"blocca_entry","params":{"reason":"STATIC_TOSSICO_SHORT_DEBOLE_ALTA_SIDEWAYS"}},
      "priority":1, "samples":21, "wr":0.10, "note":"WR 10% SHORT RANGE_VOL_W BTC"},
-
-    # ───────────────────────────────────────────────────────────────────
-    # NUOVE 11mag2026 — capsule SHORT mancanti dalla MAPPA_DEL_TESORO.
-    # Coprono 3 zone tossiche scoperte dai dati oracolo:
-    #   - DEBOLE|ALTA|DOWN     PnL -$1.87 medio
-    #   - MEDIO|MEDIA|SIDEWAYS PnL -$2.89 medio
-    #   - FORTE|MEDIA|SIDEWAYS PnL -$2.67 medio
-    # Servono ADESSO perché stiamo per sbloccare SHORT in RANGING
-    # (riga 6966 OVERTOP_BASSANO_V16_PRODUCTION.py). Senza queste,
-    # SHORT entrerebbe in contesti perdenti senza protezione.
-    # ───────────────────────────────────────────────────────────────────
-    {"id": "STATIC_SHORT_DEBOLE_ALTA_DOWN_BTC", "asset": "BTCUSDC", "livello": "STATIC", "tipo": "VETO_SHORT",
-     "descrizione": "WEAK_BEAR SHORT: WR 40% PnL -$1.87 su BTC",
-     "trigger": [{"param":"momentum","op":"==","value":"DEBOLE"},{"param":"volatility","op":"==","value":"ALTA"},
-                 {"param":"trend","op":"==","value":"DOWN"},{"param":"direction","op":"==","value":"SHORT"}],
-     "azione": {"type":"blocca_entry","params":{"reason":"STATIC_TOSSICO_SHORT_DEBOLE_ALTA_DOWN"}},
-     "priority":1, "samples":15, "wr":0.40, "note":"WR 40% PnL-$1.87 SHORT WEAK_BEAR BTC"},
-
-    {"id": "STATIC_SHORT_MEDIO_MEDIA_SIDEWAYS_BTC", "asset": "BTCUSDC", "livello": "STATIC", "tipo": "VETO_SHORT",
-     "descrizione": "MED_SIDE SHORT: WR 20% PnL -$2.89 su BTC",
-     "trigger": [{"param":"momentum","op":"==","value":"MEDIO"},{"param":"volatility","op":"==","value":"MEDIA"},
-                 {"param":"trend","op":"==","value":"SIDEWAYS"},{"param":"direction","op":"==","value":"SHORT"}],
-     "azione": {"type":"blocca_entry","params":{"reason":"STATIC_TOSSICO_SHORT_MEDIO_MEDIA_SIDEWAYS"}},
-     "priority":1, "samples":15, "wr":0.20, "note":"WR 20% PnL-$2.89 SHORT MED_SIDE BTC"},
-
-    {"id": "STATIC_SHORT_FORTE_MEDIA_SIDEWAYS_BTC", "asset": "BTCUSDC", "livello": "STATIC", "tipo": "VETO_SHORT",
-     "descrizione": "STRONG_SIDE SHORT: WR 25% PnL -$2.67 su BTC",
-     "trigger": [{"param":"momentum","op":"==","value":"FORTE"},{"param":"volatility","op":"==","value":"MEDIA"},
-                 {"param":"trend","op":"==","value":"SIDEWAYS"},{"param":"direction","op":"==","value":"SHORT"}],
-     "azione": {"type":"blocca_entry","params":{"reason":"STATIC_TOSSICO_SHORT_FORTE_MEDIA_SIDEWAYS"}},
-     "priority":1, "samples":13, "wr":0.25, "note":"WR 25% PnL-$2.67 SHORT STRONG_SIDE BTC"},
 ]
 
 # SOL: zero veti statici — impara dai dati reali propri
@@ -517,56 +486,69 @@ class CapsuleManager:
         return nuove
 
     def _l2_matrimoni(self, trades):
+        """
+        FIX #19 (12mag2026): aggiunta direction al raggruppamento e trigger.
+        Bug originale: bloccava sia LONG che SHORT su stesso matrimonio.
+        Risultato: SHORT castrato. Effetto: dei 9 trade del 11/05 nessuno SHORT.
+        """
         caps = []
         per_mat = defaultdict(list)
         for t in trades:
             m = t.get("matrimonio","")
-            if m: per_mat[m].append(t)
-        for mat, tt in per_mat.items():
+            d = t.get("direction","LONG")  # FIX #19: includo direction nella chiave
+            if m: per_mat[(m, d)].append(t)
+        for (mat, direction), tt in per_mat.items():
             if len(tt) < self.MIN_SAMPLES_L2: continue
             wins = sum(1 for t in tt if t.get("is_win"))
             wr   = wins / len(tt)
             pnl  = sum(t.get("pnl",0) for t in tt) / len(tt)
             if wr < 0.35 and pnl < -0.5:  # USDC netti
                 caps.append(self._build(
-                    f"LEARNED_MAT_TOSSICO_{mat}_{self.asset}", "LEARNED", "MATRIMONIO_TOSSICO",
-                    f"Matrimonio {mat} tossico su {self.asset}: WR {wr:.0%} n={len(tt)}",
-                    [{"param":"matrimonio","op":"==","value":mat}],
-                    {"type":"blocca_entry","params":{"reason":f"MAT_TOSSICO_{mat}"}},
+                    f"LEARNED_MAT_TOSSICO_{mat}_{direction}_{self.asset}", "LEARNED", "MATRIMONIO_TOSSICO",
+                    f"Matrimonio {mat}/{direction} tossico su {self.asset}: WR {wr:.0%} n={len(tt)}",
+                    [{"param":"matrimonio","op":"==","value":mat},
+                     {"param":"direction","op":"==","value":direction}],  # FIX #19
+                    {"type":"blocca_entry","params":{"reason":f"MAT_TOSSICO_{mat}_{direction}"}},
                     len(tt), wr, pnl, time.time()+self.MAX_AGE_L2))
-                log.info(f"[CM] 🧬 L2 MAT TOSSICO: {mat} WR={wr:.0%} n={len(tt)}")
+                log.info(f"[CM] 🧬 L2 MAT TOSSICO: {mat}/{direction} WR={wr:.0%} n={len(tt)}")
             elif wr > 0.70 and pnl > 2.50:  # breakeven USDC
                 caps.append(self._build(
-                    f"LEARNED_MAT_OPP_{mat}_{self.asset}", "LEARNED", "MATRIMONIO_OPP",
-                    f"Matrimonio {mat} opportunità su {self.asset}: WR {wr:.0%}",
-                    [{"param":"matrimonio","op":"==","value":mat}],
-                    {"type":"boost_entry","params":{"delta":5.0,"reason":f"OPP_{mat}"}},
+                    f"LEARNED_MAT_OPP_{mat}_{direction}_{self.asset}", "LEARNED", "MATRIMONIO_OPP",
+                    f"Matrimonio {mat}/{direction} opportunità su {self.asset}: WR {wr:.0%}",
+                    [{"param":"matrimonio","op":"==","value":mat},
+                     {"param":"direction","op":"==","value":direction}],  # FIX #19
+                    {"type":"boost_entry","params":{"delta":5.0,"reason":f"OPP_{mat}_{direction}"}},
                     len(tt), wr, pnl, time.time()+self.MAX_AGE_L2))
-                log.info(f"[CM] 🌟 L2 MAT OPP: {mat} WR={wr:.0%} n={len(tt)}")
+                log.info(f"[CM] 🌟 L2 MAT OPP: {mat}/{direction} WR={wr:.0%} n={len(tt)}")
         return caps
 
     def _l2_contesto(self, trades):
+        """
+        FIX #19 (12mag2026): aggiunta direction al raggruppamento e trigger.
+        Bug originale: bloccava sia LONG che SHORT su stesso contesto.
+        """
         caps = []
         per_ctx = defaultdict(list)
         for t in trades:
-            ctx = (t.get("momentum",""), t.get("volatility",""), t.get("trend",""))
-            if all(ctx): per_ctx[ctx].append(t)
+            ctx = (t.get("momentum",""), t.get("volatility",""), t.get("trend",""), t.get("direction","LONG"))  # FIX #19
+            if all([ctx[0], ctx[1], ctx[2]]): per_ctx[ctx].append(t)
         for ctx, tt in per_ctx.items():
             if len(tt) < self.MIN_SAMPLES_L2: continue
             wins = sum(1 for t in tt if t.get("is_win"))
             wr   = wins / len(tt)
             pnl  = sum(t.get("pnl",0) for t in tt) / len(tt)
-            mom, vol, trend = ctx
+            mom, vol, trend, direction = ctx  # FIX #19: unpack direction
             if wr < 0.30:
                 caps.append(self._build(
-                    f"LEARNED_CTX_{mom}_{vol}_{trend}_{self.asset}", "LEARNED", "CONTESTO_TOSSICO",
-                    f"Contesto {mom}/{vol}/{trend} tossico su {self.asset}: WR {wr:.0%}",
+                    f"LEARNED_CTX_{mom}_{vol}_{trend}_{direction}_{self.asset}", "LEARNED", "CONTESTO_TOSSICO",
+                    f"Contesto {mom}/{vol}/{trend}/{direction} tossico su {self.asset}: WR {wr:.0%}",
                     [{"param":"momentum","op":"==","value":mom},
                      {"param":"volatility","op":"==","value":vol},
-                     {"param":"trend","op":"==","value":trend}],
-                    {"type":"blocca_entry","params":{"reason":f"CTX_TOSSICO_{mom}_{vol}_{trend}"}},
+                     {"param":"trend","op":"==","value":trend},
+                     {"param":"direction","op":"==","value":direction}],  # FIX #19
+                    {"type":"blocca_entry","params":{"reason":f"CTX_TOSSICO_{mom}_{vol}_{trend}_{direction}"}},
                     len(tt), wr, pnl, time.time()+self.MAX_AGE_L2))
-                log.info(f"[CM] 🧬 L2 CTX TOSSICO: {mom}/{vol}/{trend} WR={wr:.0%}")
+                log.info(f"[CM] 🧬 L2 CTX TOSSICO: {mom}/{vol}/{trend}/{direction} WR={wr:.0%}")
         return caps
 
     def _l2_drift(self, trades):
@@ -595,21 +577,35 @@ class CapsuleManager:
         return []
 
     def _l3_regime(self, trades):
+        """
+        FIX #19 (12mag2026): aggiunta direction al raggruppamento e trigger.
+        Bug originale: AUTO_REGIME_TOSSICO_RANGING bloccava TUTTO in RANGING
+        su soli 3 samples. Soglia troppo bassa + nessuna direction.
+        """
         caps = []
         regime = self._ctx.get("regime","")
         if not regime: return caps
-        rt = [t for t in trades if t.get("regime")==regime]
-        if len(rt) < self.MIN_SAMPLES_L3: return caps
-        wins = sum(1 for t in rt if t.get("is_win"))
-        wr   = wins / len(rt)
-        if wr < 0.30:
-            caps.append(self._build(
-                f"AUTO_REGIME_TOSSICO_{regime}_{self.asset}", "AUTO", "REGIME_TOSSICO",
-                f"Regime {regime} tossico su {self.asset}: WR {wr:.0%} n={len(rt)}",
-                [{"param":"regime","op":"==","value":regime}],
-                {"type":"blocca_entry","params":{"reason":f"REGIME_TOSSICO_{regime}"}},
-                len(rt), wr, 0.0, time.time()+self.MAX_AGE_L3))
-            log.info(f"[CM] 🚨 L3 REGIME TOSSICO {regime} WR={wr:.0%}")
+        # FIX #19: raggruppa per (regime, direction)
+        rt_by_dir = defaultdict(list)
+        for t in trades:
+            if t.get("regime") == regime:
+                rt_by_dir[t.get("direction","LONG")].append(t)
+        
+        for direction, rt in rt_by_dir.items():
+            # FIX #19: alzo minimo da MIN_SAMPLES_L3 (3) a 10 per evitare 
+            # capsule generate su 3 trade
+            if len(rt) < max(10, self.MIN_SAMPLES_L3): continue
+            wins = sum(1 for t in rt if t.get("is_win"))
+            wr   = wins / len(rt)
+            if wr < 0.30:
+                caps.append(self._build(
+                    f"AUTO_REGIME_TOSSICO_{regime}_{direction}_{self.asset}", "AUTO", "REGIME_TOSSICO",
+                    f"Regime {regime}/{direction} tossico su {self.asset}: WR {wr:.0%} n={len(rt)}",
+                    [{"param":"regime","op":"==","value":regime},
+                     {"param":"direction","op":"==","value":direction}],  # FIX #19
+                    {"type":"blocca_entry","params":{"reason":f"REGIME_TOSSICO_{regime}_{direction}"}},
+                    len(rt), wr, 0.0, time.time()+self.MAX_AGE_L3))
+                log.info(f"[CM] 🚨 L3 REGIME TOSSICO {regime}/{direction} WR={wr:.0%} n={len(rt)}")
         return caps
 
     def _l3_opportunita(self, trades):
