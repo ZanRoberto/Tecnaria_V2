@@ -7078,36 +7078,6 @@ class OvertopBassanoV16Production:
         
         bearish_energy = 0
         
-        # ════════════════════════════════════════════════════════════════
-        # FIX #25 (12mag2026): TSUNAMI 30s DOWN al posto di MACD
-        # ════════════════════════════════════════════════════════════════
-        # Diagnosi: FIX #22 ha disarmato MACD (letteratura ortodossa).
-        # Effetto collaterale: bearish_energy non raggiunge più 3 in RANGING
-        # perché macd_hist è sempre 0. → bearish_streak mai >=3 → NO FLIP.
-        # 
-        # Soluzione: sostituiamo il contributo MACD con il TsunamiEngine 30s
-        # DOWN (organo del modello fisico Roberto, non letteratura ortodossa).
-        # 
-        # Logica fisica: se la 30s vede DOWN strutturato (str>=0.40), allora
-        # il prezzo sta scendendo ORA — equivalente a "MACD ribassista" ma
-        # misurato direttamente sul tsunami multi-scala, non su EMA arbitrarie.
-        # ════════════════════════════════════════════════════════════════
-        _ts_30s_down_signal = False
-        _ts_30s_up_signal = False
-        try:
-            if hasattr(self, 'tsunami') and self.tsunami is not None:
-                _last_ts = self.tsunami.last_decision()
-                if _last_ts:
-                    _v30 = _last_ts.get('verdetti', {}).get('30s', {})
-                    _dir30 = _v30.get('direction')
-                    _str30 = _v30.get('strength', 0)
-                    if _dir30 == 'DOWN' and _str30 >= 0.40:
-                        _ts_30s_down_signal = True
-                    elif _dir30 == 'UP' and _str30 >= 0.40:
-                        _ts_30s_up_signal = True
-        except Exception:
-            pass
-        
         if campo._direction == "LONG":
             # Per andare SHORT: serve impulso ribassista FRESCO
             # 1. Momentum veloce negativo (il prezzo sta scendendo ORA)
@@ -7116,8 +7086,8 @@ class OvertopBassanoV16Production:
             if mom_fast < -1.0:
                 bearish_energy += 1  # impulso forte
             
-            # 2. FIX #25: TsunamiEngine 30s DOWN (al posto di MACD disarmato)
-            if _ts_30s_down_signal:
+            # 2. MACD conferma tendenza ribassista
+            if macd_hist < -2.0:
                 bearish_energy += 1
             
             # 3. Decelerazione BASSA = impulso fresco (non esaurito)
@@ -7134,8 +7104,7 @@ class OvertopBassanoV16Production:
                 bearish_energy += 1
             if drift < -0.03:
                 bearish_energy += 1
-            # FIX #25: TsunamiEngine 30s DOWN per restare SHORT (al posto di MACD)
-            if _ts_30s_down_signal:
+            if macd_hist < 0:
                 bearish_energy += 1
         
         # Conferma: conta tick consecutivi con energia bearish alta
@@ -7172,11 +7141,7 @@ class OvertopBassanoV16Production:
         _bullish_energy = 0
         if mom_fast > 0.5:  _bullish_energy += 1
         if mom_fast > 1.0:  _bullish_energy += 1
-        # FIX #26 (12mag2026): TsunamiEngine 30s UP al posto di MACD
-        # Gemello di FIX #25: stessa logica simmetrica per il flip LONG.
-        # Senza questo, il bot non potrà mai tornare a LONG dopo aver flippato SHORT
-        # (perché _bullish_energy non raggiungerebbe più 2).
-        if _ts_30s_up_signal: _bullish_energy += 1
+        if macd_hist > 2.0: _bullish_energy += 1
         if drift > 0.08:    _bullish_energy += 1
 
         if (self._regime_current == "EXPLOSIVE" and
