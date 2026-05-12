@@ -9231,11 +9231,11 @@ class OvertopBassanoV16Production:
             '_fp_ts_10_coe':    _ts_10_coe,
             '_fp_ts_conf':      _ts_conf,
             '_fp_oi_carica':    getattr(self, '_oi_carica', None),
-            '_fp_rsi':          getattr(self.campo, '_rsi_val', None) if hasattr(self, 'campo') else None,
-            '_fp_macd':         getattr(self.campo, '_macd_val', None) if hasattr(self, 'campo') else None,
-            '_fp_matrimonio':   getattr(self, '_last_matrimonio', '') if hasattr(self, '_last_matrimonio') else '',
-            '_fp_score':        getattr(self, '_last_score', None),
-            '_fp_soglia':       getattr(self, '_last_soglia', None),
+            '_fp_rsi':          getattr(self.campo, '_last_rsi', None) if hasattr(self, 'campo') else None,
+            '_fp_macd':         getattr(self.campo, '_last_macd', None) if hasattr(self, 'campo') else None,
+            '_fp_matrimonio':   getattr(self, '_shadow_matrimonio', '') or '',
+            '_fp_score':        getattr(self.campo, '_last_score', None) if hasattr(self, 'campo') else None,
+            '_fp_soglia':       getattr(self.campo, '_last_soglia', None) if hasattr(self, 'campo') else None,
         }
         self._phantoms_open.append(phantom)
 
