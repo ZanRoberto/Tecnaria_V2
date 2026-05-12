@@ -3462,15 +3462,11 @@ class PersistenzaStato:
                         for p in data['prices_ta']:
                             bot.campo._prices_ta.append(float(p))
                         restored.append(f"prices_ta:{len(data['prices_ta'])}")
-                        # IMPORTANTE: ricalcola RSI e MACD subito sui dati ripristinati
-                        if len(bot.campo._prices_ta) >= 30:
-                            try:
-                                bot.campo._update_rsi()
-                                bot.campo._update_macd()
-                                log.info(f"[RUNTIME_LOAD] 🎯 RSI/MACD ricalcolati su buffer ripristinato "
-                                        f"({len(bot.campo._prices_ta)} prezzi)")
-                            except Exception as _e:
-                                log.warning(f"[RUNTIME_LOAD] RSI/MACD recompute failed: {_e}")
+                        # FIX #22 (12mag): RSI/MACD DISARMATI — non più ricalcolati.
+                        # Buffer prices_ta resta persistito per coerenza, ma il bot
+                        # non ne calcola più gli indicatori ortodossi.
+                        # bot.campo._update_rsi()
+                        # bot.campo._update_macd()
                     
                     if 'tick_count' in data:
                         bot.campo._tick_count = int(data.get('tick_count', 0))
@@ -4167,8 +4163,35 @@ class CampoGravitazionale:
     W_TREND       = 12    # era 15
     W_VOLATILITY  = 8     # era 10
     W_REGIME      = 3     # era 5
-    W_RSI         = 10    # NUOVO - il consigliere ipervenduto/ipercomprato
-    W_MACD        = 10    # NUOVO - il consigliere trend/momentum
+    # ════════════════════════════════════════════════════════════════
+    # FIX #22 (12mag2026): DISARMO RSI/MACD — Roberto Zanardo
+    # ════════════════════════════════════════════════════════════════
+    # MOTIVAZIONE STRATEGICA:
+    # RSI (Wilder 1978) e MACD (Appel 1979) sono nati per:
+    #   - grafici giornalieri/orari
+    #   - mercati azionari NYSE
+    #   - calcoli su carta o calcolatrice
+    # NON sono nati per:
+    #   - BTC che fa 10 tick/secondo
+    #   - crypto con volatilità diversa
+    #   - algoritmi su scale di secondi
+    #   - il modello fisico di Roberto (OI_carica, SeedScorer, 
+    #     TsunamiEngine, Matrimoni, Compartimenti)
+    # 
+    # Forensic 12mag con 151 phantom ha mostrato:
+    #   RSI:  W=None  L=43.59  → NON discrimina
+    #   MACD: W=None  L=-3.57  → NON discrimina
+    #
+    # Roberto: "Esistevano, non servono. Oggi sono zavorra. 
+    #           Strozzano il nostro sistema."
+    #
+    # Mantengo le funzioni nel codice (reversibile) ma azzero i pesi:
+    # le decisioni non saranno più influenzate da letteratura ortodossa.
+    # Sperimentale: se il bot peggiora rimetto W=10. Se migliora 
+    # procediamo a rimozione totale (LIVELLO 3).
+    # ════════════════════════════════════════════════════════════════
+    W_RSI         = 0     # ERA 10 — disarmato 12mag (letteratura ortodossa)
+    W_MACD        = 0     # ERA 10 — disarmato 12mag (letteratura ortodossa)
 
     # -- SCORING PER DIMENSIONE --------------------------------------------
     # LONG - impulso rialzista
@@ -4260,8 +4283,13 @@ class CampoGravitazionale:
             self._ta_tick_counter = 0
             self._prices_ta.append(price)
             if len(self._prices_ta) >= 30:
-                self._update_rsi()
-                self._update_macd()
+                # FIX #22 (12mag): RSI/MACD DISARMATI — letteratura ortodossa zavorra.
+                # Mantengo le funzioni nel codice (reversibile) ma non le chiamo.
+                # Decisione del bot si basa solo su organi del modello fisico:
+                # OI_carica, SeedScorer, TsunamiEngine, Matrimoni, drift, comparto.
+                # self._update_rsi()
+                # self._update_macd()
+                pass
 
     def score_now(self, seed_score: float, fingerprint_wr: float,
                   momentum: str, volatility: str, trend: str,
@@ -4274,7 +4302,9 @@ class CampoGravitazionale:
         if self._tick_count < self.WARMUP_TICKS:
             return {'score': 0, 'soglia': 60, 'valid': False}
 
-        W = {"seed":25,"fp":20,"mom":12,"trend":12,"vol":8,"regime":3,"rsi":10,"mac":10}
+        # FIX #22 (12mag): RSI/MACD pesi azzerati anche in score_now (letteratura ortodossa).
+        # I valori 10,10 ERANO i pesi originali. Mantengo le chiavi per compatibilità.
+        W = {"seed":25,"fp":20,"mom":12,"trend":12,"vol":8,"regime":3,"rsi":0,"mac":0}
         MOM_L  = {"FORTE":1.0,"MEDIO":0.67,"DEBOLE":0.20}
         MOM_S  = {"FORTE":0.20,"MEDIO":0.67,"DEBOLE":1.0}
         TRD_L  = {"UP":1.0,"SIDEWAYS":0.47,"DOWN":0.0}
