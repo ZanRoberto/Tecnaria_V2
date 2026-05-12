@@ -7794,28 +7794,73 @@ class OvertopBassanoV16Production:
                 _ts_decision = self.tsunami.evaluate()
                 _campo_dir = self.campo._direction  # LONG o SHORT corrente
                 
-                if _ts_decision.azione == 'NO_ENTRY':
+                # ════════════════════════════════════════════════════════════════
+                # FIX #29 (12mag2026 sera): BYPASS MAGNITUDE PER TREND VERI
+                # ════════════════════════════════════════════════════════════════
+                # Scoperta: TsunamiEngine misura coerenza/direzione MA NON ampiezza.
+                # Su BTC range stretto, 30s rumoroso → blocca tutto.
+                # Ma il 10min sa la verità: se vede trend strutturato (coe>=0.80) 
+                # E il prezzo si è mosso di almeno $80 nell'ora → entra LONG/SHORT
+                # nella direzione del 10min, bypassando il 30s.
+                # 
+                # Soglia magnitude: 80$ in 1h = +0.10% su BTC a 80k.
+                # Sotto a questo, restiamo conservativi.
+                # ════════════════════════════════════════════════════════════════
+                _bypass_magnitude = False
+                _bypass_dir = None
+                try:
+                    _ts_verd = _ts_decision.verdetti if hasattr(_ts_decision, 'verdetti') else {}
+                    _v10 = _ts_verd.get('10min', None)
+                    if _v10 and hasattr(_v10, 'direction') and hasattr(_v10, 'coerenza'):
+                        # 10min ha trend coerente
+                        if _v10.coerenza >= 0.80 and _v10.strength >= 0.50 and _v10.direction in ('UP', 'DOWN'):
+                            # Verifico magnitudine: prezzo si è mosso di almeno $80 negli ultimi 3600 sec
+                            if hasattr(self, 'campo') and hasattr(self.campo, '_prices_ta'):
+                                _prices_recent = list(self.campo._prices_ta)
+                                if len(_prices_recent) >= 50:
+                                    _p_start = _prices_recent[0]
+                                    _p_now = _prices_recent[-1]
+                                    _delta_dollar = abs(_p_now - _p_start)
+                                    if _delta_dollar >= 80:
+                                        _bypass_magnitude = True
+                                        _bypass_dir = 'LONG' if _v10.direction == 'UP' else 'SHORT'
+                                        self._log_m2("⚡", f"BYPASS_MAGNITUDE: 10min={_v10.direction} "
+                                                           f"coe={_v10.coerenza:.2f} delta=${_delta_dollar:.0f} → {_bypass_dir}")
+                except Exception as _e_bm:
+                    pass
+                
+                if _ts_decision.azione == 'NO_ENTRY' and not _bypass_magnitude:
                     self._log_m2("🌊", f"TSUNAMI_VETO: {_ts_decision.motivo}")
                     if len(self._phantoms_open) < 5:
                         self._record_phantom(price, "TSUNAMI_NO_ENTRY",
                                              seed['score'], momentum, volatility, trend)
                     return
                 
-                # Verifica coerenza direzione tsunami vs direction del campo
-                _ts_dir = 'LONG' if _ts_decision.azione == 'ENTRA_LONG' else 'SHORT'
-                if _ts_dir != _campo_dir:
-                    self._log_m2("🌊", f"TSUNAMI_DISCORDE: campo={_campo_dir} vs tsunami={_ts_dir} "
-                                       f"({_ts_decision.confidenza}/3) → blocca")
-                    if len(self._phantoms_open) < 5:
-                        self._record_phantom(price, f"TSUNAMI_DISCORDE_{_ts_dir}",
-                                             seed['score'], momentum, volatility, trend)
-                    return
-                
-                # Tsunami concorda con campo → log positivo e salvo size_mult
-                self._log_m2("🌊", f"TSUNAMI_OK: {_ts_dir} confidenza={_ts_decision.confidenza}/3 "
-                                   f"size_mult={_ts_decision.size_mult:.2f}")
-                # Conserva size_mult per usarlo dopo (sarà moltiplicato a fine entry)
-                self._tsunami_size_mult = _ts_decision.size_mult
+                # Se bypass magnitude attivo, forza la direzione del 10min
+                if _bypass_magnitude:
+                    _ts_dir = _bypass_dir
+                    # Sblocco anche se discorde: il 10min ha più peso del 30s
+                    if _ts_dir != _campo_dir:
+                        # Forziamo flip del campo al 10min
+                        self.campo._direction = _ts_dir
+                        self._log_m2("🔄", f"FLIP_MAGNITUDE: campo {_campo_dir} → {_ts_dir} (10min strutturato)")
+                        _campo_dir = _ts_dir
+                    self._tsunami_size_mult = 1.0
+                else:
+                    # Verifica coerenza direzione tsunami vs direction del campo
+                    _ts_dir = 'LONG' if _ts_decision.azione == 'ENTRA_LONG' else 'SHORT'
+                    if _ts_dir != _campo_dir:
+                        self._log_m2("🌊", f"TSUNAMI_DISCORDE: campo={_campo_dir} vs tsunami={_ts_dir} "
+                                           f"({_ts_decision.confidenza}/3) → blocca")
+                        if len(self._phantoms_open) < 5:
+                            self._record_phantom(price, f"TSUNAMI_DISCORDE_{_ts_dir}",
+                                                 seed['score'], momentum, volatility, trend)
+                        return
+                    
+                    # Tsunami concorda con campo → log positivo e salvo size_mult
+                    self._log_m2("🌊", f"TSUNAMI_OK: {_ts_dir} confidenza={_ts_decision.confidenza}/3 "
+                                       f"size_mult={_ts_decision.size_mult:.2f}")
+                    self._tsunami_size_mult = _ts_decision.size_mult
             else:
                 self._tsunami_size_mult = 1.0  # fallback se modulo non disponibile
 
@@ -8398,6 +8443,28 @@ class OvertopBassanoV16Production:
                 current_pnl_real = (self._shadow["price_entry"] - price) * btc_qty_sl
             else:
                 current_pnl_real = (price - self._shadow["price_entry"]) * btc_qty_sl
+
+            # ════════════════════════════════════════════════════════════════
+            # FIX #28 (12mag2026 sera): ZONA_MORTA EXIT da V13.5
+            # ════════════════════════════════════════════════════════════════
+            # Logica trapiantata dal sistema vincente V13.5 (23feb2026) che
+            # nel PDF "OVERTOP_ANALISI_PREDITTIVA_V1" (marzo 2026) ha generato
+            # +$62.54 in 16h LIVE reali su BTCUSDC.
+            #
+            # Scoperta PDF: 17 trade con durata 1.2s medio in ZONA_MORTA →
+            # WR 0%, perdita garantita -$28.42 totali. Tutti in NORMAL mode.
+            #
+            # Regola V13.5 (riga 601-603 di OVERTOP_BASSANO_VEDO_proattivo_23_02.py):
+            #   if modalita == 'NORMAL' and 2.0 <= duration < 10.0:
+            #       if pnl_corrente < 0: return "ZONA_MORTA"
+            #
+            # Adattamento V16: non abbiamo modalità NORMAL/FLAT esplicita →
+            # applichiamo SEMPRE (più conservativo, blocca perdite garantite).
+            # ════════════════════════════════════════════════════════════════
+            if 2.0 <= duration < 10.0 and current_pnl_real < 0:
+                self._log_m2("💀", f"ZONA_MORTA dur={duration:.1f}s pnl=${current_pnl_real:+.2f}")
+                self._close_shadow_trade(price, f"ZONA_MORTA_dur{duration:.0f}s")
+                return
 
             HARD_STOP_USD = self.STOP_LIVE
             if current_pnl_real < -HARD_STOP_USD:
