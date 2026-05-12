@@ -5241,7 +5241,17 @@ class SuperCervello:
                oi_carica, oi_stato, score, soglia,
                matrimonio_wr, matrimonio_trust,
                ph_protezione, ph_zavorra,
-               regime, midzone, loss_streak) -> dict:
+               regime, midzone, loss_streak,
+               fp_wr_opposite=None, fp_samples_opposite=None,
+               current_direction=None) -> dict:
+        """
+        FIX #32 (12mag2026 sera): aggiunti 3 parametri OPZIONALI con default None
+        per retro-compat. Se forniti, calcolano direction_vote.
+        - fp_wr_opposite/fp_samples_opposite: stats del fingerprint con direzione opposta
+        - current_direction: direzione corrente del campo ('LONG' o 'SHORT')
+        Se direzione opposta ha edge nettamente migliore (>=0.15 WR delta, n>=20, 
+        WR_opposite>=0.65), emette `direction_vote` opposto nell'output.
+        """
 
         self._n += 1
 
@@ -5353,7 +5363,35 @@ class SuperCervello:
         _cc_eff = round(pesi_eff.get('campo_carica', self._pesi['campo_carica']), 2)
         motivo = f"sc={st:.2f} pro={pro}/5 contro={contro}/5 cc_peso={_cc_eff:.2f} pred={_pred_forza:.2f}"
 
-        return self._out(azione, sm, sa, motivo, st, v)
+        # ════════════════════════════════════════════════════════════════
+        # FIX #32 (12mag2026 sera): DIRECTION VOTE
+        # ════════════════════════════════════════════════════════════════
+        # Se chiamante ha passato WR/samples della direzione opposta E 
+        # current_direction, valuta se SHORT (o LONG) opposto ha edge 
+        # nettamente migliore. Se sì, emette direction_vote.
+        # Soglie: n_opposite>=20, WR_opposite>=0.65, delta>=0.15 vs WR corrente.
+        # Confidenza vote: 0.0-1.0 = WR opposite scalato sopra 0.65.
+        # ════════════════════════════════════════════════════════════════
+        direction_vote = None
+        direction_vote_confidence = 0.0
+        if (fp_wr_opposite is not None and fp_samples_opposite is not None 
+            and current_direction in ('LONG', 'SHORT')):
+            try:
+                _no = float(fp_samples_opposite or 0)
+                _wo = float(fp_wr_opposite or 0)
+                _nc = float(fp_samples or 0)
+                _wc = float(fp_wr or 0)
+                if _no >= 20 and _wo >= 0.65 and (_wo - _wc) >= 0.15:
+                    direction_vote = 'SHORT' if current_direction == 'LONG' else 'LONG'
+                    # confidenza 0.65→0, 1.0→1.0
+                    direction_vote_confidence = round(min(1.0, (_wo - 0.65) / 0.35), 3)
+                    motivo += f" | FLIP_VOTE={direction_vote}(WR_opp={_wo:.0%}n={int(_no)})"
+            except Exception:
+                pass
+
+        return self._out(azione, sm, sa, motivo, st, v,
+                         direction_vote=direction_vote,
+                         direction_vote_confidence=direction_vote_confidence)
 
     def registra_esito(self, dec: dict, win: bool):
         """Dopo ogni trade adatta i pesi — gli organi precisi pesano di più."""
@@ -5372,10 +5410,15 @@ class SuperCervello:
         tot = sum(self._pesi.values())
         for k in self._pesi: self._pesi[k] = round(self._pesi[k]/tot, 4)
 
-    def _out(self, azione, size_mult, soglia_adj, motivo, confidenza, voti={}):
+    def _out(self, azione, size_mult, soglia_adj, motivo, confidenza, voti={},
+             direction_vote=None, direction_vote_confidence=0.0):
+        # FIX #32: aggiunti direction_vote e direction_vote_confidence (opzionali, 
+        # default None/0.0 per retro-compat con chiamate _out interne)
         return {'azione':azione,'size_mult':size_mult,'soglia_adj':soglia_adj,
                 'motivo':motivo,'confidenza':round(confidenza,3),
-                'voti':voti,'pesi':dict(self._pesi)}
+                'voti':voti,'pesi':dict(self._pesi),
+                'direction_vote': direction_vote,
+                'direction_vote_confidence': direction_vote_confidence}
 
 
 class OvertopBassanoV16Production:
@@ -7771,6 +7814,46 @@ class OvertopBassanoV16Production:
                 return
 
             # ════════════════════════════════════════════════════════════════
+            # FIX #31 (12mag2026 sera): PREFETCH ORACOLO + WHITELIST BYPASS
+            # ════════════════════════════════════════════════════════════════
+            # Bug architetturale: il lookup `fingerprint_wr` avveniva a riga 
+            # 7895, DOPO che TsunamiGate aveva già bloccato. Risultato: 
+            # LONG|FORTE|BASSA|UP con WR=78% n=30 MAI USATO perché Tsunami 
+            # 30s richiede 3/3 timeframe coerenti e su BTC laterale blocca 
+            # sempre prima.
+            #
+            # FIX: prefetch Oracolo QUI (prima di Tsunami). Se il fingerprint 
+            # corrente è in whitelist (n>=20 e WR>=65%), attiva il flag 
+            # `_bypass_oracolo_whitelist` che disinnesca TSUNAMI_VETO e 
+            # TSUNAMI_DISCORDE successivamente.
+            #
+            # Marker: BYPASS_ORACOLO_v1 per grep di verifica deploy.
+            # ════════════════════════════════════════════════════════════════
+            _bypass_oracolo = False
+            _bypass_oracolo_dir = None
+            _bypass_oracolo_wr = 0.0
+            _bypass_oracolo_n = 0
+            try:
+                _pre_dir = self.campo._direction
+                _pre_fp_key = self.oracolo._fp(momentum, volatility, trend, _pre_dir)
+                _pre_fp_data = self.oracolo._memory.get(_pre_fp_key, None)
+                if _pre_fp_data:
+                    _pre_samples = float(_pre_fp_data.get('samples', 0))
+                    _pre_wins    = float(_pre_fp_data.get('wins', 0))
+                    if _pre_samples >= 20:
+                        _pre_wr = _pre_wins / _pre_samples
+                        if _pre_wr >= 0.65:
+                            _bypass_oracolo = True
+                            _bypass_oracolo_dir = _pre_dir
+                            _bypass_oracolo_wr = _pre_wr
+                            _bypass_oracolo_n = int(_pre_samples)
+                            self._log_m2("📜", f"BYPASS_ORACOLO_v1: fp={_pre_fp_key} "
+                                               f"WR={_pre_wr:.0%} n={int(_pre_samples)} "
+                                               f"→ Tsunami disinnescato")
+            except Exception as _e_bo:
+                pass
+
+            # ════════════════════════════════════════════════════════════════
             # 🌊 TSUNAMI GATE — invenzione Roberto Zanardo (12mag2026)
             # ════════════════════════════════════════════════════════════════
             # PRINCIPIO FISICO: uno tsunami vero è coerente a TUTTE le scale
@@ -7830,13 +7913,19 @@ class OvertopBassanoV16Production:
                 except Exception as _e_bm:
                     pass
                 
-                if _ts_decision.azione == 'NO_ENTRY' and not _bypass_magnitude:
+                if _ts_decision.azione == 'NO_ENTRY' and not _bypass_magnitude and not _bypass_oracolo:
                     self._log_m2("🌊", f"TSUNAMI_VETO: {_ts_decision.motivo}")
                     if len(self._phantoms_open) < 5:
                         self._record_phantom(price, "TSUNAMI_NO_ENTRY",
                                              seed['score'], momentum, volatility, trend)
                     return
                 
+                # FIX #31: se bypass oracolo attivo, salta TSUNAMI_VETO e log
+                if _bypass_oracolo and _ts_decision.azione == 'NO_ENTRY':
+                    self._log_m2("📜", f"TSUNAMI_BYPASSED_BY_ORACOLO: fp WR={_bypass_oracolo_wr:.0%} "
+                                       f"n={_bypass_oracolo_n} → passa nonostante TSUNAMI {_ts_decision.motivo}")
+                    self._tsunami_size_mult = 0.7  # size ridotta per prudenza (Oracolo OK ma Tsunami no)
+
                 # Se bypass magnitude attivo, forza la direzione del 10min
                 if _bypass_magnitude:
                     _ts_dir = _bypass_dir
@@ -7851,17 +7940,23 @@ class OvertopBassanoV16Production:
                     # Verifica coerenza direzione tsunami vs direction del campo
                     _ts_dir = 'LONG' if _ts_decision.azione == 'ENTRA_LONG' else 'SHORT'
                     if _ts_dir != _campo_dir:
-                        self._log_m2("🌊", f"TSUNAMI_DISCORDE: campo={_campo_dir} vs tsunami={_ts_dir} "
-                                           f"({_ts_decision.confidenza}/3) → blocca")
-                        if len(self._phantoms_open) < 5:
-                            self._record_phantom(price, f"TSUNAMI_DISCORDE_{_ts_dir}",
-                                                 seed['score'], momentum, volatility, trend)
-                        return
-                    
-                    # Tsunami concorda con campo → log positivo e salvo size_mult
-                    self._log_m2("🌊", f"TSUNAMI_OK: {_ts_dir} confidenza={_ts_decision.confidenza}/3 "
-                                       f"size_mult={_ts_decision.size_mult:.2f}")
-                    self._tsunami_size_mult = _ts_decision.size_mult
+                        # FIX #31: se bypass oracolo attivo, ignora discorde
+                        if _bypass_oracolo:
+                            self._log_m2("📜", f"TSUNAMI_DISCORDE_BYPASSED: oracolo WR={_bypass_oracolo_wr:.0%} "
+                                               f"n={_bypass_oracolo_n} (tsunami={_ts_dir} vs campo={_campo_dir})")
+                            self._tsunami_size_mult = 0.7
+                        else:
+                            self._log_m2("🌊", f"TSUNAMI_DISCORDE: campo={_campo_dir} vs tsunami={_ts_dir} "
+                                               f"({_ts_decision.confidenza}/3) → blocca")
+                            if len(self._phantoms_open) < 5:
+                                self._record_phantom(price, f"TSUNAMI_DISCORDE_{_ts_dir}",
+                                                     seed['score'], momentum, volatility, trend)
+                            return
+                    else:
+                        # Tsunami concorda con campo → log positivo e salvo size_mult
+                        self._log_m2("🌊", f"TSUNAMI_OK: {_ts_dir} confidenza={_ts_decision.confidenza}/3 "
+                                           f"size_mult={_ts_decision.size_mult:.2f}")
+                        self._tsunami_size_mult = _ts_decision.size_mult
             else:
                 self._tsunami_size_mult = 1.0  # fallback se modulo non disponibile
 
@@ -8161,6 +8256,27 @@ class OvertopBassanoV16Production:
                     _rpos = (price - _rl) / (_rh - _rl)
                     _midzone = 0.40 <= _rpos <= 0.60
 
+            # ════════════════════════════════════════════════════════════════
+            # FIX #32 (12mag2026 sera): pre-fetch WR direzione OPPOSTA per SC
+            # ════════════════════════════════════════════════════════════════
+            # Permette a SC di proporre flip se direzione opposta ha edge 
+            # statistico nettamente migliore (delta>=15% WR, n_opp>=20).
+            # ════════════════════════════════════════════════════════════════
+            _opposite_dir = 'SHORT' if _dir == 'LONG' else 'LONG'
+            _fp_wr_opp = 0.0
+            _fp_n_opp = 0
+            try:
+                _opp_fp_key = self.oracolo._fp(momentum, volatility, trend, _opposite_dir)
+                _opp_data = self.oracolo._memory.get(_opp_fp_key, None)
+                if _opp_data:
+                    _opp_samples = float(_opp_data.get('samples', 0))
+                    _opp_wins    = float(_opp_data.get('wins', 0))
+                    if _opp_samples > 0:
+                        _fp_wr_opp = _opp_wins / _opp_samples
+                        _fp_n_opp  = int(_opp_samples)
+            except Exception:
+                pass
+
             _sc_dec = self.supercervello.decide(
                 fp_wr          = fingerprint_wr,
                 fp_samples     = self.oracolo._memory.get(
@@ -8180,6 +8296,9 @@ class OvertopBassanoV16Production:
                 regime         = self._regime_current,
                 midzone        = _midzone,
                 loss_streak    = self._m2_loss_consecutivi(),
+                fp_wr_opposite     = _fp_wr_opp,    # FIX #32
+                fp_samples_opposite= _fp_n_opp,     # FIX #32
+                current_direction  = _dir,          # FIX #32
             )
             self._last_sc_dec = _sc_dec
 
@@ -8188,6 +8307,28 @@ class OvertopBassanoV16Production:
                 self._record_phantom(price, f"SC_BLOCCA_{_sc_dec['motivo'][:20]}",
                                      seed['score'], momentum, volatility, trend)
                 return
+
+            # ════════════════════════════════════════════════════════════════
+            # FIX #32 (12mag2026 sera): FLIP_BY_SUPERCERVELLO
+            # ════════════════════════════════════════════════════════════════
+            # Se SC ha emesso direction_vote opposto con confidenza alta, 
+            # forza flip del campo PRIMA dell'open. Soglia confidenza: 0.30 
+            # (= WR_opposite >= ~75%).
+            # Re-fetch fingerprint per la nuova direzione (size/WR coerenti).
+            # ════════════════════════════════════════════════════════════════
+            _sc_dir_vote = _sc_dec.get('direction_vote')
+            _sc_dir_conf = _sc_dec.get('direction_vote_confidence', 0.0)
+            if _sc_dir_vote and _sc_dir_vote != _dir and _sc_dir_conf >= 0.30:
+                self._log_m2("🔄", f"FLIP_BY_SC: {_dir} → {_sc_dir_vote} "
+                                   f"(conf={_sc_dir_conf:.2f}, WR_opp better)")
+                self.campo._direction = _sc_dir_vote
+                _dir = _sc_dir_vote
+                # Re-fetch fingerprint_wr per la NUOVA direzione
+                try:
+                    fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend, _dir)
+                    self._last_fingerprint_wr = fingerprint_wr
+                except Exception:
+                    pass
 
             # SC può modificare size
             size = round(min(2.0, max(0.30, size * _sc_dec.get('size_mult', 1.0))), 2)
