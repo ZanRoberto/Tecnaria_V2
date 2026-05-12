@@ -469,6 +469,57 @@ class CapsuleManager:
         if self._trade_count % 10 == 0:
             self._pulisci_scadute()
 
+    # ════════════════════════════════════════════════════════════════════
+    # FIX #27 (12mag2026 sera): registra_shadow MANCAVA — bug catturato da
+    # OVERTOP con try/except silenzioso. Per TUTTA la giornata 1801 phantom
+    # LOSS non sono stati registrati nel sistema di apprendimento.
+    # Le capsule LEARNED non si generavano. Bot non imparava.
+    # 
+    # Questo metodo riceve i phantom (trade NON eseguiti ma simulati) con
+    # pattern "MOMENTUM|VOLATILITY|TREND|DIRECTION" e pnl simulato.
+    # Li accumula nel trade_buffer per analizza_e_genera() — STESSO sistema
+    # dei trade reali.
+    # 
+    # NOTA: i phantom hanno pnl più piccolo dei trade veri (durata 60s).
+    # Per evitare di triggerare capsule su rumore, accumuliamo MA non 
+    # facciamo trigger su pnl_critico (>5$) automatico.
+    # ════════════════════════════════════════════════════════════════════
+    def registra_shadow(self, pattern: str, pnl: float, oi_carica: float = 0.5):
+        """
+        Registra un trade FANTASMA (entry simulata ma bloccata).
+        Pattern formato: "MOMENTUM|VOLATILITY|TREND|DIRECTION"
+        Es: "DEBOLE|ALTA|SIDEWAYS|LONG"
+        """
+        try:
+            parti = pattern.split("|")
+            if len(parti) != 4:
+                return  # pattern malformato, ignora
+            momentum, volatility, trend, direction = parti
+            
+            shadow_trade = {
+                "_ts":        time.time(),
+                "asset":      self.asset,
+                "momentum":   momentum,
+                "volatility": volatility,
+                "trend":      trend,
+                "direction":  direction,
+                "is_win":     pnl > 0,
+                "pnl":        pnl,
+                "oi_carica":  oi_carica,
+                "_is_shadow": True,   # marker per distinguere shadow da trade veri
+            }
+            self._trade_buffer.append(shadow_trade)
+            self._trade_count += 1
+            
+            # Analizza ogni 50 shadow (più conservativo dei trade veri ogni 30)
+            # I phantom sono più rumorosi → soglia più alta evita falsi positivi
+            if self._trade_count % 50 == 0:
+                self.analizza_e_genera()
+            if self._trade_count % 100 == 0:
+                self._pulisci_scadute()
+        except Exception as e:
+            log.warning(f"[CM] ⚠️ registra_shadow errore: {e}")
+
     def analizza_e_genera(self) -> list:
         nuove = []
         trades = list(self._trade_buffer)
