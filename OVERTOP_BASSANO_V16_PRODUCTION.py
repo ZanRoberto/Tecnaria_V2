@@ -7833,6 +7833,9 @@ class OvertopBassanoV16Production:
             _bypass_oracolo_dir = None
             _bypass_oracolo_wr = 0.0
             _bypass_oracolo_n = 0
+            _pre_fp_key = None
+            _pre_wr_dbg = 0.0
+            _pre_n_dbg = 0
             try:
                 _pre_dir = self.campo._direction
                 _pre_fp_key = self.oracolo._fp(momentum, volatility, trend, _pre_dir)
@@ -7840,6 +7843,9 @@ class OvertopBassanoV16Production:
                 if _pre_fp_data:
                     _pre_samples = float(_pre_fp_data.get('samples', 0))
                     _pre_wins    = float(_pre_fp_data.get('wins', 0))
+                    _pre_n_dbg = int(_pre_samples)
+                    if _pre_samples > 0:
+                        _pre_wr_dbg = _pre_wins / _pre_samples
                     if _pre_samples >= 20:
                         _pre_wr = _pre_wins / _pre_samples
                         if _pre_wr >= 0.65:
@@ -7851,6 +7857,22 @@ class OvertopBassanoV16Production:
                                                f"WR={_pre_wr:.0%} n={int(_pre_samples)} "
                                                f"→ Tsunami disinnescato")
             except Exception as _e_bo:
+                pass
+
+            # FIX #31b (12mag2026 sera): DIAGNOSTIC LOG CAMBIO FINGERPRINT
+            # Logga UNA VOLTA SOLA quando il fingerprint corrente cambia, così 
+            # si vede esattamente cosa il bot incontra senza spammare i log.
+            # Usato per capire perché BYPASS_ORACOLO_v1 non scatta.
+            try:
+                _last_fp_seen = getattr(self, '_last_fp_diagnostic', None)
+                if _pre_fp_key and _pre_fp_key != _last_fp_seen:
+                    self._last_fp_diagnostic = _pre_fp_key
+                    _whitelist_status = "WHITELIST ✓" if _bypass_oracolo else (
+                        f"no-whitelist (n={_pre_n_dbg}, WR={_pre_wr_dbg:.0%})" 
+                        if _pre_n_dbg > 0 else "fp NON in memoria"
+                    )
+                    self._log_m2("🔍", f"FP_NUOVO: {_pre_fp_key} → {_whitelist_status}")
+            except Exception:
                 pass
 
             # ════════════════════════════════════════════════════════════════
