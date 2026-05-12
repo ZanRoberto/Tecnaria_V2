@@ -6948,32 +6948,32 @@ class OvertopBassanoV16Production:
                         'azione':  f'ALLENTA {old_base}→{new_base}',
                     })
 
-            # Sta lasciando passare cose che perdono — soglia troppo bassa
+            # FIX #30 (12mag2026 sera): RAMO IRRIGIDISCE DISABILITATO
+            # ════════════════════════════════════════════════════════════════
+            # Bug logico: wr_blocco è il WR DEI BLOCCHI, cioè dei trade BLOCCATI 
+            # dal gate. Se wr_blocco è BASSO significa che i trade bloccati 
+            # avrebbero PERSO → il gate sta facendo IL SUO LAVORO.
+            # 
+            # La logica originale "wr_blocco < 0.25 → IRRIGIDISCE" è invertita:
+            # alza la soglia proprio quando il gate funziona meglio, 
+            # strangolando l'operatività. 
+            # 
+            # Disabilita il ramo. Si conserva ALLENTA (che è corretto).
+            # Se in futuro serve un IRRIGIDISCE, va riscritto su altra metrica
+            # (es. WR dei PASSATI, non dei BLOCCATI).
+            # ════════════════════════════════════════════════════════════════
             elif wr_blocco < 0.25 and blk > 20:
-                old_base = self.campo.SOGLIA_BASE
-                new_base = min(58, old_base + 1)
-                # FIX Bug #2/4 (12mag): cooldown 10 min per IRRIGIDISCE.
-                # Bug originale: ogni 60s alza soglia anche se inutile (max 58 raggiunto).
-                # Risultato: 9-10 IRRIGIDISCI consecutivi che strangolavano operatività.
-                if not hasattr(self, '_phantom_sup_cooldown'):
-                    self._phantom_sup_cooldown = {}
-                last_h = self._phantom_sup_cooldown.get(blocco_id, 0)
-                cooldown_ok = (time.time() - last_h) > 600  # 10 min
-
-                if new_base != old_base and cooldown_ok:
-                    self.campo.SOGLIA_BASE = new_base
-                    self._phantom_sup_cooldown[blocco_id] = time.time()
-                    self._log_m2("🧠",
-                        f"PHANTOM_SUP: {blocco_id} WR={wr_blocco:.0%} blk={blk} "
-                        f"→ AUTO_IRRIGIDISCE soglia {old_base}→{new_base}")
-                    if not hasattr(self, '_phantom_sup_log'):
-                        self._phantom_sup_log = []
-                    self._phantom_sup_log.append({
-                        'ts':      time.strftime('%H:%M:%S'),
-                        'blocco':  blocco_id,
-                        'wr':      round(wr_blocco, 3),
-                        'azione':  f'IRRIGIDISCE {old_base}→{new_base}',
-                    })
+                # FIX #30: DISABILITATO. Era logica invertita.
+                # Log diagnostico per misurare quante volte AVREBBE scattato.
+                if not hasattr(self, '_phantom_sup_log'):
+                    self._phantom_sup_log = []
+                self._phantom_sup_log.append({
+                    'ts':      time.strftime('%H:%M:%S'),
+                    'blocco':  blocco_id,
+                    'wr':      round(wr_blocco, 3),
+                    'azione':  f'IRRIGIDISCE_SKIP_FIX30 (gate funziona, wr_blocco={wr_blocco:.0%})',
+                })
+                pass
 
 
     def _tele_ctx(self, trend_override=None, vol_override=None, bridge_reason=None):
@@ -7795,37 +7795,38 @@ class OvertopBassanoV16Production:
                 _campo_dir = self.campo._direction  # LONG o SHORT corrente
                 
                 # ════════════════════════════════════════════════════════════════
-                # FIX #29 (12mag2026 sera): BYPASS MAGNITUDE PER TREND VERI
+                # FIX #29 v2 (12mag2026 sera): BYPASS MAGNITUDE PER TREND VERI
                 # ════════════════════════════════════════════════════════════════
-                # Scoperta: TsunamiEngine misura coerenza/direzione MA NON ampiezza.
-                # Su BTC range stretto, 30s rumoroso → blocca tutto.
-                # Ma il 10min sa la verità: se vede trend strutturato (coe>=0.80) 
-                # E il prezzo si è mosso di almeno $80 nell'ora → entra LONG/SHORT
-                # nella direzione del 10min, bypassando il 30s.
+                # v1 (coe>=0.80 str>=0.50 delta>=$80): MAI SCATTATA in 8h live.
+                # Diagnosi: su BTC 80k a basso ATR, il 10min raramente raggiunge
+                # coe>=0.80 contemporaneamente a delta>=$80 in 1h.
                 # 
-                # Soglia magnitude: 80$ in 1h = +0.10% su BTC a 80k.
-                # Sotto a questo, restiamo conservativi.
+                # v2 SOGLIE ABBASSATE: coe>=0.65, str>=0.40, delta>=$30.
+                # $30 = 0.04% su BTC 80k → micro-trend leggibile.
+                # Marker: BYPASS_MAGNITUDE_v2 per grep di verifica deploy.
                 # ════════════════════════════════════════════════════════════════
                 _bypass_magnitude = False
                 _bypass_dir = None
+                # BYPASS_MAGNITUDE_v2 — soglie 0.65/0.40/$30
                 try:
                     _ts_verd = _ts_decision.verdetti if hasattr(_ts_decision, 'verdetti') else {}
                     _v10 = _ts_verd.get('10min', None)
                     if _v10 and hasattr(_v10, 'direction') and hasattr(_v10, 'coerenza'):
-                        # 10min ha trend coerente
-                        if _v10.coerenza >= 0.80 and _v10.strength >= 0.50 and _v10.direction in ('UP', 'DOWN'):
-                            # Verifico magnitudine: prezzo si è mosso di almeno $80 negli ultimi 3600 sec
+                        # 10min ha trend coerente (soglie v2)
+                        if _v10.coerenza >= 0.65 and _v10.strength >= 0.40 and _v10.direction in ('UP', 'DOWN'):
+                            # Verifico magnitudine: prezzo si è mosso di almeno $30 negli ultimi tick
                             if hasattr(self, 'campo') and hasattr(self.campo, '_prices_ta'):
                                 _prices_recent = list(self.campo._prices_ta)
                                 if len(_prices_recent) >= 50:
                                     _p_start = _prices_recent[0]
                                     _p_now = _prices_recent[-1]
                                     _delta_dollar = abs(_p_now - _p_start)
-                                    if _delta_dollar >= 80:
+                                    if _delta_dollar >= 30:
                                         _bypass_magnitude = True
                                         _bypass_dir = 'LONG' if _v10.direction == 'UP' else 'SHORT'
-                                        self._log_m2("⚡", f"BYPASS_MAGNITUDE: 10min={_v10.direction} "
-                                                           f"coe={_v10.coerenza:.2f} delta=${_delta_dollar:.0f} → {_bypass_dir}")
+                                        self._log_m2("⚡", f"BYPASS_MAGNITUDE_v2: 10min={_v10.direction} "
+                                                           f"coe={_v10.coerenza:.2f} str={_v10.strength:.2f} "
+                                                           f"delta=${_delta_dollar:.0f} → {_bypass_dir}")
                 except Exception as _e_bm:
                     pass
                 
