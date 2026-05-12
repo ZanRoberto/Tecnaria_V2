@@ -7183,7 +7183,39 @@ class OvertopBassanoV16Production:
                             _veritas_short_ok = True
                             break
 
-        if self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok and not _veritas_short_ok and not _drift_short_ok:
+        # ════════════════════════════════════════════════════════════════
+        # FIX #23 (12mag2026): SBLOCCO SHORT in RANGING via TSUNAMI 2min
+        # ════════════════════════════════════════════════════════════════
+        # Diagnosi 12mag pomeriggio: bot bloccato LONG in 545/545 phantom 
+        # (1h30 di osservazione) mentre tsunami 2min DOWN in 84% dei casi.
+        # Roberto: "Bot sempre LONG = anomalo".
+        #
+        # Logica fisica: se il TSUNAMI 2min (filtro low-pass strutturale)
+        # vede DOWN con forza >= 0.45 e coerenza >= 0.60, allora c'è un 
+        # trend ribassista strutturato — lo SHORT è legittimo anche in 
+        # RANGING. Le altre eccezioni restano (drift, veritas, OI fuoco).
+        #
+        # Soglie scelte:
+        #  - strength 0.45  → corrisponde a WIN più bassi osservati (0.42-0.43)
+        #  - coerenza 0.60  → discrimina tra LOSS (~0.55) e WIN (~0.63)
+        # ════════════════════════════════════════════════════════════════
+        _tsunami_short_ok = False
+        try:
+            if hasattr(self, 'tsunami') and self.tsunami is not None:
+                _ts_last = self.tsunami.last_decision()
+                if _ts_last:
+                    _v2 = _ts_last.get('verdetti', {}).get('2min', {})
+                    if (_v2.get('direction') == 'DOWN' and 
+                        _v2.get('strength', 0) >= 0.45 and 
+                        _v2.get('coerenza', 0) >= 0.60):
+                        _tsunami_short_ok = True
+                        self._log_m2("🌊", f"TSUNAMI_SHORT_OK: 2min DOWN "
+                                          f"str={_v2.get('strength',0):.2f} "
+                                          f"coe={_v2.get('coerenza',0):.2f}")
+        except Exception:
+            pass
+
+        if self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok and not _veritas_short_ok and not _drift_short_ok and not _tsunami_short_ok:
             # NON flippare - logga come SHORT evitato
             if not hasattr(self, '_shadow_short_log'):
                 self._shadow_short_log = []
@@ -7220,6 +7252,16 @@ class OvertopBassanoV16Production:
             self._log_m2("🔇", f"SHORT EVITATO in RANGING (drift={drift:+.3f}% macd={macd_hist:+.2f} energy={bearish_energy})")
             campo._direction_bearish_streak = 0
             # Non flippa - resta LONG
+        
+        # FIX #23 (12mag2026): FLIP a SHORT in RANGING quando tsunami 2min autorizza
+        # Se _tsunami_short_ok è scattato → flippa effettivamente a SHORT.
+        # (Altrimenti l'IF sopra ha bloccato il flip, ma _veritas/_drift non sono attivi)
+        elif self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok and _tsunami_short_ok and not _veritas_short_ok and not _drift_short_ok:
+            campo._direction = "SHORT"
+            campo._direction_last_change = now
+            campo._direction_bearish_streak = 0
+            self._log_m2("🔄", f"FLIP → SHORT via TSUNAMI 2min "
+                              f"(drift={drift:+.3f}% bearish={bearish_energy})")
         
         # RSI OVERRIDE: ipervenduto/ipercomprato sovrasta tutto
         # RSI < 30 = mercato caduto troppo → LONG obbligatorio
