@@ -3162,6 +3162,55 @@ class PersistenzaStato:
                     n_attivazioni      INTEGER DEFAULT 0
                 )
             """)
+            # ════════════════════════════════════════════════════════════
+            # FIX #21 (12mag2026): TABELLA FORENSE PHANTOM_NO_ENTRY
+            # ════════════════════════════════════════════════════════════
+            # Cattura il "fingerprint fisico" di ogni phantom bloccato dal
+            # TsunamiGate per analizzare a posteriori cosa distingue gli
+            # 11 WIN dai 115 LOSS (caso 12mag pomeriggio: ratio 8.4%).
+            # Roberto: "Sono gli unici soldi che possiamo prendere".
+            # ════════════════════════════════════════════════════════════
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS phantom_forensic (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts_entry        REAL,
+                    ts_close        REAL,
+                    block_reason    TEXT,
+                    direction       TEXT,
+                    price_entry     REAL,
+                    price_close     REAL,
+                    pnl_netto       REAL,
+                    is_win          INTEGER,
+                    duration_sec    REAL,
+                    -- Tsunami snapshot al momento del blocco
+                    ts_30s_strength    REAL,
+                    ts_30s_direction   TEXT,
+                    ts_30s_coerenza    REAL,
+                    ts_2min_strength   REAL,
+                    ts_2min_direction  TEXT,
+                    ts_2min_coerenza   REAL,
+                    ts_10min_strength  REAL,
+                    ts_10min_direction TEXT,
+                    ts_10min_coerenza  REAL,
+                    ts_confidenza      INTEGER,
+                    -- Altri organi al momento del blocco
+                    seed_score      REAL,
+                    oi_carica       REAL,
+                    rsi             REAL,
+                    macd            REAL,
+                    momentum        TEXT,
+                    volatility      TEXT,
+                    trend           TEXT,
+                    regime          TEXT,
+                    matrimonio      TEXT,
+                    score           REAL,
+                    soglia          REAL
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_phf_block_reason
+                ON phantom_forensic(block_reason, is_win)
+            """)
             conn.commit()
             conn.close()
         except Exception as e:
@@ -9129,6 +9178,35 @@ class OvertopBassanoV16Production:
 
     def _record_phantom(self, price, block_reason, seed_score, momentum, volatility, trend):
         """Registra un trade fantasma - bloccato da un livello di protezione."""
+        # ════════════════════════════════════════════════════════════════
+        # FIX #21 (12mag2026): FINGERPRINT FISICO al momento del blocco
+        # Cattura snapshot di TUTTI gli organi per analisi forensica futura.
+        # ════════════════════════════════════════════════════════════════
+        _ts_30s_str = _ts_30s_dir = _ts_30s_coe = None
+        _ts_2_str = _ts_2_dir = _ts_2_coe = None
+        _ts_10_str = _ts_10_dir = _ts_10_coe = None
+        _ts_conf = None
+        try:
+            if hasattr(self, 'tsunami') and self.tsunami is not None:
+                _last = self.tsunami.last_decision()
+                if _last is not None:
+                    _v = _last.get('verdetti', {})
+                    _t30 = _v.get('30s', {})
+                    _ts_30s_str = _t30.get('strength')
+                    _ts_30s_dir = _t30.get('direction')
+                    _ts_30s_coe = _t30.get('coerenza')
+                    _t2 = _v.get('2min', {})
+                    _ts_2_str = _t2.get('strength')
+                    _ts_2_dir = _t2.get('direction')
+                    _ts_2_coe = _t2.get('coerenza')
+                    _t10 = _v.get('10min', {})
+                    _ts_10_str = _t10.get('strength')
+                    _ts_10_dir = _t10.get('direction')
+                    _ts_10_coe = _t10.get('coerenza')
+                    _ts_conf = _last.get('confidenza')
+        except Exception:
+            pass
+        
         phantom = {
             'price_entry':  price,
             'block_reason': block_reason,
@@ -9141,6 +9219,23 @@ class OvertopBassanoV16Production:
             'min_price':    price,
             'regime':       self._regime_current,
             'direction':    self.campo._direction,
+            # FIX #21: fingerprint fisico per analisi forensica
+            '_fp_ts_30s_str':   _ts_30s_str,
+            '_fp_ts_30s_dir':   _ts_30s_dir,
+            '_fp_ts_30s_coe':   _ts_30s_coe,
+            '_fp_ts_2_str':     _ts_2_str,
+            '_fp_ts_2_dir':     _ts_2_dir,
+            '_fp_ts_2_coe':     _ts_2_coe,
+            '_fp_ts_10_str':    _ts_10_str,
+            '_fp_ts_10_dir':    _ts_10_dir,
+            '_fp_ts_10_coe':    _ts_10_coe,
+            '_fp_ts_conf':      _ts_conf,
+            '_fp_oi_carica':    getattr(self, '_oi_carica', None),
+            '_fp_rsi':          getattr(self.campo, '_rsi_val', None) if hasattr(self, 'campo') else None,
+            '_fp_macd':         getattr(self.campo, '_macd_val', None) if hasattr(self, 'campo') else None,
+            '_fp_matrimonio':   getattr(self, '_last_matrimonio', '') if hasattr(self, '_last_matrimonio') else '',
+            '_fp_score':        getattr(self, '_last_score', None),
+            '_fp_soglia':       getattr(self, '_last_soglia', None),
         }
         self._phantoms_open.append(phantom)
 
@@ -9334,6 +9429,52 @@ class OvertopBassanoV16Production:
                 'verdict':      "PROTEZIONE" if not is_win else "ZAVORRA",
             }
             self._phantoms_closed.append(result)
+
+            # ════════════════════════════════════════════════════════════════
+            # FIX #21 (12mag2026): SALVATAGGIO FORENSICO PHANTOM
+            # ════════════════════════════════════════════════════════════════
+            # Salva fingerprint fisico completo + esito WIN/LOSS su DB.
+            # Solo i phantom bloccati da TSUNAMI_* (focus dell'analisi).
+            # Roberto: "Sono gli unici soldi che possiamo prendere".
+            # ════════════════════════════════════════════════════════════════
+            try:
+                if "TSUNAMI" in block:
+                    import sqlite3 as _sql
+                    _duration = time.time() - ph.get('entry_time', time.time())
+                    _conn = _sql.connect(DB_PATH)
+                    _conn.execute("""
+                        INSERT INTO phantom_forensic (
+                            ts_entry, ts_close, block_reason, direction,
+                            price_entry, price_close, pnl_netto, is_win, duration_sec,
+                            ts_30s_strength, ts_30s_direction, ts_30s_coerenza,
+                            ts_2min_strength, ts_2min_direction, ts_2min_coerenza,
+                            ts_10min_strength, ts_10min_direction, ts_10min_coerenza,
+                            ts_confidenza,
+                            seed_score, oi_carica, rsi, macd,
+                            momentum, volatility, trend, regime, matrimonio,
+                            score, soglia
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                  ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                  ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                  ?, ?)
+                    """, (
+                        ph.get('entry_time'), time.time(), block, ph.get('direction','LONG'),
+                        ph['price_entry'], price, round(pnl_netto, 4), 1 if is_win_netto else 0, _duration,
+                        ph.get('_fp_ts_30s_str'), ph.get('_fp_ts_30s_dir'), ph.get('_fp_ts_30s_coe'),
+                        ph.get('_fp_ts_2_str'),   ph.get('_fp_ts_2_dir'),   ph.get('_fp_ts_2_coe'),
+                        ph.get('_fp_ts_10_str'),  ph.get('_fp_ts_10_dir'),  ph.get('_fp_ts_10_coe'),
+                        ph.get('_fp_ts_conf'),
+                        ph.get('seed_score'), ph.get('_fp_oi_carica'),
+                        ph.get('_fp_rsi'), ph.get('_fp_macd'),
+                        ph.get('momentum',''), ph.get('volatility',''),
+                        ph.get('trend',''), ph.get('regime',''),
+                        ph.get('_fp_matrimonio',''),
+                        ph.get('_fp_score'), ph.get('_fp_soglia'),
+                    ))
+                    _conn.commit()
+                    _conn.close()
+            except Exception as _fe:
+                pass  # mai bloccare per errori di logging
 
             # ── SOSPENSIONE: collega Phantom al meccanismo di osservazione ──
             # Ogni fantasma chiuso aggiorna lo shadow della sospensione attiva
