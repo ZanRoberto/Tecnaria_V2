@@ -539,35 +539,41 @@ class CapsuleManager:
     def _l2_matrimoni(self, trades):
         """
         FIX #19 (12mag2026): aggiunta direction al raggruppamento e trigger.
-        Bug originale: bloccava sia LONG che SHORT su stesso matrimonio.
-        Risultato: SHORT castrato. Effetto: dei 9 trade del 11/05 nessuno SHORT.
+        FIX #38 (13mag2026 mattina): vedi _l2_contesto — una partita persa = capsula.
         """
         caps = []
         per_mat = defaultdict(list)
         for t in trades:
             m = t.get("matrimonio","")
-            d = t.get("direction","LONG")  # FIX #19: includo direction nella chiave
+            d = t.get("direction","LONG")
             if m: per_mat[(m, d)].append(t)
         for (mat, direction), tt in per_mat.items():
-            if len(tt) < self.MIN_SAMPLES_L2: continue
+            losses = [t for t in tt if not t.get("is_win")]
             wins = sum(1 for t in tt if t.get("is_win"))
-            wr   = wins / len(tt)
-            pnl  = sum(t.get("pnl",0) for t in tt) / len(tt)
-            if wr < 0.35 and pnl < -0.5:  # USDC netti
+            wr   = wins / len(tt) if tt else 0
+            pnl  = sum(t.get("pnl",0) for t in tt) / len(tt) if tt else 0
+
+            # FIX #38: una perdita basta per generare capsula tossica
+            if losses:
+                _pnl_worst = min(t.get("pnl", 0) for t in losses)
                 caps.append(self._build(
                     f"LEARNED_MAT_TOSSICO_{mat}_{direction}_{self.asset}", "LEARNED", "MATRIMONIO_TOSSICO",
-                    f"Matrimonio {mat}/{direction} tossico su {self.asset}: WR {wr:.0%} n={len(tt)}",
+                    f"Matrimonio {mat}/{direction} tossico su {self.asset}: n={len(tt)} loss={len(losses)} worst=${_pnl_worst:.2f}",
                     [{"param":"matrimonio","op":"==","value":mat},
-                     {"param":"direction","op":"==","value":direction}],  # FIX #19
+                     {"param":"direction","op":"==","value":direction}],
                     {"type":"blocca_entry","params":{"reason":f"MAT_TOSSICO_{mat}_{direction}"}},
                     len(tt), wr, pnl, time.time()+self.MAX_AGE_L2))
-                log.info(f"[CM] 🧬 L2 MAT TOSSICO: {mat}/{direction} WR={wr:.0%} n={len(tt)}")
-            elif wr > 0.70 and pnl > 2.50:  # breakeven USDC
+                log.info(f"[CM] 🧬 L2 MAT TOSSICO: {mat}/{direction} n={len(tt)} loss={len(losses)} pnl_worst=${_pnl_worst:.2f}")
+            elif wr > 0.70 and pnl > 2.50 and len(tt) >= self.MIN_SAMPLES_L2:
+                # OPPORTUNITÀ: per amplificare un pattern positivo manteniamo MIN_SAMPLES.
+                # Razionale: un singolo win può essere fortuna; per certificare un
+                # pattern come "vincente da boostare", chiediamo statistica reale.
+                # Le perdite invece sono prevenzione → basta UNA volta.
                 caps.append(self._build(
                     f"LEARNED_MAT_OPP_{mat}_{direction}_{self.asset}", "LEARNED", "MATRIMONIO_OPP",
                     f"Matrimonio {mat}/{direction} opportunità su {self.asset}: WR {wr:.0%}",
                     [{"param":"matrimonio","op":"==","value":mat},
-                     {"param":"direction","op":"==","value":direction}],  # FIX #19
+                     {"param":"direction","op":"==","value":direction}],
                     {"type":"boost_entry","params":{"delta":5.0,"reason":f"OPP_{mat}_{direction}"}},
                     len(tt), wr, pnl, time.time()+self.MAX_AGE_L2))
                 log.info(f"[CM] 🌟 L2 MAT OPP: {mat}/{direction} WR={wr:.0%} n={len(tt)}")
@@ -577,29 +583,40 @@ class CapsuleManager:
         """
         FIX #19 (12mag2026): aggiunta direction al raggruppamento e trigger.
         Bug originale: bloccava sia LONG che SHORT su stesso contesto.
+
+        FIX #38 (13mag2026 mattina) — UNA PARTITA PERSA = UNA CAPSULA.
+        Decisione Roberto: tre partite perse non è un giocatore, è un coglione.
+        Il sistema vaccino del giocatore di scacchi impara dalla PRIMA perdita.
+        Eliminata logica MIN_SAMPLES_L2=3 e WR<30%: appena un trade chiude in loss
+        in un contesto (momentum|volatility|trend|direction), si genera la capsula.
+        Vincoli mantenuti:
+        - WHITELIST_VINCENTI (5 contesti UP/DOWN) intoccabile, gestita in valuta()
+        - capsule expire dopo MAX_AGE_L2 (timeout normale)
         """
         caps = []
         per_ctx = defaultdict(list)
         for t in trades:
-            ctx = (t.get("momentum",""), t.get("volatility",""), t.get("trend",""), t.get("direction","LONG"))  # FIX #19
+            ctx = (t.get("momentum",""), t.get("volatility",""), t.get("trend",""), t.get("direction","LONG"))
             if all([ctx[0], ctx[1], ctx[2]]): per_ctx[ctx].append(t)
         for ctx, tt in per_ctx.items():
-            if len(tt) < self.MIN_SAMPLES_L2: continue
+            losses = [t for t in tt if not t.get("is_win")]
+            if not losses:
+                continue  # nessuna perdita in questo contesto → niente capsula
             wins = sum(1 for t in tt if t.get("is_win"))
             wr   = wins / len(tt)
             pnl  = sum(t.get("pnl",0) for t in tt) / len(tt)
-            mom, vol, trend, direction = ctx  # FIX #19: unpack direction
-            if wr < 0.30:
-                caps.append(self._build(
-                    f"LEARNED_CTX_{mom}_{vol}_{trend}_{direction}_{self.asset}", "LEARNED", "CONTESTO_TOSSICO",
-                    f"Contesto {mom}/{vol}/{trend}/{direction} tossico su {self.asset}: WR {wr:.0%}",
-                    [{"param":"momentum","op":"==","value":mom},
-                     {"param":"volatility","op":"==","value":vol},
-                     {"param":"trend","op":"==","value":trend},
-                     {"param":"direction","op":"==","value":direction}],  # FIX #19
-                    {"type":"blocca_entry","params":{"reason":f"CTX_TOSSICO_{mom}_{vol}_{trend}_{direction}"}},
-                    len(tt), wr, pnl, time.time()+self.MAX_AGE_L2))
-                log.info(f"[CM] 🧬 L2 CTX TOSSICO: {mom}/{vol}/{trend}/{direction} WR={wr:.0%}")
+            mom, vol, trend, direction = ctx
+            _pnl_worst = min(t.get("pnl", 0) for t in losses)
+            caps.append(self._build(
+                f"LEARNED_CTX_{mom}_{vol}_{trend}_{direction}_{self.asset}", "LEARNED", "CONTESTO_TOSSICO",
+                f"Contesto {mom}/{vol}/{trend}/{direction} tossico su {self.asset}: n={len(tt)} loss={len(losses)} worst=${_pnl_worst:.2f}",
+                [{"param":"momentum","op":"==","value":mom},
+                 {"param":"volatility","op":"==","value":vol},
+                 {"param":"trend","op":"==","value":trend},
+                 {"param":"direction","op":"==","value":direction}],
+                {"type":"blocca_entry","params":{"reason":f"CTX_TOSSICO_{mom}_{vol}_{trend}_{direction}"}},
+                len(tt), wr, pnl, time.time()+self.MAX_AGE_L2))
+            log.info(f"[CM] 🧬 L2 CTX TOSSICO: {mom}/{vol}/{trend}/{direction} n={len(tt)} loss={len(losses)} pnl_worst=${_pnl_worst:.2f}")
         return caps
 
     def _l2_drift(self, trades):
