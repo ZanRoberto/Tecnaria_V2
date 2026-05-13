@@ -175,6 +175,25 @@ def trading_heartbeat():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/heartbeat', methods=['GET'])
+def heartbeat_ping():
+    """FIX #35 (12mag2026 sera): endpoint GET /heartbeat per Render keep-alive
+    e monitor esterni. Era 404 perché esisteva solo /trading/heartbeat POST.
+    Ritorna stato minimo del bot per healthcheck.
+    """
+    try:
+        with heartbeat_lock:
+            last_seen = heartbeat_data.get("last_seen", "never")
+            status = heartbeat_data.get("status", "unknown")
+        return jsonify({
+            "status": "alive",
+            "bot_status": status,
+            "last_seen": last_seen,
+            "ts": datetime.utcnow().isoformat()
+        }), 200
+    except Exception as e:
+        return jsonify({"status": "alive", "error": str(e)}), 200
+
 @app.route('/trading/status', methods=['GET'])
 def trading_status():
     try:
@@ -514,8 +533,14 @@ def brain_analysis_thread():
                 SELECT COUNT(*), SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END), SUM(pnl)
                 FROM trades WHERE event_type IN ('EXIT', 'M2_EXIT')
             """, fetch=True)
+            # FIX #34 (12mag2026 sera): db_execute con query COUNT usa fetchone()
+            # → row è già una tupla singola (n, w, p), NON lista di tuple.
+            # Bug originale: row[0][0] interpretava row come lista → 
+            # "'int' object is not subscriptable" perché row[0]=55 (int).
             if row and row[0]:
-                n, w, p = row[0][0] or 0, row[0][1] or 0, row[0][2] or 0
+                n = row[0] or 0
+                w = row[1] or 0
+                p = row[2] or 0
                 wr = (w / n * 100) if n > 0 else 0
                 log(f"[BRAIN] 🧠 {n} trade | WR={wr:.0f}% | PnL={p:.2f}$")
         except Exception as e:
