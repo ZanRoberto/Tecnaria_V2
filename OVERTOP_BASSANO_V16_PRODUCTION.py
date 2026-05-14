@@ -5447,10 +5447,87 @@ class SuperCervello:
                 pass  # il log non deve mai rompere decide()
 
         # Blocchi assoluti
+        # midzone resta veto fisico assoluto: zona morta di mercato, non giudizio
+        # di merito. Non si tocca.
         if midzone:
             return self._out("BLOCCA", 0.5, 0, "midzone", 0.95)
+
+        # ════════════════════════════════════════════════════════════════════
+        # PASSO 5b — LO STREAK È UN VOTO, NON UN VETO (14mag2026)
+        # ════════════════════════════════════════════════════════════════════
+        # Prima: `if loss_streak >= 4: return BLOCCA` — dittatore dentro SC.
+        # Tagliava decide() prima di guardare il verbale costituzionale.
+        #
+        # Ora: lo streak deposita un PESO CONTRARIO. Il verbale può
+        # controbilanciarlo SOLO con prove fisiche concrete e con MARGINE NETTO.
+        # Nel dubbio lo streak vince — resta la difesa di default.
+        #
+        # Numeri: nessuna soglia inventata.
+        #  - oi_carica >= 0.75  → stessa soglia di VERITAS_FUOCO (riga sotto)
+        #  - tsunami_confidence → già 0-3 nel vota() di Tsunami
+        #  - capsule_block_score, veritas_ctx_wr → valori osservati nei log live
+        #  - MARGINE_OVERRIDE → unico parametro nuovo. Parte CONSERVATIVO.
+        # ════════════════════════════════════════════════════════════════════
         if loss_streak >= 4:
-            return self._out("BLOCCA", 0.5, 0, f"streak_{loss_streak}", 0.90)
+            # Retro-compat: se il verbale non è arrivato (chiamata vecchia,
+            # tutti i param costituzionali None) → comportamento di prima.
+            _verbale_presente = (tsunami_vote is not None
+                                 or capsule_block_score is not None
+                                 or veritas_ctx_wr is not None)
+            if not _verbale_presente:
+                return self._out("BLOCCA", 0.5, 0, f"streak_{loss_streak}", 0.90)
+
+            # --- piatto 1: lo streak ---
+            # Più lungo lo streak, più pesa — ma plafonato (non infinito).
+            # streak 4 → 4.0 ; streak 8 → 8.0 ; streak 12+ → 10.0 (cap)
+            streak_contro = float(min(10.0, loss_streak))
+
+            # --- piatto 2: il verbale può controbilanciare ---
+            verbale_pro = 0.0
+            _pro_reasons = []
+
+            # (a) impulso fisico coerente multi-segnale: Tsunami + FLIP allineati
+            _tc = tsunami_confidence if tsunami_confidence is not None else 0
+            _td = tsunami_direction
+            _pd = proposed_direction
+            _fc = flip_confidence if flip_confidence is not None else 0.0
+            if (tsunami_vote in ("ENTRA_LONG", "ENTRA_SHORT")
+                    and _tc >= 2
+                    and _pd is not None and _td is not None and _pd == _td
+                    and _fc >= 0.7):
+                verbale_pro += 6.0
+                _pro_reasons.append(f"impulso_coerente(ts_conf={_tc},flip={_fc:.1f})")
+
+            # (b) energia confermata: OI FUOCO carica alta
+            if oi_stato == "FUOCO" and oi_carica >= 0.75:
+                verbale_pro += 4.0
+                _pro_reasons.append(f"oi_FUOCO_c{oi_carica:.2f}")
+
+            # --- il verbale può anche RAFFORZARE lo streak ---
+            # se gli altri testimoni confermano "contesto tossico", lo streak
+            # ha ragione: capsule che bloccano + Veritas che certifica WR basso.
+            if (capsule_block_score is not None and capsule_block_score >= 100
+                    and veritas_ctx_wr is not None and veritas_ctx_wr < 0.30):
+                streak_contro += 4.0
+                _pro_reasons.append("verbale_conferma_tossico")
+
+            # --- LA BILANCIA — SC decide ---
+            # MARGINE_OVERRIDE conservativo: il verbale deve battere lo streak
+            # di almeno 2.0 punti netti. Nel dubbio, lo streak vince.
+            MARGINE_OVERRIDE = 2.0
+            if verbale_pro - streak_contro >= MARGINE_OVERRIDE:
+                # Override: NON blocca per streak. Prosegue alla valutazione
+                # normale (voti organi, soglia su st, direction_vote).
+                # Lo streak NON è cancellato — è stato controbilanciato.
+                log.info(f"🏛️ [SC_STREAK_OVERRIDE] streak={loss_streak} "
+                         f"verbale_pro={verbale_pro:.1f} > streak_contro={streak_contro:.1f} "
+                         f"| {','.join(_pro_reasons)} → prosegue")
+                # (cade fuori dall'if — decide() continua normalmente)
+            else:
+                log.info(f"🏛️ [SC_STREAK_CONFERMATO] streak={loss_streak} "
+                         f"verbale_pro={verbale_pro:.1f} <= streak_contro={streak_contro:.1f} "
+                         f"→ BLOCCA")
+                return self._out("BLOCCA", 0.5, 0, f"streak_{loss_streak}", 0.90)
 
         # VERITAS: Oracolo FUOCO con carica alta — SC non blocca mai
         # 373 segnali: SC blocca $112 di guadagni reali quando Oracolo ha ragione
@@ -5579,6 +5656,38 @@ class SuperCervello:
                     motivo += f" | FLIP_VOTE={direction_vote}(WR_opp={_wo:.0%}n={int(_no)})"
             except Exception:
                 pass
+
+        # ════════════════════════════════════════════════════════════════════
+        # PASSO 5b — SC DECIDE SUL FLIP PROPOSTO NEL VERBALE (14mag2026)
+        # ════════════════════════════════════════════════════════════════════
+        # Prima: il FLIP veniva deposto nel verbale (proposed_direction,
+        # flip_confidence) e SC lo IGNORAVA. Risultato dai log: 20 trade LONG
+        # di fila mentre il 10min andava DOWN e il FLIP proponeva SHORT.
+        #
+        # Ora: SC DECIDE sul FLIP. È una SECONDA via, complementare al
+        # direction_vote di FIX #32:
+        #  - direction_vote (FIX #32) → flip su evidenza STORICA (fingerprint opposto)
+        #  - questo blocco          → flip su impulso FISICO (BYPASS_MAGNITUDE 10min)
+        # Se direction_vote NON ha già deciso un flip, e il verbale porta un
+        # proposed_direction con flip_confidence alta + coerenza Tsunami,
+        # SC accetta il flip. La direzione la decide SC — Articolo 3.
+        #
+        # Soglie: nessun numero inventato.
+        #  - flip_confidence >= 0.7 → il BYPASS_MAGNITUDE setta 1.0 (alta conf.)
+        #  - coerenza con tsunami_direction → l'impulso deve essere multi-segnale
+        # ════════════════════════════════════════════════════════════════════
+        if direction_vote is None and proposed_direction in ('LONG', 'SHORT'):
+            _fc2 = flip_confidence if flip_confidence is not None else 0.0
+            _td2 = tsunami_direction
+            # il FLIP è valido se: confidenza alta E (Tsunami concorda OPPURE
+            # Tsunami non si esprime — il BYPASS_MAGNITUDE 10min è già di per sé
+            # un segnale strutturato forte)
+            _tsunami_concorda = (_td2 is None) or (_td2 == proposed_direction)
+            if _fc2 >= 0.7 and _tsunami_concorda:
+                direction_vote = proposed_direction
+                direction_vote_confidence = round(min(1.0, _fc2), 3)
+                motivo += (f" | FLIP_VERBALE={direction_vote}"
+                           f"(conf={_fc2:.2f},ts={_td2})")
 
         return self._out(azione, sm, sa, motivo, st, v,
                          direction_vote=direction_vote,
@@ -8856,7 +8965,7 @@ class OvertopBassanoV16Production:
             _sc_dir_conf = _sc_dec.get('direction_vote_confidence', 0.0)
             if _sc_dir_vote and _sc_dir_vote != _dir and _sc_dir_conf >= 0.30:
                 self._log_m2("🔄", f"FLIP_BY_SC: {_dir} → {_sc_dir_vote} "
-                                   f"(conf={_sc_dir_conf:.2f}, WR_opp better)")
+                                   f"(conf={_sc_dir_conf:.2f}) — {_sc_dec.get('motivo','')[-40:]}")
                 self.campo._direction = _sc_dir_vote
                 _dir = _sc_dir_vote
                 # Re-fetch fingerprint_wr per la NUOVA direzione
