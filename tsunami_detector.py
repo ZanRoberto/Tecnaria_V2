@@ -478,6 +478,64 @@ class TsunamiEngine:
         self._last_decision = decision
         self._last_decision_ts = time.time()
         return decision
+
+    # =========================================================================
+    # STATUTO COSTITUZIONALE DI TSUNAMI (Passo 3, 13mag2026)
+    # =========================================================================
+    # AUDIT ROBERTO V1 / SC SOVRANO.
+    #
+    # Oggi il bot chiama evaluate() e usa azione=='NO_ENTRY' come VETO che fa
+    # early return — Tsunami è un dittatore.
+    #
+    # Lo Statuto aggiunge vota(): Tsunami diventa un TESTIMONE. Depone il suo
+    # parere in forma standard, SC poi deciderà se e quanto pesarlo.
+    #
+    #   vota() ritorna:
+    #     tsunami_vote        'ENTRA_LONG' | 'ENTRA_SHORT' | 'NO_ENTRY'
+    #     tsunami_confidence  0-3  (quanti timeframe concordano)
+    #     tsunami_direction   'LONG' | 'SHORT' | None
+    #     tsunami_reason      str  (motivo leggibile)
+    #     tsunami_size_mult   float (suggerimento size, NON vincolante)
+    #
+    # MODALITÀ PASSIVA: vota() esiste ma il bot continua a chiamare evaluate()
+    # e a fare early return. Il passaggio a vota() avverrà nella scena (Passo 5).
+    # evaluate() NON è toccato. Behavior del bot invariato.
+    # =========================================================================
+    def vota(self) -> dict:
+        """Statuto costituzionale: Tsunami depone un voto, non emette un veto.
+
+        Usa l'ultima decisione calcolata da evaluate(). Se evaluate() non è mai
+        stato chiamato, lo chiama una volta per avere un parere fresco.
+        """
+        dec = self._last_decision
+        if dec is None:
+            # nessuna decisione ancora — ne calcolo una al volo
+            try:
+                dec = self.evaluate()
+            except Exception as e:
+                return {
+                    "tsunami_vote":       "NO_ENTRY",
+                    "tsunami_confidence": 0,
+                    "tsunami_direction":  None,
+                    "tsunami_reason":     f"errore evaluate: {e}",
+                    "tsunami_size_mult":  0.0,
+                }
+
+        # Traduco azione → direzione esplicita
+        if dec.azione == 'ENTRA_LONG':
+            direction = 'LONG'
+        elif dec.azione == 'ENTRA_SHORT':
+            direction = 'SHORT'
+        else:
+            direction = None
+
+        return {
+            "tsunami_vote":       dec.azione,        # ENTRA_LONG | ENTRA_SHORT | NO_ENTRY
+            "tsunami_confidence": int(dec.confidenza),
+            "tsunami_direction":  direction,
+            "tsunami_reason":     dec.motivo,
+            "tsunami_size_mult":  float(dec.size_mult),
+        }
     
     def last_decision(self) -> Optional[dict]:
         """Ultima decisione per dashboard."""
