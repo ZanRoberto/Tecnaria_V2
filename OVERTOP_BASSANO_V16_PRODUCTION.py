@@ -5370,12 +5370,24 @@ class SuperCervello:
     con size_mult e soglia_adj calcolati dai voti pesati.
     I pesi si adattano autonomamente dopo ogni trade.
     """
+    # ════════════════════════════════════════════════════════════════════
+    # PASSO 6 (14mag2026) — LA SINTESI PIENA DI SC
+    # I 5 pesi originali diventano 8: Veritas, Capsule, Breath entrano nello
+    # score pesato. Prima erano ricevuti-e-loggati; ora VOTANO.
+    # Ridistribuzione: somma = 1.0. Veritas 0.16 / Capsule 0.14 pesano ma
+    # NON dominano (vincolo anti-dittatore: nessun voto singolo ribalta la
+    # maggioranza). Breath 0.00 — calcolato ma peso nullo finché un 6-bis
+    # non lo attiva (evita di introdurre 3 variabili insieme).
+    # ════════════════════════════════════════════════════════════════════
     PESI_DEFAULT = {
-        'oracolo_fp':    0.25,
-        'signal_tracker':0.20,
-        'campo_carica':  0.30,
-        'matrimonio':    0.13,
-        'phantom_ratio': 0.12,
+        'campo_carica':  0.22,   # era 0.30
+        'oracolo_fp':    0.18,   # era 0.25
+        'veritas':       0.16,   # NUOVO — testimonianza storica del contesto
+        'capsule':       0.14,   # NUOVO — il voto pesato degli anticorpi
+        'signal_tracker':0.13,   # era 0.20
+        'matrimonio':    0.09,   # era 0.13
+        'phantom_ratio': 0.08,   # era 0.12
+        'breath':        0.00,   # NUOVO — calcolato, peso nullo fino a 6-bis
     }
 
     def __init__(self):
@@ -5584,6 +5596,58 @@ class SuperCervello:
         else:
             v['phantom_ratio'] = 0.5
 
+        # ════════════════════════════════════════════════════════════════
+        # PASSO 6 — I 3 VOTI NUOVI: Veritas, Capsule, Breath
+        # Prima ricevuti-e-loggati (SC_INPUTS_FULL). Ora VOTANO nello score.
+        # Retro-compat: input None → voto 0.5 (neutro) → non sposta st.
+        # ════════════════════════════════════════════════════════════════
+
+        # VERITAS — la testimonianza storica del contesto.
+        # Mi fido del verdetto che Veritas dà già con la sua logica (n+wr).
+        if veritas_last_judgement == 'TOSSICO':
+            v['veritas'] = 0.0          # contesto certificato tossico → voto contro pieno
+        elif veritas_last_judgement == 'BUONO':
+            v['veritas'] = 1.0          # contesto certificato buono → voto a favore pieno
+        elif veritas_ctx_wr is not None:
+            # non certificato, ma c'è un wr di contesto
+            if veritas_ctx_wr < 0.35:   v['veritas'] = 0.3   # cattivo ma non certificato
+            elif veritas_ctx_wr >= 0.60: v['veritas'] = 0.8  # buono
+            else:                        v['veritas'] = 0.5  # zona neutra
+        else:
+            v['veritas'] = 0.5          # IGNOTO / dati assenti → neutro
+
+        # CAPSULE — il voto pesato degli anticorpi.
+        # block_score alto = voto contro ; boost_score alto = voto a favore.
+        # block_score reale osservato nei log: 180 sul contesto tossico.
+        if capsule_block_score is None and capsule_boost_score is None:
+            v['capsule'] = 0.5          # nessun input → neutro
+        else:
+            _block = capsule_block_score if capsule_block_score is not None else 0.0
+            _boost = capsule_boost_score if capsule_boost_score is not None else 0.0
+            # block: 0→neutro, 100→inizia a pesare, 180+→pieno contro
+            _block_v = max(0.0, 1.0 - max(0.0, _block - 0.0) / 180.0)  # 0→1.0, 180→0.0
+            # boost: 0→neutro, 50→inizia, 100+→pieno a favore
+            _boost_v = min(1.0, _boost / 100.0)                        # 0→0.0, 100→1.0
+            if _block >= 100 and _boost < 50:
+                v['capsule'] = round(_block_v, 3)        # domina il block
+            elif _boost >= 50 and _block < 100:
+                v['capsule'] = round(0.5 + _boost_v * 0.5, 3)  # domina il boost
+            elif _block < 100 and _boost < 50:
+                v['capsule'] = 0.5                       # nessuno dei due significativo
+            else:
+                # entrambi significativi: il netto decide
+                v['capsule'] = round(max(0.0, min(1.0, 0.5 + (_boost_v - (1.0 - _block_v)) * 0.5)), 3)
+
+        # BREATH — la fase respiratoria del mercato.
+        # Voto morbido (contesto, non evidenza diretta). Peso 0.00 in Passo 6.
+        if breath_fase in ('INALAZIONE', getattr(self, 'BREATH_INALAZ', 'INALAZIONE')):
+            v['breath'] = 0.7 if (breath_energia is None or breath_energia >= 0.5) else 0.6
+        elif breath_fase in ('ESALAZIONE', getattr(self, 'BREATH_ESALAZ', 'ESALAZIONE'),
+                             'PICCO', getattr(self, 'BREATH_PICCO', 'PICCO')):
+            v['breath'] = 0.4
+        else:
+            v['breath'] = 0.5           # NEUTRO / dati assenti
+
         # ── PESI DINAMICI — pred_score + OI amplificano campo_carica ──────
         # Veritas: FUOCO|PREVISTO_ENTRA 5579 segnali HIT 56% PnL +$0.32
         # Quando pred_score >= 70% + OI FUOCO: la predizione è fisica, non statistica.
@@ -5597,17 +5661,21 @@ class SuperCervello:
             _pred_forza = min(1.0, (_ps - 70) / 30) * min(1.0, oi_carica / 0.80)
 
         if _pred_forza > 0:
-            # campo_carica sale da 0.30 a max 0.55 proporzionalmente alla forza
+            # campo_carica sale da 0.22 a max 0.55 proporzionalmente alla forza
             _peso_cc_nuovo = self._pesi['campo_carica'] + _pred_forza * 0.25
             _peso_cc_nuovo = min(0.55, _peso_cc_nuovo)
             _delta = _peso_cc_nuovo - self._pesi['campo_carica']
-            # Ridistribuisce il delta sottraendo proporzionalmente dagli altri
-            _altri = ['oracolo_fp', 'signal_tracker', 'matrimonio', 'phantom_ratio']
+            # Ridistribuisce il delta sottraendo proporzionalmente dagli altri.
+            # PASSO 6: la lista include anche veritas e capsule (cedono peso
+            # come tutti gli altri). breath è escluso — è a 0.00, non c'è
+            # nulla da cedere e dividerebbe per zero.
+            _altri = ['oracolo_fp', 'signal_tracker', 'veritas', 'capsule',
+                      'matrimonio', 'phantom_ratio']
             _tot_altri = sum(self._pesi[k] for k in _altri)
             pesi_eff = dict(self._pesi)
             pesi_eff['campo_carica'] = _peso_cc_nuovo
             for k in _altri:
-                pesi_eff[k] = max(0.05, self._pesi[k] - _delta * (self._pesi[k] / _tot_altri))
+                pesi_eff[k] = max(0.03, self._pesi[k] - _delta * (self._pesi[k] / _tot_altri))
             # Rinormalizza
             _tot = sum(pesi_eff.values())
             pesi_eff = {k: round(v/_tot, 4) for k, v in pesi_eff.items()}
@@ -5629,7 +5697,9 @@ class SuperCervello:
         pro    = sum(1 for x in v.values() if x >= 0.6)
         contro = sum(1 for x in v.values() if x <= 0.3)
         _cc_eff = round(pesi_eff.get('campo_carica', self._pesi['campo_carica']), 2)
-        motivo = f"sc={st:.2f} pro={pro}/5 contro={contro}/5 cc_peso={_cc_eff:.2f} pred={_pred_forza:.2f}"
+        motivo = (f"sc={st:.2f} pro={pro}/8 contro={contro}/8 "
+                  f"cc_peso={_cc_eff:.2f} pred={_pred_forza:.2f} "
+                  f"[ver={v['veritas']:.1f} cap={v['capsule']:.1f} bre={v['breath']:.1f}]")
 
         # ════════════════════════════════════════════════════════════════
         # FIX #32 (12mag2026 sera): DIRECTION VOTE
