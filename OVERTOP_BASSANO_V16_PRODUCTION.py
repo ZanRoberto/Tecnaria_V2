@@ -5216,6 +5216,152 @@ class VeritatisTracker:
         except Exception as e:
             log.error(f"[VERITAS_LOAD] {e}")
 
+    # =========================================================================
+    # STATUTO COSTITUZIONALE DI VERITAS (Passo 2, 13mag2026)
+    # =========================================================================
+    # AUDIT ROBERTO V1 / SC SOVRANO.
+    #
+    # Veritas oggi è giudice retrospettivo + calibratore (_calibra_sc applica
+    # subito i pesi). Lo Statuto aggiunge la modalità COSTITUZIONALE:
+    #   - get_ctx_stats()      → espone le statistiche di un contesto a SC
+    #                            come input (testimonianza storica).
+    #   - recalibra_sc_pesi()  → PROPONE i nuovi pesi senza applicarli, e li
+    #                            logga. È la versione passiva di _calibra_sc.
+    #
+    # MODALITÀ PASSIVA: questi due metodi esistono ma:
+    #   - get_ctx_stats() non viene ancora chiamato dal flow (sarà nella scena)
+    #   - recalibra_sc_pesi() PROPONE soltanto — _calibra_sc continua a fare
+    #     il lavoro vero finché il Passo 6 non commuta ufficialmente.
+    # Behavior del bot invariato.
+    # =========================================================================
+    def get_ctx_stats(self, ctx_stats_dict: dict, ctx_key: str) -> dict:
+        """Espone le statistiche di un contesto come testimonianza per SC.
+
+        ctx_stats_dict: il dizionario _m2_ctx_stats del bot (vive nel bot,
+                        non in Veritas — Veritas lo riceve come parametro).
+        ctx_key:        "MOMENTUM|VOLATILITY|TREND"
+
+        Ritorna:
+          ctx_wr           float | None  — win rate del contesto
+          ctx_samples      int           — numero trade reali nel contesto
+          ctx_pnl_avg      float | None  — pnl medio
+          ctx_pnl_sum      float         — pnl totale
+          last_judgement   str           — 'TOSSICO' | 'NEUTRO' | 'BUONO' | 'IGNOTO'
+        """
+        st = (ctx_stats_dict or {}).get(ctx_key)
+        if not st or st.get('n', 0) == 0:
+            return {
+                "ctx_wr":         None,
+                "ctx_samples":    0,
+                "ctx_pnl_avg":    None,
+                "ctx_pnl_sum":    0.0,
+                "last_judgement": "IGNOTO",
+            }
+        n       = st['n']
+        wins    = st.get('wins', 0)
+        pnl_sum = st.get('pnl_sum', 0.0)
+        wr      = wins / n
+        pnl_avg = pnl_sum / n
+        # Verdetto sintetico sul contesto
+        if n >= 10 and wr < 0.20 and pnl_avg < -1.0:
+            judgement = "TOSSICO"
+        elif n >= 5 and wr >= 0.55 and pnl_avg > 0.5:
+            judgement = "BUONO"
+        elif n >= 3:
+            judgement = "NEUTRO"
+        else:
+            judgement = "IGNOTO"
+        return {
+            "ctx_wr":         round(wr, 3),
+            "ctx_samples":    n,
+            "ctx_pnl_avg":    round(pnl_avg, 2),
+            "ctx_pnl_sum":    round(pnl_sum, 2),
+            "last_judgement": judgement,
+        }
+
+    def recalibra_sc_pesi(self) -> dict:
+        """PROPONE nuovi pesi per SC sulla base dei verdetti accumulati.
+
+        VERSIONE PASSIVA: calcola la proposta, la logga, la ritorna.
+        NON applica i pesi. _calibra_sc() continua a essere il calibratore
+        attivo finché il Passo 6 non commuta.
+
+        Ritorna:
+          proposta       dict   — pesi proposti {organo: peso}
+          delta          dict   — variazione proposta per ogni organo
+          motivi         list   — perché ogni variazione
+          applicato      bool   — sempre False in modalità passiva
+        """
+        out = {
+            "proposta":  {},
+            "delta":     {},
+            "motivi":    [],
+            "applicato": False,
+        }
+        if not self._sc_ref or not hasattr(self._sc_ref, '_pesi'):
+            out["motivi"].append("nessun riferimento SC disponibile")
+            return out
+
+        pesi_attuali = dict(self._sc_ref._pesi)
+        proposta     = dict(pesi_attuali)
+        STEP_MAX     = 0.02  # max variazione per ciclo (più conservativo di _calibra_sc)
+
+        try:
+            v = self.verdetto()
+            stats = v.get('stats', {})
+
+            # Analizza i verdetti FUOCO|BLOCCA e FUOCO|ENTRA
+            for chiave, s in stats.items():
+                if s['n'] < 10:
+                    continue
+                hit_rate = s['hit_rate']
+                pnl_avg  = s['pnl_avg']
+
+                if 'FUOCO' in chiave and 'BLOCCA' in chiave:
+                    if pnl_avg < -0.5 and hit_rate >= 0.55:
+                        # SC bloccava ma il mercato saliva → SC troppo timido
+                        _d = min(STEP_MAX, abs(pnl_avg) * 0.01)
+                        proposta['campo_carica'] = min(0.60, proposta.get('campo_carica',0.30) + _d)
+                        out["motivi"].append(
+                            f"{chiave}: SC perdeva ${pnl_avg:+.2f}/trade bloccando "
+                            f"(hit {hit_rate:.0%}) → propongo campo_carica +{_d:.3f}")
+                    elif pnl_avg > 0.5 and hit_rate <= 0.45:
+                        # SC bloccava e aveva ragione
+                        _d = min(STEP_MAX, pnl_avg * 0.01)
+                        proposta['signal_tracker'] = min(0.25, proposta.get('signal_tracker',0.20) + _d)
+                        out["motivi"].append(
+                            f"{chiave}: SC bloccava giustamente (pnl ${pnl_avg:+.2f}) "
+                            f"→ propongo signal_tracker +{_d:.3f}")
+
+            # Rinormalizza la proposta a somma 1.0
+            tot = sum(proposta.values())
+            if tot > 0:
+                for k in proposta:
+                    proposta[k] = round(proposta[k] / tot, 4)
+
+            # Calcola i delta
+            for k in proposta:
+                d = proposta[k] - pesi_attuali.get(k, 0)
+                if abs(d) > 0.0001:
+                    out["delta"][k] = round(d, 4)
+
+            out["proposta"] = proposta
+
+            # LOG della proposta — visibile in app.log, NON applicata
+            if out["delta"]:
+                log.info(f"[VERITAS_RECALIBRATE_PROPOSAL] delta={out['delta']} "
+                         f"motivi={len(out['motivi'])}")
+                for m in out["motivi"]:
+                    log.info(f"  └─ {m}")
+            else:
+                log.debug("[VERITAS_RECALIBRATE_PROPOSAL] nessuna variazione proposta")
+
+        except Exception as e:
+            log.error(f"[VERITAS_RECALIBRATE] {e}")
+            out["motivi"].append(f"errore: {e}")
+
+        return out
+
 
 class SuperCervello:
     """
