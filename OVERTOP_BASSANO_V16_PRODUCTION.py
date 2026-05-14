@@ -7382,8 +7382,8 @@ class OvertopBassanoV16Production:
         event:
           PRE_SC_VETO_<name>   — veto fisico legittimo della ZONA 1
           SC_INPUTS_FULL       — il verbale completo quando SC viene chiamato
-          SC_DECISION_FINAL    — la decisione di SC
-          SC_WOULD_DECIDE      — (MODO 2) cosa SC deciderebbe sugli EXPLOSIVE
+          SC_DECISION_FINAL    — la decisione di SC (PERCORSO 2)
+          SC_DECISION_EXPLOSIVE — la decisione di SC su PERCORSO 1 (5c)
           ENTRY_OPENED         — apertura posizione
         """
         try:
@@ -7423,16 +7423,21 @@ class OvertopBassanoV16Production:
     def _sc_osserva_explosive(self, price, momentum, volatility, trend,
                               _dir, score, soglia, verbale, seed):
         """
-        MODO 2 (Passo 5a) — SC OSSERVATORE su PERCORSO 1 (EXPLOSIVE).
+        PASSO 5c (14mag2026) — SC DECISORE su PERCORSO 1 (EXPLOSIVE).
 
-        SC viene chiamato con il verbale completo. Logga cosa vede
-        (SC_INPUTS_FULL) e cosa deciderebbe (SC_WOULD_DECIDE). MA la sua
-        decisione NON viene applicata: in 5a l'EXPLOSIVE entra come oggi.
+        Prima (MODO 2, Passo 5a): SC era solo OSSERVATORE — calcolava la
+        decisione ma non la applicava, l'EXPLOSIVE entrava come oggi. I log
+        live di 5b hanno dato il verdetto: PERCORSO 1 apriva LONG con il
+        mercato giù su 3 scale e Tsunami che diceva SHORT. L'ultimo dittatore.
 
-        Il potere pieno a SC sugli EXPLOSIVE arriva in 5b, dopo aver letto
-        nei log reali se SC sugli EXPLOSIVE decide bene.
+        Ora: SC riceve il verbale completo e DECIDE. Questo metodo RITORNA
+        il dict di decide() (azione, direction_vote, size_mult, ...).
+        PERCORSO 1 rispetta la decisione: BLOCCA → non apre; direction_vote
+        diverso → flippa; size_mult → modula. Stesso schema del blocco
+        riga ~8964 di PERCORSO 2 (5b), replicato in PERCORSO 1.
 
-        Questo metodo NON ritorna nulla che influenzi il flow. Solo logga.
+        RITORNA: dict decide() oppure None se eccezione (PERCORSO 1 gestisce
+        il None come "decisione non disponibile → entra come fallback").
         """
         try:
             _mat     = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
@@ -7478,14 +7483,17 @@ class OvertopBassanoV16Production:
                 breath_energia        = verbale.get('breath_energia'),
                 sc_inputs_full        = True,
             )
-            # MODO 2: logga cosa SC AVREBBE deciso — NON applica
-            log.info(f"🏛️ [SC_WOULD_DECIDE] PERCORSO1_EXPLOSIVE → "
-                     f"SC direbbe: {_sc_obs.get('azione')} "
-                     f"(motivo: {_sc_obs.get('motivo','')}) "
-                     f"— ma in 5a l'EXPLOSIVE entra come oggi")
-            verbale["sc_would_decide"] = _sc_obs.get('azione')
+            # PASSO 5c: SC DECIDE. Logga la decisione e la RITORNA.
+            log.info(f"🏛️ [SC_DECISION_EXPLOSIVE] PERCORSO1 → "
+                     f"azione={_sc_obs.get('azione')} "
+                     f"dir_vote={_sc_obs.get('direction_vote')} "
+                     f"size_mult={_sc_obs.get('size_mult')} "
+                     f"(motivo: {_sc_obs.get('motivo','')})")
+            verbale["sc_decision_explosive"] = _sc_obs.get('azione')
+            return _sc_obs
         except Exception as e:
-            log.debug(f"[SC_OSSERVA] {e}")
+            log.debug(f"[SC_DECIDE_EXPLOSIVE] {e}")
+            return None
 
     def _auto_detect_direction(self, trend):
         """
@@ -8541,10 +8549,11 @@ class OvertopBassanoV16Production:
             # ═══════════════════════════════════════════════════════════════
             # PERCORSO 1: EXPLOSIVE con carica alta
             # ═══════════════════════════════════════════════════════════════
-            # MODO 2 (decisione capoprogetto, 5a): in PERCORSO 1, SC viene
-            # CHIAMATO come OSSERVATORE prima dell'entry — logga cosa vede e
-            # cosa deciderebbe (SC_WOULD_DECIDE) — ma l'EXPLOSIVE entra come
-            # oggi. Il potere pieno a SC sugli EXPLOSIVE arriva in 5b.
+            # PASSO 5c (decisione capoprogetto, 14mag): in PERCORSO 1, SC è
+            # DECISORE — riceve il verbale completo e decide (BLOCCA / FLIP /
+            # ENTRA con size modulata). PERCORSO 1 rispetta la decisione.
+            # MODO 2 (osservatore) è finito: i log live di 5b hanno dato il
+            # verdetto — PERCORSO 1 era l'ultimo dittatore.
             # I veti FISICI di PERCORSO 1 (RANGE check, dati insufficienti)
             # restano return — sono ZONA 1, matematica del trade.
             # Il veto CAPSULE diventa deposizione.
@@ -8661,16 +8670,46 @@ class OvertopBassanoV16Production:
                         pass
 
                 # ════════════════════════════════════════════════════════════
-                # MODO 2 — SC OSSERVATORE su PERCORSO 1
-                # SC viene chiamato, logga cosa vede e cosa deciderebbe.
-                # In 5a la sua decisione è OSSERVATA, non applicata.
-                # L'EXPLOSIVE entra come oggi.
+                # PASSO 5c — SC DECISORE su PERCORSO 1 (14mag2026)
+                # L'ULTIMO DITTATORE ABDICA. SC riceve il verbale completo
+                # e DECIDE. PERCORSO 1 rispetta la decisione:
+                #   azione==BLOCCA        → non apre (record phantom + return)
+                #   direction_vote != _dir → flippa la direzione prima di aprire
+                #   size_mult             → modula la size
+                # Stesso schema del blocco riga ~8964 di PERCORSO 2 (5b).
                 # ════════════════════════════════════════════════════════════
-                try:
-                    self._sc_osserva_explosive(price, momentum, volatility, trend,
-                                               _dir, score, soglia, _verbale, seed)
-                except Exception as _sce:
-                    log.debug(f"[SC_OSSERVA_P1_ERR] {_sce}")
+                _sc_p1 = self._sc_osserva_explosive(
+                    price, momentum, volatility, trend,
+                    _dir, score, soglia, _verbale, seed)
+
+                if _sc_p1 is not None:
+                    # 1) SC BLOCCA → PERCORSO 1 non apre
+                    if _sc_p1.get('azione') == 'BLOCCA':
+                        self._log_m2("🚫", f"SC_BLOCCA_EXPLOSIVE: {_sc_p1.get('motivo','')}")
+                        self._record_phantom(price, f"SC_BLOCCA_EXPLOSIVE_{_sc_p1.get('motivo','')[:20]}",
+                                             seed['score'], momentum, volatility, trend)
+                        _verbale["blocked_by"] = f"SC_EXPLOSIVE:{_sc_p1.get('motivo','')[:30]}"
+                        self._log_constitutional(_verbale, "SC_BLOCCA_EXPLOSIVE")
+                        return
+
+                    # 2) SC propone un FLIP → PERCORSO 1 flippa prima di aprire
+                    _sc_dv   = _sc_p1.get('direction_vote')
+                    _sc_dvc  = _sc_p1.get('direction_vote_confidence', 0.0)
+                    if _sc_dv and _sc_dv != _dir and _sc_dvc >= 0.30:
+                        self._log_m2("🔄", f"FLIP_BY_SC_EXPLOSIVE: {_dir} → {_sc_dv} "
+                                           f"(conf={_sc_dvc:.2f})")
+                        self.campo._direction = _sc_dv
+                        _dir = _sc_dv
+                        # re-fetch fingerprint per la nuova direzione (coerenza)
+                        try:
+                            fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend, _dir)
+                            self._last_fingerprint_wr = fingerprint_wr
+                        except Exception:
+                            pass
+
+                    # 3) SC modula la size
+                    size = round(min(1.0, max(0.30, size * _sc_p1.get('size_mult', 1.0))), 2)
+                # se _sc_p1 is None (eccezione in decide) → fallback: entra come prima
 
                 self._log_m2("🚀", f"EXPLOSIVE ENTRY {_dir} carica={_eo_carica:.2f} "
                                    f"size={size:.2f} {momentum}|{volatility}|{trend}")
