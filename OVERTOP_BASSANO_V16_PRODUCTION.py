@@ -5389,7 +5389,21 @@ class SuperCervello:
                ph_protezione, ph_zavorra,
                regime, midzone, loss_streak,
                fp_wr_opposite=None, fp_samples_opposite=None,
-               current_direction=None) -> dict:
+               current_direction=None,
+               # ── STATUTO COSTITUZIONALE (Passo 4, 13mag2026) ──────────────
+               # Input dagli organi che oggi sono dittatori con early return.
+               # In MODALITÀ PASSIVA: SC li RICEVE e li LOGGA (SC_INPUTS_FULL)
+               # ma NON li usa per decidere. La decisione resta identica.
+               # L'attivazione (SC che li USA) è il Passo 6.
+               tsunami_vote=None, tsunami_confidence=None,
+               tsunami_direction=None, tsunami_reason=None,
+               veritas_ctx_wr=None, veritas_ctx_samples=None,
+               veritas_ctx_pnl_avg=None, veritas_last_judgement=None,
+               capsule_block_score=None, capsule_boost_score=None,
+               capsule_reasons=None, capsule_oracolo_override=None,
+               proposed_direction=None, flip_confidence=None,
+               breath_fase=None, breath_energia=None,
+               sc_inputs_full=False) -> dict:
         """
         FIX #32 (12mag2026 sera): aggiunti 3 parametri OPZIONALI con default None
         per retro-compat. Se forniti, calcolano direction_vote.
@@ -5397,9 +5411,40 @@ class SuperCervello:
         - current_direction: direzione corrente del campo ('LONG' o 'SHORT')
         Se direzione opposta ha edge nettamente migliore (>=0.15 WR delta, n>=20, 
         WR_opposite>=0.65), emette `direction_vote` opposto nell'output.
+
+        PASSO 4 — STATUTO COSTITUZIONALE (13mag2026):
+        Aggiunti i parametri degli organi che oggi sono dittatori (Tsunami,
+        Veritas, Capsule, Flip). SC li riceve come testimonianze.
+        MODALITÀ PASSIVA: se sc_inputs_full=True, SC logga SC_INPUTS_FULL con
+        tutti i nuovi input — ma la logica decisionale NON cambia. Gli input
+        nuovi sono ignorati nel calcolo. Behavior bit-identico.
+        L'attivazione vera è il Passo 6 (post-scena).
         """
 
         self._n += 1
+
+        # ── STATUTO COSTITUZIONALE: log SC_INPUTS_FULL (modalità passiva) ────
+        # SC dichiara cosa vede. Non lo usa ancora — lo espone per tracciabilità.
+        if sc_inputs_full:
+            try:
+                _const_in = {
+                    "tsunami_vote":         tsunami_vote,
+                    "tsunami_confidence":   tsunami_confidence,
+                    "tsunami_direction":    tsunami_direction,
+                    "veritas_ctx_wr":       veritas_ctx_wr,
+                    "veritas_ctx_samples":  veritas_ctx_samples,
+                    "veritas_judgement":    veritas_last_judgement,
+                    "capsule_block_score":  capsule_block_score,
+                    "capsule_boost_score":  capsule_boost_score,
+                    "capsule_override":     capsule_oracolo_override,
+                    "proposed_direction":   proposed_direction,
+                    "flip_confidence":      flip_confidence,
+                    "breath_fase":          breath_fase,
+                }
+                _vis = " ".join(f"{k}={v}" for k, v in _const_in.items() if v is not None)
+                log.info(f"🏛️ [SC_INPUTS_FULL] {_vis if _vis else '(nessun input costituzionale)'}")
+            except Exception:
+                pass  # il log non deve mai rompere decide()
 
         # Blocchi assoluti
         if midzone:
