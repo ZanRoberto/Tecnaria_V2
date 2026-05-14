@@ -421,6 +421,216 @@ class CapsuleManager:
 
         return res
 
+    # =========================================================================
+    # CONSULTA — STATUTO COSTITUZIONALE DELLE CAPSULE (Passo 1, 13mag2026)
+    # =========================================================================
+    # AUDIT ROBERTO V1 / SC SOVRANO.
+    #
+    # Differenza con valuta():
+    #   valuta()   → ha break su blocca_entry. La PRIMA capsula che blocca vince,
+    #                le altre azioni (ABBASSA_SOGLIA, oracolo_override) di capsule
+    #                successive vengono ignorate. Ritorna {blocca: True/False}.
+    #   consulta() → NESSUN break. Itera TUTTE le capsule che matchano, accumula
+    #                i voti pesati. Ritorna una struttura consultiva. Non decide.
+    #                È un testimone: depone, non conclude.
+    #
+    # Peso per livello (autorità del testimone):
+    #   STATIC  → 1.0  (regola fisica di sicurezza, massima autorità)
+    #   AUTO    → 0.8  (analisi DeepSeek, autorevole ma recente)
+    #   LEARNED → min(1.0, samples/10)  (più trade reali osservati, più peso)
+    #
+    # MODALITÀ PASSIVA: consulta() esiste ma _evaluate_shadow_entry continua a
+    # usare valuta(). Nessun cambio di comportamento del bot. Il passaggio a
+    # consulta() avverrà nella riforma della scena (Passo 5).
+    # =========================================================================
+    def consulta(self, contesto: dict) -> dict:
+        """Statuto costituzionale: le capsule depongono voti, non bloccano.
+
+        Ritorna:
+          block_score        float 0-100  — somma pesata voti di blocco
+          boost_score        float        — somma voti di sblocco/boost
+          threshold_delta    float        — ALZA/ABBASSA soglia accumulati (+ alza, - abbassa)
+          size_delta         float        — modifica_size accumulata (moltiplicativa)
+          profit_lock_min    float        — max profit_lock richiesto
+          profit_lock_retreat float       — min retreat richiesto
+          reasons            list[str]    — motivazioni di ogni voto (per audit)
+          voti               list[dict]   — dettaglio per audit costituzionale
+          oracolo_override   bool         — almeno una capsula chiede override
+          flags              dict         — altri flag (sblocca_short_ranging, ecc.)
+        """
+        if time.time() - self._cache_ts > 10:
+            self._refresh_cache()
+
+        out = {
+            "block_score":         0.0,
+            "boost_score":         0.0,
+            "threshold_delta":     0.0,
+            "size_delta":          1.0,
+            "profit_lock_min":     0.0,
+            "profit_lock_retreat": 0.40,
+            "reasons":             [],
+            "voti":                [],
+            "oracolo_override":    False,
+            "flags":               {},
+        }
+
+        # Whitelist: pattern vincenti intoccabili da capsule AUTO/LEARNED
+        _ctx_key = (
+            contesto.get("momentum",""),
+            contesto.get("volatility",""),
+            contesto.get("trend",""),
+            contesto.get("direction",""),
+        )
+        _is_vincente = _ctx_key in self._WHITELIST_VINCENTI
+
+        def _peso(cap):
+            """Autorità del testimone in base al livello."""
+            liv = cap.get("livello","")
+            if liv == "STATIC":
+                return 1.0
+            if liv == "AUTO":
+                return 0.8
+            if liv == "LEARNED":
+                return min(1.0, max(0.0, cap.get("samples",0) / 10.0))
+            return 0.5
+
+        for cap in self._cache:
+            if not self._check_triggers(cap["trigger"], contesto):
+                continue
+            act   = cap["azione"]
+            atype = act.get("type") or act.get("tipo", "")
+            peso  = _peso(cap)
+
+            # ── VOTI DI BLOCCO ───────────────────────────────────────────────
+            if atype in ("blocca_entry", "BLOCCA_ENTRY", "blocca_entry_oracle",
+                         "BLOCCA_CONTESTO", "blocca_contesto"):
+                # Whitelist: AUTO/LEARNED non possono votare blocco su pattern vincenti
+                if _is_vincente and cap.get("livello","") in ("AUTO","LEARNED"):
+                    continue
+
+                # Precursore esplosivo — il voto di blocco dei matrimoni tossici
+                # viene annullato se c'è energia compressa in movimento.
+                _cap_id = cap.get("id","")
+                _is_matrimonio = any(x in _cap_id for x in ("RANGE_VOL_W","RANGE_VOL_M","MAT_TOSSICO"))
+                if _is_matrimonio:
+                    _regime    = contesto.get("regime", "")
+                    _oi_short  = contesto.get("oi_short", 0.0)
+                    _oi_carica = contesto.get("oi_carica", 0.0)
+                    _bf        = contesto.get("breath_fase", "NEUTRO")
+                    _ben       = contesto.get("breath_energia", 0.0)
+                    _prec1 = (_oi_short >= 0.90 and _bf in ("INALAZIONE","PICCO") and _ben >= 0.5)
+                    _prec2 = (_oi_carica >= 0.80 or _oi_short >= 0.80)
+                    if _regime in ("RANGING", "EXPLOSIVE") and (_prec1 or _prec2):
+                        # Il testimone si astiene per precursore esplosivo
+                        out["voti"].append({
+                            "capsule_id": _cap_id, "livello": cap.get("livello",""),
+                            "azione": "ASTENSIONE_PRECURSORE", "peso": 0.0,
+                        })
+                        continue
+
+                _reason = (act.get("params",{}).get("reason") or
+                           act.get("motivo") or act.get("valore") or cap["id"])
+                # Il voto di blocco contribuisce a block_score, pesato.
+                # Un STATIC da solo (peso 1.0) → 100. Una LEARNED con 3 samples → 30.
+                out["block_score"] += 100.0 * peso
+                out["reasons"].append(str(_reason))
+                out["voti"].append({
+                    "capsule_id": cap["id"], "livello": cap.get("livello",""),
+                    "azione": "BLOCCA", "peso": peso, "reason": str(_reason),
+                })
+                # consulta() NON fa break — continua a raccogliere
+
+            # ── VOTI DI MODIFICA SIZE ────────────────────────────────────────
+            elif atype == "modifica_size":
+                _mult = act.get("params",{}).get("mult",1.0)
+                out["size_delta"] *= _mult
+                out["voti"].append({
+                    "capsule_id": cap["id"], "livello": cap.get("livello",""),
+                    "azione": f"SIZE×{_mult:.2f}", "peso": peso,
+                })
+
+            # ── VOTI DI SOGLIA ───────────────────────────────────────────────
+            elif atype == "boost_soglia":
+                _d = act.get("params",{}).get("delta",0.0)
+                out["threshold_delta"] += _d
+                out["voti"].append({
+                    "capsule_id": cap["id"], "livello": cap.get("livello",""),
+                    "azione": f"SOGLIA+{_d:.1f}", "peso": peso,
+                })
+
+            elif atype == "boost_entry":
+                _d = abs(act.get("params",{}).get("delta",0.0))
+                out["threshold_delta"] -= _d
+                out["boost_score"]     += 50.0 * peso
+                out["voti"].append({
+                    "capsule_id": cap["id"], "livello": cap.get("livello",""),
+                    "azione": f"BOOST_ENTRY-{_d:.1f}", "peso": peso,
+                })
+
+            elif atype in ("ALZA_SOGLIA", "alza_soglia"):
+                delta = float(act.get("valore", act.get("params", {}).get("delta", 5)))
+                out["threshold_delta"] += delta
+                out["reasons"].append(f"ALZA_SOGLIA+{delta:.0f}")
+                out["voti"].append({
+                    "capsule_id": cap["id"], "livello": cap.get("livello",""),
+                    "azione": f"ALZA_SOGLIA+{delta:.0f}", "peso": peso,
+                })
+
+            elif atype in ("ABBASSA_SOGLIA", "abbassa_soglia"):
+                delta = float(act.get("valore", act.get("params", {}).get("delta", 5)))
+                out["threshold_delta"] -= delta
+                out["boost_score"]     += delta * peso  # abbassare soglia = voto pro-entry
+                out["reasons"].append(f"ABBASSA_SOGLIA-{delta:.0f}")
+                out["voti"].append({
+                    "capsule_id": cap["id"], "livello": cap.get("livello",""),
+                    "azione": f"ABBASSA_SOGLIA-{delta:.0f}", "peso": peso,
+                })
+
+            # ── VOTI DI PROFIT LOCK ──────────────────────────────────────────
+            elif atype in ("ALZA_SOGLIA_USCITA", "alza_soglia_uscita"):
+                val = act.get("valore", act.get("params", {}).get("valore", 2.5))
+                try:
+                    val = float(val)
+                except (TypeError, ValueError):
+                    val = 2.5
+                if val > out["profit_lock_min"]:
+                    out["profit_lock_min"] = val
+                out["voti"].append({
+                    "capsule_id": cap["id"], "livello": cap.get("livello",""),
+                    "azione": f"PROFIT_LOCK_MIN={val:.2f}", "peso": peso,
+                })
+
+            elif atype in ("adjust_profit_lock",):
+                retreat = act.get("params", {}).get("retreat", 0.30)
+                try:
+                    retreat = float(retreat)
+                except (TypeError, ValueError):
+                    retreat = 0.30
+                if retreat < out["profit_lock_retreat"]:
+                    out["profit_lock_retreat"] = retreat
+                out["voti"].append({
+                    "capsule_id": cap["id"], "livello": cap.get("livello",""),
+                    "azione": f"PROFIT_LOCK_RETREAT={retreat:.2f}", "peso": peso,
+                })
+
+            # ── FLAG SPECIALI ────────────────────────────────────────────────
+            elif atype in ("ripristina_pesi_sc","sblocca_short_ranging",
+                           "oracolo_override","blocca_long",
+                           "set_soglia_ranging","set_cap2_soglia"):
+                out["flags"][atype] = act.get("params", True)
+                if atype == "oracolo_override":
+                    out["oracolo_override"] = True
+                out["voti"].append({
+                    "capsule_id": cap["id"], "livello": cap.get("livello",""),
+                    "azione": atype.upper(), "peso": peso,
+                })
+
+        # NB: consulta() NON chiama _fire(). _fire registra l'uso di una capsula
+        # nel DB. In modalità passiva consulta() è solo osservativa: non deve
+        # alterare lo stato delle capsule. _fire resta responsabilità di valuta()
+        # finché la scena non passa ufficialmente a consulta() (Passo 5).
+        return out
+
     def _check_triggers(self, triggers: list, ctx: dict) -> bool:
         if not triggers:
             return True
@@ -463,8 +673,13 @@ class CapsuleManager:
         trade["asset"] = self.asset
         self._trade_buffer.append(trade)
         self._trade_count += 1
-        is_critico = not trade.get("is_win") and abs(trade.get("pnl",0)) > 5
-        if self._trade_count % self.ANALISI_INTERVAL == 0 or is_critico:
+        # FIX #38 (13mag2026): una partita persa = analisi immediata = capsula.
+        # Prima: analisi solo ogni 30 trade o se pnl_abs>$5.
+        # I trade 95/96/97 del 12mag (pnl $2-4) non scatenavano mai analisi
+        # → capsula tossica creata solo dopo 30 trade, troppo tardi.
+        is_loss     = not trade.get("is_win")
+        is_critico  = abs(trade.get("pnl",0)) > 5
+        if is_loss or is_critico or self._trade_count % self.ANALISI_INTERVAL == 0:
             self.analizza_e_genera()
         if self._trade_count % 10 == 0:
             self._pulisci_scadute()
@@ -523,7 +738,13 @@ class CapsuleManager:
     def analizza_e_genera(self) -> list:
         nuove = []
         trades = list(self._trade_buffer)
-        if len(trades) < self.MIN_SAMPLES_L3:
+        # FIX #38 (13mag2026): guard MIN_SAMPLES_L3 RIMOSSO.
+        # Prima: se buffer aveva <3 trade, analisi saltava → primo loss
+        # non generava capsula. Con la nuova logica _l2_contesto/_l2_matrimoni
+        # un solo loss basta per generare capsula tossica.
+        # I metodi L3 (streak, regime, opportunità) hanno guard propri al loro
+        # interno se servono soglie statistiche più alte.
+        if not trades:
             return nuove
         nuove += self._l2_matrimoni(trades)
         nuove += self._l2_contesto(trades)
@@ -539,7 +760,9 @@ class CapsuleManager:
     def _l2_matrimoni(self, trades):
         """
         FIX #19 (12mag2026): aggiunta direction al raggruppamento e trigger.
-        FIX #38 (13mag2026 mattina): vedi _l2_contesto — una partita persa = capsula.
+        FIX #38 (13mag2026): vedi _l2_contesto. Una partita persa = capsula.
+        ASIMMETRIA VOLUTA: per OPPORTUNITÀ (boost) servono MIN_SAMPLES_L2 win
+        statistici. Un singolo win può essere fortuna; non amplifichiamo subito.
         """
         caps = []
         per_mat = defaultdict(list)
@@ -552,8 +775,6 @@ class CapsuleManager:
             wins = sum(1 for t in tt if t.get("is_win"))
             wr   = wins / len(tt) if tt else 0
             pnl  = sum(t.get("pnl",0) for t in tt) / len(tt) if tt else 0
-
-            # FIX #38: una perdita basta per generare capsula tossica
             if losses:
                 _pnl_worst = min(t.get("pnl", 0) for t in losses)
                 caps.append(self._build(
@@ -565,10 +786,7 @@ class CapsuleManager:
                     len(tt), wr, pnl, time.time()+self.MAX_AGE_L2))
                 log.info(f"[CM] 🧬 L2 MAT TOSSICO: {mat}/{direction} n={len(tt)} loss={len(losses)} pnl_worst=${_pnl_worst:.2f}")
             elif wr > 0.70 and pnl > 2.50 and len(tt) >= self.MIN_SAMPLES_L2:
-                # OPPORTUNITÀ: per amplificare un pattern positivo manteniamo MIN_SAMPLES.
-                # Razionale: un singolo win può essere fortuna; per certificare un
-                # pattern come "vincente da boostare", chiediamo statistica reale.
-                # Le perdite invece sono prevenzione → basta UNA volta.
+                # OPPORTUNITÀ: serve statistica reale per amplificare (asimmetria voluta).
                 caps.append(self._build(
                     f"LEARNED_MAT_OPP_{mat}_{direction}_{self.asset}", "LEARNED", "MATRIMONIO_OPP",
                     f"Matrimonio {mat}/{direction} opportunità su {self.asset}: WR {wr:.0%}",
@@ -582,16 +800,13 @@ class CapsuleManager:
     def _l2_contesto(self, trades):
         """
         FIX #19 (12mag2026): aggiunta direction al raggruppamento e trigger.
-        Bug originale: bloccava sia LONG che SHORT su stesso contesto.
-
-        FIX #38 (13mag2026 mattina) — UNA PARTITA PERSA = UNA CAPSULA.
+        FIX #38 (13mag2026): UNA PARTITA PERSA = UNA CAPSULA.
         Decisione Roberto: tre partite perse non è un giocatore, è un coglione.
-        Il sistema vaccino del giocatore di scacchi impara dalla PRIMA perdita.
-        Eliminata logica MIN_SAMPLES_L2=3 e WR<30%: appena un trade chiude in loss
-        in un contesto (momentum|volatility|trend|direction), si genera la capsula.
+        Eliminata logica MIN_SAMPLES_L2=3 e WR<30%: appena un trade chiude in
+        loss in un contesto (momentum|volatility|trend|direction) → capsula.
         Vincoli mantenuti:
-        - WHITELIST_VINCENTI (5 contesti UP/DOWN) intoccabile, gestita in valuta()
-        - capsule expire dopo MAX_AGE_L2 (timeout normale)
+        - WHITELIST_VINCENTI gestita in valuta() (5 pattern UP/DOWN intoccabili)
+        - expire dopo MAX_AGE_L2 (timeout normale)
         """
         caps = []
         per_ctx = defaultdict(list)
@@ -601,7 +816,7 @@ class CapsuleManager:
         for ctx, tt in per_ctx.items():
             losses = [t for t in tt if not t.get("is_win")]
             if not losses:
-                continue  # nessuna perdita in questo contesto → niente capsula
+                continue
             wins = sum(1 for t in tt if t.get("is_win"))
             wr   = wins / len(tt)
             pnl  = sum(t.get("pnl",0) for t in tt) / len(tt)
