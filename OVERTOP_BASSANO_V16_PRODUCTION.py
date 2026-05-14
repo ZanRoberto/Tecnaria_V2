@@ -8160,6 +8160,9 @@ class OvertopBassanoV16Production:
             "oi_carica_short":      None,
             "score":                None,
             "soglia":               None,
+            # CAMPO GRAVITAZIONALE (Passo 5a-bis — 5° testimone)
+            "campo_veto":           None,
+            "score_ricostruito":    False,
             # ESITO (per il log finale)
             "percorso":             None,   # 'P1_EXPLOSIVE' | 'P2_NORMALE'
             "blocked_by":           None,
@@ -8602,14 +8605,40 @@ class OvertopBassanoV16Production:
             _verbale["breath_fase"]    = (self._breath._fase    if self._breath else 'NEUTRO')
             _verbale["breath_energia"] = (self._breath._energia if self._breath else 0.0)
 
+            # ════════════════════════════════════════════════════════════════
+            # ZONA 2 — DEPOSIZIONE CAMPO GRAVITAZIONALE (Passo 5a-bis, 14mag2026)
+            # ════════════════════════════════════════════════════════════════
+            # SCOPERTA dai log live 5a: result['veto'] del CampoGravitazionale
+            # era il QUINTO dittatore — non mappato nello scheletro originale.
+            # Conteneva 5 veti diversi (audit in campo.evaluate L4391-4443):
+            #   - CM_TOSSICO / TOSSICO_*  → giudizio di merito  → DEPONE
+            #   - DIVORZIO_PERMANENTE     → giudizio di merito  → DEPONE
+            #   - DRIFT_VETO_*            → giudizio di merito  → DEPONE
+            #   - WARMUP_*                → fisica (dati insuff) → RESTA return
+            #
+            # Distinzione per prefisso: solo WARMUP_ è veto fisico ZONA 1.
+            # Tutto il resto è merito → diventa deposizione, SC decide.
+            # campo.evaluate() NON è toccato — cambia solo chi lo ascolta.
+            # ════════════════════════════════════════════════════════════════
             if result['veto']:
-                self._log_m2("🚫", f"VETO: {result['veto']}")
-                if len(self._phantoms_open) < 5:
-                    self._record_phantom(price, result['veto'], seed['score'],
-                                         momentum, volatility, trend)
-                _verbale["blocked_by"] = f"ZONA1_CAMPO_VETO:{result['veto']}"
-                self._log_constitutional(_verbale, "PRE_SC_VETO_CAMPO")
-                return
+                _campo_veto = result['veto']
+
+                # WARMUP_* — veto FISICO legittimo (ZONA 1): resta return.
+                # Non ci sono abbastanza dati per analizzare. Non è un'opinione.
+                if _campo_veto.startswith('WARMUP_'):
+                    self._log_m2("⏳", f"CAMPO_WARMUP (veto fisico): {_campo_veto}")
+                    _verbale["blocked_by"] = f"ZONA1_CAMPO_WARMUP:{_campo_veto}"
+                    self._log_constitutional(_verbale, "PRE_SC_VETO_CAMPO_WARMUP")
+                    return
+
+                # Tutto il resto (CM_TOSSICO, TOSSICO_, DIVORZIO, DRIFT_VETO)
+                # è giudizio di merito → DEPOSIZIONE, niente return.
+                # Il CampoGravitazionale depone il suo veto nel verbale.
+                # SC lo leggerà e deciderà.
+                _verbale["campo_veto"] = _campo_veto
+                self._log_m2("🏛️", f"CAMPO dep: veto={_campo_veto} (deposto, SC decide)")
+                # NESSUN return. Il CampoGravitazionale ha deposto.
+                # NB: score/soglia da result restano validi e vengono usati sotto.
 
             # ── Warmup (veti fisici ZONA 1) ────────────────────────────────
             _warmup_rsi = len(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else 0
@@ -8630,20 +8659,57 @@ class OvertopBassanoV16Production:
             _verbale["score"]  = score
             _verbale["soglia"] = soglia
 
-            # ── SCORE_SOTTO ────────────────────────────────────────────────
-            # NOTA COSTITUZIONALE 5a: questo return è il dittatore L8224 che
-            # Roberto ha ESPLICITAMENTE rinviato a Fase 5b. In 5a NON viene
-            # toccato — resta return. Sarà convertito in input SC in 5b.
+            # ════════════════════════════════════════════════════════════════
+            # SCORE_SOTTO — 5a-bis (14mag2026): distinzione costituzionale
+            # ════════════════════════════════════════════════════════════════
+            # I log live di 5a hanno dimostrato che result['veto'] del Campo e
+            # SCORE_SOTTO sono LO STESSO NODO: _veto() ritorna score=0.0, che
+            # fa scattare `not result['enter']` → SCORE_SOTTO. Liberare il Campo
+            # senza toccare SCORE_SOTTO è impossibile — è una serratura sola.
+            #
+            # Due casi DISTINTI:
+            #
+            #  CASO A — il Campo ha DEPOSTO un veto di merito (campo_veto valorizzato).
+            #    score=0.0 NON è "score genuino sotto soglia": è l'artefatto di
+            #    _veto(). Il flow NON muore qui. Ricostruisco score/soglia/size
+            #    di base e procedo a SC, che leggerà campo_veto nel verbale e
+            #    deciderà. Questo COMPLETA la liberazione del 5° dittatore.
+            #
+            #  CASO B — NESSUN veto del Campo, ma score genuinamente < soglia.
+            #    Questo è il dittatore SCORE_SOTTO che Roberto ha rinviato.
+            #    RESTA return. Invariato. Sarà convertito in 5b.
+            # ════════════════════════════════════════════════════════════════
+            _campo_ha_deposto = bool(_verbale.get("campo_veto"))
+
             if not result['enter']:
-                self._log_m2("🔇", f"SCORE_SOTTO: {score:.1f} vs {soglia:.1f}")
-                if score > 50 and len(self._phantoms_open) < 5:
-                    self._record_phantom(price, f"SCORE_{score:.0f}_vs_{soglia:.0f}",
-                                         seed['score'], momentum, volatility, trend)
-                _verbale["blocked_by"] = "DITTATORE_SCORE_SOTTO_rinviato_5b"
-                self._log_constitutional(_verbale, "PRE_SC_VETO_SCORE_SOTTO_5B_PENDING")
-                return
+                if _campo_ha_deposto:
+                    # CASO A — il Campo ha deposto: score=0 è artefatto del veto.
+                    # Ricostruisco numeri di base così SC ha qualcosa da valutare.
+                    # seed['score'] è 0-1 → scala a 0-100 come score di partenza.
+                    score  = round(float(seed.get('score', 0.0)) * 100.0, 1)
+                    soglia = float(getattr(self, '_m2_soglia_base', 40))
+                    _verbale["score"]  = score
+                    _verbale["soglia"] = soglia
+                    _verbale["score_ricostruito"] = True
+                    self._log_m2("🏛️", f"CAMPO_VETO_A_SC: campo_veto={_verbale['campo_veto']} "
+                                       f"score_ricostruito={score:.1f}/{soglia:.1f} → SC decide")
+                    # NESSUN return — il flow prosegue a SC (ZONA 3)
+                else:
+                    # CASO B — score genuinamente sotto soglia, nessun veto campo.
+                    # Dittatore SCORE_SOTTO — rinviato a 5b da decisione Roberto.
+                    self._log_m2("🔇", f"SCORE_SOTTO: {score:.1f} vs {soglia:.1f}")
+                    if score > 50 and len(self._phantoms_open) < 5:
+                        self._record_phantom(price, f"SCORE_{score:.0f}_vs_{soglia:.0f}",
+                                             seed['score'], momentum, volatility, trend)
+                    _verbale["blocked_by"] = "DITTATORE_SCORE_SOTTO_rinviato_5b"
+                    self._log_constitutional(_verbale, "PRE_SC_VETO_SCORE_SOTTO_5B_PENDING")
+                    return
 
             size = result.get('size', 0.3)
+            # Se il Campo ha deposto, result['size'] è 0.0 (artefatto _veto).
+            # Uso una size di base prudente — SC potrà modularla.
+            if _campo_ha_deposto and size <= 0.0:
+                size = 0.3
 
             # ════════════════════════════════════════════════════════════════
             # VOLPE BOOST — riconosci i contesti dove devi colpire forte
