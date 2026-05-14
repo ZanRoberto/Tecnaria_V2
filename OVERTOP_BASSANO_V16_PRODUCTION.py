@@ -7263,6 +7263,121 @@ class OvertopBassanoV16Production:
         self._m2_log.append(entry)
         log.info(entry)
 
+    def _log_constitutional(self, verbale: dict, event: str):
+        """
+        Log costituzionale della scena (Passo 5a, AUDIT ROBERTO V1).
+
+        Registra ogni exit point e ogni decisione del flow _evaluate_shadow_entry.
+        NON modifica il comportamento. Solo traccia.
+
+        event:
+          PRE_SC_VETO_<name>   — veto fisico legittimo della ZONA 1
+          SC_INPUTS_FULL       — il verbale completo quando SC viene chiamato
+          SC_DECISION_FINAL    — la decisione di SC
+          SC_WOULD_DECIDE      — (MODO 2) cosa SC deciderebbe sugli EXPLOSIVE
+          ENTRY_OPENED         — apertura posizione
+        """
+        try:
+            if not hasattr(self, '_constitutional_log'):
+                self._constitutional_log = deque(maxlen=200)
+
+            # Riga compatta per app.log
+            tsu   = verbale.get('tsunami_vote') or '-'
+            tsu_c = verbale.get('tsunami_confidence')
+            ora   = verbale.get('fp_wr')
+            verw  = verbale.get('veritas_ctx_wr')
+            vern  = verbale.get('veritas_ctx_samples')
+            capb  = verbale.get('capsule_block_score', 0)
+            sco   = verbale.get('score')
+            sog   = verbale.get('soglia')
+
+            parts = [f"tsu={tsu}/{tsu_c if tsu_c is not None else '-'}"]
+            parts.append(f"ora={ora:.2f}" if ora is not None else "ora=-")
+            parts.append(f"ver={verw:.2f}/{vern}" if verw is not None else "ver=-")
+            parts.append(f"capB={capb:.0f}")
+            parts.append(f"score={sco:.1f}/{sog:.1f}" if sco is not None and sog is not None else "score=-")
+            compact = " ".join(parts)
+
+            self._constitutional_log.append({
+                "ts":      verbale.get('tick_ts'),
+                "event":   event,
+                "compact": compact,
+                "verbale": dict(verbale),
+            })
+
+            ts_str = datetime.utcnow().strftime('%H:%M:%S')
+            log.info(f"{ts_str} 🏛️ [CONST] {event} | {compact}")
+        except Exception as _ce:
+            # L'osservatorio non deve MAI rompere il flow
+            log.debug(f"[CONST] errore log: {_ce}")
+
+    def _sc_osserva_explosive(self, price, momentum, volatility, trend,
+                              _dir, score, soglia, verbale, seed):
+        """
+        MODO 2 (Passo 5a) — SC OSSERVATORE su PERCORSO 1 (EXPLOSIVE).
+
+        SC viene chiamato con il verbale completo. Logga cosa vede
+        (SC_INPUTS_FULL) e cosa deciderebbe (SC_WOULD_DECIDE). MA la sua
+        decisione NON viene applicata: in 5a l'EXPLOSIVE entra come oggi.
+
+        Il potere pieno a SC sugli EXPLOSIVE arriva in 5b, dopo aver letto
+        nei log reali se SC sugli EXPLOSIVE decide bene.
+
+        Questo metodo NON ritorna nulla che influenzi il flow. Solo logga.
+        """
+        try:
+            _mat     = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
+            _st_ctx  = self._get_signal_tracker_context(self._regime_current, score)
+            _ph_st   = self._phantom_stats.get('SCORE_INSUFFICIENTE', {})
+            _fp_smp  = self.oracolo._memory.get(
+                self.oracolo._fp(momentum, volatility, trend, _dir), {}
+            ).get('real_samples', 0)
+
+            _sc_obs = self.supercervello.decide(
+                fp_wr            = verbale.get('fp_wr', 0.5),
+                fp_samples       = _fp_smp,
+                st_hit_rate      = _st_ctx['hit_rate'],
+                st_n             = _st_ctx['n'],
+                st_pnl           = _st_ctx['pnl_sim'],
+                oi_carica        = self._oi_carica,
+                oi_stato         = self._oi_stato,
+                score            = score,
+                soglia           = soglia,
+                matrimonio_wr    = _mat.get('wr', 0.5),
+                matrimonio_trust = self.memoria.get_trust(_mat.get('name', '')),
+                ph_protezione    = _ph_st.get('would_lose', 0),
+                ph_zavorra       = _ph_st.get('would_win', 0),
+                regime           = self._regime_current,
+                midzone          = False,
+                loss_streak      = self._m2_loss_consecutivi(),
+                # ── verbale costituzionale ──
+                tsunami_vote          = verbale.get('tsunami_vote'),
+                tsunami_confidence    = verbale.get('tsunami_confidence'),
+                tsunami_direction     = verbale.get('tsunami_direction'),
+                tsunami_reason        = verbale.get('tsunami_reason'),
+                veritas_ctx_wr        = verbale.get('veritas_ctx_wr'),
+                veritas_ctx_samples   = verbale.get('veritas_ctx_samples'),
+                veritas_ctx_pnl_avg   = verbale.get('veritas_ctx_pnl_avg'),
+                veritas_last_judgement= verbale.get('veritas_last_judgement'),
+                capsule_block_score   = verbale.get('capsule_block_score'),
+                capsule_boost_score   = verbale.get('capsule_boost_score'),
+                capsule_reasons       = verbale.get('capsule_reasons'),
+                capsule_oracolo_override = verbale.get('capsule_oracolo_override'),
+                proposed_direction    = verbale.get('proposed_direction'),
+                flip_confidence       = verbale.get('flip_confidence'),
+                breath_fase           = verbale.get('breath_fase'),
+                breath_energia        = verbale.get('breath_energia'),
+                sc_inputs_full        = True,
+            )
+            # MODO 2: logga cosa SC AVREBBE deciso — NON applica
+            log.info(f"🏛️ [SC_WOULD_DECIDE] PERCORSO1_EXPLOSIVE → "
+                     f"SC direbbe: {_sc_obs.get('azione')} "
+                     f"(motivo: {_sc_obs.get('motivo','')}) "
+                     f"— ma in 5a l'EXPLOSIVE entra come oggi")
+            verbale["sc_would_decide"] = _sc_obs.get('azione')
+        except Exception as e:
+            log.debug(f"[SC_OSSERVA] {e}")
+
     def _auto_detect_direction(self, trend):
         """
         Decide automaticamente LONG o SHORT con ISTERESI + COOLDOWN + CONFERMA.
@@ -7978,30 +8093,108 @@ class OvertopBassanoV16Production:
 
     def _evaluate_shadow_entry(self, price, momentum, volatility, trend):
         """
-        MOTORE ENTRY V15+V16 — SEMPLIFICATO
-        
-        Due percorsi:
-        1. EXPLOSIVE con carica >= 0.80 → ENTRA SEMPRE, nessun gate
-        2. Tutto il resto → gate normali
+        MOTORE ENTRY V16 — SCENA COSTITUZIONALE A 4 ZONE (Passo 5a, 14mag2026)
+        ════════════════════════════════════════════════════════════════════
+        AUDIT ROBERTO V1 / SC SOVRANO — riforma costituzionale del flow.
+
+        Le 4 zone:
+          ZONA 1 — Filtro fisico: i 6 veti legittimi restano return.
+          ZONA 2 — Deposizioni: ogni organo depone nel verbale _collected_inputs.
+                   Nessun return, nessun break, nessuna modifica di stato.
+          ZONA 3 — SC esamina: riceve il verbale completo e conclude.
+          ZONA 4 — La Regina esegue: solo dopo SC.
+
+        MODO 2 per PERCORSO 1 (EXPLOSIVE) — decisione capoprogetto:
+          In 5a SC viene CHIAMATO anche per gli EXPLOSIVE, logga cosa vede e
+          cosa deciderebbe (SC_INPUTS_FULL / SC_DECISION_FINAL), MA per gli
+          EXPLOSIVE la sua decisione è solo OSSERVATA — l'EXPLOSIVE entra
+          come oggi. Il potere pieno a SC sugli EXPLOSIVE arriva in 5b, dopo
+          aver letto i log reali.
+
+        5a — SC decide con la LOGICA DI OGGI. I nuovi input li riceve e li
+        logga, non li usa ancora. L'attivazione è 5b.
+        ════════════════════════════════════════════════════════════════════
         """
+        # ── IL VERBALE COSTITUZIONALE ────────────────────────────────────────
+        # Si popola durante la ZONA 2. Ogni organo depone qui. SC lo legge.
+        _verbale = {
+            "tick_ts":          time.time(),
+            "tick_price":       price,
+            "momentum":         momentum,
+            "volatility":       volatility,
+            "trend":            trend,
+            # TSUNAMI (statuto Passo 3 — tsunami.vota())
+            "tsunami_vote":         None,
+            "tsunami_confidence":   None,
+            "tsunami_direction":    None,
+            "tsunami_reason":       None,
+            "tsunami_size_mult":    None,
+            "tsunami_discorde":     False,
+            # FLIP proposto (era modifica di stato, ora proposta)
+            "proposed_direction":   None,
+            "flip_confidence":      None,
+            "flip_reason":          None,
+            # ORACOLO
+            "fp_wr":                None,
+            "fp_wr_opposite":       None,
+            "fp_samples":           None,
+            # VERITAS (statuto Passo 2 — get_ctx_stats())
+            "veritas_ctx_wr":       None,
+            "veritas_ctx_samples":  None,
+            "veritas_ctx_pnl_avg":  None,
+            "veritas_last_judgement": None,
+            # CAPSULE (statuto Passo 1 — consulta())
+            "capsule_block_score":  0.0,
+            "capsule_boost_score":  0.0,
+            "capsule_threshold_delta": 0.0,
+            "capsule_size_delta":   1.0,
+            "capsule_reasons":      [],
+            "capsule_oracolo_override": False,
+            # BREATH
+            "breath_fase":          None,
+            "breath_energia":       None,
+            # CONTESTO BASE
+            "regime":               None,
+            "oi_carica":            None,
+            "oi_stato":             None,
+            "oi_carica_short":      None,
+            "score":                None,
+            "soglia":               None,
+            # ESITO (per il log finale)
+            "percorso":             None,   # 'P1_EXPLOSIVE' | 'P2_NORMALE'
+            "blocked_by":           None,
+        }
+
         try:
-            # ── ANTI-DUPLICATE ─────────────────────────────────────────────
+            # ════════════════════════════════════════════════════════════════
+            # ZONA 1 — FILTRO FISICO ALL'INGRESSO
+            # I 6 veti legittimi. Restano return. Sono il nastro della polizia:
+            # non sono opinioni, sono "non c'è la scena da esaminare".
+            # ════════════════════════════════════════════════════════════════
+
+            # ── ANTI-DUPLICATE (veto fisico 1) ─────────────────────────────
             _now_tick = round(time.time(), 1)
             if getattr(self, '_last_entry_tick', 0) == _now_tick:
                 self._log_m2("🔇", "ANTI_DUPLICATE tick")
+                _verbale["blocked_by"] = "ZONA1_ANTI_DUPLICATE"
+                self._log_constitutional(_verbale, "PRE_SC_VETO_ANTI_DUPLICATE")
                 return
             self._last_entry_tick = _now_tick
 
-            # ── STATE ENGINE ────────────────────────────────────────────────
+            # ── STATE ENGINE (veto fisico 2) ───────────────────────────────
             can_enter, gate_reason = self._state_engine_can_enter()
             if not can_enter:
                 self._log_m2("🔇", f"STATE_ENGINE: {gate_reason}")
+                _verbale["blocked_by"] = f"ZONA1_STATE_ENGINE:{gate_reason}"
+                self._log_constitutional(_verbale, "PRE_SC_VETO_STATE_ENGINE")
                 return
 
-            # ── SEED ────────────────────────────────────────────────────────
+            # ── SEED (veto fisico 3) ───────────────────────────────────────
             seed = self.seed_scorer.score()
             if seed.get('reason') == 'insufficient_data':
                 self._log_m2("🔇", f"SEED_INSUFFICIENTE score={seed.get('score',0):.2f}")
+                _verbale["blocked_by"] = "ZONA1_SEED_INSUFFICIENT"
+                self._log_constitutional(_verbale, "PRE_SC_VETO_SEED_INSUFFICIENT")
                 return
 
             # ════════════════════════════════════════════════════════════════
@@ -8067,50 +8260,38 @@ class OvertopBassanoV16Production:
                 pass
 
             # ════════════════════════════════════════════════════════════════
-            # 🌊 TSUNAMI GATE — invenzione Roberto Zanardo (12mag2026)
             # ════════════════════════════════════════════════════════════════
-            # PRINCIPIO FISICO: uno tsunami vero è coerente a TUTTE le scale
-            # temporali. Se è visibile solo a 30s ma non a 2min/10min →
-            # è SCHIUMA, rumore localizzato.
-            #
-            # REGOLE:
-            #   - 3/3 timeframe TSUNAMI → entry full size
-            #   - 2/3 timeframe TSUNAMI → entry size ridotta (0.5x)
-            #   - 1/3 o discordi → SCHIUMA → NO entry
-            #
-            # NOTA: TsunamiGate è VETO ADDIZIONALE — non sostituisce gli altri
-            # gate (Veritas, Capsule, ecc.) ma li precede. Solo dopo che
-            # Tsunami dice OK passiamo a controlli successivi.
-            #
-            # Direction del tsunami: deve coincidere con _dir corrente del campo,
-            # altrimenti significa che il bot vorrebbe LONG mentre il mercato 
-            # va DOWN (o viceversa) — blocchiamo.
+            # ZONA 2 — DEPOSIZIONE TSUNAMI (statuto Passo 3)
+            # ════════════════════════════════════════════════════════════════
+            # Tsunami NON è più un dittatore. NON fa return. NON modifica lo
+            # stato del campo. Depone il suo voto nel verbale. SC deciderà.
+            # La logica di calcolo (bypass magnitude, coerenza direzione,
+            # size_mult) resta — cambia solo che il risultato va nel VERBALE
+            # invece di fare return.
             # ════════════════════════════════════════════════════════════════
             if self.tsunami is not None:
                 _ts_decision = self.tsunami.evaluate()
                 _campo_dir = self.campo._direction  # LONG o SHORT corrente
-                
-                # ════════════════════════════════════════════════════════════════
-                # FIX #29 v2 (12mag2026 sera): BYPASS MAGNITUDE PER TREND VERI
-                # ════════════════════════════════════════════════════════════════
-                # v1 (coe>=0.80 str>=0.50 delta>=$80): MAI SCATTATA in 8h live.
-                # Diagnosi: su BTC 80k a basso ATR, il 10min raramente raggiunge
-                # coe>=0.80 contemporaneamente a delta>=$80 in 1h.
-                # 
-                # v2 SOGLIE ABBASSATE: coe>=0.65, str>=0.40, delta>=$30.
-                # $30 = 0.04% su BTC 80k → micro-trend leggibile.
-                # Marker: BYPASS_MAGNITUDE_v2 per grep di verifica deploy.
-                # ════════════════════════════════════════════════════════════════
+
+                # Deposizione Tsunami nel verbale (statuto: tsunami.vota())
+                try:
+                    _ts_voto = self.tsunami.vota()
+                    _verbale["tsunami_vote"]       = _ts_voto.get("tsunami_vote")
+                    _verbale["tsunami_confidence"] = _ts_voto.get("tsunami_confidence")
+                    _verbale["tsunami_direction"]  = _ts_voto.get("tsunami_direction")
+                    _verbale["tsunami_reason"]     = _ts_voto.get("tsunami_reason")
+                    _verbale["tsunami_size_mult"]  = _ts_voto.get("tsunami_size_mult")
+                except Exception:
+                    pass
+
+                # ── BYPASS MAGNITUDE v2 (logica invariata — calcola, non blocca)
                 _bypass_magnitude = False
                 _bypass_dir = None
-                # BYPASS_MAGNITUDE_v2 — soglie 0.65/0.40/$30
                 try:
                     _ts_verd = _ts_decision.verdetti if hasattr(_ts_decision, 'verdetti') else {}
                     _v10 = _ts_verd.get('10min', None)
                     if _v10 and hasattr(_v10, 'direction') and hasattr(_v10, 'coerenza'):
-                        # 10min ha trend coerente (soglie v2)
                         if _v10.coerenza >= 0.65 and _v10.strength >= 0.40 and _v10.direction in ('UP', 'DOWN'):
-                            # Verifico magnitudine: prezzo si è mosso di almeno $30 negli ultimi tick
                             if hasattr(self, 'campo') and hasattr(self.campo, '_prices_ta'):
                                 _prices_recent = list(self.campo._prices_ta)
                                 if len(_prices_recent) >= 50:
@@ -8125,96 +8306,83 @@ class OvertopBassanoV16Production:
                                                            f"delta=${_delta_dollar:.0f} → {_bypass_dir}")
                 except Exception as _e_bm:
                     pass
-                
+
+                # ── DEPOSIZIONE: TSUNAMI_NO_ENTRY (era return — ora verbale) ──
                 if _ts_decision.azione == 'NO_ENTRY' and not _bypass_magnitude and not _bypass_oracolo:
-                    self._log_m2("🌊", f"TSUNAMI_VETO: {_ts_decision.motivo}")
-                    if len(self._phantoms_open) < 5:
-                        self._record_phantom(price, "TSUNAMI_NO_ENTRY",
-                                             seed['score'], momentum, volatility, trend)
-                    return
-                
-                # FIX #31: se bypass oracolo attivo, salta TSUNAMI_VETO e log
+                    self._log_m2("🌊", f"TSUNAMI dep: NO_ENTRY — {_ts_decision.motivo}")
+                    # NESSUN return. Tsunami ha deposto. SC valuterà.
+
+                # FIX #31: se bypass oracolo attivo, log
                 if _bypass_oracolo and _ts_decision.azione == 'NO_ENTRY':
                     self._log_m2("📜", f"TSUNAMI_BYPASSED_BY_ORACOLO: fp WR={_bypass_oracolo_wr:.0%} "
-                                       f"n={_bypass_oracolo_n} → passa nonostante TSUNAMI {_ts_decision.motivo}")
-                    self._tsunami_size_mult = 0.7  # size ridotta per prudenza (Oracolo OK ma Tsunami no)
+                                       f"n={_bypass_oracolo_n}")
+                    self._tsunami_size_mult = 0.7
 
-                # Se bypass magnitude attivo, forza la direzione del 10min
+                # ── PROPOSTA DI FLIP (era modifica di stato — ora verbale) ────
                 if _bypass_magnitude:
                     _ts_dir = _bypass_dir
-                    # Sblocco anche se discorde: il 10min ha più peso del 30s
                     if _ts_dir != _campo_dir:
-                        # Forziamo flip del campo al 10min
-                        self.campo._direction = _ts_dir
-                        self._log_m2("🔄", f"FLIP_MAGNITUDE: campo {_campo_dir} → {_ts_dir} (10min strutturato)")
-                        _campo_dir = _ts_dir
+                        # NON modifico più self.campo._direction.
+                        # Depongo la PROPOSTA nel verbale. SC deciderà il flip.
+                        _verbale["proposed_direction"] = _ts_dir
+                        _verbale["flip_confidence"]    = 1.0  # bypass magnitude = alta confidenza
+                        _verbale["flip_reason"]        = "FLIP_MAGNITUDE_10min_strutturato"
+                        self._log_m2("🔄", f"FLIP proposto: {_campo_dir} → {_ts_dir} (deposto, SC decide)")
                     self._tsunami_size_mult = 1.0
                 else:
-                    # Verifica coerenza direzione tsunami vs direction del campo
                     _ts_dir = 'LONG' if _ts_decision.azione == 'ENTRA_LONG' else 'SHORT'
                     if _ts_dir != _campo_dir:
-                        # FIX #31: se bypass oracolo attivo, ignora discorde
                         if _bypass_oracolo:
-                            self._log_m2("📜", f"TSUNAMI_DISCORDE_BYPASSED: oracolo WR={_bypass_oracolo_wr:.0%} "
-                                               f"n={_bypass_oracolo_n} (tsunami={_ts_dir} vs campo={_campo_dir})")
+                            self._log_m2("📜", f"TSUNAMI_DISCORDE_BYPASSED: oracolo WR={_bypass_oracolo_wr:.0%}")
                             self._tsunami_size_mult = 0.7
                         else:
-                            self._log_m2("🌊", f"TSUNAMI_DISCORDE: campo={_campo_dir} vs tsunami={_ts_dir} "
-                                               f"({_ts_decision.confidenza}/3) → blocca")
-                            if len(self._phantoms_open) < 5:
-                                self._record_phantom(price, f"TSUNAMI_DISCORDE_{_ts_dir}",
-                                                     seed['score'], momentum, volatility, trend)
-                            return
+                            # ── DEPOSIZIONE: TSUNAMI_DISCORDE (era return) ────
+                            self._log_m2("🌊", f"TSUNAMI dep: DISCORDE campo={_campo_dir} vs tsunami={_ts_dir}")
+                            _verbale["tsunami_discorde"] = True
+                            # NESSUN return. Tsunami ha deposto la discordanza.
+                            self._tsunami_size_mult = _ts_decision.size_mult
                     else:
-                        # Tsunami concorda con campo → log positivo e salvo size_mult
-                        self._log_m2("🌊", f"TSUNAMI_OK: {_ts_dir} confidenza={_ts_decision.confidenza}/3 "
-                                           f"size_mult={_ts_decision.size_mult:.2f}")
+                        self._log_m2("🌊", f"TSUNAMI dep: OK {_ts_dir} conf={_ts_decision.confidenza}/3")
                         self._tsunami_size_mult = _ts_decision.size_mult
             else:
                 self._tsunami_size_mult = 1.0  # fallback se modulo non disponibile
 
             # ── L1.5 — VERITAS GATE: blocca contesti tossici ───────────────
-            # Su 38 trade reali, contesti DEBOLE|ALTA|SIDEWAYS e MEDIO|ALTA|SIDEWAYS
-            # hanno avuto WR<10% e pnl_avg<-1.50. Il sistema TRADE LO STESSO lì
-            # perché Veritas non era usato come gate. Adesso lo è.
-            #
-            # Soglie:
-            # - serve almeno n=10 trade nel contesto (no falsi positivi)
-            # - blocca se WR<20% E pnl_avg<-1.0
-            # - se passano 24h dall'ultima loss, riaprire gate (mercato cambia)
+            # ════════════════════════════════════════════════════════════════
+            # ZONA 2 — DEPOSIZIONE VERITAS (statuto Passo 2)
+            # ════════════════════════════════════════════════════════════════
+            # Veritas NON è più un gate. NON fa return. Depone le statistiche
+            # del contesto nel verbale. SC deciderà se il contesto è tossico.
+            # ════════════════════════════════════════════════════════════════
             _ctx_key = f"{momentum}|{volatility}|{trend}"
-            _ctx_st  = self._m2_ctx_stats.get(_ctx_key)
-            if _ctx_st and _ctx_st['n'] >= 10:
-                _ctx_wr      = _ctx_st['wins'] / _ctx_st['n']
-                _ctx_pnl_avg = _ctx_st['pnl_sum'] / _ctx_st['n']
-                if _ctx_wr < 0.20 and _ctx_pnl_avg < -1.0:
-                    self._log_m2("🚫", f"VERITAS_GATE {_ctx_key} "
-                                       f"n={_ctx_st['n']} wr={_ctx_wr:.0%} "
-                                       f"pnl_avg=${_ctx_pnl_avg:+.2f} → blocca")
-                    # PATCH 10MAG: registra fantasma anche per VERITAS_GATE
-                    # (in V15 questo gate non esisteva, è stato aggiunto in V16
-                    # senza la chiamata phantom — pattern identico ai 5 gate originali)
-                    if len(self._phantoms_open) < 5:
-                        self._record_phantom(price, f"VERITAS_GATE_{_ctx_key[:18]}",
-                                             seed['score'], momentum, volatility, trend)
-                    return
+            try:
+                _ver_stats = self.veritas.get_ctx_stats(self._m2_ctx_stats, _ctx_key)
+                _verbale["veritas_ctx_wr"]        = _ver_stats.get("ctx_wr")
+                _verbale["veritas_ctx_samples"]   = _ver_stats.get("ctx_samples")
+                _verbale["veritas_ctx_pnl_avg"]   = _ver_stats.get("ctx_pnl_avg")
+                _verbale["veritas_last_judgement"]= _ver_stats.get("last_judgement")
+                if _ver_stats.get("last_judgement") == "TOSSICO":
+                    self._log_m2("🚫", f"VERITAS dep: {_ctx_key} TOSSICO "
+                                       f"wr={_ver_stats['ctx_wr']:.0%} n={_ver_stats['ctx_samples']} "
+                                       f"pnl=${_ver_stats['ctx_pnl_avg']:+.2f}")
+                # NESSUN return. Veritas ha deposto. SC valuterà.
+            except Exception as _ve:
+                log.debug(f"[VERITAS_DEP_ERR] {_ve}")
 
             _dir           = self.campo._direction
             fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend, _dir)
             self._last_fingerprint_wr = fingerprint_wr
+            _verbale["fp_wr"] = fingerprint_wr
             matrimonio_name = MatrimonioIntelligente.get_marriage(
                 momentum, volatility, trend).get("name", "WEAK_NEUTRAL")
 
-            # ── L2 — CAPSULE LEARNED GATE: secondo guardiano ──────────────
-            # Le capsule LEARNED del CapsuleManager hanno appreso che certi
-            # matrimoni sono tossici (es. RANGE_VOL_W pnl_avg=-1.74 su 19 sample).
-            # Adesso erano interrogate solo in EXPLOSIVE+OI>=0.80.
-            # Adesso lo facciamo SEMPRE prima dell'entry, in qualsiasi regime.
-            #
-            # Differenza con Veritas Gate:
-            # - Veritas Gate: contesto (mom|vol|trend) — granularità alta
-            # - LEARNED: matrimonio (RANGE_VOL_W ecc.) — granularità famiglia
-            # Operano in OR: basta che uno dei due dica "tossico" → blocca
+            # ════════════════════════════════════════════════════════════════
+            # ZONA 2 — DEPOSIZIONE CAPSULE (statuto Passo 1)
+            # ════════════════════════════════════════════════════════════════
+            # Le capsule NON sono più un gate. NON fanno return, NON fanno break.
+            # consulta() itera TUTTE le capsule e accumula i voti pesati.
+            # Il verbale riceve block_score, boost_score, reasons. SC deciderà.
+            # ════════════════════════════════════════════════════════════════
             if hasattr(self, 'capsule_manager') and self.capsule_manager:
                 try:
                     _learned_ctx = {
@@ -8225,20 +8393,23 @@ class OvertopBassanoV16Production:
                         'regime':     self._regime_current,
                         'matrimonio': matrimonio_name,
                         'oi_carica':  getattr(self, '_oi_carica', 0.0),
+                        'oi_short':   getattr(self, '_oi_carica_short', 0.0),
+                        'breath_fase':    (self._breath._fase    if self._breath else 'NEUTRO'),
+                        'breath_energia': (self._breath._energia if self._breath else 0.0),
                     }
-                    _learned_check = self.capsule_manager.valuta(_learned_ctx)
-                    if _learned_check.get("blocca"):
-                        _reason = _learned_check.get("reason", "CM_TOSSICO")
-                        self._log_m2("🚫", f"LEARNED_GATE {matrimonio_name} → {_reason}")
-                        # PATCH 10MAG: registra fantasma anche per LEARNED_GATE
-                        # (in V15 questo gate non esisteva, è stato aggiunto in V16
-                        # senza la chiamata phantom — pattern identico ai 5 gate originali)
-                        if len(self._phantoms_open) < 5:
-                            self._record_phantom(price, f"LEARNED_{_reason[:20]}",
-                                                 seed['score'], momentum, volatility, trend)
-                        return
+                    _capsule_voto = self.capsule_manager.consulta(_learned_ctx)
+                    _verbale["capsule_block_score"]     = _capsule_voto.get("block_score", 0.0)
+                    _verbale["capsule_boost_score"]     = _capsule_voto.get("boost_score", 0.0)
+                    _verbale["capsule_threshold_delta"] = _capsule_voto.get("threshold_delta", 0.0)
+                    _verbale["capsule_size_delta"]      = _capsule_voto.get("size_delta", 1.0)
+                    _verbale["capsule_reasons"]         = _capsule_voto.get("reasons", [])
+                    _verbale["capsule_oracolo_override"]= _capsule_voto.get("oracolo_override", False)
+                    if _capsule_voto.get("block_score", 0) > 0:
+                        self._log_m2("💊", f"CAPSULE dep: block_score={_capsule_voto['block_score']:.0f} "
+                                           f"reasons={_capsule_voto.get('reasons', [])}")
+                    # NESSUN return, NESSUN break. Le capsule hanno deposto.
                 except Exception as _le:
-                    log.debug(f"[LEARNED_GATE_ERR] {_le}")
+                    log.debug(f"[CAPSULE_DEP_ERR] {_le}")
 
             # ── CALCOLA EFFECTIVE REGIME ─────────────────────────────────────
             _now_eo    = time.time()
@@ -8257,12 +8428,23 @@ class OvertopBassanoV16Production:
 
             # ═══════════════════════════════════════════════════════════════
             # PERCORSO 1: EXPLOSIVE con carica alta
-            # CapsuleManager blocca pattern tossici anche in EXPLOSIVE.
-            # DEBOLE|ALTA|SIDEWAYS WR 11% non migliora con OI alto.
+            # ═══════════════════════════════════════════════════════════════
+            # MODO 2 (decisione capoprogetto, 5a): in PERCORSO 1, SC viene
+            # CHIAMATO come OSSERVATORE prima dell'entry — logga cosa vede e
+            # cosa deciderebbe (SC_WOULD_DECIDE) — ma l'EXPLOSIVE entra come
+            # oggi. Il potere pieno a SC sugli EXPLOSIVE arriva in 5b.
+            # I veti FISICI di PERCORSO 1 (RANGE check, dati insufficienti)
+            # restano return — sono ZONA 1, matematica del trade.
+            # Il veto CAPSULE diventa deposizione.
             # ═══════════════════════════════════════════════════════════════
             if _effective_regime == 'EXPLOSIVE' and _eo_carica >= 0.80:
+                _verbale["percorso"] = "P1_EXPLOSIVE"
+                _verbale["regime"]   = _effective_regime
+                _verbale["oi_carica"]= _eo_carica
+                _verbale["oi_stato"] = self._oi_stato
+                _verbale["oi_carica_short"] = getattr(self, '_oi_carica_short', 0.0)
 
-                # CapsuleManager: pattern tossici bloccati anche in EXPLOSIVE
+                # ── DEPOSIZIONE CAPSULE in PERCORSO 1 (era return — ora verbale)
                 if self.capsule_manager:
                     _cm_ctx_p1 = {
                         'momentum':        momentum,
@@ -8274,20 +8456,26 @@ class OvertopBassanoV16Production:
                         'oi_stato':        self._oi_stato,
                         'loss_consecutivi': self._m2_loss_consecutivi(),
                         'matrimonio':      matrimonio_name,
-                        # V16: precursore esplosivo
                         'oi_short':        getattr(self, '_oi_carica_short', 0.0),
                         'breath_fase':     (self._breath._fase    if self._breath else 'NEUTRO'),
                         'breath_energia':  (self._breath._energia if self._breath else 0.0),
                     }
-                    _cm_p1 = self.capsule_manager.valuta(_cm_ctx_p1)
-                    if _cm_p1.get('blocca'):
-                        self._log_m2("🚫", f"PERCORSO1_CM_BLOCCA: {_cm_p1.get('reason')} carica={_eo_carica:.2f}")
-                        self._record_phantom(price, f"PERCORSO1_CM_{_cm_p1.get('reason','BLOCK')[:20]}",
-                                             75.0, momentum, volatility, trend)
-                        return
+                    try:
+                        _cm_p1_voto = self.capsule_manager.consulta(_cm_ctx_p1)
+                        # aggiorno il verbale con i voti capsule di PERCORSO 1
+                        _verbale["capsule_block_score"]      = _cm_p1_voto.get("block_score", 0.0)
+                        _verbale["capsule_boost_score"]      = _cm_p1_voto.get("boost_score", 0.0)
+                        _verbale["capsule_reasons"]          = _cm_p1_voto.get("reasons", [])
+                        _verbale["capsule_oracolo_override"] = _cm_p1_voto.get("oracolo_override", False)
+                        if _cm_p1_voto.get("block_score", 0) > 0:
+                            self._log_m2("💊", f"PERCORSO1 CAPSULE dep: block_score={_cm_p1_voto['block_score']:.0f}")
+                        # NESSUN return — le capsule hanno deposto
+                    except Exception as _le1:
+                        log.debug(f"[P1_CAPSULE_DEP_ERR] {_le1}")
 
-                # SIDEWAYS: blocca solo se il movimento atteso non copre le fee
-                # Se RANGE CHECK conferma movimento sufficiente → entra comunque
+                # ── VETI FISICI PERCORSO 1 (ZONA 1 — restano return) ──────────
+                # Questi sono matematica del trade: il movimento atteso non
+                # copre le fee. Non sono opinioni, sono impossibilità fisiche.
                 if trend == 'SIDEWAYS':
                     _prices_buf = list(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else []
                     if len(_prices_buf) >= 10:
@@ -8295,28 +8483,31 @@ class OvertopBassanoV16Production:
                         _breakeven = self._calcola_breakeven_dinamico(momentum, volatility, trend)
                         if _expected_move < _breakeven:
                             self._log_m2("🚫", f"EXPLOSIVE_SIDEWAYS_BLOCK: move=${_expected_move:.1f} < breakeven=${_breakeven:.1f}")
+                            _verbale["blocked_by"] = "ZONA1_EXPLOSIVE_SIDEWAYS_breakeven"
+                            self._log_constitutional(_verbale, "PRE_SC_VETO_EXPLOSIVE_SIDEWAYS")
                             return
                         self._log_m2("✅", f"EXPLOSIVE_SIDEWAYS_OK: move=${_expected_move:.1f} >= breakeven=${_breakeven:.1f}")
                     else:
                         self._log_m2("🚫", f"EXPLOSIVE_SIDEWAYS_BLOCK: dati insufficienti per RANGE CHECK")
+                        _verbale["blocked_by"] = "ZONA1_EXPLOSIVE_SIDEWAYS_dati_insuff"
+                        self._log_constitutional(_verbale, "PRE_SC_VETO_EXPLOSIVE_SIDEWAYS_DATI")
                         return
 
-                # RANGE CHECK — breakeven calcolato dai trade reali, zero hardcode
                 _prices_buf = list(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else []
                 if len(_prices_buf) >= 10:
                     _expected_move = max(_prices_buf[-20:]) - min(_prices_buf[-20:])
                     _breakeven = self._calcola_breakeven_dinamico(momentum, volatility, trend)
                     if _expected_move < _breakeven:
                         self._log_m2("🚫", f"RANGE_INSUFFICIENTE: move=${_expected_move:.1f} < breakeven=${_breakeven:.1f}")
+                        _verbale["blocked_by"] = "ZONA1_RANGE_INSUFFICIENTE"
+                        self._log_constitutional(_verbale, "PRE_SC_VETO_RANGE_INSUFFICIENTE")
                         return
                     self._log_m2("✅", f"RANGE_OK: move=${_expected_move:.1f} >= breakeven=${_breakeven:.1f}")
 
                 # Size proporzionale alla carica
                 size = round(min(1.0, max(0.30, _eo_carica)), 2)
 
-                # ── CAMPO GRAVITAZIONALE REALE — no hardcode ─────────────
-                # PERCORSO 1 usa il campo reale invece di score=75 fisso.
-                # OI alto è il gate di ingresso, il campo giudica la qualità.
+                # ── CAMPO GRAVITAZIONALE REALE ───────────────────────────────
                 _fantasma_p1 = self.oracolo.is_fantasma(momentum, volatility, trend, _dir)
                 _result_p1 = self.campo.evaluate(
                     seed_score        = seed['score'],
@@ -8330,33 +8521,49 @@ class OvertopBassanoV16Production:
                     fantasma_info     = _fantasma_p1,
                     loss_consecutivi  = self._m2_loss_consecutivi(),
                     soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend),
-                    # FIX OPZIONE C: pred_score abbassa il floor della soglia
                     pred_score        = getattr(self.supercervello, '_pred_score_ref', 0.0),
                 )
                 if _result_p1['veto'] and _eo_carica < 0.80:
                     self._log_m2("🚫", f"PERCORSO1_VETO: {_result_p1['veto']} "
                                        f"carica={_eo_carica:.2f} {momentum}|{volatility}|{trend}")
-                    self._record_phantom(price, f"PERCORSO1_{_result_p1['veto'][:20]}",
-                                         seed['score'], momentum, volatility, trend)
+                    _verbale["blocked_by"] = f"ZONA1_PERCORSO1_VETO:{_result_p1['veto']}"
+                    self._log_constitutional(_verbale, "PRE_SC_VETO_PERCORSO1_CAMPO")
                     return
                 score  = _result_p1['score']
                 soglia = _result_p1['soglia']
+                _verbale["score"]  = score
+                _verbale["soglia"] = soglia
                 self._log_m2("📊", f"PERCORSO1_CAMPO: score={score:.1f} soglia={soglia:.1f} "
                                    f"carica={_eo_carica:.2f} {momentum}|{volatility}|{trend}")
 
-                # CapsuleManager può modificare size
+                # CapsuleManager può modificare size (consulta, non valuta)
                 if self.capsule_manager:
-                    _cm_ctx = {
-                        'momentum': momentum, 'volatility': volatility,
-                        'trend': trend, 'direction': _dir,
-                        'regime': _effective_regime,
-                        'oi_carica': _eo_carica,
-                    }
-                    _cm = self.capsule_manager.valuta(_cm_ctx)
-                    size = round(min(1.0, max(0.30, size * _cm.get('size_mult', 1.0))), 2)
+                    try:
+                        _cm_size = self.capsule_manager.consulta({
+                            'momentum': momentum, 'volatility': volatility,
+                            'trend': trend, 'direction': _dir,
+                            'regime': _effective_regime, 'oi_carica': _eo_carica,
+                        })
+                        size = round(min(1.0, max(0.30, size * _cm_size.get('size_delta', 1.0))), 2)
+                    except Exception:
+                        pass
+
+                # ════════════════════════════════════════════════════════════
+                # MODO 2 — SC OSSERVATORE su PERCORSO 1
+                # SC viene chiamato, logga cosa vede e cosa deciderebbe.
+                # In 5a la sua decisione è OSSERVATA, non applicata.
+                # L'EXPLOSIVE entra come oggi.
+                # ════════════════════════════════════════════════════════════
+                try:
+                    self._sc_osserva_explosive(price, momentum, volatility, trend,
+                                               _dir, score, soglia, _verbale, seed)
+                except Exception as _sce:
+                    log.debug(f"[SC_OSSERVA_P1_ERR] {_sce}")
 
                 self._log_m2("🚀", f"EXPLOSIVE ENTRY {_dir} carica={_eo_carica:.2f} "
                                    f"size={size:.2f} {momentum}|{volatility}|{trend}")
+                _verbale["blocked_by"] = None  # è un'entrata
+                self._log_constitutional(_verbale, "ENTRY_OPENED_P1_EXPLOSIVE")
                 self._open_shadow_position(price, score, soglia, seed, size,
                                             momentum, volatility, trend,
                                             matrimonio_name, fingerprint_wr)
@@ -8387,31 +8594,53 @@ class OvertopBassanoV16Production:
                 pred_score        = getattr(self.supercervello, '_pred_score_ref', 0.0),
             )
 
+            _verbale["percorso"] = "P2_NORMALE"
+            _verbale["regime"]   = _effective_regime
+            _verbale["oi_carica"]= getattr(self, '_oi_carica', 0.0)
+            _verbale["oi_stato"] = getattr(self, '_oi_stato', '')
+            _verbale["oi_carica_short"] = getattr(self, '_oi_carica_short', 0.0)
+            _verbale["breath_fase"]    = (self._breath._fase    if self._breath else 'NEUTRO')
+            _verbale["breath_energia"] = (self._breath._energia if self._breath else 0.0)
+
             if result['veto']:
                 self._log_m2("🚫", f"VETO: {result['veto']}")
                 if len(self._phantoms_open) < 5:
                     self._record_phantom(price, result['veto'], seed['score'],
                                          momentum, volatility, trend)
+                _verbale["blocked_by"] = f"ZONA1_CAMPO_VETO:{result['veto']}"
+                self._log_constitutional(_verbale, "PRE_SC_VETO_CAMPO")
                 return
 
-            # Warmup
+            # ── Warmup (veti fisici ZONA 1) ────────────────────────────────
             _warmup_rsi = len(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else 0
             if _warmup_rsi < 20:
                 self._log_m2("⏳", f"BOOT_GUARD: warmup RSI {_warmup_rsi}/20")
+                _verbale["blocked_by"] = "ZONA1_BOOT_GUARD"
+                self._log_constitutional(_verbale, "PRE_SC_VETO_BOOT_GUARD")
                 return
             if not hasattr(self, '_warmup_done_time'):
                 self._warmup_done_time = time.time()
             if time.time() - self._warmup_done_time < 10:
+                _verbale["blocked_by"] = "ZONA1_POST_WARMUP_GRACE"
+                self._log_constitutional(_verbale, "PRE_SC_VETO_POST_WARMUP_GRACE")
                 return
 
             score  = result['score']
             soglia = result['soglia']
+            _verbale["score"]  = score
+            _verbale["soglia"] = soglia
 
+            # ── SCORE_SOTTO ────────────────────────────────────────────────
+            # NOTA COSTITUZIONALE 5a: questo return è il dittatore L8224 che
+            # Roberto ha ESPLICITAMENTE rinviato a Fase 5b. In 5a NON viene
+            # toccato — resta return. Sarà convertito in input SC in 5b.
             if not result['enter']:
                 self._log_m2("🔇", f"SCORE_SOTTO: {score:.1f} vs {soglia:.1f}")
                 if score > 50 and len(self._phantoms_open) < 5:
                     self._record_phantom(price, f"SCORE_{score:.0f}_vs_{soglia:.0f}",
                                          seed['score'], momentum, volatility, trend)
+                _verbale["blocked_by"] = "DITTATORE_SCORE_SOTTO_rinviato_5b"
+                self._log_constitutional(_verbale, "PRE_SC_VETO_SCORE_SOTTO_5B_PENDING")
                 return
 
             size = result.get('size', 0.3)
@@ -8490,6 +8719,12 @@ class OvertopBassanoV16Production:
             except Exception:
                 pass
 
+            # ════════════════════════════════════════════════════════════════
+            # ZONA 3 — L'ESPERTO ESAMINA (SC, e solo SC)
+            # SC riceve il verbale costituzionale completo. In 5a SC decide
+            # ancora con la LOGICA DI OGGI — i nuovi input li riceve e li
+            # logga (SC_INPUTS_FULL), non li usa. L'attivazione è 5b.
+            # ════════════════════════════════════════════════════════════════
             _sc_dec = self.supercervello.decide(
                 fp_wr          = fingerprint_wr,
                 fp_samples     = self.oracolo._memory.get(
@@ -8512,8 +8747,30 @@ class OvertopBassanoV16Production:
                 fp_wr_opposite     = _fp_wr_opp,    # FIX #32
                 fp_samples_opposite= _fp_n_opp,     # FIX #32
                 current_direction  = _dir,          # FIX #32
+                # ── VERBALE COSTITUZIONALE (Passo 5a — ricevuto e loggato) ──
+                tsunami_vote          = _verbale.get('tsunami_vote'),
+                tsunami_confidence    = _verbale.get('tsunami_confidence'),
+                tsunami_direction     = _verbale.get('tsunami_direction'),
+                tsunami_reason        = _verbale.get('tsunami_reason'),
+                veritas_ctx_wr        = _verbale.get('veritas_ctx_wr'),
+                veritas_ctx_samples   = _verbale.get('veritas_ctx_samples'),
+                veritas_ctx_pnl_avg   = _verbale.get('veritas_ctx_pnl_avg'),
+                veritas_last_judgement= _verbale.get('veritas_last_judgement'),
+                capsule_block_score   = _verbale.get('capsule_block_score'),
+                capsule_boost_score   = _verbale.get('capsule_boost_score'),
+                capsule_reasons       = _verbale.get('capsule_reasons'),
+                capsule_oracolo_override = _verbale.get('capsule_oracolo_override'),
+                proposed_direction    = _verbale.get('proposed_direction'),
+                flip_confidence       = _verbale.get('flip_confidence'),
+                breath_fase           = _verbale.get('breath_fase'),
+                breath_energia        = _verbale.get('breath_energia'),
+                sc_inputs_full        = True,
             )
             self._last_sc_dec = _sc_dec
+
+            # Log costituzionale: la decisione finale di SC
+            _verbale["sc_decision"] = _sc_dec['azione']
+            self._log_constitutional(_verbale, f"SC_DECISION_FINAL_{_sc_dec['azione']}")
 
             if _sc_dec['azione'] == 'BLOCCA':
                 self._log_m2("🚫", f"SC_BLOCCA: {_sc_dec['motivo']}")
