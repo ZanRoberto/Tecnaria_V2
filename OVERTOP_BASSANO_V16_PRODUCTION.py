@@ -3761,13 +3761,33 @@ class RegimeDetector:
             confidence = min(1.0, (0.50 - dir_ratio) * 5)
 
         else:
-            # Laterale
+            # ════════════════════════════════════════════════════════════
+            # PASSO 8 (14mag2026) — FIX FORMULA CONFIDENCE RANGING
+            # ════════════════════════════════════════════════════════════
+            # Prima: confidence = 1.0 - abs(dir_ratio - 0.5) * 4
+            #   con dir_ratio=0.286 → 1.0 - 0.214*4 = 0.14
+            #   con dir_ratio fuori [0.25,0.75] → NEGATIVA → clamp a 0.0
+            #   Risultato: 'regime conf 0.0' anche su RANGING legittimi.
+            #   Il *4 è troppo aggressivo: confonde "RANGING sbilanciato"
+            #   (probabile trend nascente) con "confidenza zero".
+            #
+            # Ora: due concetti separati.
+            #  - dir_ratio vicino a 0.5  → RANGING VERO, confidence ALTA
+            #    (mercato che oscilla bilanciato, nessuna direzione = è
+            #     davvero un range, e di questo siamo confidenti)
+            #  - dir_ratio lontano da 0.5 → RANGING INCERTO, confidence BASSA
+            #    (sbilanciato: forse sta trendando ma sotto le soglie trend.
+            #     NON è "zero" — è "RANGING poco affidabile", ~0.3)
+            # Coefficiente 2.0 invece di 4.0: la confidence degrada ma non
+            # satura a zero. Floor 0.30: un RANGING resta un RANGING, anche
+            # incerto — non diventa mai "non lo so" assoluto.
             regime     = 'RANGING'
-            confidence = min(1.0, 1.0 - abs(dir_ratio - 0.5) * 4)
+            confidence = max(0.30, 1.0 - abs(dir_ratio - 0.5) * 2.0)
 
         # FIX Bug #9 (12mag): clamp confidence + isteresi cambio regime
         confidence = max(0.0, min(1.0, confidence))
-        
+
+        # isteresi: il regime cambia solo dopo CHANGE_TICKS conferme
         if regime == self._regime:
             self._pending_regime = regime
             self._pending_count = 0
@@ -3780,7 +3800,31 @@ class RegimeDetector:
             self._pending_regime = regime
             self._pending_count = 1
 
-        self._confidence = confidence
+        # ════════════════════════════════════════════════════════════════
+        # PASSO 8 — RIALLINEAMENTO regime/confidence
+        # ════════════════════════════════════════════════════════════════
+        # Prima: self._confidence = confidence  (calcolata sul regime
+        #   ISTANTANEO), ma il return restituisce self._regime (quello
+        #   ISTERESIZZATO). Se l'isteresi non ha ancora confermato il
+        #   cambio, uscivano accoppiati un regime e una confidence che si
+        #   riferiscono a momenti diversi → 'conf' incoerente col 'regime'.
+        #
+        # Ora: la confidence segue il regime EFFETTIVAMENTE restituito.
+        #  - se regime calcolato == self._regime → confidence è coerente,
+        #    si usa così com'è
+        #  - se l'isteresi sta ancora trattenendo un cambio → la confidence
+        #    del regime restituito (quello vecchio, self._regime) è
+        #    "in transizione": la si attenua proporzionalmente a quanto
+        #    il pending si sta avvicinando al cambio. Più il nuovo regime
+        #    accumula conferme, meno siamo confidenti del vecchio.
+        if regime == self._regime:
+            self._confidence = confidence
+        else:
+            # isteresi attiva: regime restituito = self._regime (vecchio),
+            # ma c'è un pending che spinge. Attenua la confidence del
+            # vecchio regime in base a quanto il pending è avanzato.
+            _transizione = self._pending_count / max(1, self.CHANGE_TICKS)
+            self._confidence = round(max(0.10, confidence * (1.0 - _transizione * 0.7)), 3)
 
         return self._regime, self._confidence, {
             'trend_pct':       round(trend_pct, 3),
@@ -3788,6 +3832,7 @@ class RegimeDetector:
             'vol_accel':       round(vol_accel, 3),
             'vol_ratio':       round(vol_ratio, 3),
             'regime_calcolato': regime,
+            'confidence_calcolata': round(confidence, 3),
             'pending_count':   self._pending_count,
         }
 
