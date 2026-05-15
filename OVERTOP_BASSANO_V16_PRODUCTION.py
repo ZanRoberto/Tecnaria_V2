@@ -8934,10 +8934,36 @@ class OvertopBassanoV16Production:
                             if (dir_pred > 0) == (dir_reale > 0):
                                 conferme += 1
                     conf_pct = round(conferme / totale * 100, 1) if totale > 0 else 0
-                    self.heartbeat_data["pred_scostamento"] = scost_avg
-                    self.heartbeat_data["pred_conferme"]    = conferme
-                    self.heartbeat_data["pred_totale"]      = totale
-                    self.heartbeat_data["pred_score"]       = conf_pct
+
+                    # ════════════════════════════════════════════════════════════
+                    # PASSO 14 (15mag2026) — DASHBOARD ONESTA
+                    # Le card SCOSTAMENTO/CONFERMATE/SCORE PRED ora usano i valori
+                    # del PredittoreContestuale V2 (misurato vs realtà 60s) quando
+                    # ha raccolto ≥30 verificate. Prima di allora restano i valori
+                    # tautologici (fallback cold start) per non mostrare card vuote.
+                    # ════════════════════════════════════════════════════════════
+                    _pv2_ready = False
+                    _pv2_score = conf_pct       # default cold = tautologico
+                    _pv2_scost = scost_avg
+                    _pv2_conf  = conferme
+                    _pv2_tot   = totale
+                    try:
+                        _pv2_stats = self.predittore_v2.get_stats()
+                        _pv2_nver  = _pv2_stats.get('pred_v2_n_verificate', 0)
+                        if _pv2_nver >= 30:
+                            _pv2_ready = True
+                            _pv2_score = _pv2_stats.get('pred_v2_accuracy_segno', conf_pct)
+                            _pv2_scost = _pv2_stats.get('pred_v2_err_medio', scost_avg)
+                            _pv2_conf  = sum(self.predittore_v2._segno_giusti) \
+                                         if hasattr(self.predittore_v2, '_segno_giusti') else 0
+                            _pv2_tot   = _pv2_stats.get('pred_v2_n_segno', 0)
+                    except Exception as _e_pv2_card:
+                        log.debug(f"[PRED_V2_CARD_ERR] {_e_pv2_card}")
+                    self.heartbeat_data["pred_scostamento"] = _pv2_scost
+                    self.heartbeat_data["pred_conferme"]    = _pv2_conf
+                    self.heartbeat_data["pred_totale"]      = _pv2_tot
+                    self.heartbeat_data["pred_score"]       = _pv2_score
+                    self.heartbeat_data["pred_v2_ready"]    = _pv2_ready
                     self.heartbeat_data["pred_trade_n"]     = self._pred_trade_n
                     self.heartbeat_data["pred_trade_pnl"]   = round(self._pred_trade_pnl, 2)
                     self.heartbeat_data["pred_delta_fuoco"]  = round(_delta_fuoco, 4)
@@ -8988,7 +9014,7 @@ class OvertopBassanoV16Production:
                             _lp = self.libro_pesca.get_stats(time.time())
                             for _k, _v in _lp.items():
                                 self.heartbeat_data[_k] = _v
-                            # PASSO 15.C — eventi recenti per il grafico storico
+                            # PASSO 15.C — eventi recenti per il grafico palle colorate
                             self.heartbeat_data["lp_eventi_recenti"] = \
                                 self.libro_pesca.get_recent_events(50)
                     except Exception as _e_lp_hb:
@@ -9020,14 +9046,36 @@ class OvertopBassanoV16Production:
                         self._pred_ratio_history.append(ratio)
                         if len(self._pred_ratio_history) > 50:
                             self._pred_ratio_history.pop(0)
-                        ratio_smooth = round(
+                        ratio_smooth_taut = round(
                             sum(self._pred_ratio_history) / len(self._pred_ratio_history), 1)
-                        self.heartbeat_data["pred_ratio"]     = ratio_smooth
-                        self.heartbeat_data["pred_ratio_raw"] = ratio
-                        # Aggiorna SC per boost predizione e Veritas stats
+
+                        # ════════════════════════════════════════════════════════════
+                        # PASSO 14 — CALIBRAZIONE ONESTA DAL V2
+                        # Se V2 maturo: usa rapporto medio |delta_predetti|/|delta_reali|
+                        # misurato contro la realtà 60s. Altrimenti fallback tautologico.
+                        # ════════════════════════════════════════════════════════════
+                        ratio_v2 = ratio_smooth_taut
+                        try:
+                            _pv2_dp = getattr(self.predittore_v2, '_delta_predetti', None)
+                            _pv2_dr = getattr(self.predittore_v2, '_delta_reali', None)
+                            if _pv2_dp and _pv2_dr and len(_pv2_dr) >= 30:
+                                _ap = sum(abs(x) for x in _pv2_dp) / len(_pv2_dp)
+                                _ar = sum(abs(x) for x in _pv2_dr) / len(_pv2_dr)
+                                if _ap > 0:
+                                    ratio_v2 = round(_ar / _ap * 100, 1)
+                        except Exception as _e_rv2:
+                            log.debug(f"[PRED_V2_RATIO_ERR] {_e_rv2}")
+
+                        self.heartbeat_data["pred_ratio"]      = ratio_v2
+                        self.heartbeat_data["pred_ratio_raw"]  = ratio
+                        self.heartbeat_data["pred_ratio_taut"] = ratio_smooth_taut
+
+                        # PASSO 14 — _pred_score_ref / _pred_calib_ref dal V2 solo se maturo
+                        # Cold start: il motore resta a 70 (default boot) per non strangolare.
                         if hasattr(self, 'supercervello'):
-                            self.supercervello._pred_score_ref = conf_pct
-                            self.supercervello._pred_calib_ref = ratio_smooth
+                            if _pv2_ready:
+                                self.supercervello._pred_score_ref = _pv2_score
+                                self.supercervello._pred_calib_ref = ratio_v2
                             self.supercervello._veritas_stats_ref = self.veritas._stats
 
                 # FIX: _ctx aggiornato SEMPRE ad ogni tick dell'Oracolo Interno,
