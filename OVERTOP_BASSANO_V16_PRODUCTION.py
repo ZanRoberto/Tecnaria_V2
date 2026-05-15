@@ -83,13 +83,12 @@ DIVORCE_MIN_TRIGGERS   = 2    # quanti trigger devono scattare per uscita immedi
 DB_PATH        = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
 NARRATIVES_DB  = os.environ.get("NARRATIVES_DB", "/home/app/data/narratives.db")
 
-# --- PASSO 15.E (15mag2026) — LIBRO DI PESCA SELETTIVA ----------------------
-# ATTIVA di default. Parametri selettivi trovati nel simulatore:
-#   - cooldown 125s tra piantate (24× più lento di 15.B)
-#   - carica minima 0.95 (era 0.65) — solo carica massima reale
-#   - solo orizzonti 30s e 60s (era 5 orizzonti)
-#   - solo se OI = FUOCO (no fallback su 0.75)
-# Stima: 1-3 piantate ogni 5-10 minuti invece di 5 ogni 5s.
+# --- PASSO 15.F (15mag2026) — LIBRO DI PESCA SU FINGERPRINT VERITAS ---------
+# La pesca NON parte più dall'OI carica (principio sbagliato — fallito).
+# Parte dal fingerprint ORACOLO DINAMICO: (momentum × volatilità × trend × dir).
+# Pianta solo se il fingerprint corrente ha WR storico ≥ 60% con n ≥ 30 + PnL_sum > 0.
+# Esempio: LONG|FORTE|BASSA|UP → WR 78% n=30 PnL+$30 → PIANTA.
+# Stima: 0-2 piantate ogni 10-30 minuti (solo quando contesto è oro).
 # Per disattivare: Render env LIBRO_PESCA_ENABLED=false
 LIBRO_PESCA_ENABLED = os.environ.get("LIBRO_PESCA_ENABLED", "true").lower() in ("true", "1", "yes")
 
@@ -6031,15 +6030,17 @@ class LibroPesca:
     Per attivare → Render env: LIBRO_PESCA_ENABLED=true
     """
 
-    ORIZZONTI = (30, 60)
+    ORIZZONTI = (60,)
     LASCO_PCT   = 0.15
-    LASCO_FLOOR = 2.0
-    LASCO_CAP   = 15.0
-    CARICA_MIN_TRIGGER = 0.95
-    COOLDOWN_S = 125.0
+    LASCO_FLOOR = 3.0
+    LASCO_CAP   = 20.0
+    COOLDOWN_S = 60.0
     TRADE_SIZE_USD = 1000.0
     LEVERAGE       = 5.0
     FEE_PCT        = 0.0002
+    FP_WR_MIN      = 0.60   # WR storico minimo nel fingerprint
+    FP_N_MIN       = 30     # samples minimi
+    FP_PNL_MIN     = 0.0    # pnl_sum storico deve essere positivo
 
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -6086,15 +6087,27 @@ class LibroPesca:
                     esito_finale TEXT
                 )
             """)
-            # PASSO 15.E: colonna versione per distinguere dataset
             try:
                 cur.execute("ALTER TABLE libro_pesca ADD COLUMN versione TEXT DEFAULT 'v15b'")
             except sqlite3.OperationalError:
-                pass  # colonna già esistente
+                pass
+            try:
+                cur.execute("ALTER TABLE libro_pesca ADD COLUMN fp_key TEXT")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cur.execute("ALTER TABLE libro_pesca ADD COLUMN fp_wr REAL")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cur.execute("ALTER TABLE libro_pesca ADD COLUMN fp_n INTEGER")
+            except sqlite3.OperationalError:
+                pass
             cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_orizzonte ON libro_pesca(orizzonte_s)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_stato ON libro_pesca(stato)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_esito ON libro_pesca(esito_finale)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_versione ON libro_pesca(versione)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_fp ON libro_pesca(fp_key)")
             conn.commit()
             conn.close()
             log.info(f"[LIBRO_PESCA] DB init {self.db_path}")
@@ -6105,7 +6118,7 @@ class LibroPesca:
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
-            cur.execute("SELECT MAX(id) FROM libro_pesca")
+            cur.execute("SELECT MAX(id) FROM libro_pesca WHERE versione='v15f'")
             row = cur.fetchone()
             conn.close()
             self._next_id = int(row[0]) + 1 if row and row[0] is not None else 1
@@ -6125,8 +6138,8 @@ class LibroPesca:
                 (id, ts_piantata, prezzo_lenza, direzione, orizzonte_s, lasco,
                  regime, carica, oi_stato, delta_atteso, stato, ts_cattura,
                  prezzo_cattura, ts_chiusura, prezzo_chiusura, pnl_paper, esito_finale,
-                 versione)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 versione, fp_key, fp_wr, fp_n)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 L['id'], L['ts_piantata'], L['prezzo_lenza'], L['direzione'],
                 L['orizzonte_s'], L['lasco'], L.get('regime'), L.get('carica'),
@@ -6134,7 +6147,7 @@ class LibroPesca:
                 L['stato'], L.get('ts_cattura'), L.get('prezzo_cattura'),
                 L.get('ts_chiusura'), L.get('prezzo_chiusura'),
                 L.get('pnl_paper'), L.get('esito_finale'),
-                'v15e',
+                'v15f', L.get('fp_key'), L.get('fp_wr'), L.get('fp_n'),
             ))
             conn.commit()
             conn.close()
@@ -6147,31 +6160,70 @@ class LibroPesca:
                 self.enabled = False
                 log.error(f"[LIBRO_PESCA_AUTO_DISABLE] {self._save_err_count} errori sqlite consecutivi → libro disattivato")
 
-    def pianta_se_radar_acceso(self, now, prezzo,
-                                oi_carica, oi_stato,
-                                oi_carica_short, oi_stato_short,
-                                regime, delta_atteso):
-        """Pianta 2 lenze parallele a orizzonti 30s e 60s quando il radar è
-        ALTAMENTE acceso. Soglia stretta: carica >= 0.95 + stato FUOCO.
-        Solo carica massima reale. Niente fallback su 0.75.
+    def pianta_se_fingerprint_vincente(self, now, prezzo,
+                                        momentum, volatility, trend,
+                                        oracolo_memory, regime,
+                                        delta_atteso):
+        """
+        15.F — pianta lenza SOLO se fingerprint corrente ha edge storico.
+
+        momentum: FORTE/MEDIO/DEBOLE
+        volatility: ALTA/MEDIA/BASSA
+        trend: UP/DOWN/SIDEWAYS
+        oracolo_memory: dict bot.oracolo._memory (chiavi "LONG|FORTE|BASSA|UP" etc.)
+
+        Trigger:
+        - calcola fp_key per LONG e per SHORT
+        - cerca WR (wins/samples) e PnL_sum nello storico
+        - sceglie la direzione col WR migliore SE supera soglie FP_WR_MIN/FP_N_MIN/FP_PNL_MIN
+        - pianta 1 lenza a 60s con lasco proporzionale al delta atteso
         """
         if not self.enabled:
             return
-        direzione = None
-        carica_eff = 0.0
-        oi_eff = oi_stato
-        if oi_stato_short == "FUOCO" and oi_carica_short >= self.CARICA_MIN_TRIGGER:
-            direzione = "SHORT"; carica_eff = oi_carica_short; oi_eff = oi_stato_short
-        elif oi_stato == "FUOCO" and oi_carica >= self.CARICA_MIN_TRIGGER:
-            direzione = "LONG"; carica_eff = oi_carica; oi_eff = oi_stato
+        if not momentum or not volatility or not trend:
+            return  # warmup
 
-        if direzione is None:
+        fp_long  = f"LONG|{momentum}|{volatility}|{trend}"
+        fp_short = f"SHORT|{momentum}|{volatility}|{trend}"
+
+        # Lettura sicura da oracolo._memory
+        def _stats(k):
+            s = oracolo_memory.get(k) if oracolo_memory else None
+            if not s:
+                return (0.0, 0, 0.0)
+            wins = float(s.get('wins', 0))
+            samples = float(s.get('samples', 0))
+            pnl_sum = float(s.get('pnl_sum', 0))
+            wr = wins / samples if samples > 0 else 0.0
+            return (wr, int(samples), pnl_sum)
+
+        wr_l, n_l, pnl_l = _stats(fp_long)
+        wr_s, n_s, pnl_s = _stats(fp_short)
+
+        long_ok  = (wr_l >= self.FP_WR_MIN and n_l >= self.FP_N_MIN and pnl_l > self.FP_PNL_MIN)
+        short_ok = (wr_s >= self.FP_WR_MIN and n_s >= self.FP_N_MIN and pnl_s > self.FP_PNL_MIN)
+
+        if not long_ok and not short_ok:
             return
 
+        # Sceglie la direzione col WR maggiore
+        if long_ok and short_ok:
+            direzione = "LONG" if wr_l >= wr_s else "SHORT"
+        elif long_ok:
+            direzione = "LONG"
+        else:
+            direzione = "SHORT"
+
+        fp_key = fp_long if direzione == "LONG" else fp_short
+        fp_wr  = wr_l if direzione == "LONG" else wr_s
+        fp_n   = n_l if direzione == "LONG" else n_s
+
+        # Cooldown per direzione
         ultima = self._ultima_piantata_long if direzione == "LONG" else self._ultima_piantata_short
         if now - ultima < self.COOLDOWN_S:
             return
 
+        # Delta atteso: prefer V2 se disponibile; altrimenti stima dal pnl_sum storico
         delta_60_abs = abs(delta_atteso) if delta_atteso else max(prezzo * 0.0005, 5.0)
         sign = +1 if direzione == "LONG" else -1
 
@@ -6188,8 +6240,8 @@ class LibroPesca:
                 'orizzonte_s': h_s,
                 'lasco': round(lasco, 2),
                 'regime': regime,
-                'carica': round(carica_eff, 3),
-                'oi_stato': oi_eff,
+                'carica': round(fp_wr, 3),  # riusa la colonna 'carica' per WR fingerprint
+                'oi_stato': 'FP_VINCENTE',
                 'delta_atteso': round(delta_h, 2),
                 'stato': 'ATTESA',
                 'ts_cattura': None,
@@ -6198,15 +6250,23 @@ class LibroPesca:
                 'prezzo_chiusura': None,
                 'pnl_paper': None,
                 'esito_finale': None,
+                'fp_key': fp_key,
+                'fp_wr': round(fp_wr, 3),
+                'fp_n': fp_n,
             }
             self._next_id += 1
             self._in_volo.append(L)
             self._save(L)
+            log.info(f"[LIBRO_PESCA] piantata fp={fp_key} wr={fp_wr:.0%} n={fp_n} dir={direzione} prezzo=${prezzo_lenza}")
 
         if direzione == "LONG":
             self._ultima_piantata_long = now
         else:
             self._ultima_piantata_short = now
+
+    def pianta_se_radar_acceso(self, *args, **kwargs):
+        """Compat 15.B/15.E — disabilitato in 15.F. Non chiamare."""
+        return
 
     def tick(self, now, prezzo):
         """Verifica catture/scadenze/chiusure delle lenze in volo."""
@@ -6278,21 +6338,21 @@ class LibroPesca:
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15e'")
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15f'")
             out['lp_vere'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='BARATTOLO' AND versione='v15e'")
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='BARATTOLO' AND versione='v15f'")
             out['lp_barattoli'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='SCADUTA' AND versione='v15e'")
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='SCADUTA' AND versione='v15f'")
             out['lp_scadute'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE versione='v15e'")
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE versione='v15f'")
             out['lp_totale'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15e'")
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15f'")
             r = cur.fetchone()
             out['lp_pnl_vere'] = round(r[0], 2) if r and r[0] else 0.0
-            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='BARATTOLO' AND versione='v15e'")
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='BARATTOLO' AND versione='v15f'")
             r = cur.fetchone()
             out['lp_pnl_barattoli'] = round(r[0], 2) if r and r[0] else 0.0
-            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale IN ('VERA','BARATTOLO') AND versione='v15e'")
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale IN ('VERA','BARATTOLO') AND versione='v15f'")
             r = cur.fetchone()
             out['lp_pnl_totale'] = round(r[0], 2) if r and r[0] else 0.0
             for h_s in self.ORIZZONTI:
@@ -6303,7 +6363,7 @@ class LibroPesca:
                       SUM(CASE WHEN esito_finale='SCADUTA' THEN 1 ELSE 0 END),
                       SUM(CASE WHEN stato IN ('ATTESA','CATTURATA') THEN 1 ELSE 0 END),
                       SUM(CASE WHEN esito_finale IN ('VERA','BARATTOLO') THEN pnl_paper ELSE 0 END)
-                    FROM libro_pesca WHERE orizzonte_s = ? AND versione='v15e'
+                    FROM libro_pesca WHERE orizzonte_s = ?
                 """, (h_s,))
                 r = cur.fetchone()
                 vere = r[0] or 0
@@ -6346,7 +6406,7 @@ class LibroPesca:
                        ts_cattura, prezzo_cattura, ts_chiusura, prezzo_chiusura,
                        pnl_paper, esito_finale
                 FROM libro_pesca
-                WHERE esito_finale IS NOT NULL AND versione='v15e'
+                WHERE esito_finale IS NOT NULL AND versione='v15f'
                 ORDER BY id DESC LIMIT ?
             """, (limit,))
             for r in cur.fetchall():
@@ -6971,16 +7031,14 @@ class OvertopBassanoV16Production:
             log.debug(f"[PRED_V2_ERR] {_e_pv2}")
 
         # ════════════════════════════════════════════════════════════════
-        # PASSO 15.B — TATTICA DI PESCA (in parallelo, slot indipendente)
-        # 1) tick: verifica catture/scadenze/chiusure delle lenze in volo
-        # 2) pianta_se_radar_acceso: se radar acceso, pianta 5 lenze
-        # delta_atteso preso dal V2 se maturo (≥30 verificate), altrimenti
-        # fallback proporzionale al prezzo.
+        # PASSO 15.F — TATTICA DI PESCA SU FINGERPRINT VERITAS
+        # Pianta lenza SOLO se il fingerprint corrente (momentum × vol × trend)
+        # ha WR storico ≥ 60% con n ≥ 30 + PnL_sum > 0.
         # ════════════════════════════════════════════════════════════════
         try:
             if self.libro_pesca is not None:
                 self.libro_pesca.tick(now, price)
-                # delta_atteso per la piantata: V2 se ready, altrimenti fallback
+                # delta_atteso: V2 se maturo, altrimenti stima
                 _delta_pesca = 0.0
                 try:
                     _pv2_stats = self.predittore_v2.get_stats()
@@ -6993,11 +7051,18 @@ class OvertopBassanoV16Production:
                     _delta_pesca = price * 0.0005
                 _regime_now = getattr(self, '_regime_current',
                                       getattr(self, '_regime', 'UNKNOWN'))
-                self.libro_pesca.pianta_se_radar_acceso(
+                # Fingerprint LIVE dall'analyzer
+                try:
+                    _drift = getattr(self.campo, '_last_drift_pct', 0.0)
+                except Exception:
+                    _drift = 0.0
+                _mom, _vol, _trd = self.analyzer.analyze(regime=_regime_now, drift=_drift)
+                # Memory dall'Oracolo Dinamico
+                _orac_mem = getattr(self.oracolo, '_memory', None)
+                self.libro_pesca.pianta_se_fingerprint_vincente(
                     now, price,
-                    self._oi_carica, self._oi_stato,
-                    self._oi_carica_short, self._oi_stato_short,
-                    _regime_now, _delta_pesca
+                    _mom, _vol, _trd,
+                    _orac_mem, _regime_now, _delta_pesca
                 )
         except Exception as _e_lp:
             log.debug(f"[LIBRO_PESCA_TICK_ERR] {_e_lp}")
