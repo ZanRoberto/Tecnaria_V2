@@ -8533,12 +8533,21 @@ class OvertopBassanoV16Production:
                                     _p_start = _prices_recent[0]
                                     _p_now = _prices_recent[-1]
                                     _delta_dollar = abs(_p_now - _p_start)
-                                    if _delta_dollar >= 30:
+                                    # ════════════════════════════════════════════════
+                                    # PASSO 9 (15mag2026) — SOGLIA PROPORZIONALE
+                                    # Prima: soglia fissa $30. Su BTC=30k era 0.10%.
+                                    # Su BTC=81k è 0.037%: relativamente più alta.
+                                    # La soglia "invecchiava" col prezzo.
+                                    # Ora: 0.05% del prezzo corrente.
+                                    #   BTC=80k → $40 ; BTC=100k → $50 ; BTC=50k → $25
+                                    # ════════════════════════════════════════════════
+                                    _bypass_threshold = max(15.0, _p_now * 0.0005)
+                                    if _delta_dollar >= _bypass_threshold:
                                         _bypass_magnitude = True
                                         _bypass_dir = 'LONG' if _v10.direction == 'UP' else 'SHORT'
                                         self._log_m2("⚡", f"BYPASS_MAGNITUDE_v2: 10min={_v10.direction} "
                                                            f"coe={_v10.coerenza:.2f} str={_v10.strength:.2f} "
-                                                           f"delta=${_delta_dollar:.0f} → {_bypass_dir}")
+                                                           f"delta=${_delta_dollar:.0f}/${_bypass_threshold:.0f} → {_bypass_dir}")
                 except Exception as _e_bm:
                     pass
 
