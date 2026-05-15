@@ -2374,8 +2374,29 @@ canvas.spark { width:100%; height:40px; }
         </div>
 
         <div id="lp-params-banner" style="display:none;padding:8px 10px;background:rgba(29,158,117,0.08);border:1px solid rgba(29,158,117,0.25);border-radius:4px;font-size:10px;color:#1D9E75;margin-bottom:8px;line-height:1.5;">
-          <b>15.F · PESCA DA FINGERPRINT VERITAS</b> · WR storico ≥ 60% · n ≥ 30 · PnL_sum > 0<br>
-          <span style="color:var(--dim);">pianta solo quando momentum × volatilità × trend hanno edge dimostrato (es. FORTE|BASSA|UP wr 78%)</span>
+          <b>15.J · 3 STRATEGIE PARALLELE</b> · entry immediata, chiusura 60s, no EXPLOSIVE<br>
+          <span style="color:var(--dim);">P1=WIN signature (drift+pos+comp) · P2=V2+drift conferma · P3=compressione che parte</span>
+        </div>
+
+        <div id="lp-strategie-grid" style="display:none;margin-bottom:10px;">
+          <div style="font-size:8px;color:var(--dim);letter-spacing:0.5px;margin-bottom:4px;">CONFRONTO STRATEGIE (★ = la migliore)</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;">
+            <div class="lp-strat-cell" data-strat="p1" style="background:rgba(186,117,23,0.10);border-radius:4px;padding:8px;text-align:center;">
+              <div style="font-size:11px;font-weight:500;color:#BA7517;" class="lp-strat-label">P1 · WIN signature</div>
+              <div class="lp-strat-wr" style="font-size:16px;font-weight:500;margin-top:4px;">—</div>
+              <div class="lp-strat-detail" style="font-size:9px;color:var(--dim);line-height:1.4;">in attesa</div>
+            </div>
+            <div class="lp-strat-cell" data-strat="p2" style="background:rgba(29,158,117,0.10);border-radius:4px;padding:8px;text-align:center;">
+              <div style="font-size:11px;font-weight:500;color:#1D9E75;" class="lp-strat-label">P2 · V2 + drift</div>
+              <div class="lp-strat-wr" style="font-size:16px;font-weight:500;margin-top:4px;">—</div>
+              <div class="lp-strat-detail" style="font-size:9px;color:var(--dim);line-height:1.4;">in attesa</div>
+            </div>
+            <div class="lp-strat-cell" data-strat="p3" style="background:rgba(83,74,183,0.10);border-radius:4px;padding:8px;text-align:center;">
+              <div style="font-size:11px;font-weight:500;color:#534AB7;" class="lp-strat-label">P3 · molla parte</div>
+              <div class="lp-strat-wr" style="font-size:16px;font-weight:500;margin-top:4px;">—</div>
+              <div class="lp-strat-detail" style="font-size:9px;color:var(--dim);line-height:1.4;">in attesa</div>
+            </div>
+          </div>
         </div>
 
         <!-- Contenuto attivo (mostrato solo quando attiva) -->
@@ -2863,10 +2884,11 @@ const SCPanel = (() => {
       const lpStatusEl = document.getElementById('lp-status');
       const lpDisabledMsg = document.getElementById('lp-disabled-msg');
       const lpParamsBanner = document.getElementById('lp-params-banner');
+      const lpStrategieGrid = document.getElementById('lp-strategie-grid');
       const lpActiveContent = document.getElementById('lp-active-content');
 
       if (lpStatusEl) {
-        lpStatusEl.textContent = lpEnabled ? 'pesca da fingerprint' : 'disattivata';
+        lpStatusEl.textContent = lpEnabled ? '3 strategie parallele' : 'disattivata';
         lpStatusEl.style.color = lpEnabled ? '#1D9E75' : '#E24B4A';
       }
 
@@ -2874,12 +2896,48 @@ const SCPanel = (() => {
         if (lpEnabled) {
           lpDisabledMsg.style.display = 'none';
           lpParamsBanner.style.display = 'block';
+          if (lpStrategieGrid) lpStrategieGrid.style.display = 'block';
           lpActiveContent.style.display = 'block';
         } else {
           lpDisabledMsg.style.display = 'block';
           lpParamsBanner.style.display = 'none';
+          if (lpStrategieGrid) lpStrategieGrid.style.display = 'none';
           lpActiveContent.style.display = 'none';
         }
+      }
+
+      // 15.J — aggiorna pannello strategie P1/P2/P3
+      if (lpEnabled && lpStrategieGrid && hb.lp_strategie) {
+        const strat = hb.lp_strategie;
+        let bestPnl = -Infinity;
+        let bestKey = null;
+        for (const k of ['p1','p2','p3']) {
+          if (strat[k] && strat[k].totale_chiusi >= 3 && strat[k].pnl_totale > bestPnl) {
+            bestPnl = strat[k].pnl_totale;
+            bestKey = k;
+          }
+        }
+        document.querySelectorAll('.lp-strat-cell').forEach(cell => {
+          const k = cell.dataset.strat;
+          const s = strat[k] || {};
+          const labelEl = cell.querySelector('.lp-strat-label');
+          const wrEl = cell.querySelector('.lp-strat-wr');
+          const detEl = cell.querySelector('.lp-strat-detail');
+          const baseName = {p1:'P1 · WIN signature', p2:'P2 · V2 + drift', p3:'P3 · molla parte'}[k];
+          labelEl.textContent = (k === bestKey ? '★ ' : '') + baseName;
+          if (s.totale_chiusi > 0) {
+            wrEl.textContent = (s.wr_pct !== null ? s.wr_pct.toFixed(0) + '%' : '—');
+            const pnlSign = s.pnl_totale >= 0 ? '+' : '';
+            detEl.innerHTML = `${s.vere}v/${s.barattoli}b · <b style="color:${s.pnl_totale>=0?'#1D9E75':'#E24B4A'}">${pnlSign}$${s.pnl_totale.toFixed(2)}</b>` +
+                              (s.in_volo > 0 ? ` · ${s.in_volo} in volo` : '');
+          } else if (s.in_volo > 0) {
+            wrEl.textContent = '—';
+            detEl.textContent = `${s.in_volo} in volo`;
+          } else {
+            wrEl.textContent = '—';
+            detEl.textContent = 'in attesa';
+          }
+        });
       }
 
       if (!lpEnabled) {
