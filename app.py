@@ -2304,7 +2304,7 @@ canvas.spark { width:100%; height:40px; }
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
           <div style="font-size:9px;color:var(--dim)">SCORE PRED.</div>
           <div id="pred-score" style="font-size:14px;font-weight:500;">—</div>
-          <div style="font-size:8px;color:var(--dim)">% corrette</div>
+          <div id="pred-score-source" style="font-size:8px;color:var(--dim)">% corrette</div>
         </div>
         <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;grid-column:span 3;">
           <div style="font-size:9px;color:var(--dim)">PRED → TRADE → PnL</div>
@@ -2316,6 +2316,89 @@ canvas.spark { width:100%; height:40px; }
           <div id="pred-ratio" style="font-size:18px;font-weight:500;">—</div>
           <div style="font-size:8px;color:var(--dim)">100% = perfetto · &lt;100% troppo aggressiva · &gt;100% troppo conservativa</div>
         </div>
+
+        <!-- ════════ PASSO 12 — LENZE: dove pianto la lenza a 60s ════════ -->
+        <div id="lenza-long-card" style="background:rgba(100,255,100,0.05);border:1px solid rgba(100,255,100,0.2);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;color:var(--dim)">🎣 LENZA LONG (+60s)</div>
+          <div id="lenza-long" style="font-size:14px;font-weight:500;color:#639922;">—</div>
+          <div id="lenza-long-tag" style="font-size:8px;color:var(--dim)">attesa</div>
+        </div>
+        <div id="lenza-short-card" style="background:rgba(255,100,100,0.05);border:1px solid rgba(255,100,100,0.2);border-radius:6px;padding:8px;text-align:center;">
+          <div style="font-size:9px;color:var(--dim)">🎣 LENZA SHORT (-60s)</div>
+          <div id="lenza-short" style="font-size:14px;font-weight:500;color:#E24B4A;">—</div>
+          <div id="lenza-short-tag" style="font-size:8px;color:var(--dim)">attesa</div>
+        </div>
+      </div>
+
+      <!-- ════════ PASSO 14 — pannello azzurro V2 RIMOSSO ════════ -->
+      <!-- Le card vecchie sopra (SCOSTAMENTO/CONFERMATE/SCORE PRED/CALIBRAZIONE) -->
+      <!-- ora sono alimentate dal Predittore V2 onesto. Niente doppione. -->
+
+      <!-- ════════ PASSO 15 — TATTICA DI PESCA ════════ -->
+      <!-- Lenze piantate a 5 orizzonti (10/20/30/60/90s). Cattura → trade paper -->
+      <!-- in parallelo al SC. Esito finale: VERA / BARATTOLO / SCADUTA. -->
+      <!-- Tutto persistito su sqlite. Sopravvive ai restart. -->
+      <div style="margin-top:14px;padding:10px;background:rgba(239,159,39,0.04);border:1px solid rgba(239,159,39,0.25);border-radius:6px;">
+        <div style="font-size:10px;color:#EF9F27;letter-spacing:1.5px;margin-bottom:8px;font-weight:500;">
+          🎣 TATTICA DI PESCA — Passo 15
+        </div>
+
+        <!-- 4 contatori in alto -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px;">
+          <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+            <div style="font-size:9px;color:var(--dim)">PIANTATE</div>
+            <div id="lp-piantate" style="font-size:14px;font-weight:500;">—</div>
+            <div style="font-size:8px;color:var(--dim)">totale libro</div>
+          </div>
+          <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+            <div style="font-size:9px;color:var(--dim)">CATTURATE</div>
+            <div id="lp-catturate" style="font-size:14px;font-weight:500;">—</div>
+            <div id="lp-cat-detail" style="font-size:8px;color:var(--dim)">—</div>
+          </div>
+          <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+            <div style="font-size:9px;color:var(--dim)">SCADUTE</div>
+            <div id="lp-scadute" style="font-size:14px;font-weight:500;color:#888780">—</div>
+            <div style="font-size:8px;color:var(--dim)">no trade aperto</div>
+          </div>
+          <div style="background:rgba(100,100,100,0.08);border-radius:6px;padding:8px;text-align:center;">
+            <div style="font-size:9px;color:var(--dim)">PnL PAPER</div>
+            <div id="lp-pnl" style="font-size:14px;font-weight:500;">—</div>
+            <div id="lp-pnl-detail" style="font-size:8px;color:var(--dim)">—</div>
+          </div>
+        </div>
+
+        <!-- Grafico principale: BTC + palle che cambiano colore -->
+        <div style="position:relative;width:100%;height:200px;margin-bottom:8px;">
+          <canvas id="lpChart"></canvas>
+        </div>
+
+        <!-- Legenda colori -->
+        <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:9px;color:var(--dim);margin-bottom:8px;justify-content:center;">
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;background:#EF9F27;border-radius:50%;display:inline-block;"></span>esca in attesa</span>
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;background:#378ADD;border-radius:50%;display:inline-block;"></span>catturata</span>
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;background:#1D9E75;border-radius:50%;display:inline-block;"></span>pesce vero (+)</span>
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;background:#E24B4A;border-radius:50%;display:inline-block;"></span>barattolo (−)</span>
+          <span style="display:flex;align-items:center;gap:4px;"><span style="width:7px;height:7px;background:#888780;display:inline-block;transform:rotate(45deg);"></span>scaduta</span>
+        </div>
+
+        <!-- Grafico PnL paper cumulativo (dentini su e giù) -->
+        <div style="position:relative;width:100%;height:80px;margin-bottom:8px;">
+          <canvas id="lpPnlChart"></canvas>
+        </div>
+
+        <!-- Tabella per orizzonte: chi vince? -->
+        <div style="font-size:9px;color:var(--dim);letter-spacing:1px;margin-bottom:4px;">LIBRO PER ORIZZONTE</div>
+        <div id="lp-orizzonti" style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;">
+          <div class="lp-oriz-cell" data-h="10"><div style="font-size:10px;font-weight:500;">10s</div><div class="lp-oriz-pct" style="font-size:13px;">—</div><div class="lp-oriz-det" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div></div>
+          <div class="lp-oriz-cell" data-h="20"><div style="font-size:10px;font-weight:500;">20s</div><div class="lp-oriz-pct" style="font-size:13px;">—</div><div class="lp-oriz-det" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div></div>
+          <div class="lp-oriz-cell" data-h="30"><div style="font-size:10px;font-weight:500;">30s</div><div class="lp-oriz-pct" style="font-size:13px;">—</div><div class="lp-oriz-det" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div></div>
+          <div class="lp-oriz-cell" data-h="60"><div style="font-size:10px;font-weight:500;">60s</div><div class="lp-oriz-pct" style="font-size:13px;">—</div><div class="lp-oriz-det" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div></div>
+          <div class="lp-oriz-cell" data-h="90"><div style="font-size:10px;font-weight:500;">90s</div><div class="lp-oriz-pct" style="font-size:13px;">—</div><div class="lp-oriz-det" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div></div>
+        </div>
+        <style>
+          .lp-oriz-cell { background:rgba(100,100,100,0.08); border-radius:4px; padding:6px 4px; text-align:center; }
+          .lp-oriz-cell.lp-winner { background:rgba(29,158,117,0.12); border:1px solid rgba(29,158,117,0.4); }
+        </style>
       </div>
 
       <!-- Narrativa oracolo interno -->
@@ -2638,6 +2721,23 @@ const SCPanel = (() => {
       const scoreEl = document.getElementById('pred-score');
       if (scoreEl) { scoreEl.textContent = (score||0).toFixed(1) + '%';
         scoreEl.style.color = score >= 60 ? 'var(--green)' : score >= 50 ? 'var(--yellow)' : 'var(--red)'; }
+      // ════════ PASSO 14 — Badge V2 ready / cold sotto SCORE PRED ════════
+      // Mostra se i numeri delle 4 card sono già alimentati dal Predittore V2
+      // onesto (almeno 30 predizioni verificate) o se sono ancora il fallback
+      // tautologico iniziale. Senza questo, dopo deploy vedi 100% per ~30 min
+      // e ti chiedi perché non cambia.
+      const srcEl = document.getElementById('pred-score-source');
+      if (srcEl) {
+        const v2ready = hb.pred_v2_ready === true;
+        const nver    = hb.pred_v2_n_verificate || 0;
+        if (v2ready) {
+          srcEl.textContent = '✓ V2 onesto (n=' + nver + ')';
+          srcEl.style.color = 'var(--green)';
+        } else {
+          srcEl.textContent = '⏳ V2 cold ' + nver + '/30 — fallback tautologico';
+          srcEl.style.color = 'var(--yellow)';
+        }
+      }
       const tradeEl = document.getElementById('pred-trade');
       if (tradeEl) {
         const tn  = hb.pred_trade_n   || 0;
@@ -2653,6 +2753,122 @@ const SCPanel = (() => {
         const dist = Math.abs(r - 100);
         ratioEl.style.color = dist < 20 ? 'var(--green)' : dist < 50 ? 'var(--yellow)' : 'var(--red)';
       }
+    }
+
+    // ════════ PASSO 12 — Aggiorna LENZE (dove pianto la lenza a 60s) ════════
+    const lzLong  = hb.lenza_long;
+    const lzShort = hb.lenza_short;
+    const lzAttiva= hb.lenza_attiva || 'NONE';
+    const lzDelta = hb.lenza_delta  || 0;
+    if (lzLong !== undefined && lzShort !== undefined) {
+      const llEl = document.getElementById('lenza-long');
+      const lsEl = document.getElementById('lenza-short');
+      const llTag= document.getElementById('lenza-long-tag');
+      const lsTag= document.getElementById('lenza-short-tag');
+      const llCard= document.getElementById('lenza-long-card');
+      const lsCard= document.getElementById('lenza-short-card');
+      if (llEl) llEl.textContent  = '$' + (lzLong||0).toFixed(0);
+      if (lsEl) lsEl.textContent  = '$' + (lzShort||0).toFixed(0);
+      // Tag: indica se la lenza è ATTIVA (FUOCO acceso + predizione certificata)
+      // o se è in attesa
+      if (llTag) {
+        if (lzAttiva === 'LONG') {
+          llTag.textContent = '🔥 ATTIVA — pesce in arrivo';
+          llTag.style.color = '#639922';
+          if (llCard) { llCard.style.borderColor = '#639922'; llCard.style.background = 'rgba(100,255,100,0.12)'; }
+        } else {
+          llTag.textContent = 'delta ±$' + lzDelta.toFixed(0);
+          llTag.style.color = 'var(--dim)';
+          if (llCard) { llCard.style.borderColor = 'rgba(100,255,100,0.2)'; llCard.style.background = 'rgba(100,255,100,0.05)'; }
+        }
+      }
+      if (lsTag) {
+        if (lzAttiva === 'SHORT') {
+          lsTag.textContent = '🔥 ATTIVA — pesce in arrivo';
+          lsTag.style.color = '#E24B4A';
+          if (lsCard) { lsCard.style.borderColor = '#E24B4A'; lsCard.style.background = 'rgba(255,100,100,0.12)'; }
+        } else {
+          lsTag.textContent = 'delta ±$' + lzDelta.toFixed(0);
+          lsTag.style.color = 'var(--dim)';
+          if (lsCard) { lsCard.style.borderColor = 'rgba(255,100,100,0.2)'; lsCard.style.background = 'rgba(255,100,100,0.05)'; }
+        }
+      }
+    }
+
+    // ════════ PASSO 14 — blocco JS pannello azzurro V2 RIMOSSO ════════
+    // Le stats V2 (pred_v2_*) sono già esposte nell'heartbeat ma adesso
+    // alimentano direttamente le card vecchie sopra (pred_score/pred_scostamento/
+    // pred_conferme/pred_totale) tramite override nel V16. Niente pannello doppione.
+
+    // ════════ PASSO 15 — TATTICA DI PESCA: aggiorna contatori e 2 grafici ════════
+    try {
+      const lpVere    = hb.lp_vere || 0;
+      const lpBar     = hb.lp_barattoli || 0;
+      const lpSca     = hb.lp_scadute || 0;
+      const lpTot     = hb.lp_totale || 0;
+      const lpPnlTot  = hb.lp_pnl_totale || 0;
+      const lpPnlVere = hb.lp_pnl_vere || 0;
+      const lpPnlBar  = hb.lp_pnl_barattoli || 0;
+      const lpInVolo  = hb.lp_in_volo || 0;
+      // contatori
+      $('lp-piantate').textContent = lpTot;
+      $('lp-catturate').textContent = lpVere + lpBar;
+      const detail = $('lp-cat-detail');
+      if (detail) detail.innerHTML =
+        '<span style="color:#1D9E75">'+lpVere+' vere</span> · ' +
+        '<span style="color:#E24B4A">'+lpBar+' barattoli</span>';
+      $('lp-scadute').textContent = lpSca;
+      const pnlEl = $('lp-pnl');
+      if (pnlEl) {
+        pnlEl.textContent = (lpPnlTot >= 0 ? '+$' : '-$') + Math.abs(lpPnlTot).toFixed(2);
+        pnlEl.style.color = lpPnlTot >= 0 ? 'var(--green)' :
+                            lpPnlTot < 0 ? 'var(--red)' : 'var(--dim)';
+      }
+      const pnlDetail = $('lp-pnl-detail');
+      if (pnlDetail) pnlDetail.innerHTML =
+        '<span style="color:#1D9E75">+$'+lpPnlVere.toFixed(2)+'</span> − ' +
+        '<span style="color:#E24B4A">$'+Math.abs(lpPnlBar).toFixed(2)+'</span>';
+
+      // Tabella per orizzonte
+      const oriz = hb.lp_orizzonti || {};
+      const cells = document.querySelectorAll('.lp-oriz-cell');
+      let winner = null, winnerPct = -1;
+      cells.forEach(c => {
+        const h = c.getAttribute('data-h');
+        const d = oriz[h];
+        const pctEl = c.querySelector('.lp-oriz-pct');
+        const detEl = c.querySelector('.lp-oriz-det');
+        if (d && d.pct_vincenti !== null && d.pct_vincenti !== undefined) {
+          pctEl.textContent = d.pct_vincenti.toFixed(0)+'%';
+          pctEl.style.color = d.pct_vincenti >= 55 ? 'var(--green)' :
+                              d.pct_vincenti >= 40 ? 'var(--yellow)' : 'var(--red)';
+          detEl.innerHTML = 'V '+d.vere+' / B '+d.barattoli+' / S '+d.scadute +
+                            '<br>PnL '+(d.pnl_totale>=0?'+$':'-$')+Math.abs(d.pnl_totale).toFixed(1);
+          if ((d.vere + d.barattoli + d.scadute) >= 10 && d.pct_vincenti > winnerPct) {
+            winnerPct = d.pct_vincenti; winner = h;
+          }
+        } else {
+          pctEl.textContent = '—';
+          pctEl.style.color = 'var(--dim)';
+          const inv = d ? d.in_volo : 0;
+          detEl.innerHTML = inv > 0 ? 'in volo '+inv : 'in attesa dati';
+        }
+        c.classList.remove('lp-winner');
+      });
+      if (winner) {
+        const wEl = document.querySelector('.lp-oriz-cell[data-h="'+winner+'"]');
+        if (wEl) wEl.classList.add('lp-winner');
+      }
+
+      // Grafico palle colorate (lpChart)
+      const eventi = hb.lp_eventi_recenti || [];
+      const active = hb.lp_active || [];
+      drawLibroPescaChart(eventi, active);
+
+      // Grafico PnL cumulativo (lpPnlChart)
+      drawLibroPescaPnL(eventi);
+    } catch(e) {
+      console.warn('LP update err', e);
     }
 
     // Disegna grafici
@@ -2900,6 +3116,231 @@ const SCPanel = (() => {
     // ── FINE NARRATORE AI ─────────────────────────────────────
 
 }
+
+  // ════════ PASSO 15 — Grafico TATTICA DI PESCA (canvas puro) ════════
+  // Disegna: linea prezzo BTC + palle colorate per ogni lenza
+  // Colore palla = stato corrente della lenza
+  //   ATTESA      → giallo  (#EF9F27)
+  //   CATTURATA   → blu     (#378ADD)
+  //   VERA        → verde   (#1D9E75)   pesce pescato con PnL+
+  //   BARATTOLO   → rosso   (#E24B4A)   pesce pescato con PnL-
+  //   SCADUTA     → grigio  (#888780) rombo
+  function drawLibroPescaChart(eventi, active) {
+    const c = document.getElementById('lpChart');
+    if (!c) return;
+    const W = c.offsetWidth || 600, H = 200;
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+
+    // Background
+    ctx.fillStyle = '#060810';
+    ctx.fillRect(0, 0, W, H);
+
+    // Raggruppa tutti i punti (eventi + active)
+    const punti = [];
+    eventi.forEach(e => {
+      punti.push({
+        ts: e.ts_chiusura || e.ts_piantata,
+        prezzo: e.prezzo_chiusura !== null ? e.prezzo_chiusura : e.prezzo_lenza,
+        stato: e.esito_finale,
+        oriz: e.orizzonte_s,
+      });
+      // Aggiungo anche il punto piantata
+      punti.push({
+        ts: e.ts_piantata,
+        prezzo: e.prezzo_lenza,
+        stato: 'ATTESA_STORICA',  // per disegnare un punto giallo piccolo a piantata
+        oriz: e.orizzonte_s,
+      });
+    });
+    active.forEach(a => {
+      punti.push({
+        ts: a.ts_piantata,
+        prezzo: a.prezzo_lenza,
+        stato: a.stato,  // ATTESA o CATTURATA
+        oriz: a.orizzonte_s,
+      });
+    });
+
+    if (punti.length === 0) {
+      ctx.fillStyle = '#73726c';
+      ctx.font = '11px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('In attesa di lenze...', W/2, H/2);
+      return;
+    }
+
+    // Bounds: usa i tick di prezzo recenti se disponibili (variabile globale "prices")
+    // Se non ci sono, usa solo i punti delle lenze
+    const tsList = punti.map(p => p.ts);
+    let tMin = Math.min(...tsList);
+    let tMax = Math.max(...tsList);
+    if (tMax - tMin < 60) tMax = tMin + 60;  // finestra minima 60s
+
+    const prezzi = punti.map(p => p.prezzo);
+    let pMin = Math.min(...prezzi);
+    let pMax = Math.max(...prezzi);
+    // Espande il range Y di un 20% per dare aria
+    const range = Math.max(10, pMax - pMin);
+    pMin -= range * 0.1; pMax += range * 0.1;
+
+    // Margini
+    const ML = 50, MR = 10, MT = 10, MB = 22;
+    const PW = W - ML - MR, PH = H - MT - MB;
+    const xOf = ts => ML + ((ts - tMin) / (tMax - tMin)) * PW;
+    const yOf = pr => MT + (1 - (pr - pMin) / (pMax - pMin)) * PH;
+
+    // Griglia orizzontale leggera
+    ctx.strokeStyle = 'rgba(136,135,128,0.15)';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 4; i++) {
+      const y = MT + (i / 4) * PH;
+      ctx.beginPath(); ctx.moveTo(ML, y); ctx.lineTo(W - MR, y); ctx.stroke();
+      const pr = pMax - (i / 4) * (pMax - pMin);
+      ctx.fillStyle = '#73726c';
+      ctx.font = '9px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText('$' + Math.round(pr), ML - 4, y + 3);
+    }
+
+    // Linea prezzo BTC reale (se disponibile dalla variabile globale "prices")
+    try {
+      if (typeof prices !== 'undefined' && prices.length > 1) {
+        const nP = prices.length;
+        ctx.strokeStyle = '#185FA5';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        for (let i = 0; i < nP; i++) {
+          const tApprox = tMin + ((i / (nP - 1)) * (tMax - tMin));
+          const x = xOf(tApprox);
+          const y = yOf(prices[i]);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+    } catch(e) {}
+
+    // Disegna le palle
+    const colori = {
+      'ATTESA':           '#EF9F27',
+      'ATTESA_STORICA':   'rgba(239,159,39,0.55)',
+      'CATTURATA':        '#378ADD',
+      'VERA':             '#1D9E75',
+      'BARATTOLO':        '#E24B4A',
+      'SCADUTA':          '#888780',
+    };
+    punti.forEach(p => {
+      const x = xOf(p.ts);
+      const y = yOf(p.prezzo);
+      const col = colori[p.stato] || '#888780';
+      if (p.stato === 'SCADUTA') {
+        // Rombo grigio
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.moveTo(x, y - 4);
+        ctx.lineTo(x + 4, y);
+        ctx.lineTo(x, y + 4);
+        ctx.lineTo(x - 4, y);
+        ctx.closePath();
+        ctx.fill();
+      } else if (p.stato === 'ATTESA_STORICA') {
+        // Punto piccolo arancio chiaro (memoria piantata)
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // Palla normale
+        const r = p.stato === 'ATTESA' ? 4 : 5;
+        ctx.fillStyle = col;
+        ctx.strokeStyle = '#060810';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    });
+  }
+
+  // ════════ Grafico PnL paper cumulativo (dentini su/giù) ════════
+  function drawLibroPescaPnL(eventi) {
+    const c = document.getElementById('lpPnlChart');
+    if (!c) return;
+    const W = c.offsetWidth || 600, H = 80;
+    c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#060810';
+    ctx.fillRect(0, 0, W, H);
+
+    // Eventi conclusi con pnl_paper (VERA o BARATTOLO)
+    const eventiPnL = (eventi || [])
+      .filter(e => e.esito_finale === 'VERA' || e.esito_finale === 'BARATTOLO')
+      .filter(e => e.pnl_paper !== null && e.pnl_paper !== undefined)
+      .sort((a, b) => (a.ts_chiusura||0) - (b.ts_chiusura||0));
+
+    if (eventiPnL.length === 0) {
+      ctx.fillStyle = '#73726c';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('PnL paper — in attesa di catture', W/2, H/2);
+      return;
+    }
+
+    // Costruisco serie cumulativa
+    let acc = 0;
+    const cumulato = eventiPnL.map(e => { acc += e.pnl_paper; return acc; });
+    const tsList = eventiPnL.map(e => e.ts_chiusura);
+    const tMin = Math.min(...tsList);
+    const tMax = Math.max(...tsList);
+    const pMin = Math.min(0, ...cumulato);
+    const pMax = Math.max(0, ...cumulato);
+    const range = Math.max(1, pMax - pMin);
+
+    const ML = 40, MR = 10, MT = 8, MB = 16;
+    const PW = W - ML - MR, PH = H - MT - MB;
+    const xOf = ts => ML + ((tMax === tMin) ? PW/2 :
+                            ((ts - tMin) / (tMax - tMin)) * PW);
+    const yOf = pr => MT + (1 - (pr - pMin) / range) * PH;
+
+    // Linea zero
+    const y0 = yOf(0);
+    ctx.strokeStyle = 'rgba(136,135,128,0.4)';
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(ML, y0); ctx.lineTo(W - MR, y0); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#73726c';
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText('$0', ML - 4, y0 + 3);
+    ctx.fillText('+$' + Math.round(pMax), ML - 4, MT + 6);
+    if (pMin < 0) ctx.fillText('-$' + Math.round(Math.abs(pMin)), ML - 4, H - MB + 3);
+
+    // Step line del cumulativo
+    ctx.strokeStyle = '#1D9E75';
+    ctx.fillStyle = 'rgba(29,158,117,0.10)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let prev = null;
+    for (let i = 0; i < eventiPnL.length; i++) {
+      const x = xOf(tsList[i]);
+      const y = yOf(cumulato[i]);
+      if (prev === null) { ctx.moveTo(ML, y0); ctx.lineTo(ML, y); ctx.lineTo(x, y); }
+      else { ctx.lineTo(x, prev); ctx.lineTo(x, y); }
+      prev = y;
+    }
+    ctx.lineTo(W - MR, prev);
+    ctx.stroke();
+
+    // Riempimento sotto la linea
+    ctx.lineTo(W - MR, y0);
+    ctx.lineTo(ML, y0);
+    ctx.closePath();
+    ctx.fill();
+  }
 
   function drawCharts() {
     // Canvas puro — zero dipendenze Chart.js
