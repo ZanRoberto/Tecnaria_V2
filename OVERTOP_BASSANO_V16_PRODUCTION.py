@@ -83,15 +83,6 @@ DIVORCE_MIN_TRIGGERS   = 2    # quanti trigger devono scattare per uscita immedi
 DB_PATH        = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
 NARRATIVES_DB  = os.environ.get("NARRATIVES_DB", "/home/app/data/narratives.db")
 
-# --- PASSO 15.F (15mag2026) — LIBRO DI PESCA SU FINGERPRINT VERITAS ---------
-# La pesca NON parte più dall'OI carica (principio sbagliato — fallito).
-# Parte dal fingerprint ORACOLO DINAMICO: (momentum × volatilità × trend × dir).
-# Pianta solo se il fingerprint corrente ha WR storico ≥ 60% con n ≥ 30 + PnL_sum > 0.
-# Esempio: LONG|FORTE|BASSA|UP → WR 78% n=30 PnL+$30 → PIANTA.
-# Stima: 0-2 piantate ogni 10-30 minuti (solo quando contesto è oro).
-# Per disattivare: Render env LIBRO_PESCA_ENABLED=false
-LIBRO_PESCA_ENABLED = os.environ.get("LIBRO_PESCA_ENABLED", "true").lower() in ("true", "1", "yes")
-
 # --- BINANCE -----------------------------------------------------------------
 SYMBOL         = "BTCUSDC"
 BINANCE_WS_URL = f"wss://stream.binance.com:9443/ws/{SYMBOL.lower()}@aggTrade"
@@ -5456,11 +5447,6 @@ class SuperCervello:
                regime, midzone, loss_streak,
                fp_wr_opposite=None, fp_samples_opposite=None,
                current_direction=None,
-               # ── PASSO 11 (15mag2026) — OI SHORT per pred_boost bilaterale ──
-               # Prima: pred_boost guardava SOLO oi_stato (LONG).
-               # Quando il FUOCO era dal lato SHORT, ignorato → 20 LONG zero SHORT.
-               # Ora: pred_boost guarda ENTRAMBI i lati e flippa direzione.
-               oi_stato_short=None, oi_carica_short=None,
                # ── STATUTO COSTITUZIONALE (Passo 4, 13mag2026) ──────────────
                # Input dagli organi che oggi sono dittatori con early return.
                # In MODALITÀ PASSIVA: SC li RICEVE e li LOGGA (SC_INPUTS_FULL)
@@ -5609,43 +5595,19 @@ class SuperCervello:
 
         # VETO ASSOLUTO FINGERPRINT TOSSICO
         # Se il fingerprint ha 20+ campioni con WR < 45% — blocca sempre
-        # ECCEZIONE: pred_score >= 70% + OI FUOCO (qualunque lato) = predizione attiva supera il veto storico
+        # ECCEZIONE: pred_score >= 70% + OI FUOCO = predizione attiva supera il veto storico
         _ps = getattr(self, '_pred_score_ref', 0)
         _pc = getattr(self, '_pred_calib_ref', 0)
-        # PASSO 11: predizione attiva su uno qualunque dei due lati
-        _pred_attiva_long  = _ps >= 70 and _pc >= 50 and oi_stato == "FUOCO"
-        _pred_attiva_short = (_ps >= 70 and _pc >= 50
-                              and oi_stato_short == "FUOCO"
-                              and (oi_carica_short or 0) >= 0.75)
-        _pred_attiva = _pred_attiva_long or _pred_attiva_short
+        _pred_attiva = _ps >= 70 and _pc >= 50 and oi_stato == "FUOCO"
         if fp_samples >= 20 and fp_wr < 0.45 and not _pred_attiva:
             return self._out("BLOCCA", 0.5, 0, f"FP_TOSSICO_wr={fp_wr:.0%}_n={fp_samples}", 0.95)
 
-        # ════════════════════════════════════════════════════════════════
-        # PASSO 11 — BOOST PREDIZIONE BILATERALE (15mag2026)
-        # Prima: solo FUOCO LONG. Risultato: 20 LONG zero SHORT mentre il
-        # FUOCO SHORT a 0.93 veniva ignorato. La predizione perfetta
-        # (Score 100%, Scostamento $1.7) non guidava mai trade SHORT.
-        # Ora: riconosce FUOCO da entrambi i lati ed emette direction_vote
-        # per il lato giusto. La scena (riga 9118+) lo applica.
-        # ════════════════════════════════════════════════════════════════
+        # BOOST PREDIZIONE: direzione corretta >= 70% E OI FUOCO → entra
+        # La direzione è l'oro — calibrazione >= 50% (misura magnitudine, non direzione)
+        # Veritas: FUOCO|PREVISTO_ENTRA 5579 segnali HIT 56% PnL +$0.32 → edge reale
         if _pred_attiva and not midzone:
-            # Decide la direzione in base a QUALE FUOCO è attivo
-            # Se entrambi attivi (raro): vince il più carico
-            if _pred_attiva_long and _pred_attiva_short:
-                _dv = "LONG" if (oi_carica or 0) >= (oi_carica_short or 0) else "SHORT"
-            elif _pred_attiva_short:
-                _dv = "SHORT"
-            else:
-                _dv = "LONG"
-            _motivo = f"pred_boost score={_ps:.0f}% calib={_pc:.0f}% dir={_dv}"
-            # Se la direzione richiesta è diversa da quella attuale del campo,
-            # emette direction_vote. La scena flippa prima di aprire.
-            _dv_out = _dv if (current_direction and _dv != current_direction) else None
-            _dv_conf = 0.95 if _dv_out else 0.0
-            return self._out("ENTRA", 1.2, -5, _motivo, 0.85,
-                             direction_vote=_dv_out,
-                             direction_vote_confidence=_dv_conf)
+            return self._out("ENTRA", 1.2, -5,
+                f"pred_boost score={_ps:.0f}% calib={_pc:.0f}%", 0.85)
 
         # Voti organi
         v = {}
@@ -5872,659 +5834,6 @@ class SuperCervello:
                 'voti':voti,'pesi':dict(self._pesi),
                 'direction_vote': direction_vote,
                 'direction_vote_confidence': direction_vote_confidence}
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# PASSO 13 (15mag2026) — PREDITTORE CONTESTUALE
-# ════════════════════════════════════════════════════════════════════════════
-# La predizione esistente del bot (pred_score, pred_scostamento) è una
-# tautologia: prezzo_attuale + delta_costante. Score 100% perché si confronta
-# con sé stessa.
-#
-# Questo predittore è DIVERSO:
-#  - calcola un DELTA DINAMICO ad ogni tick (un numero diverso ogni volta)
-#  - basato sul CONTESTO ATTUALE (momentum, accelerazione, OI, regime, vol)
-#  - SALVA la predizione, dopo 60s la confronta con il prezzo VERO
-#  - misura errore_assoluto, accuracy del segno, calibrazione
-#  - si certifica ONESTAMENTE sui dati veri
-#
-# NON sostituisce niente. Gira in parallelo al pred_* esistente. Espone le
-# proprie statistiche come pred_v2_* nell'heartbeat.
-# ════════════════════════════════════════════════════════════════════════════
-class PredittoreContestuale:
-    """Predittore dinamico onesto — numero diverso ogni tick, misura vs realtà."""
-
-    WINDOW = 60          # orizzonte predizione: 60 secondi
-    HISTORY_MAX = 300    # storia per momentum/accelerazione
-    STATS_MAX = 500      # statistiche aggregate (errore, accuracy)
-
-    def __init__(self):
-        from collections import deque
-        # Storia prezzi: (timestamp, prezzo) — per calcolare contesto
-        self._prezzi = deque(maxlen=self.HISTORY_MAX)
-        # Predizioni in volo: (ts_predizione, prezzo_allora, predizione_a_60s,
-        #                       momentum, accelerazione, oi_carica, oi_dir)
-        self._in_volo = deque(maxlen=self.HISTORY_MAX)
-        # Statistiche aggregate (solo dopo verifica a 60s)
-        self._errori_abs = deque(maxlen=self.STATS_MAX)
-        self._segno_giusti = deque(maxlen=self.STATS_MAX)
-        self._delta_predetti = deque(maxlen=self.STATS_MAX)
-        self._delta_reali = deque(maxlen=self.STATS_MAX)
-        self._n_predizioni = 0
-        self._n_verificate = 0
-        # Predizione corrente esposta sulla dashboard
-        self._ultima_predizione = None
-        self._ultimo_delta = 0.0
-
-    def osserva(self, now: float, prezzo: float,
-                oi_carica: float, oi_stato: str,
-                oi_carica_short: float, oi_stato_short: str):
-        """Chiamato ad ogni tick. Aggiorna storia, fa predizione, verifica vecchie."""
-        self._prezzi.append((now, prezzo))
-
-        # 1) VERIFICA predizioni vecchie di ~60s
-        scaduti = []
-        for i, (ts_p, p_allora, pred, mom, acc, oic, odir) in enumerate(self._in_volo):
-            if now - ts_p >= self.WINDOW:
-                # Tempo di misurare. Prezzo vero adesso vs predizione di 60s fa
-                delta_reale = prezzo - p_allora
-                delta_predetto = pred - p_allora
-                errore = abs(pred - prezzo)
-                self._errori_abs.append(errore)
-                self._delta_predetti.append(delta_predetto)
-                self._delta_reali.append(delta_reale)
-                # Segno giusto?
-                if abs(delta_predetto) >= 0.5:  # ignora predizioni "flat"
-                    segno_ok = (delta_predetto > 0) == (delta_reale > 0)
-                    self._segno_giusti.append(1 if segno_ok else 0)
-                self._n_verificate += 1
-                scaduti.append(i)
-        # rimuovi dalla coda i verificati (dal fondo per non sballare gli indici)
-        for i in reversed(scaduti):
-            del self._in_volo[i]
-
-        # 2) NUOVA PREDIZIONE basata sul contesto attuale
-        if len(self._prezzi) >= 30:
-            pred, delta, mom, acc = self._calcola_predizione(prezzo,
-                                                              oi_carica, oi_stato,
-                                                              oi_carica_short, oi_stato_short)
-            self._in_volo.append((now, prezzo, pred, mom, acc, oi_carica,
-                                  'LONG' if oi_stato == 'FUOCO' else
-                                  'SHORT' if oi_stato_short == 'FUOCO' else 'FLAT'))
-            self._ultima_predizione = pred
-            self._ultimo_delta = delta
-            self._n_predizioni += 1
-
-    def _calcola_predizione(self, prezzo, oi_carica, oi_stato,
-                            oi_carica_short, oi_stato_short):
-        """
-        Formula contestuale (prima taratura — i pesi si raffinano sui dati).
-
-        delta_60s = momentum_30tick × 2.0
-                  + drift_OI × 1.5
-                  + accelerazione × 0.5
-
-        - momentum_30tick: variazione media negli ultimi 30 tick
-        - drift_OI: pressione direzionale dell'OI (FUOCO LONG spinge su, ecc.)
-        - accelerazione: derivata seconda del prezzo (sta accelerando?)
-        """
-        prezzi_recenti = [p for _, p in list(self._prezzi)[-30:]]
-        # momentum: variazione media tick-by-tick
-        if len(prezzi_recenti) >= 2:
-            momentum = (prezzi_recenti[-1] - prezzi_recenti[0]) / len(prezzi_recenti)
-        else:
-            momentum = 0.0
-        # accelerazione: confronta momentum recente (ultimi 10) vs precedente (10 prima)
-        if len(prezzi_recenti) >= 20:
-            mom_recente = (prezzi_recenti[-1] - prezzi_recenti[-10]) / 10
-            mom_prec = (prezzi_recenti[-11] - prezzi_recenti[-20]) / 10
-            accelerazione = mom_recente - mom_prec
-        else:
-            accelerazione = 0.0
-        # drift OI: se FUOCO LONG → +carica × 10 ; se FUOCO SHORT → -carica × 10
-        # PASSO 15.G (15mag2026): peso OI ridotto da 1.5 a 0.3 (5x meno),
-        # peso momentum aumentato da 2 a 5 (2.5x più),
-        # peso accelerazione aumentato da 0.5 a 2 (4x più).
-        # Motivo: V2 crollato al 40% accuracy quando si fidava troppo dell'OI.
-        # OI dice "energia in arrivo" ma non DIREZIONE → sbaglia di sistema.
-        # Momentum + accelerazione sono misure DIRETTE del prezzo, più affidabili.
-        drift_oi = 0.0
-        if oi_stato == 'FUOCO':
-            drift_oi = oi_carica * 10.0
-        elif oi_stato_short == 'FUOCO':
-            drift_oi = -oi_carica_short * 10.0
-        # formula combinata - V2 ribilanciato
-        delta = momentum * 5.0 + drift_oi * 0.3 + accelerazione * 2.0
-        pred = prezzo + delta
-        return round(pred, 2), round(delta, 2), round(momentum, 3), round(accelerazione, 3)
-
-    def get_stats(self) -> dict:
-        """Statistiche aggregate — quelle vere, misurate contro il futuro reale."""
-        import statistics as _st
-        out = {
-            'pred_v2_attiva': self._ultima_predizione,
-            'pred_v2_delta':  self._ultimo_delta,
-            'pred_v2_n_predizioni': self._n_predizioni,
-            'pred_v2_n_verificate': self._n_verificate,
-            'pred_v2_in_volo': len(self._in_volo),
-        }
-        if self._errori_abs:
-            out['pred_v2_err_medio'] = round(_st.mean(self._errori_abs), 2)
-            out['pred_v2_err_mediano'] = round(_st.median(self._errori_abs), 2)
-        if self._segno_giusti:
-            out['pred_v2_accuracy_segno'] = round(
-                sum(self._segno_giusti) / len(self._segno_giusti) * 100, 1)
-            out['pred_v2_n_segno'] = len(self._segno_giusti)
-        if self._delta_reali:
-            out['pred_v2_mov_reale_medio_abs'] = round(
-                _st.mean([abs(x) for x in self._delta_reali]), 2)
-        return out
-
-
-class LibroPesca:
-    """
-    PASSO 15 (15mag2026) — TATTICA DI PESCA.
-
-    Lenze piantate a orizzonti multipli (10/20/30/60/90s).
-    Quando il prezzo entra nella zona di tolleranza (lasco) → CATTURATA.
-    Apre trade paper indipendente al SC. Chiude all'orizzonte della lenza.
-    Esito: VERA (PnL+) / BARATTOLO (PnL-) / SCADUTA (no trade).
-
-    Persistito su sqlite. Sopravvive ai restart.
-
-    MICRO 15.A: classe presente ma INERTE se LIBRO_PESCA_ENABLED=false (default).
-    Per attivare → Render env: LIBRO_PESCA_ENABLED=true
-    """
-
-    ORIZZONTI = (60,)
-    LASCO_PCT   = 0.15
-    LASCO_FLOOR = 3.0
-    LASCO_CAP   = 20.0
-    COOLDOWN_S = 60.0           # cooldown PER STRATEGIA (3 strategie indipendenti)
-    TRADE_SIZE_USD = 1000.0
-    LEVERAGE       = 5.0
-    FEE_PCT        = 0.0002
-    # Filtri grossolani fingerprint (più larghi: cerchiamo edge nel micro)
-    FP_WR_MIN_BASE = 0.55
-    FP_N_MIN_BASE  = 20
-    # ==== PASSO 15.J — 3 STRATEGIE PARALLELE ====
-    # P1: WIN SIGNATURE — pattern esatto del WIN reale 23 marzo
-    P1_DRIFT_LONG_MIN  = 0.60   # drift_persist >= 60% per LONG
-    P1_POS_LONG_MAX    = 0.30   # range_pos <= 30% (bordo basso)
-    P1_DRIFT_SHORT_MAX = 0.40   # drift_persist <= 40% per SHORT
-    P1_POS_SHORT_MIN   = 0.70   # range_pos >= 70% (bordo alto)
-    P1_COMPRESSION_MAX = 0.80   # compression <= 0.80 (molla un po' carica)
-    # P2: V2 + CONFERMA DRIFT
-    P2_V2_DELTA_MIN    = 30.0   # delta predetto >= $30 in valore assoluto
-    P2_V2_N_MIN        = 50     # V2 maturo (n verificate >= 50)
-    P2_V2_ACC_MIN      = 0.55   # V2 accuracy_segno >= 55% per fidarsi
-    P2_DRIFT_CONFIRM_LONG  = 0.55  # drift_persist conferma LONG se >= 55%
-    P2_DRIFT_CONFIRM_SHORT = 0.45  # drift_persist conferma SHORT se <= 45%
-    # P3: COMPRESSIONE CHE PARTE
-    P3_COMP_MAX        = 0.50   # compression <= 0.50 (molla MOLTO carica)
-    P3_COMP_DUR_MIN    = 6      # da almeno 6 tick consecutivi
-    P3_SLOPE_MIN_ABS   = 0.0001 # drift_slope > 0.0001 in val assoluto (sta accelerando)
-
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        self.enabled = LIBRO_PESCA_ENABLED
-        self._in_volo = []
-        self._ultima_piantata_long  = 0.0
-        self._ultima_piantata_short = 0.0
-        # 15.J: cooldown per strategia × direzione (6 contatori)
-        self._ultime_piantate = {
-            ('p1', 'LONG'): 0.0, ('p1', 'SHORT'): 0.0,
-            ('p2', 'LONG'): 0.0, ('p2', 'SHORT'): 0.0,
-            ('p3', 'LONG'): 0.0, ('p3', 'SHORT'): 0.0,
-        }
-        self._next_id = 1
-        self._stats_cache = {}
-        self._stats_cache_ts = 0.0
-        # PASSO 15.B — protezione auto-disable se sqlite fallisce ripetutamente
-        self._save_err_count = 0
-        self._save_err_threshold = 10  # dopo 10 errori consecutivi, auto-disable
-        # Init DB solo se abilitato
-        if self.enabled:
-            self._init_db()
-            self._reload_next_id()
-            log.info("[LIBRO_PESCA] ATTIVO")
-        else:
-            log.info("[LIBRO_PESCA] disattivato (kill-switch). Set LIBRO_PESCA_ENABLED=true per attivare")
-
-    def _init_db(self):
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cur = conn.cursor()
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS libro_pesca (
-                    id INTEGER PRIMARY KEY,
-                    ts_piantata REAL NOT NULL,
-                    prezzo_lenza REAL NOT NULL,
-                    direzione TEXT NOT NULL,
-                    orizzonte_s INTEGER NOT NULL,
-                    lasco REAL NOT NULL,
-                    regime TEXT,
-                    carica REAL,
-                    oi_stato TEXT,
-                    delta_atteso REAL,
-                    stato TEXT NOT NULL,
-                    ts_cattura REAL,
-                    prezzo_cattura REAL,
-                    ts_chiusura REAL,
-                    prezzo_chiusura REAL,
-                    pnl_paper REAL,
-                    esito_finale TEXT
-                )
-            """)
-            try:
-                cur.execute("ALTER TABLE libro_pesca ADD COLUMN versione TEXT DEFAULT 'v15b'")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                cur.execute("ALTER TABLE libro_pesca ADD COLUMN fp_key TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                cur.execute("ALTER TABLE libro_pesca ADD COLUMN fp_wr REAL")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                cur.execute("ALTER TABLE libro_pesca ADD COLUMN fp_n INTEGER")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                cur.execute("ALTER TABLE libro_pesca ADD COLUMN strategia TEXT")
-            except sqlite3.OperationalError:
-                pass
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_orizzonte ON libro_pesca(orizzonte_s)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_stato ON libro_pesca(stato)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_esito ON libro_pesca(esito_finale)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_versione ON libro_pesca(versione)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_fp ON libro_pesca(fp_key)")
-            conn.commit()
-            conn.close()
-            log.info(f"[LIBRO_PESCA] DB init {self.db_path}")
-        except Exception as e:
-            log.warning(f"[LIBRO_PESCA_INIT_DB_ERR] {e}")
-
-    def _reload_next_id(self):
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cur = conn.cursor()
-            cur.execute("SELECT MAX(id) FROM libro_pesca")
-            row = cur.fetchone()
-            conn.close()
-            self._next_id = int(row[0]) + 1 if row and row[0] is not None else 1
-            log.info(f"[LIBRO_PESCA] next_id={self._next_id}")
-        except Exception as e:
-            log.warning(f"[LIBRO_PESCA_RELOAD_ERR] {e}")
-            self._next_id = 1
-
-    def _save(self, L: dict):
-        if not self.enabled:
-            return
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT OR REPLACE INTO libro_pesca
-                (id, ts_piantata, prezzo_lenza, direzione, orizzonte_s, lasco,
-                 regime, carica, oi_stato, delta_atteso, stato, ts_cattura,
-                 prezzo_cattura, ts_chiusura, prezzo_chiusura, pnl_paper, esito_finale,
-                 versione, fp_key, fp_wr, fp_n, strategia)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                L['id'], L['ts_piantata'], L['prezzo_lenza'], L['direzione'],
-                L['orizzonte_s'], L['lasco'], L.get('regime'), L.get('carica'),
-                L.get('oi_stato'), L.get('delta_atteso'),
-                L['stato'], L.get('ts_cattura'), L.get('prezzo_cattura'),
-                L.get('ts_chiusura'), L.get('prezzo_chiusura'),
-                L.get('pnl_paper'), L.get('esito_finale'),
-                'v15j', L.get('fp_key'), L.get('fp_wr'), L.get('fp_n'),
-                L.get('strategia', '?'),
-            ))
-            conn.commit()
-            conn.close()
-            if self._save_err_count > 0:
-                self._save_err_count = 0
-        except Exception as e:
-            self._save_err_count += 1
-            log.warning(f"[LIBRO_PESCA_SAVE_ERR] {e} (count={self._save_err_count})")
-            if self._save_err_count >= self._save_err_threshold:
-                self.enabled = False
-                log.error(f"[LIBRO_PESCA_AUTO_DISABLE] {self._save_err_count} errori sqlite consecutivi → libro disattivato")
-
-    def pianta_se_fingerprint_vincente(self, now, prezzo,
-                                        momentum, volatility, trend,
-                                        oracolo_memory, regime,
-                                        delta_atteso,
-                                        # 15.J: nuovi indicatori micro-contesto
-                                        drift_persist=0.5, range_pos=0.5,
-                                        compression=1.0, comp_duration=0,
-                                        drift_slope=0.0,
-                                        # 15.J: V2 stats per strategia P2
-                                        v2_delta=0.0, v2_n=0, v2_accuracy=0.0):
-        """
-        15.J — VALUTA 3 STRATEGIE IN PARALLELO con entry IMMEDIATA.
-
-        Ogni strategia ha:
-          - cooldown indipendente (60s per strategia × direzione)
-          - etichetta 'p1' / 'p2' / 'p3' salvata nel DB
-          - entry immediata (no breakout tardiva)
-          - chiusura a 60s dall'entry, PnL paper misurato
-
-        P1 — WIN SIGNATURE: drift_persist + range_pos + compression
-             (replica pattern del WIN reale 23 marzo)
-        P2 — V2 + CONFERMA: V2 dice direzione, drift conferma
-        P3 — COMPRESSIONE CHE PARTE: molla carica + drift_slope che parte
-
-        Filtri comuni a tutte le 3:
-          - regime != EXPLOSIVE (i 2 SHORT 23mar in EXPLOSIVE = entrambi LOSS)
-          - fingerprint Oracolo abbastanza buono (WR>=55%, n>=20, pnl>0)
-        """
-        if not self.enabled:
-            return
-        if not momentum or not volatility or not trend:
-            return  # warmup
-        # Hard filter comune: no EXPLOSIVE
-        if regime == 'EXPLOSIVE':
-            return
-
-        # Fingerprint Oracolo (filtro grossolano)
-        fp_long  = f"LONG|{momentum}|{volatility}|{trend}"
-        fp_short = f"SHORT|{momentum}|{volatility}|{trend}"
-        def _stats(k):
-            s = oracolo_memory.get(k) if oracolo_memory else None
-            if not s:
-                return (0.0, 0, 0.0)
-            wins = float(s.get('wins', 0))
-            samples = float(s.get('samples', 0))
-            pnl_sum = float(s.get('pnl_sum', 0))
-            wr = wins / samples if samples > 0 else 0.0
-            return (wr, int(samples), pnl_sum)
-        wr_l, n_l, pnl_l = _stats(fp_long)
-        wr_s, n_s, pnl_s = _stats(fp_short)
-        long_fp_ok  = (wr_l >= self.FP_WR_MIN_BASE and n_l >= self.FP_N_MIN_BASE and pnl_l > 0)
-        short_fp_ok = (wr_s >= self.FP_WR_MIN_BASE and n_s >= self.FP_N_MIN_BASE and pnl_s > 0)
-        if not long_fp_ok and not short_fp_ok:
-            return
-
-        # ─── P1: WIN SIGNATURE ────────────────────────────────────────
-        # LONG:  drift_persist >= 0.60 AND range_pos <= 0.30 AND compression <= 0.80
-        # SHORT: drift_persist <= 0.40 AND range_pos >= 0.70 AND compression <= 0.80
-        p1_dir = None
-        if long_fp_ok:
-            if (drift_persist >= self.P1_DRIFT_LONG_MIN and
-                range_pos <= self.P1_POS_LONG_MAX and
-                compression <= self.P1_COMPRESSION_MAX):
-                p1_dir = 'LONG'
-        if short_fp_ok and p1_dir is None:
-            if (drift_persist <= self.P1_DRIFT_SHORT_MAX and
-                range_pos >= self.P1_POS_SHORT_MIN and
-                compression <= self.P1_COMPRESSION_MAX):
-                p1_dir = 'SHORT'
-        if p1_dir:
-            self._entra_strategia('p1', p1_dir, now, prezzo, regime,
-                                   fp_long if p1_dir=='LONG' else fp_short,
-                                   wr_l if p1_dir=='LONG' else wr_s,
-                                   n_l if p1_dir=='LONG' else n_s,
-                                   ctx=f"drift={drift_persist:.2f} pos={range_pos:.2f} comp={compression:.2f}")
-
-        # ─── P2: V2 + CONFERMA DRIFT ──────────────────────────────────
-        # V2 maturo (n>=50, acc>=55%) + |delta|>=$30 + drift conferma direzione
-        p2_dir = None
-        v2_mature = (v2_n >= self.P2_V2_N_MIN and v2_accuracy >= self.P2_V2_ACC_MIN)
-        if v2_mature and abs(v2_delta) >= self.P2_V2_DELTA_MIN:
-            v2_direzione = 'LONG' if v2_delta > 0 else 'SHORT'
-            if v2_direzione == 'LONG' and long_fp_ok:
-                if drift_persist >= self.P2_DRIFT_CONFIRM_LONG:
-                    p2_dir = 'LONG'
-            elif v2_direzione == 'SHORT' and short_fp_ok:
-                if drift_persist <= self.P2_DRIFT_CONFIRM_SHORT:
-                    p2_dir = 'SHORT'
-        if p2_dir:
-            self._entra_strategia('p2', p2_dir, now, prezzo, regime,
-                                   fp_long if p2_dir=='LONG' else fp_short,
-                                   wr_l if p2_dir=='LONG' else wr_s,
-                                   n_l if p2_dir=='LONG' else n_s,
-                                   ctx=f"v2_delta=${v2_delta:.1f} v2_acc={v2_accuracy:.0%} drift={drift_persist:.2f}")
-
-        # ─── P3: COMPRESSIONE CHE PARTE ───────────────────────────────
-        # compression <= 0.50 + comp_duration >= 6 + |drift_slope| > soglia
-        # Direzione = segno del drift_slope
-        p3_dir = None
-        if compression <= self.P3_COMP_MAX and comp_duration >= self.P3_COMP_DUR_MIN:
-            if abs(drift_slope) >= self.P3_SLOPE_MIN_ABS:
-                slope_direzione = 'LONG' if drift_slope > 0 else 'SHORT'
-                if slope_direzione == 'LONG' and long_fp_ok:
-                    p3_dir = 'LONG'
-                elif slope_direzione == 'SHORT' and short_fp_ok:
-                    p3_dir = 'SHORT'
-        if p3_dir:
-            self._entra_strategia('p3', p3_dir, now, prezzo, regime,
-                                   fp_long if p3_dir=='LONG' else fp_short,
-                                   wr_l if p3_dir=='LONG' else wr_s,
-                                   n_l if p3_dir=='LONG' else n_s,
-                                   ctx=f"comp={compression:.2f} dur={comp_duration} slope={drift_slope:+.5f}")
-
-    def _entra_strategia(self, strategia, direzione, now, prezzo, regime,
-                          fp_key, fp_wr, fp_n, ctx=""):
-        """15.J: Entry IMMEDIATA per una strategia. Cooldown 60s per strategia×dir."""
-        key = (strategia, direzione)
-        ultima = self._ultime_piantate.get(key, 0.0)
-        if now - ultima < self.COOLDOWN_S:
-            return
-        L = {
-            'id': self._next_id,
-            'ts_piantata': now,
-            'prezzo_lenza': round(prezzo, 2),    # in 15.J = prezzo ENTRY
-            'direzione': direzione,
-            'orizzonte_s': 60,
-            'lasco': 0.0,
-            'regime': regime,
-            'carica': round(fp_wr, 3),
-            'oi_stato': strategia.upper(),         # P1/P2/P3 nel campo oi_stato
-            'delta_atteso': 0.0,
-            'stato': 'CATTURATA',                  # entry immediata
-            'ts_cattura': now,
-            'prezzo_cattura': round(prezzo, 2),
-            'ts_chiusura': None,
-            'prezzo_chiusura': None,
-            'pnl_paper': None,
-            'esito_finale': None,
-            'fp_key': fp_key,
-            'fp_wr': round(fp_wr, 3),
-            'fp_n': fp_n,
-            'strategia': strategia,
-        }
-        self._next_id += 1
-        self._in_volo.append(L)
-        self._save(L)
-        self._ultime_piantate[key] = now
-        log.info(f"[LIBRO_PESCA_15J:{strategia.upper()}] entry {direzione} @${prezzo:.2f} | {ctx}")
-
-
-    def pianta_se_radar_acceso(self, *args, **kwargs):
-        """Compat 15.B/15.E — disabilitato in 15.F. Non chiamare."""
-        return
-
-    def tick(self, now, prezzo):
-        """Verifica catture/scadenze/chiusure delle lenze in volo."""
-        if not self.enabled:
-            return
-        rimanenti = []
-        for L in self._in_volo:
-            t_dalla_piantata = now - L['ts_piantata']
-            if L['stato'] == 'ATTESA':
-                catturata = False
-                if L['direzione'] == "LONG":
-                    if prezzo >= (L['prezzo_lenza'] - L['lasco']):
-                        catturata = True
-                else:
-                    if prezzo <= (L['prezzo_lenza'] + L['lasco']):
-                        catturata = True
-                if catturata:
-                    L['stato'] = 'CATTURATA'
-                    L['ts_cattura'] = now
-                    L['prezzo_cattura'] = round(prezzo, 2)
-                    self._save(L)
-                    rimanenti.append(L)
-                elif t_dalla_piantata >= L['orizzonte_s']:
-                    L['stato'] = 'SCADUTA'
-                    L['ts_chiusura'] = now
-                    L['prezzo_chiusura'] = round(prezzo, 2)
-                    L['pnl_paper'] = 0.0
-                    L['esito_finale'] = 'SCADUTA'
-                    self._save(L)
-                else:
-                    rimanenti.append(L)
-            elif L['stato'] == 'CATTURATA':
-                if t_dalla_piantata >= L['orizzonte_s']:
-                    L['ts_chiusura'] = now
-                    L['prezzo_chiusura'] = round(prezzo, 2)
-                    exp = self.TRADE_SIZE_USD * self.LEVERAGE
-                    btc_qty = exp / max(1.0, L['prezzo_cattura'])
-                    if L['direzione'] == "LONG":
-                        delta = prezzo - L['prezzo_cattura']
-                    else:
-                        delta = L['prezzo_cattura'] - prezzo
-                    fee = exp * self.FEE_PCT * 2.0
-                    pnl = delta * btc_qty - fee
-                    L['pnl_paper'] = round(pnl, 4)
-                    L['stato'] = 'CHIUSA'
-                    L['esito_finale'] = 'VERA' if pnl > 0 else 'BARATTOLO'
-                    self._save(L)
-                else:
-                    rimanenti.append(L)
-        self._in_volo = rimanenti
-
-    def get_stats(self, now):
-        """Aggregati dal libro per dashboard (cache 3s)."""
-        if not self.enabled:
-            return {
-                'lp_enabled': False, 'lp_in_volo': 0, 'lp_totale': 0,
-                'lp_vere': 0, 'lp_barattoli': 0, 'lp_scadute': 0,
-                'lp_pnl_totale': 0.0, 'lp_pnl_vere': 0.0, 'lp_pnl_barattoli': 0.0,
-                'lp_orizzonti': {}, 'lp_active': [],
-            }
-        if (now - self._stats_cache_ts) < 3.0 and self._stats_cache:
-            return self._stats_cache
-        out = {
-            'lp_enabled': True, 'lp_in_volo': len(self._in_volo),
-            'lp_totale': 0, 'lp_vere': 0, 'lp_barattoli': 0, 'lp_scadute': 0,
-            'lp_pnl_totale': 0.0, 'lp_pnl_vere': 0.0, 'lp_pnl_barattoli': 0.0,
-            'lp_orizzonti': {}, 'lp_active': [],
-        }
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15j'")
-            out['lp_vere'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='BARATTOLO' AND versione='v15j'")
-            out['lp_barattoli'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='SCADUTA' AND versione='v15j'")
-            out['lp_scadute'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE versione='v15j'")
-            out['lp_totale'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15j'")
-            r = cur.fetchone()
-            out['lp_pnl_vere'] = round(r[0], 2) if r and r[0] else 0.0
-            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='BARATTOLO' AND versione='v15j'")
-            r = cur.fetchone()
-            out['lp_pnl_barattoli'] = round(r[0], 2) if r and r[0] else 0.0
-            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale IN ('VERA','BARATTOLO') AND versione='v15j'")
-            r = cur.fetchone()
-            out['lp_pnl_totale'] = round(r[0], 2) if r and r[0] else 0.0
-            for h_s in self.ORIZZONTI:
-                cur.execute("""
-                    SELECT
-                      SUM(CASE WHEN esito_finale='VERA' THEN 1 ELSE 0 END),
-                      SUM(CASE WHEN esito_finale='BARATTOLO' THEN 1 ELSE 0 END),
-                      SUM(CASE WHEN esito_finale='SCADUTA' THEN 1 ELSE 0 END),
-                      SUM(CASE WHEN stato IN ('ATTESA','CATTURATA') THEN 1 ELSE 0 END),
-                      SUM(CASE WHEN esito_finale IN ('VERA','BARATTOLO') THEN pnl_paper ELSE 0 END)
-                    FROM libro_pesca WHERE orizzonte_s = ? AND versione='v15j'
-                """, (h_s,))
-                r = cur.fetchone()
-                vere = r[0] or 0
-                bar  = r[1] or 0
-                sca  = r[2] or 0
-                vol  = r[3] or 0
-                tot_eventi = vere + bar + sca
-                pct = round(vere / tot_eventi * 100, 1) if tot_eventi > 0 else None
-                out['lp_orizzonti'][str(h_s)] = {
-                    'vere': vere, 'barattoli': bar, 'scadute': sca, 'in_volo': vol,
-                    'pct_vincenti': pct,
-                    'pnl_totale': round(r[4], 2) if r[4] is not None else 0.0,
-                }
-            # 15.J — breakdown per strategia (P1/P2/P3)
-            out['lp_strategie'] = {}
-            for strat in ('p1', 'p2', 'p3'):
-                cur.execute("""
-                    SELECT
-                      SUM(CASE WHEN esito_finale='VERA' THEN 1 ELSE 0 END),
-                      SUM(CASE WHEN esito_finale='BARATTOLO' THEN 1 ELSE 0 END),
-                      SUM(CASE WHEN esito_finale IN ('VERA','BARATTOLO') THEN pnl_paper ELSE 0 END),
-                      SUM(CASE WHEN stato='CATTURATA' THEN 1 ELSE 0 END)
-                    FROM libro_pesca WHERE strategia = ? AND versione='v15j'
-                """, (strat,))
-                r = cur.fetchone()
-                vere_s = r[0] or 0
-                bar_s = r[1] or 0
-                pnl_s = r[2] or 0.0
-                in_volo_s = r[3] or 0
-                tot_s = vere_s + bar_s
-                wr_s_calc = round(vere_s / tot_s * 100, 1) if tot_s > 0 else None
-                out['lp_strategie'][strat] = {
-                    'vere': vere_s, 'barattoli': bar_s, 'in_volo': in_volo_s,
-                    'totale_chiusi': tot_s,
-                    'wr_pct': wr_s_calc,
-                    'pnl_totale': round(pnl_s, 2),
-                }
-            conn.close()
-        except Exception as e:
-            log.debug(f"[LIBRO_PESCA_STATS_ERR] {e}")
-        for L in self._in_volo[-30:]:
-            out['lp_active'].append({
-                'id': L['id'], 'ts_piantata': L['ts_piantata'],
-                'prezzo_lenza': L['prezzo_lenza'], 'direzione': L['direzione'],
-                'orizzonte_s': L['orizzonte_s'], 'lasco': L['lasco'],
-                'stato': L['stato'],
-                'ts_cattura': L.get('ts_cattura'),
-                'prezzo_cattura': L.get('prezzo_cattura'),
-            })
-        self._stats_cache = out
-        self._stats_cache_ts = now
-        return out
-
-    def get_recent_events(self, limit=50):
-        """Ultimi N eventi conclusi (per grafico)."""
-        if not self.enabled:
-            return []
-        out = []
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cur = conn.cursor()
-            cur.execute("""
-                SELECT id, ts_piantata, prezzo_lenza, direzione, orizzonte_s,
-                       ts_cattura, prezzo_cattura, ts_chiusura, prezzo_chiusura,
-                       pnl_paper, esito_finale
-                FROM libro_pesca
-                WHERE esito_finale IS NOT NULL AND versione='v15j'
-                ORDER BY id DESC LIMIT ?
-            """, (limit,))
-            for r in cur.fetchall():
-                out.append({
-                    'id': r[0], 'ts_piantata': r[1], 'prezzo_lenza': r[2],
-                    'direzione': r[3], 'orizzonte_s': r[4],
-                    'ts_cattura': r[5], 'prezzo_cattura': r[6],
-                    'ts_chiusura': r[7], 'prezzo_chiusura': r[8],
-                    'pnl_paper': r[9], 'esito_finale': r[10],
-                })
-            conn.close()
-        except Exception as e:
-            log.debug(f"[LIBRO_PESCA_EVENTS_ERR] {e}")
-        return out
 
 
 class OvertopBassanoV16Production:
@@ -6796,22 +6105,6 @@ class OvertopBassanoV16Production:
         self.veritas        = VeritatisTracker(sc_ref=self.supercervello)
         self.veritas.load(DB_PATH)  # carica statistiche dal disco al boot
 
-        # -- PASSO 13: PREDITTORE CONTESTUALE V2 (15mag2026) ──────────────
-        # Predizione DINAMICA basata sul contesto attuale. Misura sé stesso
-        # contro il prezzo reale a 60s. Onesto. Indipendente dal pred_* vecchio.
-        self.predittore_v2 = PredittoreContestuale()
-
-        # -- PASSO 15.A: LIBRO DI PESCA (15mag2026) ────────────────────────
-        # Default DISABILITATO (kill-switch). Per attivare → Render env:
-        # LIBRO_PESCA_ENABLED=true
-        # Quando disabilitato la classe esiste ma non fa nulla.
-        # Istanziazione protetta da try/except per non rompere mai il bot.
-        try:
-            self.libro_pesca = LibroPesca(DB_PATH)
-        except Exception as _e_lp_init:
-            log.error(f"[LIBRO_PESCA_INIT_ERR] {_e_lp_init} - libro_pesca disabilitato")
-            self.libro_pesca = None
-
         # -- PRED SCORE BOOT: inizializza dai dati Veritas storici --------
         # Evita che pred_boost parta da 0 al restart e non scatti mai
         # nelle prime ore. Usa hit_rate FUOCO|PREVISTO_ENTRA come proxy.
@@ -6838,38 +6131,6 @@ class OvertopBassanoV16Production:
         self._oi_carica_short   = 0.0  # carica ribassista speculare
         self._pred_trade_n      = 0    # predizioni confermate → trade
         self._pred_trade_pnl    = 0.0  # PnL cumulativo di quei trade
-
-        # ════════════════════════════════════════════════════════════════
-        # PASSO 10 (15mag2026) — PREDICTION TRACKER
-        # ════════════════════════════════════════════════════════════════
-        # Salva il prezzo a ogni tick. Dopo 60/90/120s misura il movimento
-        # reale e lo confronta con la predizione corrente del bot.
-        # NON decide niente. Solo registra. Espone statistiche su /trading/status.
-        # ════════════════════════════════════════════════════════════════
-        # FIX 15mag2026: deque è già importato globalmente a riga 44.
-        # Avere "from collections import deque" qui rende deque LOCALE in
-        # tutto __init__, causando UnboundLocalError a riga 6157 dove
-        # deque era usata PRIMA di questo punto. Rimosso l'import locale.
-        # storico (timestamp, prezzo) ultimi 200 secondi (margine per 120s+buffer)
-        self._pt_storico = deque(maxlen=300)
-        # statistiche aggregate per orizzonte: errori, accuracy segno
-        self._pt_stats = {
-            60:  {'n': 0, 'errori_abs': deque(maxlen=200),
-                  'segno_giusto': deque(maxlen=200),
-                  'movimenti_reali': deque(maxlen=200),
-                  'predizioni_disponibili': 0, 'senza_predizione': 0},
-            90:  {'n': 0, 'errori_abs': deque(maxlen=200),
-                  'segno_giusto': deque(maxlen=200),
-                  'movimenti_reali': deque(maxlen=200),
-                  'predizioni_disponibili': 0, 'senza_predizione': 0},
-            120: {'n': 0, 'errori_abs': deque(maxlen=200),
-                  'segno_giusto': deque(maxlen=200),
-                  'movimenti_reali': deque(maxlen=200),
-                  'predizioni_disponibili': 0, 'senza_predizione': 0},
-        }
-        # snapshot delle predizioni: timestamp → predizione che il bot
-        # avrebbe usato in quel momento (pred_score corrente + delta atteso)
-        self._pt_predizioni = deque(maxlen=300)
         self._oi_stato_short    = "ATTESA"
         self._oi_tick_pronto_short = 0
 
@@ -6945,46 +6206,33 @@ class OvertopBassanoV16Production:
     # ========================================================================
 
     def connect_binance(self):
-        # Contatore tick per diagnostica (logga ogni N ricevuti)
-        self._ws_tick_count = getattr(self, '_ws_tick_count', 0)
-        self._ws_reconnect_count = getattr(self, '_ws_reconnect_count', 0)
-
         def on_message(ws, msg):
             try:
-                # DIAG: logga ESPLICITAMENTE i primi 3 messaggi e poi ogni 100
-                self._ws_tick_count += 1
-                if self._ws_tick_count <= 3 or self._ws_tick_count % 500 == 0:
-                    log.info(f"[WS_TICK_DIAG] msg#{self._ws_tick_count} len={len(msg)} preview={msg[:120]}")
                 data   = json.loads(msg)
                 price  = float(data.get('p', 0))
                 volume = float(data.get('q', 1.0))
                 if price > 0:
                     self.analyzer.add_price(price)
                     self.seed_scorer.add_tick(price, volume)
+                    # 🌊 TSUNAMI: alimenta candele multi-scala
                     if self.tsunami is not None:
                         self.tsunami.feed_tick(price, volume)
                     self._last_volume = volume
                     self._process_tick(price)
-                else:
-                    log.warning(f"[WS_TICK_NOPRICE] msg#{self._ws_tick_count} data={data}")
             except Exception as e:
-                log.error(f"[WS_MSG_ERR] {type(e).__name__}: {e} | msg[:200]={msg[:200] if msg else 'None'}")
-                import traceback
-                log.error(f"[WS_MSG_TB] {traceback.format_exc()}")
+                log.error(f"[WS_MSG] {e}")
 
         def on_error(ws, error):
-            log.error(f"[WS_ERROR] type={type(error).__name__} err={error}")
+            log.error(f"[WS_ERROR] {error}")
 
         def on_close(ws, code, msg):
-            log.warning(f"[WS_CLOSE] code={code} msg={msg} tick_ricevuti={self._ws_tick_count} reconn={self._ws_reconnect_count} - riconnessione in 5s...")
+            log.warning(f"[WS_CLOSE] codice={code} - riconnessione in 5s...")
             time.sleep(5)
-            self._ws_reconnect_count += 1
             self.connect_binance()
 
         def on_open(ws):
-            log.info(f"[WS_OPEN] ✓ Connesso a {self.ws_url} (reconn={self._ws_reconnect_count})")
+            log.info("[WS] [OK] Connesso a Binance aggTrade SOLUSDC")
 
-        log.info(f"[WS_CONNECT] Avvio connessione: {self.ws_url}")
         self.ws = websocket.WebSocketApp(
             self.ws_url,
             on_message=on_message,
@@ -6993,100 +6241,10 @@ class OvertopBassanoV16Production:
             on_open=on_open,
         )
         threading.Thread(target=self.ws.run_forever, daemon=True, name="ws_thread").start()
-        log.info(f"[WS_THREAD] Thread WS avviato")
 
     # ========================================================================
     # PROCESS TICK - orchestratore principale
     # ========================================================================
-
-    def _pt_track(self, now: float, price: float):
-        """
-        PASSO 10 — PREDICTION TRACKER (sola lettura, non decide nulla).
-
-        Salva (ts, prezzo) ad ogni tick. Per ogni orizzonte (60/90/120s),
-        cerca lo snapshot di esattamente quel tempo fa e misura:
-         - movimento_reale = prezzo_ora - prezzo_allora
-         - se c'era una predizione: errore_assoluto, segno_giusto
-        Aggrega in self._pt_stats per esposizione su /trading/status.
-        """
-        # 1) snapshot del momento
-        self._pt_storico.append((now, price))
-        # snapshot della predizione corrente del bot (pred_score interno)
-        try:
-            _ps = getattr(self.supercervello, '_pred_score_ref', 0.0)
-            _pt_pred = {
-                'ts': now,
-                'price': price,
-                'pred_score': _ps,
-                # delta predetto: se pred_score >= 70 e direzione campo nota,
-                # il bot "punta" sulla direzione del campo. Magnitudo: derivata
-                # da pred_score (più alto = più convinto, più grande il delta).
-                # Stima rozza (best effort) — non è il predittore vero, è
-                # quello che il bot ATTUALMENTE crede.
-                'campo_dir': getattr(self.campo, '_direction', None),
-                'delta_atteso': (_ps - 50.0) * 0.3 if _ps >= 50 else 0.0,
-            }
-            self._pt_predizioni.append(_pt_pred)
-        except Exception:
-            pass
-
-        # 2) per ogni orizzonte, cerca lo snapshot di W secondi fa
-        for W in (60, 90, 120):
-            target_ts = now - W
-            # trova lo snapshot più vicino a target_ts (entro ±2s di tolleranza)
-            snap_old = None
-            for (ts_old, price_old) in self._pt_storico:
-                if abs(ts_old - target_ts) <= 2.0:
-                    snap_old = (ts_old, price_old)
-                    break
-            if snap_old is None:
-                continue
-            # movimento reale a W secondi
-            movimento_reale = price - snap_old[1]
-            S = self._pt_stats[W]
-            S['n'] += 1
-            S['movimenti_reali'].append(movimento_reale)
-
-            # c'era una predizione attiva di W secondi fa?
-            pred_old = None
-            for p in self._pt_predizioni:
-                if abs(p['ts'] - target_ts) <= 2.0:
-                    pred_old = p
-                    break
-            if pred_old is None or pred_old['pred_score'] < 50.0:
-                S['senza_predizione'] += 1
-                continue
-            # confronto: la predizione di W fa diceva un delta, il movimento reale è
-            S['predizioni_disponibili'] += 1
-            delta_atteso = pred_old['delta_atteso']
-            if pred_old['campo_dir'] == 'SHORT':
-                delta_atteso = -delta_atteso
-            errore_abs = abs(delta_atteso - movimento_reale)
-            S['errori_abs'].append(errore_abs)
-            # segno giusto?
-            segno_predetto = 'UP' if delta_atteso > 0 else ('DOWN' if delta_atteso < 0 else 'FLAT')
-            segno_reale = 'UP' if movimento_reale > 0 else ('DOWN' if movimento_reale < 0 else 'FLAT')
-            if segno_predetto != 'FLAT':
-                S['segno_giusto'].append(1 if segno_predetto == segno_reale else 0)
-
-    def _pt_get_stats(self) -> dict:
-        """Ritorna le statistiche aggregate del tracker per /trading/status."""
-        import statistics as _st
-        out = {}
-        for W, S in self._pt_stats.items():
-            row = {'n_misurati': S['n'],
-                   'predizioni_disponibili': S['predizioni_disponibili'],
-                   'senza_predizione': S['senza_predizione']}
-            if S['errori_abs']:
-                row['err_medio'] = round(_st.mean(S['errori_abs']), 2)
-                row['err_mediano'] = round(_st.median(S['errori_abs']), 2)
-            if S['segno_giusto']:
-                row['accuracy_segno_pct'] = round(sum(S['segno_giusto']) / len(S['segno_giusto']) * 100, 1)
-                row['n_segno_valutato'] = len(S['segno_giusto'])
-            if S['movimenti_reali']:
-                row['mov_reale_medio_abs'] = round(_st.mean([abs(x) for x in S['movimenti_reali']]), 2)
-            out[f'{W}s'] = row
-        return out
 
     def _process_tick(self, price: float):
         now = time.time()
@@ -7113,81 +6271,6 @@ class OvertopBassanoV16Production:
 
         # Aggiorna prezzo live ad ogni tick
         self._last_price = price
-
-        # ════════════════════════════════════════════════════════════════
-        # PASSO 10 — PREDICTION TRACKER (chiamato ogni tick, sola lettura)
-        # ════════════════════════════════════════════════════════════════
-        try:
-            self._pt_track(now, price)
-        except Exception as _e_pt:
-            log.debug(f"[PT_TRACK_ERR] {_e_pt}")
-
-        # ════════════════════════════════════════════════════════════════
-        # PASSO 13 — PREDITTORE CONTESTUALE V2 (dinamico, onesto)
-        # ════════════════════════════════════════════════════════════════
-        try:
-            self.predittore_v2.osserva(
-                now, price,
-                self._oi_carica, self._oi_stato,
-                self._oi_carica_short, self._oi_stato_short
-            )
-        except Exception as _e_pv2:
-            log.debug(f"[PRED_V2_ERR] {_e_pv2}")
-
-        # ════════════════════════════════════════════════════════════════
-        # PASSO 15.F — TATTICA DI PESCA SU FINGERPRINT VERITAS
-        # ════════════════════════════════════════════════════════════════
-        # PASSO 15.J — 3 STRATEGIE PARALLELE
-        #   P1 = WIN signature (drift + range_pos + compression)
-        #   P2 = V2 + conferma drift_persist
-        #   P3 = Compressione che parte (comp_dur + drift_slope)
-        # Ogni strategia: cooldown indipendente, etichetta nel DB, entry immediata.
-        # ════════════════════════════════════════════════════════════════
-        try:
-            if self.libro_pesca is not None:
-                self.libro_pesca.tick(now, price)
-                _regime_now = getattr(self, '_regime_current',
-                                      getattr(self, '_regime', 'UNKNOWN'))
-                # Fingerprint LIVE
-                try:
-                    _drift = getattr(self.campo, '_last_drift_pct', 0.0)
-                except Exception:
-                    _drift = 0.0
-                _mom, _vol, _trd = self.analyzer.analyze(regime=_regime_now, drift=_drift)
-                _orac_mem = getattr(self.oracolo, '_memory', None)
-                # 15.J — SeedScorer fornisce TUTTI gli indicatori micro
-                _seed_data = self.seed_scorer.score() if hasattr(self, 'seed_scorer') else {}
-                _drift_persist = _seed_data.get('drift_persist', 0.5)
-                _range_pos     = _seed_data.get('range_pos', 0.5)
-                _compression   = _seed_data.get('compression', 1.0)
-                _comp_dur      = _seed_data.get('comp_duration', 0)
-                _drift_slope   = _seed_data.get('drift_slope', 0.0)
-                # 15.J — V2 stats per strategia P2
-                _v2_delta = 0.0
-                _v2_n = 0
-                _v2_acc = 0.0
-                try:
-                    _pv2_stats = self.predittore_v2.get_stats()
-                    _v2_delta = _pv2_stats.get('pred_v2_delta', 0.0)
-                    _v2_n     = _pv2_stats.get('pred_v2_n_segno', 0)
-                    _v2_acc   = (_pv2_stats.get('pred_v2_accuracy_segno', 0) or 0) / 100.0
-                except Exception:
-                    pass
-                self.libro_pesca.pianta_se_fingerprint_vincente(
-                    now, price,
-                    _mom, _vol, _trd,
-                    _orac_mem, _regime_now, 0.0,
-                    drift_persist=_drift_persist,
-                    range_pos=_range_pos,
-                    compression=_compression,
-                    comp_duration=_comp_dur,
-                    drift_slope=_drift_slope,
-                    v2_delta=_v2_delta,
-                    v2_n=_v2_n,
-                    v2_accuracy=_v2_acc,
-                )
-        except Exception as _e_lp:
-            log.debug(f"[LIBRO_PESCA_TICK_ERR] {_e_lp}")
 
         # Aggiorna prezzo live ad ogni tick (per dashboard)
         if self.heartbeat_lock:
@@ -8487,9 +7570,6 @@ class OvertopBassanoV16Production:
                 st_pnl           = _st_ctx['pnl_sim'],
                 oi_carica        = self._oi_carica,
                 oi_stato         = self._oi_stato,
-                # PASSO 11: passa anche l'OI SHORT per il pred_boost bilaterale
-                oi_carica_short  = self._oi_carica_short,
-                oi_stato_short   = self._oi_stato_short,
                 score            = score,
                 soglia           = soglia,
                 matrimonio_wr    = _mat.get('wr', 0.5),
@@ -9131,91 +8211,14 @@ class OvertopBassanoV16Production:
                             if (dir_pred > 0) == (dir_reale > 0):
                                 conferme += 1
                     conf_pct = round(conferme / totale * 100, 1) if totale > 0 else 0
-
-                    # ════════════════════════════════════════════════════════════
-                    # PASSO 14 (15mag2026) — DASHBOARD ONESTA
-                    # Le card SCOSTAMENTO/CONFERMATE/SCORE PRED ora usano i valori
-                    # del PredittoreContestuale V2 (misurato vs realtà 60s) quando
-                    # ha raccolto ≥30 verificate. Prima di allora restano i valori
-                    # tautologici (fallback cold start) per non mostrare card vuote.
-                    # ════════════════════════════════════════════════════════════
-                    _pv2_ready = False
-                    _pv2_score = conf_pct       # default cold = tautologico
-                    _pv2_scost = scost_avg
-                    _pv2_conf  = conferme
-                    _pv2_tot   = totale
-                    try:
-                        _pv2_stats = self.predittore_v2.get_stats()
-                        _pv2_nver  = _pv2_stats.get('pred_v2_n_verificate', 0)
-                        if _pv2_nver >= 30:
-                            _pv2_ready = True
-                            _pv2_score = _pv2_stats.get('pred_v2_accuracy_segno', conf_pct)
-                            _pv2_scost = _pv2_stats.get('pred_v2_err_medio', scost_avg)
-                            _pv2_conf  = sum(self.predittore_v2._segno_giusti) \
-                                         if hasattr(self.predittore_v2, '_segno_giusti') else 0
-                            _pv2_tot   = _pv2_stats.get('pred_v2_n_segno', 0)
-                    except Exception as _e_pv2_card:
-                        log.debug(f"[PRED_V2_CARD_ERR] {_e_pv2_card}")
-                    self.heartbeat_data["pred_scostamento"] = _pv2_scost
-                    self.heartbeat_data["pred_conferme"]    = _pv2_conf
-                    self.heartbeat_data["pred_totale"]      = _pv2_tot
-                    self.heartbeat_data["pred_score"]       = _pv2_score
-                    self.heartbeat_data["pred_v2_ready"]    = _pv2_ready
+                    self.heartbeat_data["pred_scostamento"] = scost_avg
+                    self.heartbeat_data["pred_conferme"]    = conferme
+                    self.heartbeat_data["pred_totale"]      = totale
+                    self.heartbeat_data["pred_score"]       = conf_pct
                     self.heartbeat_data["pred_trade_n"]     = self._pred_trade_n
                     self.heartbeat_data["pred_trade_pnl"]   = round(self._pred_trade_pnl, 2)
                     self.heartbeat_data["pred_delta_fuoco"]  = round(_delta_fuoco, 4)
                     self.heartbeat_data["pred_delta_carica"] = round(_delta_carica, 4)
-
-                    # ════════════════════════════════════════════════════════════
-                    # PASSO 12 (15mag2026) — LENZA visibile sulla dashboard
-                    # Il pescatore pianta la lenza dove passerà il pesce a 60s.
-                    # delta_fuoco = movimento medio osservato a 60s quando OI=FUOCO
-                    # lenza_long  = dove arriverà il prezzo se sale (FUOCO LONG)
-                    # lenza_short = dove arriverà se scende (FUOCO SHORT)
-                    # Espone anche QUALE lenza è attiva (FUOCO da che lato).
-                    # ════════════════════════════════════════════════════════════
-                    _prezzo_attuale = _ph[-1] if _ph else 0
-                    _delta_pred = _delta_fuoco if _delta_fuoco != 0 else _delta_carica
-                    _delta_abs = abs(_delta_pred)
-                    self.heartbeat_data["lenza_long"]    = round(_prezzo_attuale + _delta_abs, 2)
-                    self.heartbeat_data["lenza_short"]   = round(_prezzo_attuale - _delta_abs, 2)
-                    self.heartbeat_data["lenza_delta"]   = round(_delta_abs, 2)
-                    # Quale lenza è ATTIVA (FUOCO acceso da quel lato + predizione certificata)
-                    _ps_now = getattr(self.supercervello, '_pred_score_ref', 0)
-                    _pc_now = getattr(self.supercervello, '_pred_calib_ref', 0)
-                    _pred_ok = _ps_now >= 70 and _pc_now >= 50
-                    _lenza_attiva = "NONE"
-                    if _pred_ok:
-                        if self._oi_stato_short == "FUOCO" and self._oi_carica_short >= 0.75:
-                            _lenza_attiva = "SHORT"
-                        elif self._oi_stato == "FUOCO" and self._oi_carica >= 0.75:
-                            _lenza_attiva = "LONG"
-                    self.heartbeat_data["lenza_attiva"]  = _lenza_attiva
-
-                    # ════════════════════════════════════════════════════════════
-                    # PASSO 13 — PREDITTORE V2 ONESTO (statistiche misurate)
-                    # ════════════════════════════════════════════════════════════
-                    try:
-                        _pv2 = self.predittore_v2.get_stats()
-                        for _k, _v in _pv2.items():
-                            self.heartbeat_data[_k] = _v
-                    except Exception as _e_pv2:
-                        log.debug(f"[PRED_V2_HB_ERR] {_e_pv2}")
-
-                    # ════════════════════════════════════════════════════════════
-                    # PASSO 15.B — LIBRO DI PESCA (stats per diagnosi)
-                    # Le stats vanno nell'heartbeat. UI nuova arriverà in MICRO 15.C.
-                    # ════════════════════════════════════════════════════════════
-                    try:
-                        if self.libro_pesca is not None:
-                            _lp = self.libro_pesca.get_stats(time.time())
-                            for _k, _v in _lp.items():
-                                self.heartbeat_data[_k] = _v
-                            # PASSO 15.C — eventi recenti per il grafico palle colorate
-                            self.heartbeat_data["lp_eventi_recenti"] = \
-                                self.libro_pesca.get_recent_events(50)
-                    except Exception as _e_lp_hb:
-                        log.debug(f"[LIBRO_PESCA_HB_ERR] {_e_lp_hb}")
 
                     # Ratio magnitudine: predizione vs movimento reale
                     # Misura quanto la predizione sovra/sottostima il mercato
@@ -9243,36 +8246,14 @@ class OvertopBassanoV16Production:
                         self._pred_ratio_history.append(ratio)
                         if len(self._pred_ratio_history) > 50:
                             self._pred_ratio_history.pop(0)
-                        ratio_smooth_taut = round(
+                        ratio_smooth = round(
                             sum(self._pred_ratio_history) / len(self._pred_ratio_history), 1)
-
-                        # ════════════════════════════════════════════════════════════
-                        # PASSO 14 — CALIBRAZIONE ONESTA DAL V2
-                        # Se V2 maturo: usa rapporto medio |delta_predetti|/|delta_reali|
-                        # misurato contro la realtà 60s. Altrimenti fallback tautologico.
-                        # ════════════════════════════════════════════════════════════
-                        ratio_v2 = ratio_smooth_taut
-                        try:
-                            _pv2_dp = getattr(self.predittore_v2, '_delta_predetti', None)
-                            _pv2_dr = getattr(self.predittore_v2, '_delta_reali', None)
-                            if _pv2_dp and _pv2_dr and len(_pv2_dr) >= 30:
-                                _ap = sum(abs(x) for x in _pv2_dp) / len(_pv2_dp)
-                                _ar = sum(abs(x) for x in _pv2_dr) / len(_pv2_dr)
-                                if _ap > 0:
-                                    ratio_v2 = round(_ar / _ap * 100, 1)
-                        except Exception as _e_rv2:
-                            log.debug(f"[PRED_V2_RATIO_ERR] {_e_rv2}")
-
-                        self.heartbeat_data["pred_ratio"]      = ratio_v2
-                        self.heartbeat_data["pred_ratio_raw"]  = ratio
-                        self.heartbeat_data["pred_ratio_taut"] = ratio_smooth_taut
-
-                        # PASSO 14 — _pred_score_ref / _pred_calib_ref dal V2 solo se maturo
-                        # Cold start: il motore resta a 70 (default boot) per non strangolare.
+                        self.heartbeat_data["pred_ratio"]     = ratio_smooth
+                        self.heartbeat_data["pred_ratio_raw"] = ratio
+                        # Aggiorna SC per boost predizione e Veritas stats
                         if hasattr(self, 'supercervello'):
-                            if _pv2_ready:
-                                self.supercervello._pred_score_ref = _pv2_score
-                                self.supercervello._pred_calib_ref = ratio_v2
+                            self.supercervello._pred_score_ref = conf_pct
+                            self.supercervello._pred_calib_ref = ratio_smooth
                             self.supercervello._veritas_stats_ref = self.veritas._stats
 
                 # FIX: _ctx aggiornato SEMPRE ad ogni tick dell'Oracolo Interno,
@@ -10092,9 +9073,6 @@ class OvertopBassanoV16Production:
                 st_pnl         = _st_ctx['pnl_sim'],
                 oi_carica      = self._oi_carica,
                 oi_stato       = self._oi_stato,
-                # PASSO 11: passa anche l'OI SHORT per il pred_boost bilaterale
-                oi_carica_short= self._oi_carica_short,
-                oi_stato_short = self._oi_stato_short,
                 score          = score,
                 soglia         = soglia,
                 matrimonio_wr  = _mat.get('wr', 0.5),
@@ -11963,8 +10941,6 @@ class OvertopBassanoV16Production:
                 _hb_set("m2_cooldown",         lambda: max(0, self._m2_cooldown_until - time.time()))
                 _hb_set("m2_log",              lambda: list(self._m2_log))
                 _hb_set("m2_campo_stats",      lambda: self.campo.get_stats())
-                # ─── PASSO 10 — Prediction Tracker (sola lettura, diagnostica) ───
-                _hb_set("pt_stats",            lambda: self._pt_get_stats())
                 _hb_set("m2_last_score",       lambda: round(getattr(self.campo, '_last_score', 0), 1))
                 _hb_set("m2_last_soglia",      lambda: round(getattr(self.campo, '_last_soglia', 60), 1))
                 _hb_set("m2_buy_distance",     lambda: round(getattr(self.campo, '_last_soglia', 60) - getattr(self.campo, '_last_score', 0), 1))
