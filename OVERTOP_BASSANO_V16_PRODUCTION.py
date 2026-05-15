@@ -6410,33 +6410,46 @@ class OvertopBassanoV16Production:
     # ========================================================================
 
     def connect_binance(self):
+        # Contatore tick per diagnostica (logga ogni N ricevuti)
+        self._ws_tick_count = getattr(self, '_ws_tick_count', 0)
+        self._ws_reconnect_count = getattr(self, '_ws_reconnect_count', 0)
+
         def on_message(ws, msg):
             try:
+                # DIAG: logga ESPLICITAMENTE i primi 3 messaggi e poi ogni 100
+                self._ws_tick_count += 1
+                if self._ws_tick_count <= 3 or self._ws_tick_count % 500 == 0:
+                    log.info(f"[WS_TICK_DIAG] msg#{self._ws_tick_count} len={len(msg)} preview={msg[:120]}")
                 data   = json.loads(msg)
                 price  = float(data.get('p', 0))
                 volume = float(data.get('q', 1.0))
                 if price > 0:
                     self.analyzer.add_price(price)
                     self.seed_scorer.add_tick(price, volume)
-                    # 🌊 TSUNAMI: alimenta candele multi-scala
                     if self.tsunami is not None:
                         self.tsunami.feed_tick(price, volume)
                     self._last_volume = volume
                     self._process_tick(price)
+                else:
+                    log.warning(f"[WS_TICK_NOPRICE] msg#{self._ws_tick_count} data={data}")
             except Exception as e:
-                log.error(f"[WS_MSG] {e}")
+                log.error(f"[WS_MSG_ERR] {type(e).__name__}: {e} | msg[:200]={msg[:200] if msg else 'None'}")
+                import traceback
+                log.error(f"[WS_MSG_TB] {traceback.format_exc()}")
 
         def on_error(ws, error):
-            log.error(f"[WS_ERROR] {error}")
+            log.error(f"[WS_ERROR] type={type(error).__name__} err={error}")
 
         def on_close(ws, code, msg):
-            log.warning(f"[WS_CLOSE] codice={code} - riconnessione in 5s...")
+            log.warning(f"[WS_CLOSE] code={code} msg={msg} tick_ricevuti={self._ws_tick_count} reconn={self._ws_reconnect_count} - riconnessione in 5s...")
             time.sleep(5)
+            self._ws_reconnect_count += 1
             self.connect_binance()
 
         def on_open(ws):
-            log.info("[WS] [OK] Connesso a Binance aggTrade SOLUSDC")
+            log.info(f"[WS_OPEN] ✓ Connesso a {self.ws_url} (reconn={self._ws_reconnect_count})")
 
+        log.info(f"[WS_CONNECT] Avvio connessione: {self.ws_url}")
         self.ws = websocket.WebSocketApp(
             self.ws_url,
             on_message=on_message,
@@ -6445,6 +6458,7 @@ class OvertopBassanoV16Production:
             on_open=on_open,
         )
         threading.Thread(target=self.ws.run_forever, daemon=True, name="ws_thread").start()
+        log.info(f"[WS_THREAD] Thread WS avviato")
 
     # ========================================================================
     # PROCESS TICK - orchestratore principale
