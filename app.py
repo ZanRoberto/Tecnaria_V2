@@ -2374,8 +2374,8 @@ canvas.spark { width:100%; height:40px; }
         </div>
 
         <div id="lp-params-banner" style="display:none;padding:8px 10px;background:rgba(29,158,117,0.08);border:1px solid rgba(29,158,117,0.25);border-radius:4px;font-size:10px;color:#1D9E75;margin-bottom:8px;line-height:1.5;">
-          <b>MODALITÀ SELETTIVA</b> · cooldown 125s · carica ≥ 0.95 · solo orizzonti 30s + 60s · solo OI=FUOCO<br>
-          <span style="color:var(--dim);">parametri trovati dal simulatore stasera — 1-3 piantate ogni 5-10 minuti</span>
+          <b>15.F · PESCA DA FINGERPRINT VERITAS</b> · WR storico ≥ 60% · n ≥ 30 · PnL_sum > 0<br>
+          <span style="color:var(--dim);">pianta solo quando momentum × volatilità × trend hanno edge dimostrato (es. FORTE|BASSA|UP wr 78%)</span>
         </div>
 
         <!-- Contenuto attivo (mostrato solo quando attiva) -->
@@ -2405,16 +2405,11 @@ canvas.spark { width:100%; height:40px; }
           </div>
 
           <!-- 5 box per orizzonte -->
-          <div style="font-size:8px;color:var(--dim);letter-spacing:0.5px;margin-bottom:4px;">RESA PER ORIZZONTE (★ = il vincente)</div>
-          <div id="lp-orizzonti-grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-bottom:8px;">
-            <div class="lp-oriz-cell" data-oriz="30" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:8px;text-align:center;">
-              <div style="font-size:11px;font-weight:500;" class="lp-oriz-label">30s</div>
-              <div class="lp-oriz-pct" style="font-size:15px;font-weight:500;">—</div>
-              <div class="lp-oriz-detail" style="font-size:9px;color:var(--dim);line-height:1.4;">in attesa primi pesci</div>
-            </div>
-            <div class="lp-oriz-cell" data-oriz="60" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:8px;text-align:center;">
-              <div style="font-size:11px;font-weight:500;" class="lp-oriz-label">60s</div>
-              <div class="lp-oriz-pct" style="font-size:15px;font-weight:500;">—</div>
+          <div style="font-size:8px;color:var(--dim);letter-spacing:0.5px;margin-bottom:4px;">RESA ORIZZONTE 60s</div>
+          <div id="lp-orizzonti-grid" style="display:grid;grid-template-columns:1fr;gap:6px;margin-bottom:8px;">
+            <div class="lp-oriz-cell" data-oriz="60" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:10px;text-align:center;">
+              <div style="font-size:11px;font-weight:500;" class="lp-oriz-label">60s · solo fingerprint vincenti</div>
+              <div class="lp-oriz-pct" style="font-size:18px;font-weight:500;margin-top:4px;">—</div>
               <div class="lp-oriz-detail" style="font-size:9px;color:var(--dim);line-height:1.4;">in attesa primi pesci</div>
             </div>
           </div>
@@ -2871,7 +2866,7 @@ const SCPanel = (() => {
       const lpActiveContent = document.getElementById('lp-active-content');
 
       if (lpStatusEl) {
-        lpStatusEl.textContent = lpEnabled ? 'attiva selettiva' : 'disattivata';
+        lpStatusEl.textContent = lpEnabled ? 'pesca da fingerprint' : 'disattivata';
         lpStatusEl.style.color = lpEnabled ? '#1D9E75' : '#E24B4A';
       }
 
@@ -2917,7 +2912,7 @@ const SCPanel = (() => {
       // 5 box orizzonti
       const orizStats = hb.lp_orizzonti || {};
       let bestOriz = null, bestPct = -1;
-      ['30','60'].forEach(o => {
+      ['60'].forEach(o => {
         const s = orizStats[o];
         if (s && s.pct_vincenti !== null && s.pct_vincenti !== undefined &&
             (s.vere + s.barattoli + s.scadute) >= 10 &&
