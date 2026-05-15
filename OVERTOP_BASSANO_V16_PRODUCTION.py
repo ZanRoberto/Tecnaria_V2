@@ -6314,7 +6314,10 @@ class OvertopBassanoV16Production:
         # reale e lo confronta con la predizione corrente del bot.
         # NON decide niente. Solo registra. Espone statistiche su /trading/status.
         # ════════════════════════════════════════════════════════════════
-        from collections import deque
+        # FIX 15mag2026: deque è già importato globalmente a riga 44.
+        # Avere "from collections import deque" qui rende deque LOCALE in
+        # tutto __init__, causando UnboundLocalError a riga 6157 dove
+        # deque era usata PRIMA di questo punto. Rimosso l'import locale.
         # storico (timestamp, prezzo) ultimi 200 secondi (margine per 120s+buffer)
         self._pt_storico = deque(maxlen=300)
         # statistiche aggregate per orizzonte: errori, accuracy segno
