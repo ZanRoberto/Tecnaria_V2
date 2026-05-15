@@ -2360,90 +2360,98 @@ canvas.spark { width:100%; height:40px; }
         </div>
       </div>
 
-      <!-- ════════ PASSO 15.C — TATTICA DI PESCA ════════ -->
-      <div style="margin-top:10px;padding:10px;background:rgba(29,158,117,0.05);border:1px solid rgba(29,158,117,0.3);border-radius:6px;">
+      <!-- ════════ PASSO 15.D — TATTICA DI PESCA ════════ -->
+      <div id="tattica-pesca-card" style="margin-top:10px;padding:10px;background:rgba(29,158,117,0.05);border:1px solid rgba(29,158,117,0.3);border-radius:6px;">
         <div style="font-size:10px;color:#1D9E75;letter-spacing:1px;margin-bottom:8px;font-weight:600;display:flex;justify-content:space-between;align-items:center;">
-          <span>🎣 TATTICA DI PESCA — lenze piantate, catturate, pesce vero/barattolo</span>
-          <span id="lp-status" style="font-size:8px;color:var(--dim);font-weight:400;">— inerte</span>
+          <span>🎣 TATTICA DI PESCA</span>
+          <span id="lp-status" style="font-size:9px;color:var(--dim);font-weight:400;">— inerte</span>
         </div>
 
-        <!-- 4 contatori principali -->
-        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-bottom:8px;">
-          <div style="background:rgba(29,158,117,0.06);border-radius:6px;padding:6px;text-align:center;">
-            <div style="font-size:8px;color:var(--dim)">PIANTATE</div>
-            <div id="lp-piantate" style="font-size:14px;font-weight:500;">0</div>
-            <div id="lp-in-volo" style="font-size:8px;color:var(--dim)">in volo 0</div>
-          </div>
-          <div style="background:rgba(29,158,117,0.06);border-radius:6px;padding:6px;text-align:center;">
-            <div style="font-size:8px;color:var(--dim)">CATTURATE</div>
-            <div id="lp-catturate" style="font-size:14px;font-weight:500;">0</div>
-            <div id="lp-esiti" style="font-size:8px;color:var(--dim)"><span style="color:#1D9E75;">0 vere</span> · <span style="color:#E24B4A;">0 barat.</span></div>
-          </div>
-          <div style="background:rgba(29,158,117,0.06);border-radius:6px;padding:6px;text-align:center;">
-            <div style="font-size:8px;color:var(--dim)">SCADUTE</div>
-            <div id="lp-scadute" style="font-size:14px;font-weight:500;color:#888780;">0</div>
-            <div style="font-size:8px;color:var(--dim)">no trade aperto</div>
-          </div>
-          <div style="background:rgba(29,158,117,0.06);border-radius:6px;padding:6px;text-align:center;">
-            <div style="font-size:8px;color:var(--dim)">PnL PAPER</div>
-            <div id="lp-pnl" style="font-size:14px;font-weight:500;color:#1D9E75;">+$0.00</div>
-            <div style="font-size:8px;color:var(--dim)">solo pesca</div>
-          </div>
+        <!-- Messaggio quando è disattivata -->
+        <div id="lp-disabled-msg" style="display:none;padding:14px;background:rgba(255,255,255,0.02);border-radius:6px;text-align:center;color:var(--dim);font-size:11px;line-height:1.7;">
+          La tattica di pesca è <b style="color:var(--text);">disattivata</b>.<br>
+          <span style="font-size:10px;">Strategia precedente (1310 lenze/8min, cooldown 5s, 5 orizzonti paralleli) pagava solo fee. Risultato: 41 vere su 689 trade, PnL −$1324.</span><br>
+          <span style="font-size:10px;color:var(--dim);">Per riattivare con nuovi parametri: env Render <code>LIBRO_PESCA_ENABLED=true</code></span>
         </div>
 
-        <!-- 5 box per orizzonte -->
-        <div style="font-size:8px;color:var(--dim);letter-spacing:0.5px;margin-bottom:4px;">RESA PER ORIZZONTE (★ = il vincente)</div>
-        <div id="lp-orizzonti-grid" style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-bottom:8px;">
-          <div class="lp-oriz-cell" data-oriz="10" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:5px 3px;text-align:center;">
-            <div style="font-size:10px;font-weight:500;" class="lp-oriz-label">10s</div>
-            <div class="lp-oriz-pct" style="font-size:13px;font-weight:500;">—</div>
-            <div class="lp-oriz-detail" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div>
+        <!-- Contenuto attivo (mostrato solo quando attiva) -->
+        <div id="lp-active-content">
+          <!-- 4 contatori principali -->
+          <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-bottom:8px;">
+            <div style="background:rgba(29,158,117,0.06);border-radius:6px;padding:6px;text-align:center;">
+              <div style="font-size:8px;color:var(--dim)">PIANTATE</div>
+              <div id="lp-piantate" style="font-size:14px;font-weight:500;">0</div>
+              <div id="lp-in-volo" style="font-size:8px;color:var(--dim)">in volo 0</div>
+            </div>
+            <div style="background:rgba(29,158,117,0.06);border-radius:6px;padding:6px;text-align:center;">
+              <div style="font-size:8px;color:var(--dim)">CATTURATE</div>
+              <div id="lp-catturate" style="font-size:14px;font-weight:500;">0</div>
+              <div id="lp-esiti" style="font-size:8px;color:var(--dim)"><span style="color:#1D9E75;">0 vere</span> · <span style="color:#E24B4A;">0 barat.</span></div>
+            </div>
+            <div style="background:rgba(29,158,117,0.06);border-radius:6px;padding:6px;text-align:center;">
+              <div style="font-size:8px;color:var(--dim)">SCADUTE</div>
+              <div id="lp-scadute" style="font-size:14px;font-weight:500;color:#888780;">0</div>
+              <div style="font-size:8px;color:var(--dim)">no trade aperto</div>
+            </div>
+            <div style="background:rgba(29,158,117,0.06);border-radius:6px;padding:6px;text-align:center;">
+              <div style="font-size:8px;color:var(--dim)">PnL PAPER</div>
+              <div id="lp-pnl" style="font-size:14px;font-weight:500;color:#1D9E75;">+$0.00</div>
+              <div style="font-size:8px;color:var(--dim)">solo pesca</div>
+            </div>
           </div>
-          <div class="lp-oriz-cell" data-oriz="20" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:5px 3px;text-align:center;">
-            <div style="font-size:10px;font-weight:500;" class="lp-oriz-label">20s</div>
-            <div class="lp-oriz-pct" style="font-size:13px;font-weight:500;">—</div>
-            <div class="lp-oriz-detail" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div>
-          </div>
-          <div class="lp-oriz-cell" data-oriz="30" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:5px 3px;text-align:center;">
-            <div style="font-size:10px;font-weight:500;" class="lp-oriz-label">30s</div>
-            <div class="lp-oriz-pct" style="font-size:13px;font-weight:500;">—</div>
-            <div class="lp-oriz-detail" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div>
-          </div>
-          <div class="lp-oriz-cell" data-oriz="60" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:5px 3px;text-align:center;">
-            <div style="font-size:10px;font-weight:500;" class="lp-oriz-label">60s</div>
-            <div class="lp-oriz-pct" style="font-size:13px;font-weight:500;">—</div>
-            <div class="lp-oriz-detail" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div>
-          </div>
-          <div class="lp-oriz-cell" data-oriz="90" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:5px 3px;text-align:center;">
-            <div style="font-size:10px;font-weight:500;" class="lp-oriz-label">90s</div>
-            <div class="lp-oriz-pct" style="font-size:13px;font-weight:500;">—</div>
-            <div class="lp-oriz-detail" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div>
-          </div>
-        </div>
 
-        <!-- Lenze in volo adesso -->
-        <div style="font-size:8px;color:var(--dim);letter-spacing:0.5px;margin-bottom:4px;">LENZE IN VOLO ADESSO</div>
-        <div id="lp-active-list" style="display:flex;flex-direction:column;gap:3px;min-height:30px;font-family:monospace;font-size:10px;">
-          <div style="color:var(--dim);padding:4px;">— nessuna lenza piantata —</div>
-        </div>
+          <!-- 5 box per orizzonte -->
+          <div style="font-size:8px;color:var(--dim);letter-spacing:0.5px;margin-bottom:4px;">RESA PER ORIZZONTE (★ = il vincente)</div>
+          <div id="lp-orizzonti-grid" style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-bottom:8px;">
+            <div class="lp-oriz-cell" data-oriz="10" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:5px 3px;text-align:center;">
+              <div style="font-size:10px;font-weight:500;" class="lp-oriz-label">10s</div>
+              <div class="lp-oriz-pct" style="font-size:13px;font-weight:500;">—</div>
+              <div class="lp-oriz-detail" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div>
+            </div>
+            <div class="lp-oriz-cell" data-oriz="20" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:5px 3px;text-align:center;">
+              <div style="font-size:10px;font-weight:500;" class="lp-oriz-label">20s</div>
+              <div class="lp-oriz-pct" style="font-size:13px;font-weight:500;">—</div>
+              <div class="lp-oriz-detail" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div>
+            </div>
+            <div class="lp-oriz-cell" data-oriz="30" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:5px 3px;text-align:center;">
+              <div style="font-size:10px;font-weight:500;" class="lp-oriz-label">30s</div>
+              <div class="lp-oriz-pct" style="font-size:13px;font-weight:500;">—</div>
+              <div class="lp-oriz-detail" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div>
+            </div>
+            <div class="lp-oriz-cell" data-oriz="60" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:5px 3px;text-align:center;">
+              <div style="font-size:10px;font-weight:500;" class="lp-oriz-label">60s</div>
+              <div class="lp-oriz-pct" style="font-size:13px;font-weight:500;">—</div>
+              <div class="lp-oriz-detail" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div>
+            </div>
+            <div class="lp-oriz-cell" data-oriz="90" style="background:rgba(29,158,117,0.06);border-radius:4px;padding:5px 3px;text-align:center;">
+              <div style="font-size:10px;font-weight:500;" class="lp-oriz-label">90s</div>
+              <div class="lp-oriz-pct" style="font-size:13px;font-weight:500;">—</div>
+              <div class="lp-oriz-detail" style="font-size:8px;color:var(--dim);line-height:1.3;">—</div>
+            </div>
+          </div>
 
-        <!-- Grafico palle colorate (canvas) -->
-        <div style="font-size:8px;color:var(--dim);letter-spacing:0.5px;margin-top:8px;margin-bottom:4px;">
-          GRAFICO ESCHE NEL TEMPO ·
-          <span style="color:#EF9F27;">●</span> attesa ·
-          <span style="color:#378ADD;">●</span> catturata ·
-          <span style="color:#1D9E75;">●</span> vera ·
-          <span style="color:#E24B4A;">●</span> barattolo ·
-          <span style="color:#888780;">◆</span> scaduta
-        </div>
-        <div style="position:relative;background:rgba(29,158,117,0.03);border-radius:4px;height:160px;overflow:hidden;">
-          <canvas id="lp-canvas" width="700" height="160" style="width:100%;height:100%;"></canvas>
-        </div>
+          <!-- Lenze in volo adesso -->
+          <div style="font-size:8px;color:var(--dim);letter-spacing:0.5px;margin-bottom:4px;">LENZE IN VOLO ADESSO (ultime 8)</div>
+          <div id="lp-active-list" style="display:flex;flex-direction:column;gap:3px;min-height:30px;font-family:monospace;font-size:10px;">
+            <div style="color:var(--dim);padding:4px;">— nessuna lenza piantata —</div>
+          </div>
 
-        <!-- PnL cumulativo coi dentini -->
-        <div style="font-size:8px;color:var(--dim);letter-spacing:0.5px;margin-top:6px;margin-bottom:4px;">PnL PESCA CUMULATIVO</div>
-        <div style="position:relative;background:rgba(29,158,117,0.03);border-radius:4px;height:80px;overflow:hidden;">
-          <canvas id="lp-pnl-canvas" width="700" height="80" style="width:100%;height:100%;"></canvas>
+          <!-- Storico esiti -->
+          <div style="font-size:8px;color:var(--dim);letter-spacing:0.5px;margin-top:8px;margin-bottom:4px;">
+            ULTIMI 30 ESITI ·
+            <span style="color:#1D9E75;">●</span> vera ·
+            <span style="color:#E24B4A;">●</span> barattolo ·
+            <span style="color:#888780;">◆</span> scaduta
+          </div>
+          <div id="lp-esiti-strip" style="display:flex;flex-wrap:wrap;gap:3px;padding:6px;background:rgba(255,255,255,0.02);border-radius:4px;min-height:30px;">
+            <div style="color:var(--dim);font-size:10px;padding:2px;">— in attesa primi esiti —</div>
+          </div>
+
+          <!-- PnL cumulativo coi dentini -->
+          <div style="font-size:8px;color:var(--dim);letter-spacing:0.5px;margin-top:8px;margin-bottom:4px;">PnL PESCA CUMULATIVO</div>
+          <div style="position:relative;background:rgba(29,158,117,0.03);border-radius:4px;height:80px;overflow:hidden;">
+            <canvas id="lp-pnl-canvas" width="700" height="80" style="width:100%;height:100%;"></canvas>
+          </div>
         </div>
       </div>
 
@@ -2865,14 +2873,32 @@ const SCPanel = (() => {
     const voloEl = document.getElementById('pv2-volo');
     if (voloEl) voloEl.textContent = 'in volo ' + pv2Volo;
 
-    // ════════ PASSO 15.C — TATTICA DI PESCA ════════
+    // ════════ PASSO 15.D — TATTICA DI PESCA ════════
     try {
       const lpEnabled = hb.lp_enabled === true;
       const lpStatusEl = document.getElementById('lp-status');
+      const lpDisabledMsg = document.getElementById('lp-disabled-msg');
+      const lpActiveContent = document.getElementById('lp-active-content');
+
       if (lpStatusEl) {
         lpStatusEl.textContent = lpEnabled ? 'attivo' : 'disattivato';
-        lpStatusEl.style.color = lpEnabled ? '#1D9E75' : 'var(--dim)';
+        lpStatusEl.style.color = lpEnabled ? '#1D9E75' : '#E24B4A';
       }
+
+      // Mostra messaggio chiaro quando disattivato, nasconde il resto
+      if (lpDisabledMsg && lpActiveContent) {
+        if (lpEnabled) {
+          lpDisabledMsg.style.display = 'none';
+          lpActiveContent.style.display = 'block';
+        } else {
+          lpDisabledMsg.style.display = 'block';
+          lpActiveContent.style.display = 'none';
+        }
+      }
+
+      if (!lpEnabled) {
+        // Esci subito: niente da disegnare
+      } else {
 
       const lpTot = hb.lp_totale || 0;
       const lpInVolo = hb.lp_in_volo || 0;
@@ -2951,18 +2977,39 @@ const SCPanel = (() => {
             const stato = L.stato === 'CATTURATA' ? '✓ CATT' : '◌ ATTESA';
             const colore = L.stato === 'CATTURATA' ? '#378ADD' : '#EF9F27';
             const dirSym = L.direzione === 'LONG' ? '↑' : '↓';
-            return '<div style="display:flex;justify-content:space-between;padding:2px 6px;background:rgba(255,255,255,0.02);border-radius:3px;">' +
-                   '<span style="color:' + colore + ';">' + stato + '</span>' +
-                   '<span>' + dirSym + ' ' + L.orizzonte_s + 's · $' + L.prezzo_lenza.toFixed(0) + '</span>' +
-                   '<span style="color:var(--dim);">' + eta + 's rim.</span>' +
+            return '<div style="display:flex;justify-content:space-between;padding:3px 6px;background:rgba(255,255,255,0.02);border-radius:3px;gap:8px;">' +
+                   '<span style="color:' + colore + ';min-width:60px;">' + stato + '</span>' +
+                   '<span style="flex:1;text-align:center;">' + dirSym + ' ' + L.orizzonte_s + 's · $' + L.prezzo_lenza.toFixed(0) + '</span>' +
+                   '<span style="color:var(--dim);min-width:60px;text-align:right;">' + eta + 's rim.</span>' +
                    '</div>';
           }).join('');
         }
       }
 
-      // Grafico palle colorate
-      drawPescaCanvas(hb);
+      // Striscia ultimi 30 esiti (sostituisce il grafico palle saltellanti)
+      const esitiStrip = document.getElementById('lp-esiti-strip');
+      const eventi = (hb.lp_eventi_recenti || []).filter(e => e.esito_finale);
+      if (esitiStrip) {
+        if (eventi.length === 0) {
+          esitiStrip.innerHTML = '<div style="color:var(--dim);font-size:10px;padding:2px;">— in attesa primi esiti —</div>';
+        } else {
+          esitiStrip.innerHTML = eventi.slice(-30).map(e => {
+            let colore = '#888780', simbolo = '◆';
+            if (e.esito_finale === 'VERA') { colore = '#1D9E75'; simbolo = '●'; }
+            else if (e.esito_finale === 'BARATTOLO') { colore = '#E24B4A'; simbolo = '●'; }
+            const pnlTxt = e.pnl_paper !== null && e.pnl_paper !== undefined
+              ? (e.pnl_paper >= 0 ? '+$' : '-$') + Math.abs(e.pnl_paper).toFixed(2)
+              : '—';
+            const title = e.esito_finale + ' · ' + e.orizzonte_s + 's · ' + e.direzione + ' · ' + pnlTxt;
+            return '<span title="' + title + '" style="color:' + colore + ';font-size:14px;line-height:1;">' + simbolo + '</span>';
+          }).join('');
+        }
+      }
+
+      // PnL cumulativo coi dentini
       drawPescaPnLCanvas(hb);
+
+      } // fine else (lpEnabled)
     } catch (e) {
       console.error('[LIBRO_PESCA_UI]', e);
     }
@@ -3213,136 +3260,7 @@ const SCPanel = (() => {
 
 }
 
-  // ════════ PASSO 15.C — disegno grafici TATTICA DI PESCA ════════
-  // Storico locale del prezzo per il grafico (ultimi 240 punti)
-  let pescaPriceHistory = [];
-  let pescaEventiHistory = [];   // eventi conclusi (esiti finali)
-  let pescaPnLHistory = [];      // pnl cumulativo step
-
-  function drawPescaCanvas(hb) {
-    const canvas = document.getElementById('lp-canvas');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const W = canvas.width, H = canvas.height;
-    ctx.clearRect(0, 0, W, H);
-
-    // Aggiorna storia prezzo
-    const lastPrice = hb.last_price;
-    if (lastPrice && pescaPriceHistory.length === 0 ||
-        (pescaPriceHistory.length > 0 && lastPrice !== pescaPriceHistory[pescaPriceHistory.length-1])) {
-      pescaPriceHistory.push(lastPrice);
-      if (pescaPriceHistory.length > 240) pescaPriceHistory.shift();
-    }
-
-    if (pescaPriceHistory.length < 2) {
-      ctx.fillStyle = '#888780';
-      ctx.font = '11px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText('in attesa di tick...', W/2, H/2);
-      return;
-    }
-
-    // Range Y
-    const minP = Math.min(...pescaPriceHistory);
-    const maxP = Math.max(...pescaPriceHistory);
-    const padY = Math.max(1, (maxP - minP) * 0.1);
-    const yMin = minP - padY;
-    const yMax = maxP + padY;
-    const yRange = yMax - yMin;
-
-    const x = (i) => 30 + (W - 40) * (i / Math.max(1, pescaPriceHistory.length - 1));
-    const y = (p) => 10 + (H - 30) * (1 - (p - yMin) / yRange);
-
-    // Asse Y leggero
-    ctx.strokeStyle = 'rgba(136,135,128,0.1)';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 4; i++) {
-      const yPos = 10 + (H - 30) * i / 4;
-      ctx.beginPath();
-      ctx.moveTo(30, yPos);
-      ctx.lineTo(W - 10, yPos);
-      ctx.stroke();
-    }
-    // Tick label
-    ctx.fillStyle = '#888780';
-    ctx.font = '9px monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText('$' + Math.round(yMax), 28, 14);
-    ctx.fillText('$' + Math.round(yMin), 28, H - 18);
-
-    // Linea prezzo BTC
-    ctx.strokeStyle = '#185FA5';
-    ctx.lineWidth = 1.3;
-    ctx.beginPath();
-    pescaPriceHistory.forEach((p, i) => {
-      if (i === 0) ctx.moveTo(x(i), y(p));
-      else ctx.lineTo(x(i), y(p));
-    });
-    ctx.stroke();
-
-    // Palle: lenze attive in volo
-    const active = hb.lp_active || [];
-    const nowTs = Date.now() / 1000;
-    const iLast = pescaPriceHistory.length - 1;
-
-    active.forEach(L => {
-      // Stima posizione X in base a ts_piantata
-      // Approssimazione: ultimi 240 tick coprono ~ultimi 4 minuti → 1 tick/secondo
-      const secAgo = nowTs - L.ts_piantata;
-      const iX = Math.max(0, Math.min(iLast, iLast - Math.round(secAgo)));
-      const xx = x(iX);
-      const yy = y(L.prezzo_lenza);
-      if (xx < 30 || xx > W - 10) return;
-
-      ctx.beginPath();
-      ctx.arc(xx, yy, 5, 0, 2 * Math.PI);
-      if (L.stato === 'CATTURATA') {
-        ctx.fillStyle = '#378ADD';
-      } else {
-        ctx.fillStyle = '#EF9F27';
-      }
-      ctx.fill();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-    });
-
-    // Palle: eventi conclusi recenti
-    const eventi = hb.lp_eventi_recenti || [];
-    eventi.forEach(e => {
-      if (!e.ts_chiusura) return;
-      const secAgo = nowTs - e.ts_chiusura;
-      const iX = Math.max(0, Math.min(iLast, iLast - Math.round(secAgo)));
-      const xx = x(iX);
-      const yy = y(e.prezzo_chiusura || e.prezzo_lenza);
-      if (xx < 30 || xx > W - 10) return;
-
-      ctx.beginPath();
-      if (e.esito_finale === 'VERA') {
-        ctx.arc(xx, yy, 5, 0, 2 * Math.PI);
-        ctx.fillStyle = '#1D9E75';
-        ctx.fill();
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-      } else if (e.esito_finale === 'BARATTOLO') {
-        ctx.arc(xx, yy, 5, 0, 2 * Math.PI);
-        ctx.fillStyle = '#E24B4A';
-        ctx.fill();
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-      } else if (e.esito_finale === 'SCADUTA') {
-        ctx.save();
-        ctx.translate(xx, yy);
-        ctx.rotate(Math.PI / 4);
-        ctx.fillStyle = '#888780';
-        ctx.fillRect(-4, -4, 8, 8);
-        ctx.restore();
-      }
-    });
-  }
-
+  // ════════ PASSO 15.D — grafico PnL pesca cumulativo coi dentini ════════
   function drawPescaPnLCanvas(hb) {
     const canvas = document.getElementById('lp-pnl-canvas');
     if (!canvas) return;
@@ -3371,21 +3289,30 @@ const SCPanel = (() => {
     const yMax = maxY + padY;
     const yRange = yMax - yMin;
 
-    const x = (i) => 30 + (W - 40) * (i / Math.max(1, eventi.length - 1));
-    const y = (v) => 5 + (H - 15) * (1 - (v - yMin) / yRange);
+    const x = (i) => 50 + (W - 60) * (i / Math.max(1, eventi.length - 1));
+    const y = (v) => 5 + (H - 25) * (1 - (v - yMin) / yRange);
 
     // Linea zero
     const yZero = y(0);
     ctx.strokeStyle = 'rgba(136,135,128,0.3)';
     ctx.setLineDash([3, 3]);
     ctx.beginPath();
-    ctx.moveTo(30, yZero);
+    ctx.moveTo(50, yZero);
     ctx.lineTo(W - 10, yZero);
     ctx.stroke();
     ctx.setLineDash([]);
 
+    // Asse Y label
+    ctx.fillStyle = '#888780';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText((yMax >= 0 ? '+$' : '-$') + Math.abs(yMax).toFixed(0), 46, 12);
+    ctx.fillText((yMin >= 0 ? '+$' : '-$') + Math.abs(yMin).toFixed(0), 46, H - 18);
+    ctx.fillText('$0', 46, yZero + 3);
+
     // PnL stepped (coi dentini)
-    ctx.strokeStyle = '#1D9E75';
+    const lineColor = pnlCum[pnlCum.length - 1] >= 0 ? '#1D9E75' : '#E24B4A';
+    ctx.strokeStyle = lineColor;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     pnlCum.forEach((v, i) => {
@@ -3401,19 +3328,20 @@ const SCPanel = (() => {
     });
     ctx.stroke();
 
-    // Riempi area
-    ctx.fillStyle = 'rgba(29,158,117,0.10)';
-    ctx.lineTo(x(eventi.length - 1), yZero);
-    ctx.lineTo(x(0), yZero);
-    ctx.closePath();
-    ctx.fill();
-
-    // Label
+    // Asse X label (primo e ultimo evento)
     ctx.fillStyle = '#888780';
     ctx.font = '9px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('1° pesce', 50, H - 4);
+    ctx.textAlign = 'right';
+    ctx.fillText('ultimo (' + eventi.length + ')', W - 10, H - 4);
+
+    // Valore corrente in alto a destra
+    ctx.fillStyle = lineColor;
+    ctx.font = '12px monospace';
     ctx.textAlign = 'right';
     const lastV = pnlCum[pnlCum.length - 1];
-    ctx.fillText((lastV >= 0 ? '+$' : '-$') + Math.abs(lastV).toFixed(2), 28, 14);
+    ctx.fillText((lastV >= 0 ? '+$' : '-$') + Math.abs(lastV).toFixed(2), W - 10, 14);
   }
 
   function drawCharts() {
