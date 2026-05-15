@@ -83,6 +83,11 @@ DIVORCE_MIN_TRIGGERS   = 2    # quanti trigger devono scattare per uscita immedi
 DB_PATH        = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
 NARRATIVES_DB  = os.environ.get("NARRATIVES_DB", "/home/app/data/narratives.db")
 
+# --- PASSO 15.B (15mag2026) — LIBRO DI PESCA ---------------------------------
+# Attivo di default. Per disattivare manualmente: Render env LIBRO_PESCA_ENABLED=false
+# Auto-disable interno se il sqlite fallisce 5 volte di fila (vedi classe LibroPesca).
+LIBRO_PESCA_ENABLED = os.environ.get("LIBRO_PESCA_ENABLED", "true").lower() in ("true", "1", "yes")
+
 # --- BINANCE -----------------------------------------------------------------
 SYMBOL         = "BTCUSDC"
 BINANCE_WS_URL = f"wss://stream.binance.com:9443/ws/{SYMBOL.lower()}@aggTrade"
@@ -6006,6 +6011,348 @@ class PredittoreContestuale:
         return out
 
 
+class LibroPesca:
+    """
+    PASSO 15 (15mag2026) — TATTICA DI PESCA.
+
+    Lenze piantate a orizzonti multipli (10/20/30/60/90s).
+    Quando il prezzo entra nella zona di tolleranza (lasco) → CATTURATA.
+    Apre trade paper indipendente al SC. Chiude all'orizzonte della lenza.
+    Esito: VERA (PnL+) / BARATTOLO (PnL-) / SCADUTA (no trade).
+
+    Persistito su sqlite. Sopravvive ai restart.
+
+    MICRO 15.A: classe presente ma INERTE se LIBRO_PESCA_ENABLED=false (default).
+    Per attivare → Render env: LIBRO_PESCA_ENABLED=true
+    """
+
+    ORIZZONTI = (10, 20, 30, 60, 90)
+    LASCO_PCT   = 0.15
+    LASCO_FLOOR = 2.0
+    LASCO_CAP   = 15.0
+    CARICA_MIN_TRIGGER = 0.65
+    COOLDOWN_S = 5.0
+    TRADE_SIZE_USD = 1000.0
+    LEVERAGE       = 5.0
+    FEE_PCT        = 0.0002
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.enabled = LIBRO_PESCA_ENABLED
+        self._in_volo = []
+        self._ultima_piantata_long  = 0.0
+        self._ultima_piantata_short = 0.0
+        self._next_id = 1
+        self._stats_cache = {}
+        self._stats_cache_ts = 0.0
+        # PASSO 15.B — protezione auto-disable se sqlite fallisce ripetutamente
+        self._save_err_count = 0
+        self._save_err_threshold = 10  # dopo 10 errori consecutivi, auto-disable
+        # Init DB solo se abilitato
+        if self.enabled:
+            self._init_db()
+            self._reload_next_id()
+            log.info("[LIBRO_PESCA] ATTIVO")
+        else:
+            log.info("[LIBRO_PESCA] disattivato (kill-switch). Set LIBRO_PESCA_ENABLED=true per attivare")
+
+    def _init_db(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS libro_pesca (
+                    id INTEGER PRIMARY KEY,
+                    ts_piantata REAL NOT NULL,
+                    prezzo_lenza REAL NOT NULL,
+                    direzione TEXT NOT NULL,
+                    orizzonte_s INTEGER NOT NULL,
+                    lasco REAL NOT NULL,
+                    regime TEXT,
+                    carica REAL,
+                    oi_stato TEXT,
+                    delta_atteso REAL,
+                    stato TEXT NOT NULL,
+                    ts_cattura REAL,
+                    prezzo_cattura REAL,
+                    ts_chiusura REAL,
+                    prezzo_chiusura REAL,
+                    pnl_paper REAL,
+                    esito_finale TEXT
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_orizzonte ON libro_pesca(orizzonte_s)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_stato ON libro_pesca(stato)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_esito ON libro_pesca(esito_finale)")
+            conn.commit()
+            conn.close()
+            log.info(f"[LIBRO_PESCA] DB init {self.db_path}")
+        except Exception as e:
+            log.warning(f"[LIBRO_PESCA_INIT_DB_ERR] {e}")
+
+    def _reload_next_id(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(id) FROM libro_pesca")
+            row = cur.fetchone()
+            conn.close()
+            self._next_id = int(row[0]) + 1 if row and row[0] is not None else 1
+            log.info(f"[LIBRO_PESCA] next_id={self._next_id}")
+        except Exception as e:
+            log.warning(f"[LIBRO_PESCA_RELOAD_ERR] {e}")
+            self._next_id = 1
+
+    def _save(self, L: dict):
+        if not self.enabled:
+            return
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT OR REPLACE INTO libro_pesca
+                (id, ts_piantata, prezzo_lenza, direzione, orizzonte_s, lasco,
+                 regime, carica, oi_stato, delta_atteso, stato, ts_cattura,
+                 prezzo_cattura, ts_chiusura, prezzo_chiusura, pnl_paper, esito_finale)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                L['id'], L['ts_piantata'], L['prezzo_lenza'], L['direzione'],
+                L['orizzonte_s'], L['lasco'], L.get('regime'), L.get('carica'),
+                L.get('oi_stato'), L.get('delta_atteso'),
+                L['stato'], L.get('ts_cattura'), L.get('prezzo_cattura'),
+                L.get('ts_chiusura'), L.get('prezzo_chiusura'),
+                L.get('pnl_paper'), L.get('esito_finale'),
+            ))
+            conn.commit()
+            conn.close()
+            # Reset contatore errori al successo
+            if self._save_err_count > 0:
+                self._save_err_count = 0
+        except Exception as e:
+            self._save_err_count += 1
+            log.warning(f"[LIBRO_PESCA_SAVE_ERR] {e} (count={self._save_err_count})")
+            # AUTO-DISABLE se sqlite fallisce ripetutamente
+            if self._save_err_count >= self._save_err_threshold:
+                self.enabled = False
+                log.error(f"[LIBRO_PESCA_AUTO_DISABLE] {self._save_err_count} errori sqlite consecutivi → libro disattivato")
+
+    def pianta_se_radar_acceso(self, now, prezzo,
+                                oi_carica, oi_stato,
+                                oi_carica_short, oi_stato_short,
+                                regime, delta_atteso):
+        """Pianta 5 lenze parallele a orizzonti diversi quando il radar è acceso."""
+        if not self.enabled:
+            return
+        direzione = None
+        carica_eff = 0.0
+        oi_eff = oi_stato
+        if oi_stato_short == "FUOCO" and oi_carica_short >= self.CARICA_MIN_TRIGGER:
+            direzione = "SHORT"; carica_eff = oi_carica_short; oi_eff = oi_stato_short
+        elif oi_stato == "FUOCO" and oi_carica >= self.CARICA_MIN_TRIGGER:
+            direzione = "LONG"; carica_eff = oi_carica; oi_eff = oi_stato
+        elif oi_carica >= 0.75:
+            direzione = "LONG"; carica_eff = oi_carica; oi_eff = oi_stato
+        elif oi_carica_short >= 0.75:
+            direzione = "SHORT"; carica_eff = oi_carica_short; oi_eff = oi_stato_short
+
+        if direzione is None:
+            return
+
+        ultima = self._ultima_piantata_long if direzione == "LONG" else self._ultima_piantata_short
+        if now - ultima < self.COOLDOWN_S:
+            return
+
+        delta_60_abs = abs(delta_atteso) if delta_atteso else max(prezzo * 0.0005, 5.0)
+        sign = +1 if direzione == "LONG" else -1
+
+        for h_s in self.ORIZZONTI:
+            delta_h = delta_60_abs * (h_s / 60.0) * sign
+            prezzo_lenza = round(prezzo + delta_h, 2)
+            lasco = max(self.LASCO_FLOOR,
+                        min(self.LASCO_CAP, abs(delta_h) * self.LASCO_PCT))
+            L = {
+                'id': self._next_id,
+                'ts_piantata': now,
+                'prezzo_lenza': prezzo_lenza,
+                'direzione': direzione,
+                'orizzonte_s': h_s,
+                'lasco': round(lasco, 2),
+                'regime': regime,
+                'carica': round(carica_eff, 3),
+                'oi_stato': oi_eff,
+                'delta_atteso': round(delta_h, 2),
+                'stato': 'ATTESA',
+                'ts_cattura': None,
+                'prezzo_cattura': None,
+                'ts_chiusura': None,
+                'prezzo_chiusura': None,
+                'pnl_paper': None,
+                'esito_finale': None,
+            }
+            self._next_id += 1
+            self._in_volo.append(L)
+            self._save(L)
+
+        if direzione == "LONG":
+            self._ultima_piantata_long = now
+        else:
+            self._ultima_piantata_short = now
+
+    def tick(self, now, prezzo):
+        """Verifica catture/scadenze/chiusure delle lenze in volo."""
+        if not self.enabled:
+            return
+        rimanenti = []
+        for L in self._in_volo:
+            t_dalla_piantata = now - L['ts_piantata']
+            if L['stato'] == 'ATTESA':
+                catturata = False
+                if L['direzione'] == "LONG":
+                    if prezzo >= (L['prezzo_lenza'] - L['lasco']):
+                        catturata = True
+                else:
+                    if prezzo <= (L['prezzo_lenza'] + L['lasco']):
+                        catturata = True
+                if catturata:
+                    L['stato'] = 'CATTURATA'
+                    L['ts_cattura'] = now
+                    L['prezzo_cattura'] = round(prezzo, 2)
+                    self._save(L)
+                    rimanenti.append(L)
+                elif t_dalla_piantata >= L['orizzonte_s']:
+                    L['stato'] = 'SCADUTA'
+                    L['ts_chiusura'] = now
+                    L['prezzo_chiusura'] = round(prezzo, 2)
+                    L['pnl_paper'] = 0.0
+                    L['esito_finale'] = 'SCADUTA'
+                    self._save(L)
+                else:
+                    rimanenti.append(L)
+            elif L['stato'] == 'CATTURATA':
+                if t_dalla_piantata >= L['orizzonte_s']:
+                    L['ts_chiusura'] = now
+                    L['prezzo_chiusura'] = round(prezzo, 2)
+                    exp = self.TRADE_SIZE_USD * self.LEVERAGE
+                    btc_qty = exp / max(1.0, L['prezzo_cattura'])
+                    if L['direzione'] == "LONG":
+                        delta = prezzo - L['prezzo_cattura']
+                    else:
+                        delta = L['prezzo_cattura'] - prezzo
+                    fee = exp * self.FEE_PCT * 2.0
+                    pnl = delta * btc_qty - fee
+                    L['pnl_paper'] = round(pnl, 4)
+                    L['stato'] = 'CHIUSA'
+                    L['esito_finale'] = 'VERA' if pnl > 0 else 'BARATTOLO'
+                    self._save(L)
+                else:
+                    rimanenti.append(L)
+        self._in_volo = rimanenti
+
+    def get_stats(self, now):
+        """Aggregati dal libro per dashboard (cache 3s)."""
+        if not self.enabled:
+            return {
+                'lp_enabled': False, 'lp_in_volo': 0, 'lp_totale': 0,
+                'lp_vere': 0, 'lp_barattoli': 0, 'lp_scadute': 0,
+                'lp_pnl_totale': 0.0, 'lp_pnl_vere': 0.0, 'lp_pnl_barattoli': 0.0,
+                'lp_orizzonti': {}, 'lp_active': [],
+            }
+        if (now - self._stats_cache_ts) < 3.0 and self._stats_cache:
+            return self._stats_cache
+        out = {
+            'lp_enabled': True, 'lp_in_volo': len(self._in_volo),
+            'lp_totale': 0, 'lp_vere': 0, 'lp_barattoli': 0, 'lp_scadute': 0,
+            'lp_pnl_totale': 0.0, 'lp_pnl_vere': 0.0, 'lp_pnl_barattoli': 0.0,
+            'lp_orizzonti': {}, 'lp_active': [],
+        }
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='VERA'")
+            out['lp_vere'] = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='BARATTOLO'")
+            out['lp_barattoli'] = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='SCADUTA'")
+            out['lp_scadute'] = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM libro_pesca")
+            out['lp_totale'] = cur.fetchone()[0] or 0
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='VERA'")
+            r = cur.fetchone()
+            out['lp_pnl_vere'] = round(r[0], 2) if r and r[0] else 0.0
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='BARATTOLO'")
+            r = cur.fetchone()
+            out['lp_pnl_barattoli'] = round(r[0], 2) if r and r[0] else 0.0
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale IN ('VERA','BARATTOLO')")
+            r = cur.fetchone()
+            out['lp_pnl_totale'] = round(r[0], 2) if r and r[0] else 0.0
+            for h_s in self.ORIZZONTI:
+                cur.execute("""
+                    SELECT
+                      SUM(CASE WHEN esito_finale='VERA' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN esito_finale='BARATTOLO' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN esito_finale='SCADUTA' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN stato IN ('ATTESA','CATTURATA') THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN esito_finale IN ('VERA','BARATTOLO') THEN pnl_paper ELSE 0 END)
+                    FROM libro_pesca WHERE orizzonte_s = ?
+                """, (h_s,))
+                r = cur.fetchone()
+                vere = r[0] or 0
+                bar  = r[1] or 0
+                sca  = r[2] or 0
+                vol  = r[3] or 0
+                tot_eventi = vere + bar + sca
+                pct = round(vere / tot_eventi * 100, 1) if tot_eventi > 0 else None
+                out['lp_orizzonti'][str(h_s)] = {
+                    'vere': vere, 'barattoli': bar, 'scadute': sca, 'in_volo': vol,
+                    'pct_vincenti': pct,
+                    'pnl_totale': round(r[4], 2) if r[4] is not None else 0.0,
+                }
+            conn.close()
+        except Exception as e:
+            log.debug(f"[LIBRO_PESCA_STATS_ERR] {e}")
+        for L in self._in_volo[-30:]:
+            out['lp_active'].append({
+                'id': L['id'], 'ts_piantata': L['ts_piantata'],
+                'prezzo_lenza': L['prezzo_lenza'], 'direzione': L['direzione'],
+                'orizzonte_s': L['orizzonte_s'], 'lasco': L['lasco'],
+                'stato': L['stato'],
+                'ts_cattura': L.get('ts_cattura'),
+                'prezzo_cattura': L.get('prezzo_cattura'),
+            })
+        self._stats_cache = out
+        self._stats_cache_ts = now
+        return out
+
+    def get_recent_events(self, limit=50):
+        """Ultimi N eventi conclusi (per grafico)."""
+        if not self.enabled:
+            return []
+        out = []
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, ts_piantata, prezzo_lenza, direzione, orizzonte_s,
+                       ts_cattura, prezzo_cattura, ts_chiusura, prezzo_chiusura,
+                       pnl_paper, esito_finale
+                FROM libro_pesca
+                WHERE esito_finale IS NOT NULL
+                ORDER BY id DESC LIMIT ?
+            """, (limit,))
+            for r in cur.fetchall():
+                out.append({
+                    'id': r[0], 'ts_piantata': r[1], 'prezzo_lenza': r[2],
+                    'direzione': r[3], 'orizzonte_s': r[4],
+                    'ts_cattura': r[5], 'prezzo_cattura': r[6],
+                    'ts_chiusura': r[7], 'prezzo_chiusura': r[8],
+                    'pnl_paper': r[9], 'esito_finale': r[10],
+                })
+            conn.close()
+        except Exception as e:
+            log.debug(f"[LIBRO_PESCA_EVENTS_ERR] {e}")
+        return out
+
+
 class OvertopBassanoV16Production:
     """
     Bot BTC/USDC su Binance WebSocket.
@@ -6279,6 +6626,17 @@ class OvertopBassanoV16Production:
         # Predizione DINAMICA basata sul contesto attuale. Misura sé stesso
         # contro il prezzo reale a 60s. Onesto. Indipendente dal pred_* vecchio.
         self.predittore_v2 = PredittoreContestuale()
+
+        # -- PASSO 15.A: LIBRO DI PESCA (15mag2026) ────────────────────────
+        # Default DISABILITATO (kill-switch). Per attivare → Render env:
+        # LIBRO_PESCA_ENABLED=true
+        # Quando disabilitato la classe esiste ma non fa nulla.
+        # Istanziazione protetta da try/except per non rompere mai il bot.
+        try:
+            self.libro_pesca = LibroPesca(DB_PATH)
+        except Exception as _e_lp_init:
+            log.error(f"[LIBRO_PESCA_INIT_ERR] {_e_lp_init} - libro_pesca disabilitato")
+            self.libro_pesca = None
 
         # -- PRED SCORE BOOT: inizializza dai dati Veritas storici --------
         # Evita che pred_boost parta da 0 al restart e non scatti mai
@@ -6601,6 +6959,38 @@ class OvertopBassanoV16Production:
             )
         except Exception as _e_pv2:
             log.debug(f"[PRED_V2_ERR] {_e_pv2}")
+
+        # ════════════════════════════════════════════════════════════════
+        # PASSO 15.B — TATTICA DI PESCA (in parallelo, slot indipendente)
+        # 1) tick: verifica catture/scadenze/chiusure delle lenze in volo
+        # 2) pianta_se_radar_acceso: se radar acceso, pianta 5 lenze
+        # delta_atteso preso dal V2 se maturo (≥30 verificate), altrimenti
+        # fallback proporzionale al prezzo.
+        # ════════════════════════════════════════════════════════════════
+        try:
+            if self.libro_pesca is not None:
+                self.libro_pesca.tick(now, price)
+                # delta_atteso per la piantata: V2 se ready, altrimenti fallback
+                _delta_pesca = 0.0
+                try:
+                    _pv2_stats = self.predittore_v2.get_stats()
+                    _pv2_delta = _pv2_stats.get('pred_v2_delta', 0.0)
+                    if _pv2_stats.get('pred_v2_n_verificate', 0) >= 30 and _pv2_delta:
+                        _delta_pesca = abs(_pv2_delta)
+                except Exception:
+                    pass
+                if _delta_pesca == 0.0:
+                    _delta_pesca = price * 0.0005
+                _regime_now = getattr(self, '_regime_current',
+                                      getattr(self, '_regime', 'UNKNOWN'))
+                self.libro_pesca.pianta_se_radar_acceso(
+                    now, price,
+                    self._oi_carica, self._oi_stato,
+                    self._oi_carica_short, self._oi_stato_short,
+                    _regime_now, _delta_pesca
+                )
+        except Exception as _e_lp:
+            log.debug(f"[LIBRO_PESCA_TICK_ERR] {_e_lp}")
 
         # Aggiorna prezzo live ad ogni tick (per dashboard)
         if self.heartbeat_lock:
@@ -8588,6 +8978,18 @@ class OvertopBassanoV16Production:
                             self.heartbeat_data[_k] = _v
                     except Exception as _e_pv2:
                         log.debug(f"[PRED_V2_HB_ERR] {_e_pv2}")
+
+                    # ════════════════════════════════════════════════════════════
+                    # PASSO 15.B — LIBRO DI PESCA (stats per diagnosi)
+                    # Le stats vanno nell'heartbeat. UI nuova arriverà in MICRO 15.C.
+                    # ════════════════════════════════════════════════════════════
+                    try:
+                        if self.libro_pesca is not None:
+                            _lp = self.libro_pesca.get_stats(time.time())
+                            for _k, _v in _lp.items():
+                                self.heartbeat_data[_k] = _v
+                    except Exception as _e_lp_hb:
+                        log.debug(f"[LIBRO_PESCA_HB_ERR] {_e_lp_hb}")
 
                     # Ratio magnitudine: predizione vs movimento reale
                     # Misura quanto la predizione sovra/sottostima il mercato
