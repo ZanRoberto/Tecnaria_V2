@@ -83,10 +83,11 @@ DIVORCE_MIN_TRIGGERS   = 2    # quanti trigger devono scattare per uscita immedi
 DB_PATH        = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
 NARRATIVES_DB  = os.environ.get("NARRATIVES_DB", "/home/app/data/narratives.db")
 
-# --- PASSO 15.B (15mag2026) — LIBRO DI PESCA ---------------------------------
-# Attivo di default. Per disattivare manualmente: Render env LIBRO_PESCA_ENABLED=false
-# Auto-disable interno se il sqlite fallisce 5 volte di fila (vedi classe LibroPesca).
-LIBRO_PESCA_ENABLED = os.environ.get("LIBRO_PESCA_ENABLED", "true").lower() in ("true", "1", "yes")
+# --- PASSO 15.D (15mag2026) — LIBRO DI PESCA -------------------------------
+# DEFAULT DISATTIVATO. Strategia attuale paga solo fee ($4/trade vs movimento $5).
+# Risultato live MICRO 15.B: 41 vere / 648 barattoli / -$1324 paper.
+# Per riattivare con parametri rivisti: Render env LIBRO_PESCA_ENABLED=true
+LIBRO_PESCA_ENABLED = os.environ.get("LIBRO_PESCA_ENABLED", "false").lower() in ("true", "1", "yes")
 
 # --- BINANCE -----------------------------------------------------------------
 SYMBOL         = "BTCUSDC"
