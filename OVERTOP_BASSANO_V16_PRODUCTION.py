@@ -83,11 +83,15 @@ DIVORCE_MIN_TRIGGERS   = 2    # quanti trigger devono scattare per uscita immedi
 DB_PATH        = os.environ.get("DB_PATH", "/home/app/data/trading_data.db")
 NARRATIVES_DB  = os.environ.get("NARRATIVES_DB", "/home/app/data/narratives.db")
 
-# --- PASSO 15.D (15mag2026) — LIBRO DI PESCA -------------------------------
-# DEFAULT DISATTIVATO. Strategia attuale paga solo fee ($4/trade vs movimento $5).
-# Risultato live MICRO 15.B: 41 vere / 648 barattoli / -$1324 paper.
-# Per riattivare con parametri rivisti: Render env LIBRO_PESCA_ENABLED=true
-LIBRO_PESCA_ENABLED = os.environ.get("LIBRO_PESCA_ENABLED", "false").lower() in ("true", "1", "yes")
+# --- PASSO 15.E (15mag2026) — LIBRO DI PESCA SELETTIVA ----------------------
+# ATTIVA di default. Parametri selettivi trovati nel simulatore:
+#   - cooldown 125s tra piantate (24× più lento di 15.B)
+#   - carica minima 0.95 (era 0.65) — solo carica massima reale
+#   - solo orizzonti 30s e 60s (era 5 orizzonti)
+#   - solo se OI = FUOCO (no fallback su 0.75)
+# Stima: 1-3 piantate ogni 5-10 minuti invece di 5 ogni 5s.
+# Per disattivare: Render env LIBRO_PESCA_ENABLED=false
+LIBRO_PESCA_ENABLED = os.environ.get("LIBRO_PESCA_ENABLED", "true").lower() in ("true", "1", "yes")
 
 # --- BINANCE -----------------------------------------------------------------
 SYMBOL         = "BTCUSDC"
@@ -6027,12 +6031,12 @@ class LibroPesca:
     Per attivare → Render env: LIBRO_PESCA_ENABLED=true
     """
 
-    ORIZZONTI = (10, 20, 30, 60, 90)
+    ORIZZONTI = (30, 60)
     LASCO_PCT   = 0.15
     LASCO_FLOOR = 2.0
     LASCO_CAP   = 15.0
-    CARICA_MIN_TRIGGER = 0.65
-    COOLDOWN_S = 5.0
+    CARICA_MIN_TRIGGER = 0.95
+    COOLDOWN_S = 125.0
     TRADE_SIZE_USD = 1000.0
     LEVERAGE       = 5.0
     FEE_PCT        = 0.0002
@@ -6082,9 +6086,15 @@ class LibroPesca:
                     esito_finale TEXT
                 )
             """)
+            # PASSO 15.E: colonna versione per distinguere dataset
+            try:
+                cur.execute("ALTER TABLE libro_pesca ADD COLUMN versione TEXT DEFAULT 'v15b'")
+            except sqlite3.OperationalError:
+                pass  # colonna già esistente
             cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_orizzonte ON libro_pesca(orizzonte_s)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_stato ON libro_pesca(stato)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_esito ON libro_pesca(esito_finale)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_versione ON libro_pesca(versione)")
             conn.commit()
             conn.close()
             log.info(f"[LIBRO_PESCA] DB init {self.db_path}")
@@ -6114,8 +6124,9 @@ class LibroPesca:
                 INSERT OR REPLACE INTO libro_pesca
                 (id, ts_piantata, prezzo_lenza, direzione, orizzonte_s, lasco,
                  regime, carica, oi_stato, delta_atteso, stato, ts_cattura,
-                 prezzo_cattura, ts_chiusura, prezzo_chiusura, pnl_paper, esito_finale)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 prezzo_cattura, ts_chiusura, prezzo_chiusura, pnl_paper, esito_finale,
+                 versione)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 L['id'], L['ts_piantata'], L['prezzo_lenza'], L['direzione'],
                 L['orizzonte_s'], L['lasco'], L.get('regime'), L.get('carica'),
@@ -6123,16 +6134,15 @@ class LibroPesca:
                 L['stato'], L.get('ts_cattura'), L.get('prezzo_cattura'),
                 L.get('ts_chiusura'), L.get('prezzo_chiusura'),
                 L.get('pnl_paper'), L.get('esito_finale'),
+                'v15e',
             ))
             conn.commit()
             conn.close()
-            # Reset contatore errori al successo
             if self._save_err_count > 0:
                 self._save_err_count = 0
         except Exception as e:
             self._save_err_count += 1
             log.warning(f"[LIBRO_PESCA_SAVE_ERR] {e} (count={self._save_err_count})")
-            # AUTO-DISABLE se sqlite fallisce ripetutamente
             if self._save_err_count >= self._save_err_threshold:
                 self.enabled = False
                 log.error(f"[LIBRO_PESCA_AUTO_DISABLE] {self._save_err_count} errori sqlite consecutivi → libro disattivato")
@@ -6141,7 +6151,10 @@ class LibroPesca:
                                 oi_carica, oi_stato,
                                 oi_carica_short, oi_stato_short,
                                 regime, delta_atteso):
-        """Pianta 5 lenze parallele a orizzonti diversi quando il radar è acceso."""
+        """Pianta 2 lenze parallele a orizzonti 30s e 60s quando il radar è
+        ALTAMENTE acceso. Soglia stretta: carica >= 0.95 + stato FUOCO.
+        Solo carica massima reale. Niente fallback su 0.75.
+        """
         if not self.enabled:
             return
         direzione = None
@@ -6151,10 +6164,6 @@ class LibroPesca:
             direzione = "SHORT"; carica_eff = oi_carica_short; oi_eff = oi_stato_short
         elif oi_stato == "FUOCO" and oi_carica >= self.CARICA_MIN_TRIGGER:
             direzione = "LONG"; carica_eff = oi_carica; oi_eff = oi_stato
-        elif oi_carica >= 0.75:
-            direzione = "LONG"; carica_eff = oi_carica; oi_eff = oi_stato
-        elif oi_carica_short >= 0.75:
-            direzione = "SHORT"; carica_eff = oi_carica_short; oi_eff = oi_stato_short
 
         if direzione is None:
             return
@@ -6269,21 +6278,21 @@ class LibroPesca:
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='VERA'")
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15e'")
             out['lp_vere'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='BARATTOLO'")
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='BARATTOLO' AND versione='v15e'")
             out['lp_barattoli'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='SCADUTA'")
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='SCADUTA' AND versione='v15e'")
             out['lp_scadute'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM libro_pesca")
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE versione='v15e'")
             out['lp_totale'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='VERA'")
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15e'")
             r = cur.fetchone()
             out['lp_pnl_vere'] = round(r[0], 2) if r and r[0] else 0.0
-            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='BARATTOLO'")
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='BARATTOLO' AND versione='v15e'")
             r = cur.fetchone()
             out['lp_pnl_barattoli'] = round(r[0], 2) if r and r[0] else 0.0
-            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale IN ('VERA','BARATTOLO')")
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale IN ('VERA','BARATTOLO') AND versione='v15e'")
             r = cur.fetchone()
             out['lp_pnl_totale'] = round(r[0], 2) if r and r[0] else 0.0
             for h_s in self.ORIZZONTI:
@@ -6294,7 +6303,7 @@ class LibroPesca:
                       SUM(CASE WHEN esito_finale='SCADUTA' THEN 1 ELSE 0 END),
                       SUM(CASE WHEN stato IN ('ATTESA','CATTURATA') THEN 1 ELSE 0 END),
                       SUM(CASE WHEN esito_finale IN ('VERA','BARATTOLO') THEN pnl_paper ELSE 0 END)
-                    FROM libro_pesca WHERE orizzonte_s = ?
+                    FROM libro_pesca WHERE orizzonte_s = ? AND versione='v15e'
                 """, (h_s,))
                 r = cur.fetchone()
                 vere = r[0] or 0
@@ -6337,7 +6346,7 @@ class LibroPesca:
                        ts_cattura, prezzo_cattura, ts_chiusura, prezzo_chiusura,
                        pnl_paper, esito_finale
                 FROM libro_pesca
-                WHERE esito_finale IS NOT NULL
+                WHERE esito_finale IS NOT NULL AND versione='v15e'
                 ORDER BY id DESC LIMIT ?
             """, (limit,))
             for r in cur.fetchall():
