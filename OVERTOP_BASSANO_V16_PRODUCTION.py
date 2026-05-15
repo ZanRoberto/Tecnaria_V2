@@ -5982,13 +5982,19 @@ class PredittoreContestuale:
         else:
             accelerazione = 0.0
         # drift OI: se FUOCO LONG → +carica × 10 ; se FUOCO SHORT → -carica × 10
+        # PASSO 15.G (15mag2026): peso OI ridotto da 1.5 a 0.3 (5x meno),
+        # peso momentum aumentato da 2 a 5 (2.5x più),
+        # peso accelerazione aumentato da 0.5 a 2 (4x più).
+        # Motivo: V2 crollato al 40% accuracy quando si fidava troppo dell'OI.
+        # OI dice "energia in arrivo" ma non DIREZIONE → sbaglia di sistema.
+        # Momentum + accelerazione sono misure DIRETTE del prezzo, più affidabili.
         drift_oi = 0.0
         if oi_stato == 'FUOCO':
             drift_oi = oi_carica * 10.0
         elif oi_stato_short == 'FUOCO':
             drift_oi = -oi_carica_short * 10.0
-        # formula combinata
-        delta = momentum * 2.0 + drift_oi * 1.5 + accelerazione * 0.5
+        # formula combinata - V2 ribilanciato
+        delta = momentum * 5.0 + drift_oi * 0.3 + accelerazione * 2.0
         pred = prezzo + delta
         return round(pred, 2), round(delta, 2), round(momentum, 3), round(accelerazione, 3)
 
@@ -6034,13 +6040,30 @@ class LibroPesca:
     LASCO_PCT   = 0.15
     LASCO_FLOOR = 3.0
     LASCO_CAP   = 20.0
-    COOLDOWN_S = 60.0
+    COOLDOWN_S = 60.0           # cooldown PER STRATEGIA (3 strategie indipendenti)
     TRADE_SIZE_USD = 1000.0
     LEVERAGE       = 5.0
     FEE_PCT        = 0.0002
-    FP_WR_MIN      = 0.60   # WR storico minimo nel fingerprint
-    FP_N_MIN       = 30     # samples minimi
-    FP_PNL_MIN     = 0.0    # pnl_sum storico deve essere positivo
+    # Filtri grossolani fingerprint (più larghi: cerchiamo edge nel micro)
+    FP_WR_MIN_BASE = 0.55
+    FP_N_MIN_BASE  = 20
+    # ==== PASSO 15.J — 3 STRATEGIE PARALLELE ====
+    # P1: WIN SIGNATURE — pattern esatto del WIN reale 23 marzo
+    P1_DRIFT_LONG_MIN  = 0.60   # drift_persist >= 60% per LONG
+    P1_POS_LONG_MAX    = 0.30   # range_pos <= 30% (bordo basso)
+    P1_DRIFT_SHORT_MAX = 0.40   # drift_persist <= 40% per SHORT
+    P1_POS_SHORT_MIN   = 0.70   # range_pos >= 70% (bordo alto)
+    P1_COMPRESSION_MAX = 0.80   # compression <= 0.80 (molla un po' carica)
+    # P2: V2 + CONFERMA DRIFT
+    P2_V2_DELTA_MIN    = 30.0   # delta predetto >= $30 in valore assoluto
+    P2_V2_N_MIN        = 50     # V2 maturo (n verificate >= 50)
+    P2_V2_ACC_MIN      = 0.55   # V2 accuracy_segno >= 55% per fidarsi
+    P2_DRIFT_CONFIRM_LONG  = 0.55  # drift_persist conferma LONG se >= 55%
+    P2_DRIFT_CONFIRM_SHORT = 0.45  # drift_persist conferma SHORT se <= 45%
+    # P3: COMPRESSIONE CHE PARTE
+    P3_COMP_MAX        = 0.50   # compression <= 0.50 (molla MOLTO carica)
+    P3_COMP_DUR_MIN    = 6      # da almeno 6 tick consecutivi
+    P3_SLOPE_MIN_ABS   = 0.0001 # drift_slope > 0.0001 in val assoluto (sta accelerando)
 
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -6048,6 +6071,12 @@ class LibroPesca:
         self._in_volo = []
         self._ultima_piantata_long  = 0.0
         self._ultima_piantata_short = 0.0
+        # 15.J: cooldown per strategia × direzione (6 contatori)
+        self._ultime_piantate = {
+            ('p1', 'LONG'): 0.0, ('p1', 'SHORT'): 0.0,
+            ('p2', 'LONG'): 0.0, ('p2', 'SHORT'): 0.0,
+            ('p3', 'LONG'): 0.0, ('p3', 'SHORT'): 0.0,
+        }
         self._next_id = 1
         self._stats_cache = {}
         self._stats_cache_ts = 0.0
@@ -6103,6 +6132,10 @@ class LibroPesca:
                 cur.execute("ALTER TABLE libro_pesca ADD COLUMN fp_n INTEGER")
             except sqlite3.OperationalError:
                 pass
+            try:
+                cur.execute("ALTER TABLE libro_pesca ADD COLUMN strategia TEXT")
+            except sqlite3.OperationalError:
+                pass
             cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_orizzonte ON libro_pesca(orizzonte_s)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_stato ON libro_pesca(stato)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_esito ON libro_pesca(esito_finale)")
@@ -6118,7 +6151,7 @@ class LibroPesca:
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
-            cur.execute("SELECT MAX(id) FROM libro_pesca WHERE versione='v15f'")
+            cur.execute("SELECT MAX(id) FROM libro_pesca")
             row = cur.fetchone()
             conn.close()
             self._next_id = int(row[0]) + 1 if row and row[0] is not None else 1
@@ -6138,8 +6171,8 @@ class LibroPesca:
                 (id, ts_piantata, prezzo_lenza, direzione, orizzonte_s, lasco,
                  regime, carica, oi_stato, delta_atteso, stato, ts_cattura,
                  prezzo_cattura, ts_chiusura, prezzo_chiusura, pnl_paper, esito_finale,
-                 versione, fp_key, fp_wr, fp_n)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 versione, fp_key, fp_wr, fp_n, strategia)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 L['id'], L['ts_piantata'], L['prezzo_lenza'], L['direzione'],
                 L['orizzonte_s'], L['lasco'], L.get('regime'), L.get('carica'),
@@ -6147,7 +6180,8 @@ class LibroPesca:
                 L['stato'], L.get('ts_cattura'), L.get('prezzo_cattura'),
                 L.get('ts_chiusura'), L.get('prezzo_chiusura'),
                 L.get('pnl_paper'), L.get('esito_finale'),
-                'v15f', L.get('fp_key'), L.get('fp_wr'), L.get('fp_n'),
+                'v15j', L.get('fp_key'), L.get('fp_wr'), L.get('fp_n'),
+                L.get('strategia', '?'),
             ))
             conn.commit()
             conn.close()
@@ -6163,30 +6197,42 @@ class LibroPesca:
     def pianta_se_fingerprint_vincente(self, now, prezzo,
                                         momentum, volatility, trend,
                                         oracolo_memory, regime,
-                                        delta_atteso):
+                                        delta_atteso,
+                                        # 15.J: nuovi indicatori micro-contesto
+                                        drift_persist=0.5, range_pos=0.5,
+                                        compression=1.0, comp_duration=0,
+                                        drift_slope=0.0,
+                                        # 15.J: V2 stats per strategia P2
+                                        v2_delta=0.0, v2_n=0, v2_accuracy=0.0):
         """
-        15.F — pianta lenza SOLO se fingerprint corrente ha edge storico.
+        15.J — VALUTA 3 STRATEGIE IN PARALLELO con entry IMMEDIATA.
 
-        momentum: FORTE/MEDIO/DEBOLE
-        volatility: ALTA/MEDIA/BASSA
-        trend: UP/DOWN/SIDEWAYS
-        oracolo_memory: dict bot.oracolo._memory (chiavi "LONG|FORTE|BASSA|UP" etc.)
+        Ogni strategia ha:
+          - cooldown indipendente (60s per strategia × direzione)
+          - etichetta 'p1' / 'p2' / 'p3' salvata nel DB
+          - entry immediata (no breakout tardiva)
+          - chiusura a 60s dall'entry, PnL paper misurato
 
-        Trigger:
-        - calcola fp_key per LONG e per SHORT
-        - cerca WR (wins/samples) e PnL_sum nello storico
-        - sceglie la direzione col WR migliore SE supera soglie FP_WR_MIN/FP_N_MIN/FP_PNL_MIN
-        - pianta 1 lenza a 60s con lasco proporzionale al delta atteso
+        P1 — WIN SIGNATURE: drift_persist + range_pos + compression
+             (replica pattern del WIN reale 23 marzo)
+        P2 — V2 + CONFERMA: V2 dice direzione, drift conferma
+        P3 — COMPRESSIONE CHE PARTE: molla carica + drift_slope che parte
+
+        Filtri comuni a tutte le 3:
+          - regime != EXPLOSIVE (i 2 SHORT 23mar in EXPLOSIVE = entrambi LOSS)
+          - fingerprint Oracolo abbastanza buono (WR>=55%, n>=20, pnl>0)
         """
         if not self.enabled:
             return
         if not momentum or not volatility or not trend:
             return  # warmup
+        # Hard filter comune: no EXPLOSIVE
+        if regime == 'EXPLOSIVE':
+            return
 
+        # Fingerprint Oracolo (filtro grossolano)
         fp_long  = f"LONG|{momentum}|{volatility}|{trend}"
         fp_short = f"SHORT|{momentum}|{volatility}|{trend}"
-
-        # Lettura sicura da oracolo._memory
         def _stats(k):
             s = oracolo_memory.get(k) if oracolo_memory else None
             if not s:
@@ -6196,73 +6242,107 @@ class LibroPesca:
             pnl_sum = float(s.get('pnl_sum', 0))
             wr = wins / samples if samples > 0 else 0.0
             return (wr, int(samples), pnl_sum)
-
         wr_l, n_l, pnl_l = _stats(fp_long)
         wr_s, n_s, pnl_s = _stats(fp_short)
-
-        long_ok  = (wr_l >= self.FP_WR_MIN and n_l >= self.FP_N_MIN and pnl_l > self.FP_PNL_MIN)
-        short_ok = (wr_s >= self.FP_WR_MIN and n_s >= self.FP_N_MIN and pnl_s > self.FP_PNL_MIN)
-
-        if not long_ok and not short_ok:
+        long_fp_ok  = (wr_l >= self.FP_WR_MIN_BASE and n_l >= self.FP_N_MIN_BASE and pnl_l > 0)
+        short_fp_ok = (wr_s >= self.FP_WR_MIN_BASE and n_s >= self.FP_N_MIN_BASE and pnl_s > 0)
+        if not long_fp_ok and not short_fp_ok:
             return
 
-        # Sceglie la direzione col WR maggiore
-        if long_ok and short_ok:
-            direzione = "LONG" if wr_l >= wr_s else "SHORT"
-        elif long_ok:
-            direzione = "LONG"
-        else:
-            direzione = "SHORT"
+        # ─── P1: WIN SIGNATURE ────────────────────────────────────────
+        # LONG:  drift_persist >= 0.60 AND range_pos <= 0.30 AND compression <= 0.80
+        # SHORT: drift_persist <= 0.40 AND range_pos >= 0.70 AND compression <= 0.80
+        p1_dir = None
+        if long_fp_ok:
+            if (drift_persist >= self.P1_DRIFT_LONG_MIN and
+                range_pos <= self.P1_POS_LONG_MAX and
+                compression <= self.P1_COMPRESSION_MAX):
+                p1_dir = 'LONG'
+        if short_fp_ok and p1_dir is None:
+            if (drift_persist <= self.P1_DRIFT_SHORT_MAX and
+                range_pos >= self.P1_POS_SHORT_MIN and
+                compression <= self.P1_COMPRESSION_MAX):
+                p1_dir = 'SHORT'
+        if p1_dir:
+            self._entra_strategia('p1', p1_dir, now, prezzo, regime,
+                                   fp_long if p1_dir=='LONG' else fp_short,
+                                   wr_l if p1_dir=='LONG' else wr_s,
+                                   n_l if p1_dir=='LONG' else n_s,
+                                   ctx=f"drift={drift_persist:.2f} pos={range_pos:.2f} comp={compression:.2f}")
 
-        fp_key = fp_long if direzione == "LONG" else fp_short
-        fp_wr  = wr_l if direzione == "LONG" else wr_s
-        fp_n   = n_l if direzione == "LONG" else n_s
+        # ─── P2: V2 + CONFERMA DRIFT ──────────────────────────────────
+        # V2 maturo (n>=50, acc>=55%) + |delta|>=$30 + drift conferma direzione
+        p2_dir = None
+        v2_mature = (v2_n >= self.P2_V2_N_MIN and v2_accuracy >= self.P2_V2_ACC_MIN)
+        if v2_mature and abs(v2_delta) >= self.P2_V2_DELTA_MIN:
+            v2_direzione = 'LONG' if v2_delta > 0 else 'SHORT'
+            if v2_direzione == 'LONG' and long_fp_ok:
+                if drift_persist >= self.P2_DRIFT_CONFIRM_LONG:
+                    p2_dir = 'LONG'
+            elif v2_direzione == 'SHORT' and short_fp_ok:
+                if drift_persist <= self.P2_DRIFT_CONFIRM_SHORT:
+                    p2_dir = 'SHORT'
+        if p2_dir:
+            self._entra_strategia('p2', p2_dir, now, prezzo, regime,
+                                   fp_long if p2_dir=='LONG' else fp_short,
+                                   wr_l if p2_dir=='LONG' else wr_s,
+                                   n_l if p2_dir=='LONG' else n_s,
+                                   ctx=f"v2_delta=${v2_delta:.1f} v2_acc={v2_accuracy:.0%} drift={drift_persist:.2f}")
 
-        # Cooldown per direzione
-        ultima = self._ultima_piantata_long if direzione == "LONG" else self._ultima_piantata_short
+        # ─── P3: COMPRESSIONE CHE PARTE ───────────────────────────────
+        # compression <= 0.50 + comp_duration >= 6 + |drift_slope| > soglia
+        # Direzione = segno del drift_slope
+        p3_dir = None
+        if compression <= self.P3_COMP_MAX and comp_duration >= self.P3_COMP_DUR_MIN:
+            if abs(drift_slope) >= self.P3_SLOPE_MIN_ABS:
+                slope_direzione = 'LONG' if drift_slope > 0 else 'SHORT'
+                if slope_direzione == 'LONG' and long_fp_ok:
+                    p3_dir = 'LONG'
+                elif slope_direzione == 'SHORT' and short_fp_ok:
+                    p3_dir = 'SHORT'
+        if p3_dir:
+            self._entra_strategia('p3', p3_dir, now, prezzo, regime,
+                                   fp_long if p3_dir=='LONG' else fp_short,
+                                   wr_l if p3_dir=='LONG' else wr_s,
+                                   n_l if p3_dir=='LONG' else n_s,
+                                   ctx=f"comp={compression:.2f} dur={comp_duration} slope={drift_slope:+.5f}")
+
+    def _entra_strategia(self, strategia, direzione, now, prezzo, regime,
+                          fp_key, fp_wr, fp_n, ctx=""):
+        """15.J: Entry IMMEDIATA per una strategia. Cooldown 60s per strategia×dir."""
+        key = (strategia, direzione)
+        ultima = self._ultime_piantate.get(key, 0.0)
         if now - ultima < self.COOLDOWN_S:
             return
+        L = {
+            'id': self._next_id,
+            'ts_piantata': now,
+            'prezzo_lenza': round(prezzo, 2),    # in 15.J = prezzo ENTRY
+            'direzione': direzione,
+            'orizzonte_s': 60,
+            'lasco': 0.0,
+            'regime': regime,
+            'carica': round(fp_wr, 3),
+            'oi_stato': strategia.upper(),         # P1/P2/P3 nel campo oi_stato
+            'delta_atteso': 0.0,
+            'stato': 'CATTURATA',                  # entry immediata
+            'ts_cattura': now,
+            'prezzo_cattura': round(prezzo, 2),
+            'ts_chiusura': None,
+            'prezzo_chiusura': None,
+            'pnl_paper': None,
+            'esito_finale': None,
+            'fp_key': fp_key,
+            'fp_wr': round(fp_wr, 3),
+            'fp_n': fp_n,
+            'strategia': strategia,
+        }
+        self._next_id += 1
+        self._in_volo.append(L)
+        self._save(L)
+        self._ultime_piantate[key] = now
+        log.info(f"[LIBRO_PESCA_15J:{strategia.upper()}] entry {direzione} @${prezzo:.2f} | {ctx}")
 
-        # Delta atteso: prefer V2 se disponibile; altrimenti stima dal pnl_sum storico
-        delta_60_abs = abs(delta_atteso) if delta_atteso else max(prezzo * 0.0005, 5.0)
-        sign = +1 if direzione == "LONG" else -1
-
-        for h_s in self.ORIZZONTI:
-            delta_h = delta_60_abs * (h_s / 60.0) * sign
-            prezzo_lenza = round(prezzo + delta_h, 2)
-            lasco = max(self.LASCO_FLOOR,
-                        min(self.LASCO_CAP, abs(delta_h) * self.LASCO_PCT))
-            L = {
-                'id': self._next_id,
-                'ts_piantata': now,
-                'prezzo_lenza': prezzo_lenza,
-                'direzione': direzione,
-                'orizzonte_s': h_s,
-                'lasco': round(lasco, 2),
-                'regime': regime,
-                'carica': round(fp_wr, 3),  # riusa la colonna 'carica' per WR fingerprint
-                'oi_stato': 'FP_VINCENTE',
-                'delta_atteso': round(delta_h, 2),
-                'stato': 'ATTESA',
-                'ts_cattura': None,
-                'prezzo_cattura': None,
-                'ts_chiusura': None,
-                'prezzo_chiusura': None,
-                'pnl_paper': None,
-                'esito_finale': None,
-                'fp_key': fp_key,
-                'fp_wr': round(fp_wr, 3),
-                'fp_n': fp_n,
-            }
-            self._next_id += 1
-            self._in_volo.append(L)
-            self._save(L)
-            log.info(f"[LIBRO_PESCA] piantata fp={fp_key} wr={fp_wr:.0%} n={fp_n} dir={direzione} prezzo=${prezzo_lenza}")
-
-        if direzione == "LONG":
-            self._ultima_piantata_long = now
-        else:
-            self._ultima_piantata_short = now
 
     def pianta_se_radar_acceso(self, *args, **kwargs):
         """Compat 15.B/15.E — disabilitato in 15.F. Non chiamare."""
@@ -6338,21 +6418,21 @@ class LibroPesca:
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15f'")
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15j'")
             out['lp_vere'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='BARATTOLO' AND versione='v15f'")
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='BARATTOLO' AND versione='v15j'")
             out['lp_barattoli'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='SCADUTA' AND versione='v15f'")
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='SCADUTA' AND versione='v15j'")
             out['lp_scadute'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE versione='v15f'")
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE versione='v15j'")
             out['lp_totale'] = cur.fetchone()[0] or 0
-            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15f'")
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15j'")
             r = cur.fetchone()
             out['lp_pnl_vere'] = round(r[0], 2) if r and r[0] else 0.0
-            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='BARATTOLO' AND versione='v15f'")
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='BARATTOLO' AND versione='v15j'")
             r = cur.fetchone()
             out['lp_pnl_barattoli'] = round(r[0], 2) if r and r[0] else 0.0
-            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale IN ('VERA','BARATTOLO') AND versione='v15f'")
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale IN ('VERA','BARATTOLO') AND versione='v15j'")
             r = cur.fetchone()
             out['lp_pnl_totale'] = round(r[0], 2) if r and r[0] else 0.0
             for h_s in self.ORIZZONTI:
@@ -6363,7 +6443,7 @@ class LibroPesca:
                       SUM(CASE WHEN esito_finale='SCADUTA' THEN 1 ELSE 0 END),
                       SUM(CASE WHEN stato IN ('ATTESA','CATTURATA') THEN 1 ELSE 0 END),
                       SUM(CASE WHEN esito_finale IN ('VERA','BARATTOLO') THEN pnl_paper ELSE 0 END)
-                    FROM libro_pesca WHERE orizzonte_s = ?
+                    FROM libro_pesca WHERE orizzonte_s = ? AND versione='v15j'
                 """, (h_s,))
                 r = cur.fetchone()
                 vere = r[0] or 0
@@ -6376,6 +6456,30 @@ class LibroPesca:
                     'vere': vere, 'barattoli': bar, 'scadute': sca, 'in_volo': vol,
                     'pct_vincenti': pct,
                     'pnl_totale': round(r[4], 2) if r[4] is not None else 0.0,
+                }
+            # 15.J — breakdown per strategia (P1/P2/P3)
+            out['lp_strategie'] = {}
+            for strat in ('p1', 'p2', 'p3'):
+                cur.execute("""
+                    SELECT
+                      SUM(CASE WHEN esito_finale='VERA' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN esito_finale='BARATTOLO' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN esito_finale IN ('VERA','BARATTOLO') THEN pnl_paper ELSE 0 END),
+                      SUM(CASE WHEN stato='CATTURATA' THEN 1 ELSE 0 END)
+                    FROM libro_pesca WHERE strategia = ? AND versione='v15j'
+                """, (strat,))
+                r = cur.fetchone()
+                vere_s = r[0] or 0
+                bar_s = r[1] or 0
+                pnl_s = r[2] or 0.0
+                in_volo_s = r[3] or 0
+                tot_s = vere_s + bar_s
+                wr_s_calc = round(vere_s / tot_s * 100, 1) if tot_s > 0 else None
+                out['lp_strategie'][strat] = {
+                    'vere': vere_s, 'barattoli': bar_s, 'in_volo': in_volo_s,
+                    'totale_chiusi': tot_s,
+                    'wr_pct': wr_s_calc,
+                    'pnl_totale': round(pnl_s, 2),
                 }
             conn.close()
         except Exception as e:
@@ -6406,7 +6510,7 @@ class LibroPesca:
                        ts_cattura, prezzo_cattura, ts_chiusura, prezzo_chiusura,
                        pnl_paper, esito_finale
                 FROM libro_pesca
-                WHERE esito_finale IS NOT NULL AND versione='v15f'
+                WHERE esito_finale IS NOT NULL AND versione='v15j'
                 ORDER BY id DESC LIMIT ?
             """, (limit,))
             for r in cur.fetchall():
@@ -7032,37 +7136,55 @@ class OvertopBassanoV16Production:
 
         # ════════════════════════════════════════════════════════════════
         # PASSO 15.F — TATTICA DI PESCA SU FINGERPRINT VERITAS
-        # Pianta lenza SOLO se il fingerprint corrente (momentum × vol × trend)
-        # ha WR storico ≥ 60% con n ≥ 30 + PnL_sum > 0.
+        # ════════════════════════════════════════════════════════════════
+        # PASSO 15.J — 3 STRATEGIE PARALLELE
+        #   P1 = WIN signature (drift + range_pos + compression)
+        #   P2 = V2 + conferma drift_persist
+        #   P3 = Compressione che parte (comp_dur + drift_slope)
+        # Ogni strategia: cooldown indipendente, etichetta nel DB, entry immediata.
         # ════════════════════════════════════════════════════════════════
         try:
             if self.libro_pesca is not None:
                 self.libro_pesca.tick(now, price)
-                # delta_atteso: V2 se maturo, altrimenti stima
-                _delta_pesca = 0.0
-                try:
-                    _pv2_stats = self.predittore_v2.get_stats()
-                    _pv2_delta = _pv2_stats.get('pred_v2_delta', 0.0)
-                    if _pv2_stats.get('pred_v2_n_verificate', 0) >= 30 and _pv2_delta:
-                        _delta_pesca = abs(_pv2_delta)
-                except Exception:
-                    pass
-                if _delta_pesca == 0.0:
-                    _delta_pesca = price * 0.0005
                 _regime_now = getattr(self, '_regime_current',
                                       getattr(self, '_regime', 'UNKNOWN'))
-                # Fingerprint LIVE dall'analyzer
+                # Fingerprint LIVE
                 try:
                     _drift = getattr(self.campo, '_last_drift_pct', 0.0)
                 except Exception:
                     _drift = 0.0
                 _mom, _vol, _trd = self.analyzer.analyze(regime=_regime_now, drift=_drift)
-                # Memory dall'Oracolo Dinamico
                 _orac_mem = getattr(self.oracolo, '_memory', None)
+                # 15.J — SeedScorer fornisce TUTTI gli indicatori micro
+                _seed_data = self.seed_scorer.score() if hasattr(self, 'seed_scorer') else {}
+                _drift_persist = _seed_data.get('drift_persist', 0.5)
+                _range_pos     = _seed_data.get('range_pos', 0.5)
+                _compression   = _seed_data.get('compression', 1.0)
+                _comp_dur      = _seed_data.get('comp_duration', 0)
+                _drift_slope   = _seed_data.get('drift_slope', 0.0)
+                # 15.J — V2 stats per strategia P2
+                _v2_delta = 0.0
+                _v2_n = 0
+                _v2_acc = 0.0
+                try:
+                    _pv2_stats = self.predittore_v2.get_stats()
+                    _v2_delta = _pv2_stats.get('pred_v2_delta', 0.0)
+                    _v2_n     = _pv2_stats.get('pred_v2_n_segno', 0)
+                    _v2_acc   = (_pv2_stats.get('pred_v2_accuracy_segno', 0) or 0) / 100.0
+                except Exception:
+                    pass
                 self.libro_pesca.pianta_se_fingerprint_vincente(
                     now, price,
                     _mom, _vol, _trd,
-                    _orac_mem, _regime_now, _delta_pesca
+                    _orac_mem, _regime_now, 0.0,
+                    drift_persist=_drift_persist,
+                    range_pos=_range_pos,
+                    compression=_compression,
+                    comp_duration=_comp_dur,
+                    drift_slope=_drift_slope,
+                    v2_delta=_v2_delta,
+                    v2_n=_v2_n,
+                    v2_accuracy=_v2_acc,
                 )
         except Exception as _e_lp:
             log.debug(f"[LIBRO_PESCA_TICK_ERR] {_e_lp}")
