@@ -5447,6 +5447,11 @@ class SuperCervello:
                regime, midzone, loss_streak,
                fp_wr_opposite=None, fp_samples_opposite=None,
                current_direction=None,
+               # ── PASSO 11 (15mag2026) — OI SHORT per pred_boost bilaterale ──
+               # Prima: pred_boost guardava SOLO oi_stato (LONG).
+               # Quando il FUOCO era dal lato SHORT, ignorato → 20 LONG zero SHORT.
+               # Ora: pred_boost guarda ENTRAMBI i lati e flippa direzione.
+               oi_stato_short=None, oi_carica_short=None,
                # ── STATUTO COSTITUZIONALE (Passo 4, 13mag2026) ──────────────
                # Input dagli organi che oggi sono dittatori con early return.
                # In MODALITÀ PASSIVA: SC li RICEVE e li LOGGA (SC_INPUTS_FULL)
@@ -5595,19 +5600,43 @@ class SuperCervello:
 
         # VETO ASSOLUTO FINGERPRINT TOSSICO
         # Se il fingerprint ha 20+ campioni con WR < 45% — blocca sempre
-        # ECCEZIONE: pred_score >= 70% + OI FUOCO = predizione attiva supera il veto storico
+        # ECCEZIONE: pred_score >= 70% + OI FUOCO (qualunque lato) = predizione attiva supera il veto storico
         _ps = getattr(self, '_pred_score_ref', 0)
         _pc = getattr(self, '_pred_calib_ref', 0)
-        _pred_attiva = _ps >= 70 and _pc >= 50 and oi_stato == "FUOCO"
+        # PASSO 11: predizione attiva su uno qualunque dei due lati
+        _pred_attiva_long  = _ps >= 70 and _pc >= 50 and oi_stato == "FUOCO"
+        _pred_attiva_short = (_ps >= 70 and _pc >= 50
+                              and oi_stato_short == "FUOCO"
+                              and (oi_carica_short or 0) >= 0.75)
+        _pred_attiva = _pred_attiva_long or _pred_attiva_short
         if fp_samples >= 20 and fp_wr < 0.45 and not _pred_attiva:
             return self._out("BLOCCA", 0.5, 0, f"FP_TOSSICO_wr={fp_wr:.0%}_n={fp_samples}", 0.95)
 
-        # BOOST PREDIZIONE: direzione corretta >= 70% E OI FUOCO → entra
-        # La direzione è l'oro — calibrazione >= 50% (misura magnitudine, non direzione)
-        # Veritas: FUOCO|PREVISTO_ENTRA 5579 segnali HIT 56% PnL +$0.32 → edge reale
+        # ════════════════════════════════════════════════════════════════
+        # PASSO 11 — BOOST PREDIZIONE BILATERALE (15mag2026)
+        # Prima: solo FUOCO LONG. Risultato: 20 LONG zero SHORT mentre il
+        # FUOCO SHORT a 0.93 veniva ignorato. La predizione perfetta
+        # (Score 100%, Scostamento $1.7) non guidava mai trade SHORT.
+        # Ora: riconosce FUOCO da entrambi i lati ed emette direction_vote
+        # per il lato giusto. La scena (riga 9118+) lo applica.
+        # ════════════════════════════════════════════════════════════════
         if _pred_attiva and not midzone:
-            return self._out("ENTRA", 1.2, -5,
-                f"pred_boost score={_ps:.0f}% calib={_pc:.0f}%", 0.85)
+            # Decide la direzione in base a QUALE FUOCO è attivo
+            # Se entrambi attivi (raro): vince il più carico
+            if _pred_attiva_long and _pred_attiva_short:
+                _dv = "LONG" if (oi_carica or 0) >= (oi_carica_short or 0) else "SHORT"
+            elif _pred_attiva_short:
+                _dv = "SHORT"
+            else:
+                _dv = "LONG"
+            _motivo = f"pred_boost score={_ps:.0f}% calib={_pc:.0f}% dir={_dv}"
+            # Se la direzione richiesta è diversa da quella attuale del campo,
+            # emette direction_vote. La scena flippa prima di aprire.
+            _dv_out = _dv if (current_direction and _dv != current_direction) else None
+            _dv_conf = 0.95 if _dv_out else 0.0
+            return self._out("ENTRA", 1.2, -5, _motivo, 0.85,
+                             direction_vote=_dv_out,
+                             direction_vote_confidence=_dv_conf)
 
         # Voti organi
         v = {}
@@ -5834,6 +5863,530 @@ class SuperCervello:
                 'voti':voti,'pesi':dict(self._pesi),
                 'direction_vote': direction_vote,
                 'direction_vote_confidence': direction_vote_confidence}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PASSO 13 (15mag2026) — PREDITTORE CONTESTUALE
+# ════════════════════════════════════════════════════════════════════════════
+# La predizione esistente del bot (pred_score, pred_scostamento) è una
+# tautologia: prezzo_attuale + delta_costante. Score 100% perché si confronta
+# con sé stessa.
+#
+# Questo predittore è DIVERSO:
+#  - calcola un DELTA DINAMICO ad ogni tick (un numero diverso ogni volta)
+#  - basato sul CONTESTO ATTUALE (momentum, accelerazione, OI, regime, vol)
+#  - SALVA la predizione, dopo 60s la confronta con il prezzo VERO
+#  - misura errore_assoluto, accuracy del segno, calibrazione
+#  - si certifica ONESTAMENTE sui dati veri
+#
+# NON sostituisce niente. Gira in parallelo al pred_* esistente. Espone le
+# proprie statistiche come pred_v2_* nell'heartbeat.
+# ════════════════════════════════════════════════════════════════════════════
+class PredittoreContestuale:
+    """Predittore dinamico onesto — numero diverso ogni tick, misura vs realtà."""
+
+    WINDOW = 60          # orizzonte predizione: 60 secondi
+    HISTORY_MAX = 300    # storia per momentum/accelerazione
+    STATS_MAX = 500      # statistiche aggregate (errore, accuracy)
+
+    def __init__(self):
+        from collections import deque
+        # Storia prezzi: (timestamp, prezzo) — per calcolare contesto
+        self._prezzi = deque(maxlen=self.HISTORY_MAX)
+        # Predizioni in volo: (ts_predizione, prezzo_allora, predizione_a_60s,
+        #                       momentum, accelerazione, oi_carica, oi_dir)
+        self._in_volo = deque(maxlen=self.HISTORY_MAX)
+        # Statistiche aggregate (solo dopo verifica a 60s)
+        self._errori_abs = deque(maxlen=self.STATS_MAX)
+        self._segno_giusti = deque(maxlen=self.STATS_MAX)
+        self._delta_predetti = deque(maxlen=self.STATS_MAX)
+        self._delta_reali = deque(maxlen=self.STATS_MAX)
+        self._n_predizioni = 0
+        self._n_verificate = 0
+        # Predizione corrente esposta sulla dashboard
+        self._ultima_predizione = None
+        self._ultimo_delta = 0.0
+
+    def osserva(self, now: float, prezzo: float,
+                oi_carica: float, oi_stato: str,
+                oi_carica_short: float, oi_stato_short: str):
+        """Chiamato ad ogni tick. Aggiorna storia, fa predizione, verifica vecchie."""
+        self._prezzi.append((now, prezzo))
+
+        # 1) VERIFICA predizioni vecchie di ~60s
+        scaduti = []
+        for i, (ts_p, p_allora, pred, mom, acc, oic, odir) in enumerate(self._in_volo):
+            if now - ts_p >= self.WINDOW:
+                # Tempo di misurare. Prezzo vero adesso vs predizione di 60s fa
+                delta_reale = prezzo - p_allora
+                delta_predetto = pred - p_allora
+                errore = abs(pred - prezzo)
+                self._errori_abs.append(errore)
+                self._delta_predetti.append(delta_predetto)
+                self._delta_reali.append(delta_reale)
+                # Segno giusto?
+                if abs(delta_predetto) >= 0.5:  # ignora predizioni "flat"
+                    segno_ok = (delta_predetto > 0) == (delta_reale > 0)
+                    self._segno_giusti.append(1 if segno_ok else 0)
+                self._n_verificate += 1
+                scaduti.append(i)
+        # rimuovi dalla coda i verificati (dal fondo per non sballare gli indici)
+        for i in reversed(scaduti):
+            del self._in_volo[i]
+
+        # 2) NUOVA PREDIZIONE basata sul contesto attuale
+        if len(self._prezzi) >= 30:
+            pred, delta, mom, acc = self._calcola_predizione(prezzo,
+                                                              oi_carica, oi_stato,
+                                                              oi_carica_short, oi_stato_short)
+            self._in_volo.append((now, prezzo, pred, mom, acc, oi_carica,
+                                  'LONG' if oi_stato == 'FUOCO' else
+                                  'SHORT' if oi_stato_short == 'FUOCO' else 'FLAT'))
+            self._ultima_predizione = pred
+            self._ultimo_delta = delta
+            self._n_predizioni += 1
+
+    def _calcola_predizione(self, prezzo, oi_carica, oi_stato,
+                            oi_carica_short, oi_stato_short):
+        """
+        Formula contestuale (prima taratura — i pesi si raffinano sui dati).
+
+        delta_60s = momentum_30tick × 2.0
+                  + drift_OI × 1.5
+                  + accelerazione × 0.5
+
+        - momentum_30tick: variazione media negli ultimi 30 tick
+        - drift_OI: pressione direzionale dell'OI (FUOCO LONG spinge su, ecc.)
+        - accelerazione: derivata seconda del prezzo (sta accelerando?)
+        """
+        prezzi_recenti = [p for _, p in list(self._prezzi)[-30:]]
+        # momentum: variazione media tick-by-tick
+        if len(prezzi_recenti) >= 2:
+            momentum = (prezzi_recenti[-1] - prezzi_recenti[0]) / len(prezzi_recenti)
+        else:
+            momentum = 0.0
+        # accelerazione: confronta momentum recente (ultimi 10) vs precedente (10 prima)
+        if len(prezzi_recenti) >= 20:
+            mom_recente = (prezzi_recenti[-1] - prezzi_recenti[-10]) / 10
+            mom_prec = (prezzi_recenti[-11] - prezzi_recenti[-20]) / 10
+            accelerazione = mom_recente - mom_prec
+        else:
+            accelerazione = 0.0
+        # drift OI: se FUOCO LONG → +carica × 10 ; se FUOCO SHORT → -carica × 10
+        drift_oi = 0.0
+        if oi_stato == 'FUOCO':
+            drift_oi = oi_carica * 10.0
+        elif oi_stato_short == 'FUOCO':
+            drift_oi = -oi_carica_short * 10.0
+        # formula combinata
+        delta = momentum * 2.0 + drift_oi * 1.5 + accelerazione * 0.5
+        pred = prezzo + delta
+        return round(pred, 2), round(delta, 2), round(momentum, 3), round(accelerazione, 3)
+
+    def get_stats(self) -> dict:
+        """Statistiche aggregate — quelle vere, misurate contro il futuro reale."""
+        import statistics as _st
+        out = {
+            'pred_v2_attiva': self._ultima_predizione,
+            'pred_v2_delta':  self._ultimo_delta,
+            'pred_v2_n_predizioni': self._n_predizioni,
+            'pred_v2_n_verificate': self._n_verificate,
+            'pred_v2_in_volo': len(self._in_volo),
+        }
+        if self._errori_abs:
+            out['pred_v2_err_medio'] = round(_st.mean(self._errori_abs), 2)
+            out['pred_v2_err_mediano'] = round(_st.median(self._errori_abs), 2)
+        if self._segno_giusti:
+            out['pred_v2_accuracy_segno'] = round(
+                sum(self._segno_giusti) / len(self._segno_giusti) * 100, 1)
+            out['pred_v2_n_segno'] = len(self._segno_giusti)
+        if self._delta_reali:
+            out['pred_v2_mov_reale_medio_abs'] = round(
+                _st.mean([abs(x) for x in self._delta_reali]), 2)
+        return out
+
+
+class LibroPesca:
+    """
+    PASSO 15 (15mag2026) — TATTICA DI PESCA.
+
+    Il radar V16 (SuperCervello, capsule, regime, OI) legge il mare.
+    Sopra il radar piantiamo lenze a orizzonti multipli (10/20/30/60/90s).
+    Ogni lenza ha un prezzo target e un lasco di tolleranza.
+    Quando il prezzo entra in zona → CATTURATA → apre un trade paper
+    indipendente. Il trade chiude all'orizzonte della lenza.
+    Esito finale: VERA (PnL+) o BARATTOLO (PnL-) o SCADUTA (no trade).
+
+    Le lenze NON toccano il motore SC. I trade pesca vivono in parallelo
+    ai trade SC (slot indipendenti, due posizioni paper insieme).
+
+    Il libro persiste su sqlite. Sopravvive ai restart.
+    """
+
+    ORIZZONTI = (10, 20, 30, 60, 90)
+    LASCO_PCT   = 0.15
+    LASCO_FLOOR = 2.0
+    LASCO_CAP   = 15.0
+    CARICA_MIN_TRIGGER = 0.65
+    COOLDOWN_S = 5.0
+    # Per PnL paper — stesse costanti del motore esistente
+    TRADE_SIZE_USD = 1000.0
+    LEVERAGE       = 5.0
+    FEE_PCT        = 0.0002    # 0.02%
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        # Lenze in volo: liste di dict mutabili (ATTESA o CATTURATA)
+        self._in_volo = []
+        # Cooldown per direzione
+        self._ultima_piantata_long  = 0.0
+        self._ultima_piantata_short = 0.0
+        # ID sequenziale, ricaricato dal DB al boot
+        self._next_id = 1
+        # Cache stats (per non martellare il DB)
+        self._stats_cache = {}
+        self._stats_cache_ts = 0.0
+        # Init DB + ricarica next_id
+        self._init_db()
+        self._reload_next_id()
+
+    def _init_db(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS libro_pesca (
+                    id INTEGER PRIMARY KEY,
+                    ts_piantata REAL NOT NULL,
+                    prezzo_lenza REAL NOT NULL,
+                    direzione TEXT NOT NULL,
+                    orizzonte_s INTEGER NOT NULL,
+                    lasco REAL NOT NULL,
+                    regime TEXT,
+                    carica REAL,
+                    oi_stato TEXT,
+                    delta_atteso REAL,
+                    stato TEXT NOT NULL,
+                    ts_cattura REAL,
+                    prezzo_cattura REAL,
+                    ts_chiusura REAL,
+                    prezzo_chiusura REAL,
+                    pnl_paper REAL,
+                    esito_finale TEXT
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_orizzonte ON libro_pesca(orizzonte_s)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_stato ON libro_pesca(stato)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_regime ON libro_pesca(regime)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_lp_esito ON libro_pesca(esito_finale)")
+            conn.commit()
+            conn.close()
+            log.info(f"[LIBRO_PESCA] DB init {self.db_path}")
+        except Exception as e:
+            log.warning(f"[LIBRO_PESCA_INIT_DB_ERR] {e}")
+
+    def _reload_next_id(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(id) FROM libro_pesca")
+            row = cur.fetchone()
+            conn.close()
+            if row and row[0] is not None:
+                self._next_id = int(row[0]) + 1
+            else:
+                self._next_id = 1
+            log.info(f"[LIBRO_PESCA] next_id={self._next_id}")
+        except Exception as e:
+            log.warning(f"[LIBRO_PESCA_RELOAD_ERR] {e}")
+            self._next_id = 1
+
+    def _save(self, L: dict):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT OR REPLACE INTO libro_pesca
+                (id, ts_piantata, prezzo_lenza, direzione, orizzonte_s, lasco,
+                 regime, carica, oi_stato, delta_atteso, stato, ts_cattura,
+                 prezzo_cattura, ts_chiusura, prezzo_chiusura, pnl_paper, esito_finale)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                L['id'], L['ts_piantata'], L['prezzo_lenza'], L['direzione'],
+                L['orizzonte_s'], L['lasco'], L.get('regime'), L.get('carica'),
+                L.get('oi_stato'), L.get('delta_atteso'),
+                L['stato'], L.get('ts_cattura'), L.get('prezzo_cattura'),
+                L.get('ts_chiusura'), L.get('prezzo_chiusura'),
+                L.get('pnl_paper'), L.get('esito_finale'),
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            log.warning(f"[LIBRO_PESCA_SAVE_ERR] {e}")
+
+    def pianta_se_radar_acceso(self, now: float, prezzo: float,
+                                oi_carica: float, oi_stato: str,
+                                oi_carica_short: float, oi_stato_short: str,
+                                regime: str, delta_atteso: float):
+        """Decide se piantare 5 lenze (una per orizzonte) in base al radar."""
+        direzione = None
+        carica_eff = 0.0
+        oi_eff = oi_stato
+        if oi_stato_short == "FUOCO" and oi_carica_short >= self.CARICA_MIN_TRIGGER:
+            direzione = "SHORT"; carica_eff = oi_carica_short; oi_eff = oi_stato_short
+        elif oi_stato == "FUOCO" and oi_carica >= self.CARICA_MIN_TRIGGER:
+            direzione = "LONG";  carica_eff = oi_carica;       oi_eff = oi_stato
+        elif oi_carica >= 0.75:
+            direzione = "LONG";  carica_eff = oi_carica;       oi_eff = oi_stato
+        elif oi_carica_short >= 0.75:
+            direzione = "SHORT"; carica_eff = oi_carica_short; oi_eff = oi_stato_short
+
+        if direzione is None:
+            return
+
+        ultima = self._ultima_piantata_long if direzione == "LONG" \
+                 else self._ultima_piantata_short
+        if now - ultima < self.COOLDOWN_S:
+            return
+
+        delta_60_abs = abs(delta_atteso) if delta_atteso \
+                       else max(prezzo * 0.0005, 5.0)
+        sign = +1 if direzione == "LONG" else -1
+
+        for h_s in self.ORIZZONTI:
+            delta_h = delta_60_abs * (h_s / 60.0) * sign
+            prezzo_lenza = round(prezzo + delta_h, 2)
+            lasco = max(self.LASCO_FLOOR,
+                        min(self.LASCO_CAP, abs(delta_h) * self.LASCO_PCT))
+            L = {
+                'id': self._next_id,
+                'ts_piantata': now,
+                'prezzo_lenza': prezzo_lenza,
+                'direzione': direzione,
+                'orizzonte_s': h_s,
+                'lasco': round(lasco, 2),
+                'regime': regime,
+                'carica': round(carica_eff, 3),
+                'oi_stato': oi_eff,
+                'delta_atteso': round(delta_h, 2),
+                'stato': 'ATTESA',
+                'ts_cattura': None,
+                'prezzo_cattura': None,
+                'ts_chiusura': None,
+                'prezzo_chiusura': None,
+                'pnl_paper': None,
+                'esito_finale': None,
+            }
+            self._next_id += 1
+            self._in_volo.append(L)
+            self._save(L)
+
+        if direzione == "LONG":
+            self._ultima_piantata_long = now
+        else:
+            self._ultima_piantata_short = now
+
+    def tick(self, now: float, prezzo: float):
+        """
+        Per ogni lenza in volo:
+        - se ATTESA: controlla cattura (in zona) o scadenza
+        - se CATTURATA: controlla chiusura (orizzonte raggiunto)
+        """
+        rimanenti = []
+        for L in self._in_volo:
+            t_dalla_piantata = now - L['ts_piantata']
+
+            if L['stato'] == 'ATTESA':
+                # Cattura: prezzo entra nella zona di tolleranza
+                # Asimmetrica: LONG cattura se prezzo >= (lenza - lasco)
+                #              SHORT cattura se prezzo <= (lenza + lasco)
+                catturata = False
+                if L['direzione'] == "LONG":
+                    if prezzo >= (L['prezzo_lenza'] - L['lasco']):
+                        catturata = True
+                else:
+                    if prezzo <= (L['prezzo_lenza'] + L['lasco']):
+                        catturata = True
+
+                if catturata:
+                    # Diventa CATTURATA — trade paper aperto al prezzo corrente
+                    L['stato'] = 'CATTURATA'
+                    L['ts_cattura'] = now
+                    L['prezzo_cattura'] = round(prezzo, 2)
+                    self._save(L)
+                    rimanenti.append(L)
+                elif t_dalla_piantata >= L['orizzonte_s']:
+                    # Scaduta — niente trade, evento solo nel libro
+                    L['stato'] = 'SCADUTA'
+                    L['ts_chiusura'] = now
+                    L['prezzo_chiusura'] = round(prezzo, 2)
+                    L['pnl_paper'] = 0.0
+                    L['esito_finale'] = 'SCADUTA'
+                    self._save(L)
+                    # Non rimane in volo
+                else:
+                    rimanenti.append(L)
+
+            elif L['stato'] == 'CATTURATA':
+                # Trade paper aperto a prezzo_cattura.
+                # Chiude all'orizzonte (3-A): durata = orizzonte_s dalla piantata
+                if t_dalla_piantata >= L['orizzonte_s']:
+                    L['ts_chiusura'] = now
+                    L['prezzo_chiusura'] = round(prezzo, 2)
+                    # PnL paper con la stessa formula del motore esistente:
+                    # esposizione = $1000 × 5 = $5000
+                    # btc_qty = $5000 / prezzo_cattura
+                    # delta (signed) = prezzo_chiusura - prezzo_cattura (LONG)
+                    #                = prezzo_cattura - prezzo_chiusura (SHORT)
+                    # fee = $5000 × 0.02% × 2 = $2.00
+                    exp = self.TRADE_SIZE_USD * self.LEVERAGE
+                    btc_qty = exp / max(1.0, L['prezzo_cattura'])
+                    if L['direzione'] == "LONG":
+                        delta = prezzo - L['prezzo_cattura']
+                    else:
+                        delta = L['prezzo_cattura'] - prezzo
+                    fee = exp * self.FEE_PCT * 2.0
+                    pnl = delta * btc_qty - fee
+                    L['pnl_paper'] = round(pnl, 4)
+                    L['stato'] = 'CHIUSA'
+                    L['esito_finale'] = 'VERA' if pnl > 0 else 'BARATTOLO'
+                    self._save(L)
+                    # Non rimane in volo
+                else:
+                    rimanenti.append(L)
+
+            else:
+                # Stati 'SCADUTA' / 'CHIUSA' non dovrebbero arrivare qui,
+                # ma per sicurezza non li rimettiamo in volo
+                pass
+
+        self._in_volo = rimanenti
+
+    def get_stats(self, now: float) -> dict:
+        """
+        Aggregati dal libro per dashboard. Cache 5s.
+        Ritorna anche le lenze attive (in volo) per il grafico.
+        """
+        if (now - self._stats_cache_ts) < 3.0 and self._stats_cache:
+            return self._stats_cache
+
+        out = {
+            'lp_in_volo': len(self._in_volo),
+            'lp_orizzonti': {},
+            'lp_totale': 0,
+            'lp_vere': 0,
+            'lp_barattoli': 0,
+            'lp_scadute': 0,
+            'lp_pnl_totale': 0.0,
+            'lp_pnl_vere': 0.0,
+            'lp_pnl_barattoli': 0.0,
+            'lp_active': [],
+        }
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+
+            # Globali per esito
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='VERA'")
+            out['lp_vere'] = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='BARATTOLO'")
+            out['lp_barattoli'] = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='SCADUTA'")
+            out['lp_scadute'] = cur.fetchone()[0] or 0
+            cur.execute("SELECT COUNT(*) FROM libro_pesca")
+            out['lp_totale'] = cur.fetchone()[0] or 0
+
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='VERA'")
+            r = cur.fetchone()
+            out['lp_pnl_vere'] = round(r[0], 2) if r and r[0] else 0.0
+            cur.execute("SELECT SUM(pnl_paper) FROM libro_pesca WHERE esito_finale='BARATTOLO'")
+            r = cur.fetchone()
+            out['lp_pnl_barattoli'] = round(r[0], 2) if r and r[0] else 0.0
+            cur.execute("""SELECT SUM(pnl_paper) FROM libro_pesca
+                           WHERE esito_finale IN ('VERA','BARATTOLO')""")
+            r = cur.fetchone()
+            out['lp_pnl_totale'] = round(r[0], 2) if r and r[0] else 0.0
+
+            # Per orizzonte
+            for h_s in self.ORIZZONTI:
+                cur.execute("""
+                    SELECT
+                      SUM(CASE WHEN esito_finale='VERA' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN esito_finale='BARATTOLO' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN esito_finale='SCADUTA' THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN stato IN ('ATTESA','CATTURATA') THEN 1 ELSE 0 END),
+                      AVG(CASE WHEN esito_finale IN ('VERA','BARATTOLO') THEN pnl_paper END),
+                      SUM(CASE WHEN esito_finale IN ('VERA','BARATTOLO') THEN pnl_paper ELSE 0 END)
+                    FROM libro_pesca WHERE orizzonte_s = ?
+                """, (h_s,))
+                r = cur.fetchone()
+                vere = r[0] or 0
+                bar  = r[1] or 0
+                sca  = r[2] or 0
+                vol  = r[3] or 0
+                concl = vere + bar
+                tot_eventi = concl + sca
+                pct_cattura_netta = round(vere / tot_eventi * 100, 1) if tot_eventi > 0 else None
+                out['lp_orizzonti'][str(h_s)] = {
+                    'vere': vere,
+                    'barattoli': bar,
+                    'scadute': sca,
+                    'in_volo': vol,
+                    'pct_vincenti': pct_cattura_netta,
+                    'pnl_medio': round(r[4], 2) if r[4] is not None else None,
+                    'pnl_totale': round(r[5], 2) if r[5] is not None else 0.0,
+                }
+            conn.close()
+        except Exception as e:
+            log.debug(f"[LIBRO_PESCA_STATS_ERR] {e}")
+
+        # Lenze attive (per grafico — max 30 più recenti)
+        active = []
+        for L in self._in_volo[-30:]:
+            active.append({
+                'id': L['id'],
+                'ts_piantata': L['ts_piantata'],
+                'prezzo_lenza': L['prezzo_lenza'],
+                'direzione': L['direzione'],
+                'orizzonte_s': L['orizzonte_s'],
+                'lasco': L['lasco'],
+                'stato': L['stato'],
+                'ts_cattura': L.get('ts_cattura'),
+                'prezzo_cattura': L.get('prezzo_cattura'),
+            })
+        out['lp_active'] = active
+
+        self._stats_cache = out
+        self._stats_cache_ts = now
+        return out
+
+    def get_recent_events(self, limit: int = 50) -> list:
+        """Ultimi N eventi conclusi (VERA/BARATTOLO/SCADUTA) per il grafico."""
+        out = []
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, ts_piantata, prezzo_lenza, direzione, orizzonte_s,
+                       ts_cattura, prezzo_cattura, ts_chiusura, prezzo_chiusura,
+                       pnl_paper, esito_finale
+                FROM libro_pesca
+                WHERE esito_finale IS NOT NULL
+                ORDER BY id DESC LIMIT ?
+            """, (limit,))
+            for r in cur.fetchall():
+                out.append({
+                    'id': r[0], 'ts_piantata': r[1], 'prezzo_lenza': r[2],
+                    'direzione': r[3], 'orizzonte_s': r[4],
+                    'ts_cattura': r[5], 'prezzo_cattura': r[6],
+                    'ts_chiusura': r[7], 'prezzo_chiusura': r[8],
+                    'pnl_paper': r[9], 'esito_finale': r[10],
+                })
+            conn.close()
+        except Exception as e:
+            log.debug(f"[LIBRO_PESCA_EVENTS_ERR] {e}")
+        return out
 
 
 class OvertopBassanoV16Production:
@@ -6105,6 +6658,18 @@ class OvertopBassanoV16Production:
         self.veritas        = VeritatisTracker(sc_ref=self.supercervello)
         self.veritas.load(DB_PATH)  # carica statistiche dal disco al boot
 
+        # -- PASSO 13: PREDITTORE CONTESTUALE V2 (15mag2026) ──────────────
+        # Predizione DINAMICA basata sul contesto attuale. Misura sé stesso
+        # contro il prezzo reale a 60s. Onesto. Indipendente dal pred_* vecchio.
+        self.predittore_v2 = PredittoreContestuale()
+
+        # -- PASSO 15: LIBRO DI PESCA (15mag2026) ──────────────────────────
+        # Tattica di pesca a 5 orizzonti (10/20/30/60/90s).
+        # Pianta lenze quando il radar (OI) è acceso. Cattura → trade paper
+        # indipendente che chiude all'orizzonte della lenza. Persistito su
+        # sqlite, sopravvive ai restart.
+        self.libro_pesca = LibroPesca(DB_PATH)
+
         # -- PRED SCORE BOOT: inizializza dai dati Veritas storici --------
         # Evita che pred_boost parta da 0 al restart e non scatti mai
         # nelle prime ore. Usa hit_rate FUOCO|PREVISTO_ENTRA come proxy.
@@ -6131,6 +6696,35 @@ class OvertopBassanoV16Production:
         self._oi_carica_short   = 0.0  # carica ribassista speculare
         self._pred_trade_n      = 0    # predizioni confermate → trade
         self._pred_trade_pnl    = 0.0  # PnL cumulativo di quei trade
+
+        # ════════════════════════════════════════════════════════════════
+        # PASSO 10 (15mag2026) — PREDICTION TRACKER
+        # ════════════════════════════════════════════════════════════════
+        # Salva il prezzo a ogni tick. Dopo 60/90/120s misura il movimento
+        # reale e lo confronta con la predizione corrente del bot.
+        # NON decide niente. Solo registra. Espone statistiche su /trading/status.
+        # ════════════════════════════════════════════════════════════════
+        from collections import deque
+        # storico (timestamp, prezzo) ultimi 200 secondi (margine per 120s+buffer)
+        self._pt_storico = deque(maxlen=300)
+        # statistiche aggregate per orizzonte: errori, accuracy segno
+        self._pt_stats = {
+            60:  {'n': 0, 'errori_abs': deque(maxlen=200),
+                  'segno_giusto': deque(maxlen=200),
+                  'movimenti_reali': deque(maxlen=200),
+                  'predizioni_disponibili': 0, 'senza_predizione': 0},
+            90:  {'n': 0, 'errori_abs': deque(maxlen=200),
+                  'segno_giusto': deque(maxlen=200),
+                  'movimenti_reali': deque(maxlen=200),
+                  'predizioni_disponibili': 0, 'senza_predizione': 0},
+            120: {'n': 0, 'errori_abs': deque(maxlen=200),
+                  'segno_giusto': deque(maxlen=200),
+                  'movimenti_reali': deque(maxlen=200),
+                  'predizioni_disponibili': 0, 'senza_predizione': 0},
+        }
+        # snapshot delle predizioni: timestamp → predizione che il bot
+        # avrebbe usato in quel momento (pred_score corrente + delta atteso)
+        self._pt_predizioni = deque(maxlen=300)
         self._oi_stato_short    = "ATTESA"
         self._oi_tick_pronto_short = 0
 
@@ -6246,6 +6840,95 @@ class OvertopBassanoV16Production:
     # PROCESS TICK - orchestratore principale
     # ========================================================================
 
+    def _pt_track(self, now: float, price: float):
+        """
+        PASSO 10 — PREDICTION TRACKER (sola lettura, non decide nulla).
+
+        Salva (ts, prezzo) ad ogni tick. Per ogni orizzonte (60/90/120s),
+        cerca lo snapshot di esattamente quel tempo fa e misura:
+         - movimento_reale = prezzo_ora - prezzo_allora
+         - se c'era una predizione: errore_assoluto, segno_giusto
+        Aggrega in self._pt_stats per esposizione su /trading/status.
+        """
+        # 1) snapshot del momento
+        self._pt_storico.append((now, price))
+        # snapshot della predizione corrente del bot (pred_score interno)
+        try:
+            _ps = getattr(self.supercervello, '_pred_score_ref', 0.0)
+            _pt_pred = {
+                'ts': now,
+                'price': price,
+                'pred_score': _ps,
+                # delta predetto: se pred_score >= 70 e direzione campo nota,
+                # il bot "punta" sulla direzione del campo. Magnitudo: derivata
+                # da pred_score (più alto = più convinto, più grande il delta).
+                # Stima rozza (best effort) — non è il predittore vero, è
+                # quello che il bot ATTUALMENTE crede.
+                'campo_dir': getattr(self.campo, '_direction', None),
+                'delta_atteso': (_ps - 50.0) * 0.3 if _ps >= 50 else 0.0,
+            }
+            self._pt_predizioni.append(_pt_pred)
+        except Exception:
+            pass
+
+        # 2) per ogni orizzonte, cerca lo snapshot di W secondi fa
+        for W in (60, 90, 120):
+            target_ts = now - W
+            # trova lo snapshot più vicino a target_ts (entro ±2s di tolleranza)
+            snap_old = None
+            for (ts_old, price_old) in self._pt_storico:
+                if abs(ts_old - target_ts) <= 2.0:
+                    snap_old = (ts_old, price_old)
+                    break
+            if snap_old is None:
+                continue
+            # movimento reale a W secondi
+            movimento_reale = price - snap_old[1]
+            S = self._pt_stats[W]
+            S['n'] += 1
+            S['movimenti_reali'].append(movimento_reale)
+
+            # c'era una predizione attiva di W secondi fa?
+            pred_old = None
+            for p in self._pt_predizioni:
+                if abs(p['ts'] - target_ts) <= 2.0:
+                    pred_old = p
+                    break
+            if pred_old is None or pred_old['pred_score'] < 50.0:
+                S['senza_predizione'] += 1
+                continue
+            # confronto: la predizione di W fa diceva un delta, il movimento reale è
+            S['predizioni_disponibili'] += 1
+            delta_atteso = pred_old['delta_atteso']
+            if pred_old['campo_dir'] == 'SHORT':
+                delta_atteso = -delta_atteso
+            errore_abs = abs(delta_atteso - movimento_reale)
+            S['errori_abs'].append(errore_abs)
+            # segno giusto?
+            segno_predetto = 'UP' if delta_atteso > 0 else ('DOWN' if delta_atteso < 0 else 'FLAT')
+            segno_reale = 'UP' if movimento_reale > 0 else ('DOWN' if movimento_reale < 0 else 'FLAT')
+            if segno_predetto != 'FLAT':
+                S['segno_giusto'].append(1 if segno_predetto == segno_reale else 0)
+
+    def _pt_get_stats(self) -> dict:
+        """Ritorna le statistiche aggregate del tracker per /trading/status."""
+        import statistics as _st
+        out = {}
+        for W, S in self._pt_stats.items():
+            row = {'n_misurati': S['n'],
+                   'predizioni_disponibili': S['predizioni_disponibili'],
+                   'senza_predizione': S['senza_predizione']}
+            if S['errori_abs']:
+                row['err_medio'] = round(_st.mean(S['errori_abs']), 2)
+                row['err_mediano'] = round(_st.median(S['errori_abs']), 2)
+            if S['segno_giusto']:
+                row['accuracy_segno_pct'] = round(sum(S['segno_giusto']) / len(S['segno_giusto']) * 100, 1)
+                row['n_segno_valutato'] = len(S['segno_giusto'])
+            if S['movimenti_reali']:
+                row['mov_reale_medio_abs'] = round(_st.mean([abs(x) for x in S['movimenti_reali']]), 2)
+            out[f'{W}s'] = row
+        return out
+
     def _process_tick(self, price: float):
         now = time.time()
 
@@ -6271,6 +6954,59 @@ class OvertopBassanoV16Production:
 
         # Aggiorna prezzo live ad ogni tick
         self._last_price = price
+
+        # ════════════════════════════════════════════════════════════════
+        # PASSO 10 — PREDICTION TRACKER (chiamato ogni tick, sola lettura)
+        # ════════════════════════════════════════════════════════════════
+        try:
+            self._pt_track(now, price)
+        except Exception as _e_pt:
+            log.debug(f"[PT_TRACK_ERR] {_e_pt}")
+
+        # ════════════════════════════════════════════════════════════════
+        # PASSO 13 — PREDITTORE CONTESTUALE V2 (dinamico, onesto)
+        # ════════════════════════════════════════════════════════════════
+        try:
+            self.predittore_v2.osserva(
+                now, price,
+                self._oi_carica, self._oi_stato,
+                self._oi_carica_short, self._oi_stato_short
+            )
+        except Exception as _e_pv2:
+            log.debug(f"[PRED_V2_ERR] {_e_pv2}")
+
+        # ════════════════════════════════════════════════════════════════
+        # PASSO 15 — TATTICA DI PESCA
+        # 1) tick: verifica catture/scadenze/chiusure delle lenze in volo
+        # 2) pianta_se_radar_acceso: se il radar dice qualcosa, pianta 5 lenze
+        # Il delta_atteso viene dal V2 (se ready) altrimenti da _delta_fuoco
+        # del Veritas. Niente che tocchi il motore SC — pesca in parallelo.
+        # ════════════════════════════════════════════════════════════════
+        try:
+            self.libro_pesca.tick(now, price)
+            # delta_atteso per la piantata: dal V2 se ready, altrimenti
+            # fallback a una stima conservativa proporzionale al prezzo
+            _delta_pesca = 0.0
+            try:
+                _pv2_stats = self.predittore_v2.get_stats()
+                _pv2_delta = _pv2_stats.get('pred_v2_delta', 0.0)
+                if _pv2_stats.get('pred_v2_n_verificate', 0) >= 30 and _pv2_delta:
+                    _delta_pesca = abs(_pv2_delta)
+            except Exception:
+                pass
+            if _delta_pesca == 0.0:
+                # Fallback: 0.05% del prezzo (es. BTC $80k → $40)
+                _delta_pesca = price * 0.0005
+            _regime_now = getattr(self, '_regime_current',
+                                  getattr(self, '_regime', 'UNKNOWN'))
+            self.libro_pesca.pianta_se_radar_acceso(
+                now, price,
+                self._oi_carica, self._oi_stato,
+                self._oi_carica_short, self._oi_stato_short,
+                _regime_now, _delta_pesca
+            )
+        except Exception as _e_lp:
+            log.debug(f"[LIBRO_PESCA_TICK_ERR] {_e_lp}")
 
         # Aggiorna prezzo live ad ogni tick (per dashboard)
         if self.heartbeat_lock:
@@ -7570,6 +8306,9 @@ class OvertopBassanoV16Production:
                 st_pnl           = _st_ctx['pnl_sim'],
                 oi_carica        = self._oi_carica,
                 oi_stato         = self._oi_stato,
+                # PASSO 11: passa anche l'OI SHORT per il pred_boost bilaterale
+                oi_carica_short  = self._oi_carica_short,
+                oi_stato_short   = self._oi_stato_short,
                 score            = score,
                 soglia           = soglia,
                 matrimonio_wr    = _mat.get('wr', 0.5),
@@ -8211,14 +8950,91 @@ class OvertopBassanoV16Production:
                             if (dir_pred > 0) == (dir_reale > 0):
                                 conferme += 1
                     conf_pct = round(conferme / totale * 100, 1) if totale > 0 else 0
-                    self.heartbeat_data["pred_scostamento"] = scost_avg
-                    self.heartbeat_data["pred_conferme"]    = conferme
-                    self.heartbeat_data["pred_totale"]      = totale
-                    self.heartbeat_data["pred_score"]       = conf_pct
+                    # ════════════════════════════════════════════════════════════
+                    # PASSO 14 (15mag2026) — DASHBOARD ONESTA
+                    # Le card vecchie (SCOSTAMENTO, CONFERMATE, SCORE PRED) NON
+                    # vengono più alimentate dal calcolo tautologico (copia +
+                    # delta costante). Vengono alimentate dal Predittore V2,
+                    # che misura sé stesso contro il futuro reale a 60s.
+                    # I valori tautologici (scost_avg/conferme/totale/conf_pct)
+                    # restano calcolati come fallback finché il V2 non ha
+                    # raccolto almeno 30 predizioni verificate.
+                    # ════════════════════════════════════════════════════════════
+                    _pv2_ready = False
+                    _pv2_score = conf_pct        # default = tautologico (cold)
+                    _pv2_scost = scost_avg       # default = tautologico (cold)
+                    _pv2_conf  = conferme        # default = tautologico (cold)
+                    _pv2_tot   = totale          # default = tautologico (cold)
+                    try:
+                        _pv2_stats = self.predittore_v2.get_stats()
+                        _pv2_nver  = _pv2_stats.get('pred_v2_n_verificate', 0)
+                        if _pv2_nver >= 30:
+                            _pv2_ready = True
+                            _pv2_score = _pv2_stats.get('pred_v2_accuracy_segno', conf_pct)
+                            _pv2_scost = _pv2_stats.get('pred_v2_err_medio', scost_avg)
+                            _pv2_conf  = sum(self.predittore_v2._segno_giusti) \
+                                         if hasattr(self.predittore_v2, '_segno_giusti') else 0
+                            _pv2_tot   = _pv2_stats.get('pred_v2_n_segno', 0)
+                    except Exception as _e_pv2_card:
+                        log.debug(f"[PRED_V2_CARD_ERR] {_e_pv2_card}")
+                    self.heartbeat_data["pred_scostamento"] = _pv2_scost
+                    self.heartbeat_data["pred_conferme"]    = _pv2_conf
+                    self.heartbeat_data["pred_totale"]      = _pv2_tot
+                    self.heartbeat_data["pred_score"]       = _pv2_score
+                    self.heartbeat_data["pred_v2_ready"]    = _pv2_ready
                     self.heartbeat_data["pred_trade_n"]     = self._pred_trade_n
                     self.heartbeat_data["pred_trade_pnl"]   = round(self._pred_trade_pnl, 2)
                     self.heartbeat_data["pred_delta_fuoco"]  = round(_delta_fuoco, 4)
                     self.heartbeat_data["pred_delta_carica"] = round(_delta_carica, 4)
+
+                    # ════════════════════════════════════════════════════════════
+                    # PASSO 12 (15mag2026) — LENZA visibile sulla dashboard
+                    # Il pescatore pianta la lenza dove passerà il pesce a 60s.
+                    # delta_fuoco = movimento medio osservato a 60s quando OI=FUOCO
+                    # lenza_long  = dove arriverà il prezzo se sale (FUOCO LONG)
+                    # lenza_short = dove arriverà se scende (FUOCO SHORT)
+                    # Espone anche QUALE lenza è attiva (FUOCO da che lato).
+                    # ════════════════════════════════════════════════════════════
+                    _prezzo_attuale = _ph[-1] if _ph else 0
+                    _delta_pred = _delta_fuoco if _delta_fuoco != 0 else _delta_carica
+                    _delta_abs = abs(_delta_pred)
+                    self.heartbeat_data["lenza_long"]    = round(_prezzo_attuale + _delta_abs, 2)
+                    self.heartbeat_data["lenza_short"]   = round(_prezzo_attuale - _delta_abs, 2)
+                    self.heartbeat_data["lenza_delta"]   = round(_delta_abs, 2)
+                    # Quale lenza è ATTIVA (FUOCO acceso da quel lato + predizione certificata)
+                    _ps_now = getattr(self.supercervello, '_pred_score_ref', 0)
+                    _pc_now = getattr(self.supercervello, '_pred_calib_ref', 0)
+                    _pred_ok = _ps_now >= 70 and _pc_now >= 50
+                    _lenza_attiva = "NONE"
+                    if _pred_ok:
+                        if self._oi_stato_short == "FUOCO" and self._oi_carica_short >= 0.75:
+                            _lenza_attiva = "SHORT"
+                        elif self._oi_stato == "FUOCO" and self._oi_carica >= 0.75:
+                            _lenza_attiva = "LONG"
+                    self.heartbeat_data["lenza_attiva"]  = _lenza_attiva
+
+                    # ════════════════════════════════════════════════════════════
+                    # PASSO 13 — PREDITTORE V2 ONESTO (statistiche misurate)
+                    # ════════════════════════════════════════════════════════════
+                    try:
+                        _pv2 = self.predittore_v2.get_stats()
+                        for _k, _v in _pv2.items():
+                            self.heartbeat_data[_k] = _v
+                    except Exception as _e_pv2:
+                        log.debug(f"[PRED_V2_HB_ERR] {_e_pv2}")
+
+                    # ════════════════════════════════════════════════════════════
+                    # PASSO 15 — LIBRO DI PESCA (stats per dashboard)
+                    # ════════════════════════════════════════════════════════════
+                    try:
+                        _lp = self.libro_pesca.get_stats(time.time())
+                        for _k, _v in _lp.items():
+                            self.heartbeat_data[_k] = _v
+                        # Eventi recenti per il grafico (catture + scadute)
+                        self.heartbeat_data["lp_eventi_recenti"] = \
+                            self.libro_pesca.get_recent_events(50)
+                    except Exception as _e_lp_hb:
+                        log.debug(f"[LIBRO_PESCA_HB_ERR] {_e_lp_hb}")
 
                     # Ratio magnitudine: predizione vs movimento reale
                     # Misura quanto la predizione sovra/sottostima il mercato
@@ -8246,14 +9062,50 @@ class OvertopBassanoV16Production:
                         self._pred_ratio_history.append(ratio)
                         if len(self._pred_ratio_history) > 50:
                             self._pred_ratio_history.pop(0)
-                        ratio_smooth = round(
+                        ratio_smooth_taut = round(
                             sum(self._pred_ratio_history) / len(self._pred_ratio_history), 1)
-                        self.heartbeat_data["pred_ratio"]     = ratio_smooth
+
+                        # ════════════════════════════════════════════════════════
+                        # PASSO 14 — CALIBRAZIONE ONESTA DAL V2
+                        # Se V2 ha abbastanza dati: usiamo delta_predetti/reali
+                        # misurati contro il futuro reale, non i tick tautologici.
+                        # Altrimenti fallback al ratio_smooth tautologico.
+                        # ════════════════════════════════════════════════════════
+                        ratio_v2 = ratio_smooth_taut  # default cold
+                        try:
+                            _pv2_dp = getattr(self.predittore_v2, '_delta_predetti', None)
+                            _pv2_dr = getattr(self.predittore_v2, '_delta_reali', None)
+                            if _pv2_dp and _pv2_dr and len(_pv2_dr) >= 30:
+                                _abs_pred  = [abs(x) for x in _pv2_dp]
+                                _abs_real  = [abs(x) for x in _pv2_dr]
+                                _ap = sum(_abs_pred) / len(_abs_pred)
+                                _ar = sum(_abs_real) / len(_abs_real)
+                                if _ap > 0:
+                                    ratio_v2 = round(_ar / _ap * 100, 1)
+                        except Exception as _e_rv2:
+                            log.debug(f"[PRED_V2_RATIO_ERR] {_e_rv2}")
+                        self.heartbeat_data["pred_ratio"]     = ratio_v2
                         self.heartbeat_data["pred_ratio_raw"] = ratio
-                        # Aggiorna SC per boost predizione e Veritas stats
+                        self.heartbeat_data["pred_ratio_taut"] = ratio_smooth_taut
+
+                        # ════════════════════════════════════════════════════════
+                        # PASSO 14 — _pred_score_ref / _pred_calib_ref dal V2
+                        # Il motore (floor dinamico soglie + gate decisionali)
+                        # smette di guidare sulla menzogna tautologica.
+                        # Cold start: finché V2 non ha 30 verificate, motore
+                        # resta a 70/100 (default boot) per non strangolare.
+                        # ════════════════════════════════════════════════════════
                         if hasattr(self, 'supercervello'):
-                            self.supercervello._pred_score_ref = conf_pct
-                            self.supercervello._pred_calib_ref = ratio_smooth
+                            if _pv2_ready:
+                                # V2 maturo: il motore vede la verità
+                                self.supercervello._pred_score_ref = _pv2_score
+                                self.supercervello._pred_calib_ref = ratio_v2
+                            else:
+                                # Cold start: lascia il default boot (70/100)
+                                # NON aggiorniamo _pred_score_ref qui — resta
+                                # quello settato in __init__ (70.0 da Veritas)
+                                # NON sovrascriviamo con conf_pct tautologico.
+                                pass
                             self.supercervello._veritas_stats_ref = self.veritas._stats
 
                 # FIX: _ctx aggiornato SEMPRE ad ogni tick dell'Oracolo Interno,
@@ -9073,6 +9925,9 @@ class OvertopBassanoV16Production:
                 st_pnl         = _st_ctx['pnl_sim'],
                 oi_carica      = self._oi_carica,
                 oi_stato       = self._oi_stato,
+                # PASSO 11: passa anche l'OI SHORT per il pred_boost bilaterale
+                oi_carica_short= self._oi_carica_short,
+                oi_stato_short = self._oi_stato_short,
                 score          = score,
                 soglia         = soglia,
                 matrimonio_wr  = _mat.get('wr', 0.5),
@@ -10941,6 +11796,8 @@ class OvertopBassanoV16Production:
                 _hb_set("m2_cooldown",         lambda: max(0, self._m2_cooldown_until - time.time()))
                 _hb_set("m2_log",              lambda: list(self._m2_log))
                 _hb_set("m2_campo_stats",      lambda: self.campo.get_stats())
+                # ─── PASSO 10 — Prediction Tracker (sola lettura, diagnostica) ───
+                _hb_set("pt_stats",            lambda: self._pt_get_stats())
                 _hb_set("m2_last_score",       lambda: round(getattr(self.campo, '_last_score', 0), 1))
                 _hb_set("m2_last_soglia",      lambda: round(getattr(self.campo, '_last_soglia', 60), 1))
                 _hb_set("m2_buy_distance",     lambda: round(getattr(self.campo, '_last_soglia', 60) - getattr(self.campo, '_last_score', 0), 1))
