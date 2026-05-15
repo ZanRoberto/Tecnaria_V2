@@ -8988,6 +8988,9 @@ class OvertopBassanoV16Production:
                             _lp = self.libro_pesca.get_stats(time.time())
                             for _k, _v in _lp.items():
                                 self.heartbeat_data[_k] = _v
+                            # PASSO 15.C — eventi recenti per il grafico storico
+                            self.heartbeat_data["lp_eventi_recenti"] = \
+                                self.libro_pesca.get_recent_events(50)
                     except Exception as _e_lp_hb:
                         log.debug(f"[LIBRO_PESCA_HB_ERR] {_e_lp_hb}")
 
