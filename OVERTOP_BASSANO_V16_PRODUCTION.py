@@ -3047,7 +3047,28 @@ class ContestoAnalyzer:
         r20        = prices[-20:]
         changes20  = [abs(r20[i+1] - r20[i]) for i in range(len(r20)-1)]
         avg_ch20   = sum(changes20) / len(changes20) if changes20 else 0
-        volatility = "ALTA" if avg_ch20 > 0.005 else ("MEDIA" if avg_ch20 > 0.002 else "BASSA")
+        # ════════════════════════════════════════════════════════════════
+        # PATCH 1 (16mag2026) — VOLATILITY PERCENTUALE
+        # PRIMA: soglie ASSOLUTE 0.005 / 0.002 in $.
+        #   Su BTC $79000 una variazione tick media è $1-5 → avg_ch20 sempre
+        #   ben sopra 0.005 → volatility = "ALTA" praticamente sempre.
+        #   Fingerprint Oracolo contaminato al 100% (vedi memorie 16mag).
+        # ADESSO: rapporto percentuale rispetto al prezzo medio.
+        #   ALTA  se avg_ch20_pct > 0.00015 (vibrazione tick > ~$12 su BTC $79k)
+        #   MEDIA se avg_ch20_pct > 0.00005 (vibrazione tick > ~$4)
+        #   BASSA altrimenti
+        # ════════════════════════════════════════════════════════════════
+        prezzo_medio_20 = sum(r20) / len(r20) if r20 else 0
+        if prezzo_medio_20 > 0:
+            avg_ch20_pct = avg_ch20 / prezzo_medio_20
+        else:
+            avg_ch20_pct = 0
+        if avg_ch20_pct > 0.00015:
+            volatility = "ALTA"
+        elif avg_ch20_pct > 0.00005:
+            volatility = "MEDIA"
+        else:
+            volatility = "BASSA"
 
         chg_pct = (prices[-1] - prices[0]) / prices[0] * 100
         trend   = "UP" if chg_pct > 0.3 else ("DOWN" if chg_pct < -0.3 else "SIDEWAYS")
@@ -6909,6 +6930,18 @@ class OvertopBassanoV16Production:
         self._pred_trade_pnl    = 0.0  # PnL cumulativo di quei trade
 
         # ════════════════════════════════════════════════════════════════
+        # PATCH 1 (16mag2026) — TELEMETRIA PASSIVA DISTRIBUZIONE
+        # Contatori per misurare la NUOVA distribuzione dopo fix percezione.
+        # Non votano, non modificano soglie, non creano capsule.
+        # Solo conteggio per osservazione 24h.
+        # ════════════════════════════════════════════════════════════════
+        self._tel_vol_distribution = {"ALTA": 0, "MEDIA": 0, "BASSA": 0}
+        self._tel_vp_distribution = {"vp_lt_0.8": 0, "vp_0.8_1.1": 0,
+                                       "vp_1.1_1.5": 0, "vp_gte_1.5": 0}
+        self._tel_oi_stato_distribution = {"ATTESA": 0, "CARICA": 0, "FUOCO": 0}
+        self._tel_ticks_total = 0
+
+        # ════════════════════════════════════════════════════════════════
         # PASSO 10 (15mag2026) — PREDICTION TRACKER
         # ════════════════════════════════════════════════════════════════
         # Salva il prezzo a ogni tick. Dopo 60/90/120s misura il movimento
@@ -7595,6 +7628,18 @@ class OvertopBassanoV16Production:
         _mom = contesto[0] if _contesto_ok else "MEDIO"
         _vol = contesto[1] if _contesto_ok else "MEDIA"
         _trd = contesto[2] if _contesto_ok else "SIDEWAYS"
+
+        # ════════════════════════════════════════════════════════════════
+        # PATCH 1 TELEMETRIA — distribuzione volatility + oi_stato (passiva)
+        # ════════════════════════════════════════════════════════════════
+        try:
+            if _contesto_ok and _vol in self._tel_vol_distribution:
+                self._tel_vol_distribution[_vol] += 1
+            _stato_now = getattr(self, '_oi_stato', 'ATTESA')
+            if _stato_now in self._tel_oi_stato_distribution:
+                self._tel_oi_stato_distribution[_stato_now] += 1
+        except Exception:
+            pass
 
         # Oracolo e Veritas girano sempre
         self._oracolo_interno_tick(price, _mom, _vol, _trd)
@@ -8971,7 +9016,37 @@ class OvertopBassanoV16Production:
 
         # Volume pressure dal seed scorer
         _sv = self.seed_scorer.score()
-        vp  = _sv.get('vol_accel', 0.5) + 1.0 if _sv.get('reason') != 'insufficient_data' else 1.0
+        # ════════════════════════════════════════════════════════════════
+        # PATCH 1 (16mag2026) — VOL_PRESSURE OPZIONE B
+        # PRIMA: vp = _sv.get('vol_accel', 0.5) + 1.0
+        #   Bug pre-esistente: SeedScorer ritorna 'vol_pressure' NON 'vol_accel'.
+        #   La chiave 'vol_accel' non esisteva → fallback 0.5 + 1.0 = 1.5 sempre.
+        #   Risultato: vp >= 1.1 sempre True → +0.15 sempre alla carica OI.
+        #   Spiega FUOCO costante.
+        # ADESSO: chiave giusta + niente pezza +1.0 (era patch per fallback drogato).
+        #   vp ora rappresenta davvero il rapporto vol5/vol15 (0.3-2.5 tipico).
+        #   Soglia 1.1 sopravvive con significato reale: volume +10% su media.
+        # ════════════════════════════════════════════════════════════════
+        if _sv.get('reason') != 'insufficient_data':
+            vp = _sv.get('vol_pressure', 0.5)
+        else:
+            vp = 0.5
+
+        # ════════════════════════════════════════════════════════════════
+        # PATCH 1 TELEMETRIA — distribuzione vp (passiva, no impatto)
+        # ════════════════════════════════════════════════════════════════
+        try:
+            if vp < 0.8:
+                self._tel_vp_distribution["vp_lt_0.8"] += 1
+            elif vp < 1.1:
+                self._tel_vp_distribution["vp_0.8_1.1"] += 1
+            elif vp < 1.5:
+                self._tel_vp_distribution["vp_1.1_1.5"] += 1
+            else:
+                self._tel_vp_distribution["vp_gte_1.5"] += 1
+            self._tel_ticks_total += 1
+        except Exception:
+            pass
 
         # L3: memoria dal Signal Tracker
         _mem_hit = 0.5
@@ -9267,6 +9342,14 @@ class OvertopBassanoV16Production:
                     self.heartbeat_data["pred_trade_pnl"]   = round(self._pred_trade_pnl, 2)
                     self.heartbeat_data["pred_delta_fuoco"]  = round(_delta_fuoco, 4)
                     self.heartbeat_data["pred_delta_carica"] = round(_delta_carica, 4)
+
+                    # ════════════════════════════════════════════════════════════════
+                    # PATCH 1 TELEMETRIA — distribuzioni esposte (read-only)
+                    # ════════════════════════════════════════════════════════════════
+                    self.heartbeat_data["tel_ticks_total"] = self._tel_ticks_total
+                    self.heartbeat_data["tel_vol_distribution"] = dict(self._tel_vol_distribution)
+                    self.heartbeat_data["tel_vp_distribution"] = dict(self._tel_vp_distribution)
+                    self.heartbeat_data["tel_oi_stato_distribution"] = dict(self._tel_oi_stato_distribution)
 
                     # ════════════════════════════════════════════════════════════
                     # PASSO 12 (15mag2026) — LENZA visibile sulla dashboard
