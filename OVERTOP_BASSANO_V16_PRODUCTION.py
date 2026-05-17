@@ -11238,16 +11238,32 @@ class OvertopBassanoV16Production:
                     pass
             self._m2_pnl += pnl
 
-            # FIX: aggiorna _m2_recent_trades — usato dal gate CESPUGLIO_AVVELENATO
-            # Senza questo il gate non ha mai dati e non funziona
-            self._m2_recent_trades.append({
-                'ts':       time.time(),
-                'pnl':      pnl,
-                'is_win':   is_win,
-                'duration': trade_duration,
-                'regime':   self._regime_current,
-                'soglia':   self._shadow.get('soglia', 60) if self._shadow else 60,
-            })
+            # ════════════════════════════════════════════════════════════════
+            # PATCH 5 BUG 12 — Single Recent Trade Append
+            # ════════════════════════════════════════════════════════════════
+            # Background: prima di PATCH 5, lo stesso trade chiuso entrava DUE
+            # VOLTE consecutive in self._m2_recent_trades:
+            #   1. dentro _state_engine_update (riga ~8136), chiamato sopra
+            #   2. di nuovo qui sotto (append orfano)
+            #
+            # Questo falsava:
+            #   - recent[-5] usato da State Engine (AGGRESSIVO/NEUTRO/DIFENSIVO)
+            #   - recent_wr, recent_pnl, recent_losses, _m2_loss_streak percepito
+            #   - auto_tune_soglia che guarda recent[-5]
+            #   - tutti i gate di entrata basati sulla memoria breve
+            #
+            # Il commento del vecchio append diceva:
+            #   "FIX: aggiorna _m2_recent_trades — usato dal gate [GATE_OBSOLETO]"
+            # Ma il gate citato non esiste più nel codice (grep conferma 0
+            # occorrenze del nome come simbolo operativo). Era codice morto
+            # orfano da una versione precedente.
+            #
+            # Fix PATCH 5: rimosso il secondo append. L'append in
+            # _state_engine_update resta unico e corretto, ed è quello che
+            # State Engine effettivamente legge.
+            # ════════════════════════════════════════════════════════════════
+            # (PATCH 5: secondo append rimosso. State Engine usa l'unico
+            #  append eseguito poco sopra dentro _state_engine_update.)
 
             # ════════════════════════════════════════════════════════════════
             # FIX 2026-05-09 — Aggancio CompartoEngine + Engine V16 al close
