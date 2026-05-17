@@ -11179,21 +11179,61 @@ class OvertopBassanoV16Production:
                 self._m2_wins  += 1
             else:
                 self._m2_losses += 1
-                # ── SOSPENSIONE: prima perdita → sospendi pattern per osservazione ──
+                # ════════════════════════════════════════════════════════════════
+                # PATCH 4 BUG 11 — Pattern Suspension Cascade
+                # ════════════════════════════════════════════════════════════════
+                # Background: prima di PATCH 4, OGNI perdita (anche -$2 di sola fee)
+                # chiamava capsule_manager.sospendi_pattern() sul pattern appena
+                # usato. Cascata osservata:
+                #   1. Trade #1 entra su pattern fresco → WIN
+                #   2. Trade #1 chiude → pattern X1 sospeso
+                #   3. Trade #2 forzato su pattern X2 (marginale) → LOSS da fee
+                #   4. Trade #2 chiude → pattern X2 sospeso
+                #   5. ... cascata fino a esaurimento pattern utili
+                #
+                # Conseguenza: il bot punisce un pattern operativo per UNA SOLA
+                # perdita, anche se quella perdita è solo fee. Pattern strangolati
+                # a catena. Il "primo trade vince, gli altri muoiono" osservato
+                # da Roberto è esattamente questo meccanismo.
+                #
+                # Fix PATCH 4 (Suspension Sanity):
+                #  - AUTO_SUSPEND_PATTERN_ON_LOSS = False (flag, default OFF)
+                #  - Nessuna sospensione automatica dopo singola loss
+                #  - Log osservativo SUSPEND_SKIP_SINGLE_LOSS al posto della
+                #    sospensione, per visibilità senza azione
+                #  - In futuro PATCH separata: riattivare sospensione SOLO se
+                #    stesso pattern perde 3 volte su 5, non per singola loss
+                #    e mai per fee-only loss
+                # ════════════════════════════════════════════════════════════════
+                AUTO_SUSPEND_PATTERN_ON_LOSS = False  # PATCH 4: flag OFF di default
                 try:
-                    if hasattr(self, 'capsule_manager') and self.capsule_manager:
-                        _mom = getattr(self, '_shadow_entry_momentum', '') or ''
-                        _vol = self._shadow_entry_volatility or ''
-                        _trd = self._shadow_entry_trend or ''
-                        _dir = entry_direction or 'LONG'
-                        if _mom and _vol and _trd:
-                            _pattern = f"{_mom}|{_vol}|{_trd}|{_dir}"
-                            self.capsule_manager.sospendi_pattern(
-                                pattern   = _pattern,
-                                oi_carica = self._oi_carica,
-                                regime    = self._regime_current,
-                                motivo    = f"Perdita netta ${pnl:.2f} — in osservazione shadow"
-                            )
+                    _mom = getattr(self, '_shadow_entry_momentum', '') or ''
+                    _vol = self._shadow_entry_volatility or ''
+                    _trd = self._shadow_entry_trend or ''
+                    _dir = entry_direction or 'LONG'
+                    _pattern = f"{_mom}|{_vol}|{_trd}|{_dir}" if (_mom and _vol and _trd) else "?|?|?|?"
+
+                    if AUTO_SUSPEND_PATTERN_ON_LOSS:
+                        # Comportamento legacy — disattivato per default in PATCH 4.
+                        # Lasciato qui per attivazione futura con condizioni più strette.
+                        if hasattr(self, 'capsule_manager') and self.capsule_manager:
+                            if _mom and _vol and _trd:
+                                self.capsule_manager.sospendi_pattern(
+                                    pattern   = _pattern,
+                                    oi_carica = self._oi_carica,
+                                    regime    = self._regime_current,
+                                    motivo    = f"Perdita netta ${pnl:.2f} — in osservazione shadow"
+                                )
+                    else:
+                        # PATCH 4: solo log, nessuna sospensione automatica.
+                        # Distinguiamo fee-only loss da loss strutturale per visibilità.
+                        _fee_rt_p4 = float(getattr(self, "FEE_TRADE", 2.00))
+                        _is_fee_loss = abs(pnl) <= (_fee_rt_p4 * 1.5)  # entro $3 netto
+                        _loss_kind = "FEE_LOSS" if _is_fee_loss else "REAL_LOSS"
+                        self._log_m2("🟦",
+                            f"SUSPEND_SKIP_SINGLE_LOSS pattern={_pattern} "
+                            f"pnl=${pnl:+.2f} kind={_loss_kind} "
+                            f"reason=AUTO_SUSPEND_OFF_PATCH4")
                 except Exception as _sp_e:
                     pass
             self._m2_pnl += pnl
