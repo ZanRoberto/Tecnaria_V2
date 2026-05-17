@@ -10824,11 +10824,29 @@ class OvertopBassanoV16Production:
             # Quanto siamo nella vita del trade rispetto alla durata media WIN
             time_ratio = duration / avg_win_dur  # 0.5 = a metà vita, 2.0 = doppio del normale
 
+            # PATCH 3 BUG 10 — Time-Ratio Exit Killer
+            # Background: exit_soglia cresce linearmente con time_ratio.
+            # Combinato con il BUG 8 (WIN classification senza fee), questo crea
+            # un feedback loop velenoso: i falsi-WIN entrano in avg_win_dur,
+            # abbassano la durata media, fanno salire time_ratio sui trade
+            # successivi, alzano exit_soglia, chiudono ancora prima.
+            # Osservato live: soglie 45→46→53 in 3 trade consecutivi.
+            #
+            # Fix: se il trade NON ha ancora pagato la fee (pnl_lordo < fee*1.5),
+            # il time_ratio NON deve alzare la soglia oltre il floor di 35.
+            # Significato fisico: "non strangolare un trade che non è ancora
+            # economicamente maturo". Solo i trade che hanno già attraversato
+            # la zona-fee possono essere chiusi per calo energia con soglia alta.
+            _fee_rt_soglia = float(getattr(self, "FEE_TRADE", 2.00))
+            _trade_maturo = current_pnl >= (_fee_rt_soglia * 1.5)  # +$3 lordo = breakeven netto
             # Soglia che sale con il tempo proporzionalmente alla vita del trade
             # Quando siamo a metà vita (ratio=0.5): soglia 32
             # Quando siamo alla fine normale (ratio=1.0): soglia 45
             # Quando siamo oltre (ratio=2.0): soglia 58
             exit_soglia_base = int(25 + time_ratio * 30)
+            if not _trade_maturo:
+                # Sotto fee: cap soglia a 35 (no strangolamento prematuro)
+                exit_soglia_base = min(35, exit_soglia_base)
             exit_soglia_base = max(28, min(65, exit_soglia_base))
 
             # EXIT_TOO_EARLY FEEDBACK: il post-trade dice quanto spesso usciamo presto.
@@ -10970,12 +10988,44 @@ class OvertopBassanoV16Production:
                         return
 
             # -- DECISIONE ---------------------------------------------
+            # PATCH 3 BUG 8 — Honest WIN Classification
+            # Background: current_pnl è LORDO (delta_price * btc_qty).
+            # La fee round-trip ($2.00) viene applicata solo in _close_shadow_trade.
+            # Senza correzione, il bot etichettava come "WIN_+1" trade economicamente
+            # in perdita ($1 lordo → -$1 netto). Veleno per la memoria e per l'occhio
+            # umano che legge i log.
+            #
+            # Regola nuova:
+            #  - WIN vero solo se pnl_netto_stimato > 0 (lordo > fee)
+            #  - Sotto fee con energy < soglia: NON CHIUDERE (lascia respirare)
+            #    perché chiudere significherebbe registrare un loss travestito.
+            #    Aspettare che il movimento maturi o muoia decisamente.
+            #  - Loss vera (pnl <= 0): chiude come prima ma con label LOSS
             if exit_energy < exit_soglia:
-                if current_pnl > 0:
-                    self._close_shadow_trade(price, f"EXIT_E{exit_energy}_S{exit_soglia}_WIN_{current_pnl:+.0f}")
+                _fee_rt = float(getattr(self, "FEE_TRADE", 2.00))
+                pnl_netto_stimato = current_pnl - _fee_rt
+
+                if pnl_netto_stimato > 0:
+                    # WIN vero: lordo > fee
+                    self._close_shadow_trade(price,
+                        f"EXIT_E{exit_energy}_S{exit_soglia}_WIN_NET_{pnl_netto_stimato:+.1f}")
+                    return
+                elif current_pnl > 0:
+                    # SUBFEE: lordo positivo ma netto negativo.
+                    # NON chiudere per calo energia se sotto fee.
+                    # Loggiamo per visibilità ma lasciamo che il trade prosegua.
+                    # Si chiuderà naturalmente con altri trigger (HARD_STOP,
+                    # divorzio, TIMEOUT_DD, PROTECT_HI se torna sopra) o quando
+                    # current_pnl diventa decisamente negativo.
+                    self._log_m2("🟡",
+                        f"SUBFEE_HOLD E{exit_energy} S{exit_soglia} "
+                        f"lordo=${current_pnl:+.2f} netto=${pnl_netto_stimato:+.2f}")
+                    # NON return: continua agli altri controlli (timeout, drawdown)
                 else:
-                    self._close_shadow_trade(price, f"EXIT_E{exit_energy}_S{exit_soglia}")
-                return
+                    # LOSS vera: chiusura come prima
+                    self._close_shadow_trade(price,
+                        f"EXIT_E{exit_energy}_S{exit_soglia}_LOSS_{current_pnl:+.1f}")
+                    return
 
             # -- TIMEOUT SAFETY - solo se l'exit intelligente non chiude -----
             # Niente TIMEOUT_3X - l'exit intelligente decide.
