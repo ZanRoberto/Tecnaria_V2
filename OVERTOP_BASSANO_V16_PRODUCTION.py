@@ -9982,8 +9982,40 @@ class OvertopBassanoV16Production:
                 except Exception:
                     pass
 
-                # ── BYPASS MAGNITUDE v2 (logica invariata — calcola, non blocca)
-                _bypass_magnitude = False
+                # ════════════════════════════════════════════════════════════════
+                # PATCH 7 BUG 14 — Disable Operational BYPASS_MAGNITUDE_v2
+                # ════════════════════════════════════════════════════════════════
+                # Background: BYPASS_MAGNITUDE_v2 si attivava quando BTC si era
+                # mosso più di ~0.05% in 10 minuti (soglia $40 a BTC=80k). Quando
+                # attivo:
+                #   1. bypassava TSUNAMI_NO_ENTRY (l'NO_ENTRY non bloccava più)
+                #   2. iniettava proposed_direction + flip_confidence=1.0 nel verbale
+                #   3. SC accettava il flip (perché flip_confidence>=0.7)
+                #   4. il bot entrava su rincorsa post-movimento
+                #
+                # Diagnosi di Roberto (17 maggio 2026): osservando i trade dopo
+                # un doppio WIN, i LOSS_FEE consecutivi avevano score=0.0
+                # soglia=0.0 nel data_json — segno di entry su path che bypassa
+                # SC. La firma del WIN era ritrovata, ma il bot entrava ciecamente
+                # con BYPASS_MAGNITUDE attivo, perdendo le fee.
+                #
+                # Fix PATCH 7:
+                #  - BYPASS_MAGNITUDE_OPERATIVO = False (flag, default OFF)
+                #  - Il calcolo continua (utile come log osservativo)
+                #  - _bypass_magnitude_observed = True quando calcolo supera soglia
+                #  - _bypass_magnitude (variabile operativa) resta False
+                #  - TSUNAMI_NO_ENTRY non viene più bypassato da magnitude
+                #  - Nessun flip_confidence=1.0 derivante dal bypass
+                #  - Nessun _tsunami_size_mult=1.0 forzato da bypass
+                #
+                # In futuro: si potrà riattivare BYPASS_MAGNITUDE solo con
+                # condizioni più strette (es. score SC valido prima del bypass).
+                # ════════════════════════════════════════════════════════════════
+                BYPASS_MAGNITUDE_OPERATIVO = False  # PATCH 7: flag OFF di default
+
+                # ── BYPASS MAGNITUDE v2 (calcolo invariato, USO ridotto a osservazione)
+                _bypass_magnitude = False           # OPERATIVO: resta False
+                _bypass_magnitude_observed = False  # OSSERVATIVO: nuovo
                 _bypass_dir = None
                 try:
                     _ts_verd = _ts_decision.verdetti if hasattr(_ts_decision, 'verdetti') else {}
@@ -9998,34 +10030,45 @@ class OvertopBassanoV16Production:
                                     _delta_dollar = abs(_p_now - _p_start)
                                     # ════════════════════════════════════════════════
                                     # PASSO 9 (15mag2026) — SOGLIA PROPORZIONALE
-                                    # Prima: soglia fissa $30. Su BTC=30k era 0.10%.
-                                    # Su BTC=81k è 0.037%: relativamente più alta.
-                                    # La soglia "invecchiava" col prezzo.
-                                    # Ora: 0.05% del prezzo corrente.
+                                    # 0.05% del prezzo corrente.
                                     #   BTC=80k → $40 ; BTC=100k → $50 ; BTC=50k → $25
                                     # ════════════════════════════════════════════════
                                     _bypass_threshold = max(15.0, _p_now * 0.0005)
                                     if _delta_dollar >= _bypass_threshold:
-                                        _bypass_magnitude = True
                                         _bypass_dir = 'LONG' if _v10.direction == 'UP' else 'SHORT'
-                                        self._log_m2("⚡", f"BYPASS_MAGNITUDE_v2: 10min={_v10.direction} "
-                                                           f"coe={_v10.coerenza:.2f} str={_v10.strength:.2f} "
-                                                           f"delta=${_delta_dollar:.0f}/${_bypass_threshold:.0f} → {_bypass_dir}")
+                                        _bypass_magnitude_observed = True
+                                        # PATCH 7: setta _bypass_magnitude operativo SOLO se flag attivo
+                                        if BYPASS_MAGNITUDE_OPERATIVO:
+                                            _bypass_magnitude = True
+                                            self._log_m2("⚡", f"BYPASS_MAGNITUDE_v2: 10min={_v10.direction} "
+                                                               f"coe={_v10.coerenza:.2f} str={_v10.strength:.2f} "
+                                                               f"delta=${_delta_dollar:.0f}/${_bypass_threshold:.0f} → {_bypass_dir}")
+                                        else:
+                                            # PATCH 7: solo osservativo. Non autorizza entry.
+                                            self._log_m2("👁️", f"BYPASS_MAGNITUDE_OBSERVED: 10min={_v10.direction} "
+                                                               f"coe={_v10.coerenza:.2f} str={_v10.strength:.2f} "
+                                                               f"delta=${_delta_dollar:.0f}/${_bypass_threshold:.0f} → {_bypass_dir} "
+                                                               f"reason=BYPASS_OPERATIVO_OFF_PATCH7")
                 except Exception as _e_bm:
                     pass
 
                 # ── DEPOSIZIONE: TSUNAMI_NO_ENTRY (era return — ora verbale) ──
+                # PATCH 7: _bypass_magnitude resta sempre False (a meno di flag),
+                # quindi TSUNAMI_NO_ENTRY non viene più scavalcato da magnitude.
+                # Resta possibile lo scavalco da _bypass_oracolo (path separato, non toccato).
                 if _ts_decision.azione == 'NO_ENTRY' and not _bypass_magnitude and not _bypass_oracolo:
                     self._log_m2("🌊", f"TSUNAMI dep: NO_ENTRY — {_ts_decision.motivo}")
                     # NESSUN return. Tsunami ha deposto. SC valuterà.
 
-                # FIX #31: se bypass oracolo attivo, log
+                # FIX #31: se bypass oracolo attivo, log (path separato, non toccato da PATCH 7)
                 if _bypass_oracolo and _ts_decision.azione == 'NO_ENTRY':
                     self._log_m2("📜", f"TSUNAMI_BYPASSED_BY_ORACOLO: fp WR={_bypass_oracolo_wr:.0%} "
                                        f"n={_bypass_oracolo_n}")
                     self._tsunami_size_mult = 0.7
 
                 # ── PROPOSTA DI FLIP (era modifica di stato — ora verbale) ────
+                # PATCH 7: _bypass_magnitude=False di default, quindi questo ramo
+                # non si attiva. Nessun flip_confidence=1.0 da bypass magnitude.
                 if _bypass_magnitude:
                     _ts_dir = _bypass_dir
                     if _ts_dir != _campo_dir:
