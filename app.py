@@ -2277,6 +2277,7 @@ canvas.spark { width:100%; height:40px; }
       <div style="display:flex;gap:12px;margin-top:6px;font-size:9px;color:var(--dim);flex-wrap:wrap;">
         <span><span style="color:#378ADD">━</span> Mercato reale</span>
         <span><span style="color:#639922">╌</span> Predizione SC</span>
+        <span><span style="color:#ff9933">╌</span> Predizione V2 60s</span>
         <span><span style="color:#639922;font-size:11px">▲</span> BUY</span>
         <span><span style="color:#E24B4A;font-size:11px">▼</span> SELL loss</span>
         <span><span style="color:#639922;font-size:11px">✓</span> SELL win</span>
@@ -2510,6 +2511,7 @@ const SCPanel = (() => {
   const MAX = 120;
   const prices  = [];
   const preds   = [];
+  const predsV2 = [];   // V2LINE: predizione V2 a 60s (linea arancione)
   const cariche = [];
   const labels  = [];
   const buyMkrs = [];
@@ -2529,7 +2531,11 @@ const SCPanel = (() => {
     if (hb.sc_price_history && hb.sc_price_history.length > 2) {
       const ph = hb.sc_price_history;
       const ch = hb.sc_carica_history || [];
-      prices.length = 0; preds.length = 0; cariche.length = 0; labels.length = 0;
+      // V2LINE: serie storica V2 se esiste, altrimenti riempiremo punto-per-punto
+      const v2h = hb.sc_pred_v2_history || [];
+      prices.length = 0; preds.length = 0; predsV2.length = 0; cariche.length = 0; labels.length = 0;
+      // V2LINE: predizione V2 a 60s — valore corrente, ripetuto se manca storia
+      const predV2Now = (typeof hb.pred_v2_attiva === 'number') ? hb.pred_v2_attiva : null;
       ph.forEach((p, i) => {
         prices.push(p);
         labels.push(i);
@@ -2541,6 +2547,14 @@ const SCPanel = (() => {
         if (c >= 0.65)      delta = deltaFuoco;
         else if (c >= 0.40) delta = deltaCarica;
         preds.push(Math.round((p + delta) * 100) / 100);
+        // V2LINE: se backend manda storia v2 la usiamo, altrimenti valore corrente per ultimo punto
+        if (v2h[i] !== undefined && v2h[i] !== null) {
+          predsV2.push(Math.round(v2h[i] * 100) / 100);
+        } else if (i === ph.length - 1 && predV2Now) {
+          predsV2.push(Math.round(predV2Now * 100) / 100);
+        } else {
+          predsV2.push(null);
+        }
         cariche.push(Math.round(c * 1000) / 1000);
       });
     } else {
@@ -2548,8 +2562,12 @@ const SCPanel = (() => {
       labels.push(labels.length);
       if (prices.length > MAX) { prices.shift(); labels.shift(); }
       preds.push(Math.round((price + (carica - 0.5) * 150) * 100) / 100);
+      // V2LINE: append valore corrente V2 se disponibile, altrimenti null
+      const pv2 = (typeof hb.pred_v2_attiva === 'number') ? hb.pred_v2_attiva : null;
+      predsV2.push(pv2 ? Math.round(pv2 * 100) / 100 : null);
       cariche.push(Math.round(carica * 1000) / 1000);
       if (preds.length   > MAX) preds.shift();
+      if (predsV2.length > MAX) predsV2.shift();
       if (cariche.length > MAX) cariche.shift();
     }
 
@@ -2952,7 +2970,7 @@ const SCPanel = (() => {
     const w1 = W1-PAD.left-PAD.right;
     const h1 = H1-PAD.top-PAD.bottom;
 
-    const allPrices = prices.concat(preds).filter(v=>v>0);
+    const allPrices = prices.concat(preds).concat(predsV2.filter(v => v !== null && v > 0)).filter(v=>v>0);
     const minP = Math.min(...allPrices)*0.9999;
     const maxP = Math.max(...allPrices)*1.0001;
     const rngP = maxP-minP||1;
@@ -2972,10 +2990,31 @@ const SCPanel = (() => {
     prices.forEach((p,i)=>i===0?ctx1.moveTo(xOf(i),yOf(p)):ctx1.lineTo(xOf(i),yOf(p)));
     ctx1.stroke();
 
-    // Linea Predizione
+    // Linea Predizione (SC, verde tratteggiata)
     ctx1.beginPath(); ctx1.strokeStyle='#639922'; ctx1.lineWidth=1; ctx1.setLineDash([4,3]);
     preds.forEach((p,i)=>{ if(p>0) i===0?ctx1.moveTo(xOf(i),yOf(p)):ctx1.lineTo(xOf(i),yOf(p)); });
     ctx1.stroke(); ctx1.setLineDash([]);
+
+    // V2LINE: Linea Predizione V2 a 60s (arancione tratteggiata)
+    // Saltiamo i null così la linea non scende a zero quando il dato non c'è.
+    ctx1.strokeStyle='#ff9933'; ctx1.lineWidth=1.2; ctx1.setLineDash([6,3]);
+    let v2Open = false;
+    ctx1.beginPath();
+    predsV2.forEach((p,i)=>{
+      if (p === null || p === undefined || !(p > 0)) { v2Open = false; return; }
+      if (!v2Open) { ctx1.moveTo(xOf(i), yOf(p)); v2Open = true; }
+      else         { ctx1.lineTo(xOf(i), yOf(p)); }
+    });
+    ctx1.stroke(); ctx1.setLineDash([]);
+
+    // V2LINE: pallino arancione sull'ultimo punto V2 (così è sempre visibile)
+    const lastV2Idx = predsV2.length - 1;
+    if (lastV2Idx >= 0 && predsV2[lastV2Idx] && predsV2[lastV2Idx] > 0) {
+      ctx1.fillStyle = '#ff9933';
+      ctx1.beginPath();
+      ctx1.arc(xOf(lastV2Idx), yOf(predsV2[lastV2Idx]), 3, 0, Math.PI*2);
+      ctx1.fill();
+    }
 
     // BUY markers
     buyMkrs.forEach(m=>{
