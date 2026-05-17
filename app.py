@@ -2277,23 +2277,10 @@ canvas.spark { width:100%; height:40px; }
       <div style="display:flex;gap:12px;margin-top:6px;font-size:9px;color:var(--dim);flex-wrap:wrap;">
         <span><span style="color:#378ADD">━</span> Mercato reale</span>
         <span><span style="color:#639922">╌</span> Predizione SC</span>
-        <span><span style="color:#ffcc33;font-size:13px">●</span> V2 aperto</span>
-        <span><span style="color:#00ff88;font-size:13px">●</span> V2 preso</span>
-        <span><span style="color:rgba(255,204,51,0.65);font-size:13px">●</span> V2 scaduto</span>
         <span><span style="color:#639922;font-size:11px">▲</span> BUY</span>
         <span><span style="color:#E24B4A;font-size:11px">▼</span> SELL loss</span>
-      </div>
-
-      <!-- Box accuratezza V2 -->
-      <div style="display:flex;gap:18px;margin-top:10px;padding:8px 12px;background:#0a1018;border:1px solid #1a2535;border-radius:4px;font-size:11px;align-items:center;flex-wrap:wrap;">
-        <span style="color:var(--dim);font-size:10px;">⏱ ACCURATEZZA V2 60s →</span>
-        <span>APERTI: <b id="v2-aperti" style="color:#ffcc33;font-size:13px;">0</b></span>
-        <span>PRESI: <b id="v2-presi" style="color:#00ff88;font-size:13px;">0</b></span>
-        <span>SCADUTI: <b id="v2-scaduti" style="color:rgba(255,204,51,0.85);font-size:13px;">0</b></span>
-        <span style="color:var(--dim);">|</span>
-        <span>ACCURACY: <b id="v2-accuracy" style="color:#888;font-size:14px;">—</b></span>
-        <span>TEMPO MEDIO: <b id="v2-tempo" style="color:#ff9933;">—</b></span>
-        <span>MANCATO MEDIO: <b id="v2-mancato" style="color:#ffcc33;">—</b></span>
+        <span><span style="color:#639922;font-size:11px">✓</span> SELL win</span>
+        <span><span style="color:#EF9F27;font-size:11px">◆</span> BLOCCA</span>
       </div>
 
       <!-- Carica bar -->
@@ -2523,20 +2510,7 @@ const SCPanel = (() => {
   const MAX = 120;
   const prices  = [];
   const preds   = [];
-  const predsV2 = [];   // V2: predizione V2 a 60s (linea arancione)
   const cariche = [];
-
-  // PALLINI V2 — un pallino nasce ad ogni nuovo target V2.
-  // Vive max 60 secondi: se la blu lo tocca → PRESO (verde + secondi).
-  // Se scade senza essere toccato → SCADUTO (giallo opaco + $mancato).
-  const PALLINI_MAX = 80;
-  const TIMEOUT_SEC = 60;
-  const pallini = [];
-  let pStats = { presi: 0, scaduti: 0, sommaSec: 0, sommaMancato: 0 };
-  let lastTarget = null;
-  let lastEmitIdx = -1;
-  // DIAG: logghiamo in console finché Roberto non vede pallini
-  let diagCount = 0;
   const labels  = [];
   const buyMkrs = [];
   const sellMkrs= [];
@@ -2555,8 +2529,7 @@ const SCPanel = (() => {
     if (hb.sc_price_history && hb.sc_price_history.length > 2) {
       const ph = hb.sc_price_history;
       const ch = hb.sc_carica_history || [];
-      prices.length = 0; preds.length = 0; predsV2.length = 0; cariche.length = 0; labels.length = 0;
-      const predV2Now = (typeof hb.pred_v2_attiva === 'number') ? hb.pred_v2_attiva : null;
+      prices.length = 0; preds.length = 0; cariche.length = 0; labels.length = 0;
       ph.forEach((p, i) => {
         prices.push(p);
         labels.push(i);
@@ -2568,12 +2541,6 @@ const SCPanel = (() => {
         if (c >= 0.65)      delta = deltaFuoco;
         else if (c >= 0.40) delta = deltaCarica;
         preds.push(Math.round((p + delta) * 100) / 100);
-        // V2: solo ultimo punto = pred_v2_attiva, gli altri sono null (no storia)
-        if (i === ph.length - 1 && predV2Now) {
-          predsV2.push(Math.round(predV2Now * 100) / 100);
-        } else {
-          predsV2.push(null);
-        }
         cariche.push(Math.round(c * 1000) / 1000);
       });
     } else {
@@ -2581,106 +2548,10 @@ const SCPanel = (() => {
       labels.push(labels.length);
       if (prices.length > MAX) { prices.shift(); labels.shift(); }
       preds.push(Math.round((price + (carica - 0.5) * 150) * 100) / 100);
-      // V2 fallback live
-      const pv2 = (typeof hb.pred_v2_attiva === 'number') ? hb.pred_v2_attiva : null;
-      predsV2.push(pv2 ? Math.round(pv2 * 100) / 100 : null);
       cariche.push(Math.round(carica * 1000) / 1000);
       if (preds.length   > MAX) preds.shift();
-      if (predsV2.length > MAX) predsV2.shift();
       if (cariche.length > MAX) cariche.shift();
     }
-
-    // ============================================================
-    // PALLINI V2 — vita e morte
-    // ============================================================
-    const curIdx = prices.length - 1;
-    const curPrice = prices[curIdx];
-    const curV2 = (typeof hb.pred_v2_attiva === 'number') ? hb.pred_v2_attiva : null;
-
-    // DIAG: log primi 5 cicli per debug
-    if (diagCount < 5) {
-      console.log('[V2 DIAG]', {
-        ciclo: diagCount,
-        curIdx, curPrice, curV2,
-        pricesLen: prices.length,
-        pallini_count: pallini.length,
-        hasHistory: !!(hb.sc_price_history && hb.sc_price_history.length > 2)
-      });
-      diagCount++;
-    }
-
-    // Nascita pallino: V2 ha emesso un target, e (è il primo) OR (target cambiato) OR (passati >=3 tick)
-    if (curV2 && curV2 > 0 && curPrice && curIdx >= 0) {
-      const diff = lastTarget === null ? 999 : Math.abs(curV2 - lastTarget);
-      const since = lastEmitIdx < 0 ? 999 : (curIdx - lastEmitIdx);
-      if (diff > 0.3 || since >= 5) {
-        pallini.push({
-          idx_nato:      curIdx,
-          target:        curV2,
-          emit_price:    curPrice,
-          dir:           curV2 > curPrice ? 'UP' : 'DOWN',
-          stato:         'aperto',
-          idx_preso:     null,
-          sec_preso:     null,
-          delta_mancato: null,
-        });
-        if (pallini.length > PALLINI_MAX) {
-          const old = pallini.shift();
-          if (old.stato === 'aperto') pStats.scaduti++;
-        }
-        lastTarget  = curV2;
-        lastEmitIdx = curIdx;
-      }
-    }
-
-    // Aggiornamento pallini aperti
-    pallini.forEach(p => {
-      if (p.stato !== 'aperto') return;
-      const eta = curIdx - p.idx_nato;
-      for (let i = p.idx_nato + 1; i <= curIdx && i < prices.length; i++) {
-        const px = prices[i];
-        if (!px) continue;
-        const toccato = (p.dir === 'UP') ? (px >= p.target) : (px <= p.target);
-        if (toccato) {
-          p.stato     = 'preso';
-          p.idx_preso = i;
-          p.sec_preso = i - p.idx_nato;
-          pStats.presi++;
-          pStats.sommaSec += p.sec_preso;
-          break;
-        }
-      }
-      if (p.stato === 'aperto' && eta >= TIMEOUT_SEC) {
-        p.stato = 'scaduto';
-        const distanza = (p.dir === 'UP')
-            ? Math.max(0, p.target - (curPrice || p.emit_price))
-            : Math.max(0, (curPrice || p.emit_price) - p.target);
-        p.delta_mancato = Math.round(distanza * 100) / 100;
-        pStats.scaduti++;
-        pStats.sommaMancato += p.delta_mancato;
-      }
-    });
-
-    // Box stats V2
-    const tot = pStats.presi + pStats.scaduti;
-    const acc = tot > 0 ? (pStats.presi / tot * 100) : 0;
-    const avgSec = pStats.presi > 0 ? (pStats.sommaSec / pStats.presi) : 0;
-    const avgMancato = pStats.scaduti > 0 ? (pStats.sommaMancato / pStats.scaduti) : 0;
-    const eP = document.getElementById('v2-presi');
-    const eS = document.getElementById('v2-scaduti');
-    const eA = document.getElementById('v2-accuracy');
-    const eT = document.getElementById('v2-tempo');
-    const eM = document.getElementById('v2-mancato');
-    const eOpen = document.getElementById('v2-aperti');
-    if (eP) eP.textContent = pStats.presi;
-    if (eS) eS.textContent = pStats.scaduti;
-    if (eOpen) eOpen.textContent = pallini.filter(p => p.stato === 'aperto').length;
-    if (eA) {
-      eA.textContent = tot > 0 ? acc.toFixed(1) + '%' : '—';
-      eA.style.color = acc >= 70 ? '#00ff88' : acc >= 50 ? '#ffd700' : acc >= 30 ? '#ff9933' : tot > 0 ? '#ff3355' : '#888';
-    }
-    if (eT) eT.textContent = avgSec > 0 ? avgSec.toFixed(1) + 's' : '—';
-    if (eM) eM.textContent = avgMancato > 0 ? '$' + avgMancato.toFixed(2) : '—';
 
     // Stato e carica
     const statoEl = document.getElementById('sc-stato');
@@ -3081,7 +2952,7 @@ const SCPanel = (() => {
     const w1 = W1-PAD.left-PAD.right;
     const h1 = H1-PAD.top-PAD.bottom;
 
-    const allPrices = prices.concat(preds).concat(predsV2.filter(v=>v!==null && v>0)).filter(v=>v>0);
+    const allPrices = prices.concat(preds).filter(v=>v>0);
     const minP = Math.min(...allPrices)*0.9999;
     const maxP = Math.max(...allPrices)*1.0001;
     const rngP = maxP-minP||1;
@@ -3101,54 +2972,10 @@ const SCPanel = (() => {
     prices.forEach((p,i)=>i===0?ctx1.moveTo(xOf(i),yOf(p)):ctx1.lineTo(xOf(i),yOf(p)));
     ctx1.stroke();
 
-    // Linea Predizione SC (verde)
+    // Linea Predizione
     ctx1.beginPath(); ctx1.strokeStyle='#639922'; ctx1.lineWidth=1; ctx1.setLineDash([4,3]);
     preds.forEach((p,i)=>{ if(p>0) i===0?ctx1.moveTo(xOf(i),yOf(p)):ctx1.lineTo(xOf(i),yOf(p)); });
     ctx1.stroke(); ctx1.setLineDash([]);
-
-    // PALLINI V2 — disegno colorato per stato
-    pallini.forEach(p => {
-      if (p.idx_nato < 0 || p.idx_nato >= prices.length) return;
-      const xp = xOf(p.idx_nato);
-      const yp = yOf(p.target);
-      if (p.stato === 'preso') {
-        // VERDE — preso, con secondi
-        ctx1.fillStyle = '#00ff88';
-        ctx1.beginPath();
-        ctx1.arc(xp, yp, 4.5, 0, Math.PI*2);
-        ctx1.fill();
-        ctx1.strokeStyle = '#00ff88';
-        ctx1.lineWidth = 1.5;
-        ctx1.stroke();
-        ctx1.font = 'bold 9px Share Tech Mono';
-        ctx1.fillStyle = '#00ff88';
-        ctx1.textAlign = 'center';
-        ctx1.fillText(p.sec_preso + 's', xp, yp + 16);
-      } else if (p.stato === 'scaduto') {
-        // GIALLO OPACO — scaduto, con $mancato
-        ctx1.fillStyle = 'rgba(255,204,51,0.55)';
-        ctx1.beginPath();
-        ctx1.arc(xp, yp, 3.5, 0, Math.PI*2);
-        ctx1.fill();
-        ctx1.font = '8px Share Tech Mono';
-        ctx1.fillStyle = 'rgba(255,204,51,0.85)';
-        ctx1.textAlign = 'center';
-        if (p.delta_mancato !== null && p.delta_mancato > 0) {
-          ctx1.fillText('-$' + p.delta_mancato.toFixed(1), xp, yp + 14);
-        } else {
-          ctx1.fillText('×', xp, yp + 14);
-        }
-      } else {
-        // APERTO — giallo vivace pulsante
-        ctx1.fillStyle = '#ffcc33';
-        ctx1.beginPath();
-        ctx1.arc(xp, yp, 4, 0, Math.PI*2);
-        ctx1.fill();
-        ctx1.strokeStyle = '#ff9933';
-        ctx1.lineWidth = 1;
-        ctx1.stroke();
-      }
-    });
 
     // BUY markers
     buyMkrs.forEach(m=>{
