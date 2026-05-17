@@ -4218,11 +4218,23 @@ class CampoGravitazionale:
         ("MEDIO",  "ALTA", "SIDEWAYS"),# RANGE_VOL_M - WR 28% dati reali Oracolo
     }
     # SHORT: non entrare in mercato che esplode al rialzo
+    # ════════════════════════════════════════════════════════════════
+    # PATCH 2 BUG 7 (16mag2026): SIMMETRIA VETI con VETI_LONG.
+    # Prima: VETI_LONG aveva 4 voci, VETI_SHORT aveva 4 voci ma su
+    # combinazioni diverse. Era simmetrico nei numeri, non nella
+    # semantica. Mancavano veti speculari per SHORT in scenari
+    # rialzisti che sono pericolosi quanto i loro opposti per LONG.
+    # Aggiunti: (DEBOLE,ALTA,UP) speculare a (DEBOLE,ALTA,DOWN) LONG
+    #           (MEDIO,ALTA,UP) speculare a (MEDIO,ALTA,SIDEWAYS) range tossico
+    # ════════════════════════════════════════════════════════════════
     VETI_SHORT = {
         ("FORTE",  "BASSA", "UP"),     # STRONG_BULL - WR 5% per SHORT
         ("FORTE",  "MEDIA", "UP"),     # STRONG_MED - pericoloso per SHORT
         ("DEBOLE", "ALTA", "SIDEWAYS"),# RANGE_VOL_W - WR 10% in SHORT
         ("FORTE",  "ALTA", "SIDEWAYS"),# RANGE_VOL_F - WR 12% in SHORT
+        # PATCH 2 aggiunti (16mag): simmetria con VETI_LONG
+        ("DEBOLE", "ALTA", "UP"),      # TRAP_UP - speculare a (DEBOLE,ALTA,DOWN) LONG
+        ("MEDIO",  "ALTA", "UP"),      # RANGE_VOL_UP_M - speculare a (MEDIO,ALTA,SIDEWAYS) LONG
         # RIMOSSO 02/05/2026: real=0 campioni reali SHORT in questo contesto — WR 8% era simulato
         # ("MEDIO",  "ALTA", "SIDEWAYS"),# RANGE_VOL_M - WR 8% in SHORT — da rivalutare con dati reali
     }
@@ -10636,9 +10648,19 @@ class OvertopBassanoV16Production:
             # Adattamento V16: non abbiamo modalità NORMAL/FLAT esplicita →
             # applichiamo SEMPRE (più conservativo, blocca perdite garantite).
             # ════════════════════════════════════════════════════════════════
-            if 2.0 <= duration < 10.0 and current_pnl_real < 0:
-                self._log_m2("💀", f"ZONA_MORTA dur={duration:.1f}s pnl=${current_pnl_real:+.2f}")
-                self._close_shadow_trade(price, f"ZONA_MORTA_dur{duration:.0f}s")
+            # PATCH 2 BUG 5 (16mag2026): ZONA_MORTA adattiva al regime.
+            # Prima: SEMPRE 2-10s → tagliava anche movimenti vivi in
+            # EXPLOSIVE/TRENDING. Tutti i ZONA_MORTA del 16mag erano 2-9s
+            # con PnL -$2/-$3. Coerente con 17 trade del PDF (V13.5 NORMAL).
+            # Adesso: finestra ZONA_MORTA dipende dal regime corrente.
+            #   RANGING (mercato fermo) → 2-10s come prima (originale V13.5)
+            #   EXPLOSIVE/TRENDING_BULL/TRENDING_BEAR → lascia respirare ≥15s
+            # In regimi vivi 3-9s è respirazione, non morte del trade.
+            _regime_now = getattr(self, "_regime_current", "RANGING") or "RANGING"
+            _zm_min, _zm_max = (2.0, 10.0) if _regime_now == "RANGING" else (15.0, 30.0)
+            if _zm_min <= duration < _zm_max and current_pnl_real < 0:
+                self._log_m2("💀", f"ZONA_MORTA dur={duration:.1f}s pnl=${current_pnl_real:+.2f} reg={_regime_now}")
+                self._close_shadow_trade(price, f"ZONA_MORTA_dur{duration:.0f}s_{_regime_now[:3]}")
                 return
 
             HARD_STOP_USD = self.STOP_LIVE
@@ -10862,27 +10884,48 @@ class OvertopBassanoV16Production:
             # ════════════════════════════════════════════════════════════════
             _entry_mom = self._shadow_entry_momentum or momentum
             
+            # ════════════════════════════════════════════════════════════════
+            # PATCH 2 BUG 6 (16mag2026): PROFIT_FLOOR scalato su exposure/prezzo.
+            # Prima: 15 costanti in dollari assoluti tarate per BTC ~$50k.
+            # Su BTC $78k con fee $2.00 round-trip, il floor $2.10-$2.30
+            # corrispondeva a $0.10-$0.30 netto: vittorie sterili.
+            # Adesso: floor = fee + margine_pct * exposure.
+            #   exposure = $5000 (size base bot)
+            #   margine: DEBOLE 0.04% / MEDIO 0.06% / FORTE 0.10% del notional
+            #   → floor lordo: ~$4 / ~$5 / ~$7 (netto: ~$2 / ~$3 / ~$5)
+            # Tutte le soglie scalano con exposure ed entry price reali.
+            # ════════════════════════════════════════════════════════════════
+            # FIX 16mag late: usa self.EXPOSURE reale del bot
+            # (TRADE_SIZE_USD * LEVERAGE = $5000), non variabile inesistente.
+            _exp_usd = float(getattr(self, "EXPOSURE", None) or
+                             (getattr(self, "TRADE_SIZE_USD", 1000.0) *
+                              getattr(self, "LEVERAGE", 5.0)))
+            _fee_rt = float(getattr(self, "FEE_TRADE", 2.00))  # fee round-trip reale
+            
             if _entry_mom == "FORTE":
                 # FORTE = trade che corre. Soglie alte, retreat permissivo.
-                PROFIT_FLOOR_LOW     = 2.30   # +$0.30 netto minimo
-                PROFIT_FLOOR_HIGH    = 3.00   # +$1.00 netto
-                PROFIT_BIG_THRESHOLD = 4.50   # qui scatta PROTECT_HI permissivo
+                _margine_pct = 0.0010   # 0.10% di $5k = $5 netto target
+                PROFIT_FLOOR_LOW     = _fee_rt + (_exp_usd * _margine_pct * 0.5)   # ~$4.50 lordo
+                PROFIT_FLOOR_HIGH    = _fee_rt + (_exp_usd * _margine_pct * 1.0)   # ~$7.00 lordo
+                PROFIT_BIG_THRESHOLD = _fee_rt + (_exp_usd * _margine_pct * 1.6)   # ~$10.00 lordo
                 LOCK_LOW_RETREAT     = 0.35   # 35% retreat (più tollerante)
-                BREATH_MEDIA_RANGE   = (1.50, 3.00)  # solo range medio
+                BREATH_MEDIA_RANGE   = (PROFIT_FLOOR_LOW * 0.5, PROFIT_FLOOR_HIGH * 0.7)
             elif _entry_mom == "MEDIO":
                 # MEDIO = trade ordinario. Soglie standard.
-                PROFIT_FLOOR_LOW     = 2.20
-                PROFIT_FLOOR_HIGH    = 2.80
-                PROFIT_BIG_THRESHOLD = 4.00
+                _margine_pct = 0.0006   # 0.06% di $5k = $3 netto target
+                PROFIT_FLOOR_LOW     = _fee_rt + (_exp_usd * _margine_pct * 0.5)   # ~$3.50 lordo
+                PROFIT_FLOOR_HIGH    = _fee_rt + (_exp_usd * _margine_pct * 1.0)   # ~$5.00 lordo
+                PROFIT_BIG_THRESHOLD = _fee_rt + (_exp_usd * _margine_pct * 1.6)   # ~$6.80 lordo
                 LOCK_LOW_RETREAT     = 0.25
-                BREATH_MEDIA_RANGE   = (1.00, 2.50)
+                BREATH_MEDIA_RANGE   = (PROFIT_FLOOR_LOW * 0.5, PROFIT_FLOOR_HIGH * 0.7)
             else:  # DEBOLE
                 # DEBOLE = trade fragile. Soglie basse, prendi quello che dà.
-                PROFIT_FLOOR_LOW     = 2.10   # +$0.10 netto basta
-                PROFIT_FLOOR_HIGH    = 2.40
-                PROFIT_BIG_THRESHOLD = 3.50
+                _margine_pct = 0.0004   # 0.04% di $5k = $2 netto target
+                PROFIT_FLOOR_LOW     = _fee_rt + (_exp_usd * _margine_pct * 0.5)   # ~$3.00 lordo
+                PROFIT_FLOOR_HIGH    = _fee_rt + (_exp_usd * _margine_pct * 1.0)   # ~$4.00 lordo
+                PROFIT_BIG_THRESHOLD = _fee_rt + (_exp_usd * _margine_pct * 1.6)   # ~$5.20 lordo
                 LOCK_LOW_RETREAT     = 0.18   # retreat aggressivo (chiudi presto)
-                BREATH_MEDIA_RANGE   = (0.50, 2.00)
+                BREATH_MEDIA_RANGE   = (PROFIT_FLOOR_LOW * 0.5, PROFIT_FLOOR_HIGH * 0.7)
             
             # Override da SuperCapsule Oracle se presente
             PROFIT_FLOOR_HIGH = max(_cm_profit_min, PROFIT_FLOOR_HIGH)
