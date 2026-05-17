@@ -136,6 +136,234 @@ OPS = {
 }
 
 # ===========================================================================
+# PATCH 6 BUG 13 — WINNING ENVIRONMENT SIGNATURE LOGGER (osservatore puro)
+# ===========================================================================
+# Idea originale di Roberto, 17 maggio 2026:
+#
+#   "Il secondo trade deve trovare nel mercato lo stesso ambiente del primo
+#    per agire in modo corretto. Non si forza il bot a replicare. Si verifica
+#    se il mercato ripresenta da solo la firma vincente."
+#
+# Cosa fa:
+#   1. Quando un trade chiude come WIN_NET (pnl_netto > 0), registra la
+#      "firma" completa dell'ambiente al momento dell'ENTRY.
+#   2. Per ogni nuova entry candidate, calcola la similarità con:
+#        - ultima firma WIN_NET (entro 60 min)
+#        - firme LOSS_FEE recenti
+#        - firme LOSS_REAL recenti
+#   3. Salva nel DB i match per analisi successiva.
+#
+# Cosa NON fa:
+#   - non vota
+#   - non blocca
+#   - non modifica soglie
+#   - non tocca entry/exit/V2/Sinapsi/Oracolo
+#   - osservatore puro, solo dati per il report
+#
+# Lo scopo è raccogliere evidenza per rispondere alla domanda:
+#   "I WIN_NET successivi accadono quando match_win è alto?"
+#   "I LOSS_FEE accadono quando match_win è basso?"
+#   "Esiste davvero una firma comune tra le vittorie?"
+# Solo dopo aver risposto, in patch separata, si potrà trasformare
+# la firma in filtro entry.
+# ===========================================================================
+import math as _wsig_math
+
+
+class WinningSignatureLogger:
+    """Osservatore puro: registra firme di trade vincenti e calcola similarità.
+    
+    NON modifica nulla del bot. Solo legge e scrive nel DB su tabella dedicata.
+    """
+    
+    # Campi numerici della firma — la similarità è euclidea normalizzata su questi
+    NUMERIC_FIELDS = [
+        'oi_carica', 'vol_pressure', 'rsi', 'drift',
+        'pred_delta_fuoco', 'pred_delta_carica', 'pred_v2_delta',
+        'score', 'soglia',
+    ]
+    # Campi categorici — devono matchare esattamente per peso massimo
+    CATEGORICAL_FIELDS = [
+        'momentum', 'volatility', 'trend', 'direction',
+        'regime', 'oi_stato', 'pred_source',
+    ]
+    # Tolleranze relative per i campi numerici (per normalizzare la distanza)
+    NUMERIC_RANGES = {
+        'oi_carica': 1.0,           # 0-1
+        'vol_pressure': 2.0,        # 0-4 tipicamente
+        'rsi': 100.0,               # 0-100
+        'drift': 5.0,               # ±5% tipico
+        'pred_delta_fuoco': 10.0,
+        'pred_delta_carica': 10.0,
+        'pred_v2_delta': 30.0,
+        'score': 100.0,
+        'soglia': 100.0,
+    }
+    # Tempo massimo (secondi) per considerare una firma "viva"
+    SIGNATURE_TTL_SEC = 3600   # 60 minuti
+    
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self._ensure_table()
+    
+    def _ensure_table(self):
+        """Crea la tabella se non esiste. Idempotente."""
+        try:
+            import sqlite3
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS winning_signatures (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts REAL NOT NULL,
+                    trade_outcome TEXT NOT NULL,  -- WIN_NET / LOSS_FEE / LOSS_REAL
+                    pnl_netto REAL,
+                    pnl_lordo REAL,
+                    signature_json TEXT NOT NULL,
+                    match_at_entry REAL  -- similarità all'ultima firma WIN viva, calcolata al momento dell'entry
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_winsig_ts ON winning_signatures(ts)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_winsig_outcome ON winning_signatures(trade_outcome)
+            """)
+            conn.commit()
+            conn.close()
+        except Exception:
+            # Non blocca il bot se il DB ha problemi
+            pass
+    
+    def save_signature(self, trade_outcome, signature, pnl_netto, pnl_lordo, match_at_entry):
+        """Salva una firma chiusa (post-trade). Non blocca mai."""
+        try:
+            import sqlite3
+            import json
+            import time
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("""
+                INSERT INTO winning_signatures (ts, trade_outcome, pnl_netto, pnl_lordo, signature_json, match_at_entry)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (time.time(), trade_outcome,
+                  float(pnl_netto) if pnl_netto is not None else None,
+                  float(pnl_lordo) if pnl_lordo is not None else None,
+                  json.dumps(signature),
+                  float(match_at_entry) if match_at_entry is not None else None))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+    
+    def get_recent_signatures(self, outcome_filter, max_age_sec=None):
+        """Ritorna le firme recenti per un dato outcome. None = tutte."""
+        if max_age_sec is None:
+            max_age_sec = self.SIGNATURE_TTL_SEC
+        try:
+            import sqlite3
+            import json
+            import time
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cutoff = time.time() - max_age_sec
+            if outcome_filter:
+                rows = conn.execute("""
+                    SELECT signature_json FROM winning_signatures
+                    WHERE trade_outcome = ? AND ts >= ?
+                    ORDER BY ts DESC LIMIT 20
+                """, (outcome_filter, cutoff)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT signature_json, trade_outcome FROM winning_signatures
+                    WHERE ts >= ?
+                    ORDER BY ts DESC LIMIT 50
+                """, (cutoff,)).fetchall()
+            conn.close()
+            return [json.loads(r['signature_json']) for r in rows]
+        except Exception:
+            return []
+    
+    @classmethod
+    def similarity(cls, sig_a, sig_b):
+        """Calcola similarità 0.0-1.0 tra due firme.
+        
+        - Campi categorici: match esatto = 1.0, mismatch = 0.0
+        - Campi numerici: 1 - (distanza_assoluta / range_tipico), capped a [0,1]
+        - Media pesata: categorici peso 1.5, numerici peso 1.0
+        """
+        if not sig_a or not sig_b:
+            return 0.0
+        scores = []
+        weights = []
+        # Categorici
+        for f in cls.CATEGORICAL_FIELDS:
+            a = sig_a.get(f)
+            b = sig_b.get(f)
+            if a is None or b is None:
+                continue
+            scores.append(1.0 if a == b else 0.0)
+            weights.append(1.5)
+        # Numerici
+        for f in cls.NUMERIC_FIELDS:
+            a = sig_a.get(f)
+            b = sig_b.get(f)
+            if a is None or b is None:
+                continue
+            try:
+                a_f = float(a)
+                b_f = float(b)
+                rng = cls.NUMERIC_RANGES.get(f, 1.0)
+                dist = abs(a_f - b_f) / rng
+                sim = max(0.0, 1.0 - dist)
+                scores.append(sim)
+                weights.append(1.0)
+            except (ValueError, TypeError):
+                continue
+        if not scores:
+            return 0.0
+        weighted_sum = sum(s * w for s, w in zip(scores, weights))
+        total_w = sum(weights)
+        return weighted_sum / total_w if total_w > 0 else 0.0
+    
+    def compute_match_at_entry(self, current_signature):
+        """Calcola match della firma corrente con l'ultima WIN_NET viva.
+        
+        Ritorna float 0.0-1.0 o None se non c'è alcuna firma WIN recente.
+        """
+        wins = self.get_recent_signatures('WIN_NET')
+        if not wins:
+            return None
+        # Prendi la più recente (è la prima nella lista per ORDER BY ts DESC)
+        last_win = wins[0]
+        return self.similarity(current_signature, last_win)
+    
+    @staticmethod
+    def build_signature_from_context(momentum, volatility, trend, direction,
+                                      regime, oi_stato, oi_carica, vol_pressure,
+                                      rsi, drift, score, soglia,
+                                      pred_delta_fuoco, pred_delta_carica,
+                                      pred_v2_delta, pred_source):
+        """Helper: costruisce un dict-firma dai sensori live."""
+        return {
+            'momentum': momentum,
+            'volatility': volatility,
+            'trend': trend,
+            'direction': direction,
+            'regime': regime,
+            'oi_stato': oi_stato,
+            'oi_carica': round(float(oi_carica or 0), 4),
+            'vol_pressure': round(float(vol_pressure or 0), 4),
+            'rsi': round(float(rsi or 50), 2),
+            'drift': round(float(drift or 0), 4),
+            'score': round(float(score or 0), 2),
+            'soglia': round(float(soglia or 60), 2),
+            'pred_delta_fuoco': round(float(pred_delta_fuoco or 0), 4),
+            'pred_delta_carica': round(float(pred_delta_carica or 0), 4),
+            'pred_v2_delta': round(float(pred_v2_delta or 0), 4),
+            'pred_source': pred_source or 'UNKNOWN',
+        }
+
+
+# ===========================================================================
 # STABILITY TELEMETRY - LOGGING PASSIVO, ZERO LOGICA
 # Solo osserva. Non decide. Non modifica. Non ottimizza.
 # ===========================================================================
@@ -6781,6 +7009,14 @@ class OvertopBassanoV16Production:
         self._shadow_min_price = None
         self._shadow_matrimonio = None
 
+        # PATCH 6 BUG 13 — WinningSignatureLogger (osservatore puro)
+        # Registra firma vincente all'exit, calcola match all'entry.
+        # Non modifica decisioni del bot. Solo dati per il report.
+        try:
+            self._winsig = WinningSignatureLogger(DB_PATH)
+        except Exception:
+            self._winsig = None
+
         # -- LATENCY TRACKER — misura slippage decisione→esecuzione -------
         # Registra la differenza tra prezzo al momento della DECISIONE
         # e prezzo al momento dell'APERTURA EFFETTIVA della shadow.
@@ -10432,6 +10668,57 @@ class OvertopBassanoV16Production:
             self._shadow_min_price         = price
             self._shadow_matrimonio        = matrimonio_name
 
+            # ════════════════════════════════════════════════════════════════
+            # PATCH 6 BUG 13 — Cattura firma ambientale + match WIN precedenti
+            # ════════════════════════════════════════════════════════════════
+            # Fotografia del contesto al momento dell'entry. Verrà salvata al
+            # close come "winning_signature" SOLO se il trade chiude WIN_NET.
+            # Inoltre calcoliamo il match con l'ultima firma WIN viva: se
+            # l'ambiente attuale assomiglia a quello che ha vinto prima, il
+            # match sarà alto. Solo dato — nessuna decisione presa qui.
+            try:
+                if hasattr(self, '_winsig') and self._winsig is not None:
+                    # Sensori vivi al momento dell'entry
+                    _pred_st_entry = self.supercervello._get_pred_state() \
+                        if hasattr(self, 'supercervello') and self.supercervello is not None \
+                        else {'source': 'NO_SC'}
+                    _rsi_entry = getattr(self.campo, '_last_rsi', 50)
+                    _drift_entry = 0.0
+                    if len(self.campo._prices_long) >= 100:
+                        _p = list(self.campo._prices_long)
+                        _drift_entry = (sum(_p[-50:])/50 - sum(_p[:50])/50) \
+                                       / (sum(_p[:50])/50) * 100
+                    _sig_entry = WinningSignatureLogger.build_signature_from_context(
+                        momentum=momentum,
+                        volatility=volatility,
+                        trend=trend,
+                        direction=self.campo._direction,
+                        regime=self._regime_current,
+                        oi_stato=self._oi_stato,
+                        oi_carica=self._oi_carica,
+                        vol_pressure=getattr(self.campo, '_last_vol_pressure', None),
+                        rsi=_rsi_entry,
+                        drift=_drift_entry,
+                        score=score,
+                        soglia=soglia,
+                        pred_delta_fuoco=getattr(self, 'pred_delta_fuoco', 0),
+                        pred_delta_carica=getattr(self, 'pred_delta_carica', 0),
+                        pred_v2_delta=getattr(self, 'pred_v2_delta', 0),
+                        pred_source=_pred_st_entry.get('source', 'UNKNOWN'),
+                    )
+                    _match_at_entry = self._winsig.compute_match_at_entry(_sig_entry)
+                    # Salviamo dentro lo shadow per uso al close
+                    self._shadow['_winsig_entry'] = _sig_entry
+                    self._shadow['_winsig_match_at_entry'] = _match_at_entry
+                    if _match_at_entry is not None:
+                        self._log_m2("🔬",
+                            f"WINSIG entry match_with_last_WIN={_match_at_entry:.2f} "
+                            f"(0=diverso, 1=identico)")
+            except Exception as _wse:
+                # Mai bloccare l'entry per un problema del logger osservativo
+                pass
+            # ════════════════════════════════════════════════════════════════
+
             # ── LATENCY TRACKER: misura slippage decisione→esecuzione ────
             # Il prezzo della decisione è stato registrato in _decision_price.
             # Il prezzo qui è quello effettivo dell'apertura.
@@ -11081,6 +11368,40 @@ class OvertopBassanoV16Production:
             
             pnl = pnl_gross - total_fees
             is_win = pnl > 0
+
+            # ════════════════════════════════════════════════════════════════
+            # PATCH 6 BUG 13 — Salva firma con classificazione outcome
+            # ════════════════════════════════════════════════════════════════
+            # Classifica il trade in WIN_NET / LOSS_FEE / LOSS_REAL e salva
+            # la firma catturata all'entry, con il match calcolato all'entry.
+            # Nessuna decisione presa qui. Solo log per il report diagnostico.
+            try:
+                if hasattr(self, '_winsig') and self._winsig is not None \
+                   and self._shadow and '_winsig_entry' in self._shadow:
+                    _sig = self._shadow.get('_winsig_entry')
+                    _match = self._shadow.get('_winsig_match_at_entry')
+                    # Classificazione coerente con post_patch5_report.py
+                    if is_win:
+                        _outcome = 'WIN_NET'
+                    elif pnl_gross >= -0.50:
+                        # lordo vicino a zero = entry in punto morto
+                        _outcome = 'LOSS_FEE'
+                    else:
+                        _outcome = 'LOSS_REAL'
+                    self._winsig.save_signature(
+                        trade_outcome=_outcome,
+                        signature=_sig,
+                        pnl_netto=pnl,
+                        pnl_lordo=pnl_gross,
+                        match_at_entry=_match,
+                    )
+                    if _match is not None:
+                        self._log_m2("🔬",
+                            f"WINSIG close outcome={_outcome} "
+                            f"match_at_entry={_match:.2f} pnl_n=${pnl:+.2f}")
+            except Exception:
+                pass
+            # ════════════════════════════════════════════════════════════════
 
             # -- TELEMETRY: registra trade ------------------------------------
             trade_duration = time.time() - self._shadow_entry_time if self._shadow_entry_time else 0
