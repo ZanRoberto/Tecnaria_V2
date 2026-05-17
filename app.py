@@ -2277,11 +2277,23 @@ canvas.spark { width:100%; height:40px; }
       <div style="display:flex;gap:12px;margin-top:6px;font-size:9px;color:var(--dim);flex-wrap:wrap;">
         <span><span style="color:#378ADD">━</span> Mercato reale</span>
         <span><span style="color:#639922">╌</span> Predizione SC</span>
-        <span><span style="color:#ff9933">╌</span> Predizione V2 60s</span>
+        <span><span style="color:#ff9933">╌</span> Linea V2 60s</span>
+        <span><span style="color:#ffcc33;font-size:11px">●</span> Pallino V2 aperto</span>
+        <span><span style="color:#00ff88;font-size:11px">●</span> Pallino preso</span>
+        <span><span style="color:rgba(255,204,51,0.7);font-size:11px">●</span> Scaduto ($mancato)</span>
         <span><span style="color:#639922;font-size:11px">▲</span> BUY</span>
         <span><span style="color:#E24B4A;font-size:11px">▼</span> SELL loss</span>
-        <span><span style="color:#639922;font-size:11px">✓</span> SELL win</span>
-        <span><span style="color:#EF9F27;font-size:11px">◆</span> BLOCCA</span>
+      </div>
+
+      <!-- ACCURACY V2 — quanti pallini sono stati presi entro 60s -->
+      <div style="display:flex;gap:20px;margin-top:8px;padding:8px 12px;background:#0a1018;border:1px solid #1a2535;border-radius:4px;font-size:11px;align-items:center;">
+        <span style="color:var(--dim);font-size:10px;">ACCURATEZZA V2 60s →</span>
+        <span>PRESI: <b id="v2-presi" style="color:#00ff88;font-size:13px;">0</b></span>
+        <span>SCADUTI: <b id="v2-scaduti" style="color:#ffcc33;font-size:13px;">0</b></span>
+        <span style="color:var(--dim);">|</span>
+        <span>ACCURACY: <b id="v2-accuracy" style="color:#888;font-size:14px;">—</b></span>
+        <span>TEMPO MEDIO: <b id="v2-tempo" style="color:#ff9933;">—</b></span>
+        <span>MANCATO MEDIO: <b id="v2-mancato" style="color:#ffcc33;">—</b></span>
       </div>
 
       <!-- Carica bar -->
@@ -2513,6 +2525,16 @@ const SCPanel = (() => {
   const preds   = [];
   const predsV2 = [];   // V2LINE: predizione V2 a 60s (linea arancione)
   const cariche = [];
+
+  // PALLINI V2: ogni pallino ha vita propria
+  // {idx_nato, target, emit_price, dir, stato, idx_preso, sec_preso, delta_mancato}
+  // stato: 'aperto' (giallo) | 'preso' (verde) | 'scaduto' (giallo con $X)
+  const PALLINI_MAX = 80;
+  const TIMEOUT_SEC = 60;
+  const pallini = [];
+  let pStats = { presi: 0, scaduti: 0, sommaSec: 0, sommaMancato: 0 };
+  let lastTarget = null;
+  let lastEmitIdx = -1;
   const labels  = [];
   const buyMkrs = [];
   const sellMkrs= [];
@@ -2570,6 +2592,88 @@ const SCPanel = (() => {
       if (predsV2.length > MAX) predsV2.shift();
       if (cariche.length > MAX) cariche.shift();
     }
+
+    // PALLINI V2: gestione vita del pallino arancione
+    // -------------------------------------------------------------
+    const curIdx = prices.length - 1;
+    const curPrice = prices[curIdx];
+    const curV2 = (typeof hb.pred_v2_attiva === 'number') ? hb.pred_v2_attiva : null;
+
+    // 1) Nascita di un nuovo pallino:
+    //    - V2 ha dato un nuovo target diverso da quello precedente (Δ > 0.3$)
+    //    - sono passati almeno 3 tick dall'ultimo (no spam)
+    if (curV2 && curPrice && curIdx >= 0) {
+      const diff = lastTarget === null ? 999 : Math.abs(curV2 - lastTarget);
+      const since = lastEmitIdx < 0 ? 999 : (curIdx - lastEmitIdx);
+      if (diff > 0.3 && since >= 3) {
+        pallini.push({
+          idx_nato:       curIdx,
+          target:         curV2,
+          emit_price:     curPrice,
+          dir:            curV2 > curPrice ? 'UP' : 'DOWN',
+          stato:          'aperto',
+          idx_preso:      null,
+          sec_preso:      null,
+          delta_mancato:  null,  // se scaduto: quanto era distante alla scadenza
+        });
+        if (pallini.length > PALLINI_MAX) {
+          const old = pallini.shift();
+          if (old.stato === 'aperto') pStats.scaduti++;
+        }
+        lastTarget  = curV2;
+        lastEmitIdx = curIdx;
+      }
+    }
+
+    // 2) Aggiornamento stato pallini aperti
+    pallini.forEach(p => {
+      if (p.stato !== 'aperto') return;
+      const eta = curIdx - p.idx_nato;
+      // Cerca se uno dei tick tra emissione e adesso ha toccato il target
+      for (let i = p.idx_nato + 1; i <= curIdx && i < prices.length; i++) {
+        const px = prices[i];
+        if (!px) continue;
+        const toccato = (p.dir === 'UP') ? (px >= p.target) : (px <= p.target);
+        if (toccato) {
+          p.stato     = 'preso';
+          p.idx_preso = i;
+          p.sec_preso = i - p.idx_nato;
+          pStats.presi++;
+          pStats.sommaSec += p.sec_preso;
+          break;
+        }
+      }
+      // Scaduto senza essere preso
+      if (p.stato === 'aperto' && eta >= TIMEOUT_SEC) {
+        p.stato = 'scaduto';
+        // Quanto mancava: distanza tra prezzo attuale e target
+        const distanza = (p.dir === 'UP')
+            ? Math.max(0, p.target - (curPrice || p.emit_price))
+            : Math.max(0, (curPrice || p.emit_price) - p.target);
+        p.delta_mancato = Math.round(distanza * 100) / 100;
+        pStats.scaduti++;
+        pStats.sommaMancato += p.delta_mancato;
+      }
+    });
+
+    // 3) Aggiorna box stats
+    const tot = pStats.presi + pStats.scaduti;
+    const acc = tot > 0 ? (pStats.presi / tot * 100) : 0;
+    const avgSec = pStats.presi > 0 ? (pStats.sommaSec / pStats.presi) : 0;
+    const avgMancato = pStats.scaduti > 0 ? (pStats.sommaMancato / pStats.scaduti) : 0;
+    const eP  = document.getElementById('v2-presi');
+    const eS  = document.getElementById('v2-scaduti');
+    const eA  = document.getElementById('v2-accuracy');
+    const eT  = document.getElementById('v2-tempo');
+    const eM  = document.getElementById('v2-mancato');
+    if (eP) eP.textContent = pStats.presi;
+    if (eS) eS.textContent = pStats.scaduti;
+    if (eA) {
+      eA.textContent = tot > 0 ? acc.toFixed(1) + '%' : '—';
+      eA.style.color = acc >= 70 ? '#00ff88' : acc >= 50 ? '#ffd700' : acc >= 30 ? '#ff9933' : '#ff3355';
+    }
+    if (eT) eT.textContent = avgSec > 0 ? avgSec.toFixed(1) + 's' : '—';
+    if (eM) eM.textContent = avgMancato > 0 ? '$' + avgMancato.toFixed(2) : '—';
 
     // Stato e carica
     const statoEl = document.getElementById('sc-stato');
@@ -3007,14 +3111,46 @@ const SCPanel = (() => {
     });
     ctx1.stroke(); ctx1.setLineDash([]);
 
-    // V2LINE: pallino arancione sull'ultimo punto V2 (così è sempre visibile)
-    const lastV2Idx = predsV2.length - 1;
-    if (lastV2Idx >= 0 && predsV2[lastV2Idx] && predsV2[lastV2Idx] > 0) {
-      ctx1.fillStyle = '#ff9933';
-      ctx1.beginPath();
-      ctx1.arc(xOf(lastV2Idx), yOf(predsV2[lastV2Idx]), 3, 0, Math.PI*2);
-      ctx1.fill();
-    }
+    // V2LINE: pallini V2 colorati per stato
+    // - APERTO  = giallo/arancione vivace
+    // - PRESO   = verde (con secondi)
+    // - SCADUTO = giallo opaco (con "$X mancato")
+    pallini.forEach(p => {
+      if (p.idx_nato >= prices.length) return; // safety
+      const xp = xOf(p.idx_nato);
+      const yp = yOf(p.target);
+
+      if (p.stato === 'preso') {
+        // Verde — preso
+        ctx1.fillStyle = '#00ff88';
+        ctx1.beginPath();
+        ctx1.arc(xp, yp, 4, 0, Math.PI*2);
+        ctx1.fill();
+        // Etichetta "Ns" sotto
+        ctx1.font = 'bold 8px Share Tech Mono';
+        ctx1.fillStyle = '#00ff88';
+        ctx1.textAlign = 'center';
+        ctx1.fillText(p.sec_preso + 's', xp, yp + 13);
+      } else if (p.stato === 'scaduto') {
+        // Giallo opaco — scaduto, con quanto mancava
+        ctx1.fillStyle = 'rgba(255,204,51,0.55)';
+        ctx1.beginPath();
+        ctx1.arc(xp, yp, 3, 0, Math.PI*2);
+        ctx1.fill();
+        ctx1.font = '8px Share Tech Mono';
+        ctx1.fillStyle = 'rgba(255,204,51,0.85)';
+        ctx1.textAlign = 'center';
+        if (p.delta_mancato !== null && p.delta_mancato > 0) {
+          ctx1.fillText('$' + p.delta_mancato.toFixed(1), xp, yp + 13);
+        }
+      } else {
+        // Aperto — giallo/arancione vivace (in attesa)
+        ctx1.fillStyle = '#ffcc33';
+        ctx1.beginPath();
+        ctx1.arc(xp, yp, 3.5, 0, Math.PI*2);
+        ctx1.fill();
+      }
+    });
 
     // BUY markers
     buyMkrs.forEach(m=>{
