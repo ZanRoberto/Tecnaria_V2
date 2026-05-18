@@ -9921,22 +9921,43 @@ class OvertopBassanoV16Production:
                 return
 
             # ════════════════════════════════════════════════════════════════
-            # FIX #31 (12mag2026 sera): PREFETCH ORACOLO + WHITELIST BYPASS
+            # PATCH 9 BUG 16 — Disable Operational BYPASS_ORACOLO
             # ════════════════════════════════════════════════════════════════
-            # Bug architetturale: il lookup `fingerprint_wr` avveniva a riga 
-            # 7895, DOPO che TsunamiGate aveva già bloccato. Risultato: 
-            # LONG|FORTE|BASSA|UP con WR=78% n=30 MAI USATO perché Tsunami 
-            # 30s richiede 3/3 timeframe coerenti e su BTC laterale blocca 
-            # sempre prima.
+            # Background: PATCH 7 ha spento _bypass_magnitude. Ma _bypass_oracolo
+            # è rimasto operativo. Stesso meccanismo: quando il fingerprint
+            # corrente ha _pre_samples >= 20 e _pre_wr >= 0.65, il flag
+            # _bypass_oracolo=True scavalcava TSUNAMI_NO_ENTRY.
             #
-            # FIX: prefetch Oracolo QUI (prima di Tsunami). Se il fingerprint 
-            # corrente è in whitelist (n>=20 e WR>=65%), attiva il flag 
-            # `_bypass_oracolo_whitelist` che disinnesca TSUNAMI_VETO e 
-            # TSUNAMI_DISCORDE successivamente.
+            # Problema strutturale: la memoria storica dell'Oracolo (DB SQLite)
+            # contiene fingerprint pre-PATCH 3 quando WIN_+1 erano "vittorie
+            # finte" (lordo +$1 ma netto -$1 per le fee). Quei WR storici sono
+            # CONTAMINATI: l'Oracolo legge WR ≥ 65% e dice "vince → bypassa",
+            # ma quei WIN erano falsi positivi. Il bot quindi entra OGGI su
+            # fingerprint che ieri sembravano vincenti ma erano illusioni.
             #
-            # Marker: BYPASS_ORACOLO_v1 per grep di verifica deploy.
+            # Diagnosi di Roberto (18 mag 2026 mattina): osservando 3
+            # ZONA_MORTA consecutive (07:03-07:05) ha detto:
+            #   "qualcosa di vecchio è rientrato nel flusso operativo"
+            # Letteralmente vero: memoria storica pre-patch sta autorizzando
+            # entry attuali tramite _bypass_oracolo.
+            #
+            # Fix PATCH 9: stesso pattern di PATCH 7.
+            #  - BYPASS_ORACOLO_OPERATIVO = False (flag, default OFF)
+            #  - Il calcolo Oracolo (samples, WR) continua: utile per
+            #    diagnostica e per il log fp NON in memoria / WHITELIST ✓
+            #  - _bypass_oracolo_observed = True quando WR storico >= 65%
+            #  - _bypass_oracolo (variabile operativa) resta False
+            #  - TSUNAMI_NO_ENTRY non viene più bypassato da Oracolo
+            #  - Nessun diritto operativo da memoria storica contaminata
+            #
+            # In futuro: si potrà ricostruire Oracolo PULITO basato su trade
+            # post-PATCH 3 (WIN_NET veri, non WIN_+1 finti). Allora la
+            # whitelist potrà tornare operativa con condizioni più strette.
             # ════════════════════════════════════════════════════════════════
-            _bypass_oracolo = False
+            BYPASS_ORACOLO_OPERATIVO = False  # PATCH 9: flag OFF di default
+
+            _bypass_oracolo = False           # OPERATIVO: resta False
+            _bypass_oracolo_observed = False  # OSSERVATIVO: nuovo
             _bypass_oracolo_dir = None
             _bypass_oracolo_wr = 0.0
             _bypass_oracolo_n = 0
@@ -9956,13 +9977,23 @@ class OvertopBassanoV16Production:
                     if _pre_samples >= 20:
                         _pre_wr = _pre_wins / _pre_samples
                         if _pre_wr >= 0.65:
-                            _bypass_oracolo = True
+                            # PATCH 9: osservazione sempre attiva
+                            _bypass_oracolo_observed = True
                             _bypass_oracolo_dir = _pre_dir
                             _bypass_oracolo_wr = _pre_wr
                             _bypass_oracolo_n = int(_pre_samples)
-                            self._log_m2("📜", f"BYPASS_ORACOLO_v1: fp={_pre_fp_key} "
-                                               f"WR={_pre_wr:.0%} n={int(_pre_samples)} "
-                                               f"→ Tsunami disinnescato")
+                            # PATCH 9: setta _bypass_oracolo operativo SOLO se flag attivo
+                            if BYPASS_ORACOLO_OPERATIVO:
+                                _bypass_oracolo = True
+                                self._log_m2("📜", f"BYPASS_ORACOLO_v1: fp={_pre_fp_key} "
+                                                   f"WR={_pre_wr:.0%} n={int(_pre_samples)} "
+                                                   f"→ Tsunami disinnescato")
+                            else:
+                                # PATCH 9: solo osservativo. Non autorizza entry.
+                                self._log_m2("👁️", f"BYPASS_ORACOLO_OBSERVED: fp={_pre_fp_key} "
+                                                   f"WR={_pre_wr:.0%} n={int(_pre_samples)} "
+                                                   f"reason=BYPASS_ORACOLO_OFF_PATCH9 "
+                                                   f"(memoria storica può essere contaminata pre-PATCH3)")
             except Exception as _e_bo:
                 pass
 
