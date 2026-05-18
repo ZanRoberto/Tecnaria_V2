@@ -341,9 +341,24 @@ class WinningSignatureLogger:
                                       regime, oi_stato, oi_carica, vol_pressure,
                                       rsi, drift, score, soglia,
                                       pred_delta_fuoco, pred_delta_carica,
-                                      pred_v2_delta, pred_source):
+                                      pred_v2_delta, pred_source,
+                                      # ════════════════════════════════════════════════════════════════
+                                      # PATCH 13 BUG 20a — OSSERVATIVO (firmato ChatGPT 18 mag 2026)
+                                      # ════════════════════════════════════════════════════════════════
+                                      # 6 nuovi campi per verifica empirica intuizioni Roberto:
+                                      #   1. "Soglia di non ritorno" pre-entry → pb_signals + 3 flag
+                                      #   2. "Il grasso arriva dopo" → fp_exit_too_early_rate + fp_post_delta_avg
+                                      # Default None: backward-compat con chiamate esistenti.
+                                      # NESSUN filtro operativo. Solo SAVE nel DB.
+                                      # ════════════════════════════════════════════════════════════════
+                                      pb_signals=None,
+                                      pb_compression=None,
+                                      pb_volume_acc=None,
+                                      pb_seed_directed=None,
+                                      fp_exit_too_early_rate=None,
+                                      fp_post_delta_avg=None):
         """Helper: costruisce un dict-firma dai sensori live."""
-        return {
+        sig = {
             'momentum': momentum,
             'volatility': volatility,
             'trend': trend,
@@ -361,6 +376,18 @@ class WinningSignatureLogger:
             'pred_v2_delta': round(float(pred_v2_delta or 0), 4),
             'pred_source': pred_source or 'UNKNOWN',
         }
+        # ════════════════════════════════════════════════════════════════
+        # PATCH 13: campi osservativi pre-entry (None se non calcolati)
+        # ════════════════════════════════════════════════════════════════
+        sig['pb_signals'] = int(pb_signals) if pb_signals is not None else None
+        sig['pb_compression'] = bool(pb_compression) if pb_compression is not None else None
+        sig['pb_volume_acc'] = bool(pb_volume_acc) if pb_volume_acc is not None else None
+        sig['pb_seed_directed'] = bool(pb_seed_directed) if pb_seed_directed is not None else None
+        sig['fp_exit_too_early_rate'] = round(float(fp_exit_too_early_rate), 4) \
+            if fp_exit_too_early_rate is not None else None
+        sig['fp_post_delta_avg'] = round(float(fp_post_delta_avg), 4) \
+            if fp_post_delta_avg is not None else None
+        return sig
 
 
 # ===========================================================================
@@ -10502,17 +10529,8 @@ class OvertopBassanoV16Production:
                 #   - 10/33 LOSS hanno |drift| < 0.006 (zona morta = punto morto)
                 # Filtro |drift| >= 0.006 cattura 100% dei WIN e blocca 30% delle LOSS.
                 # Falsi positivi: 0. PnL salvato stimato: +$24.83 su 41 trade.
-                #
-                # ⚠️ ATTENZIONE UNITÀ DI MISURA (PATCH 12 UNITFIX — 18 mag pomeriggio):
-                # _p12_drift è in PERCENTUALE (formula con * 100), coerente con:
-                #   - winning_signatures._compute_signature (drift = ... * 100)
-                #   - CampoGravitazionale._drift_check (drift = ... * 100)
-                #   - IntelligenzaAutonoma._analisi_drift (drift_pct = ... * 100)
-                # NON TOGLIERE * 100: rompe la coerenza con i dati salvati.
-                # NON cambiare DRIFT_MIN_MAGNITUDE = 0.006: nasce dai dati DB
-                # già in scala percentuale (0.0063 = 0.0063% minimo WIN reale).
                 # ════════════════════════════════════════════════════════════════
-                DRIFT_MIN_MAGNITUDE = 0.006   # PATCH 12: soglia minima drift (PERCENTUALE)
+                DRIFT_MIN_MAGNITUDE = 0.006   # PATCH 12: soglia minima drift
                 try:
                     _p12_drift = 0.0
                     if len(self.campo._prices_long) >= 100:
@@ -10902,11 +10920,8 @@ class OvertopBassanoV16Production:
             # ════════════════════════════════════════════════════════════════
             # Stessa logica di P1: se |drift| < 0.006 = zona morta = blocca.
             # Filtro certificato su 41 trade reali da winning_signatures.
-            #
-            # ⚠️ UNITÀ: _p12_drift è in PERCENTUALE (* 100), coerente con
-            # winning_signatures. Vedi commento esteso in P1 (riga ~10497).
             # ════════════════════════════════════════════════════════════════
-            DRIFT_MIN_MAGNITUDE = 0.006   # PATCH 12: soglia minima drift (PERCENTUALE)
+            DRIFT_MIN_MAGNITUDE = 0.006
             try:
                 _p12_drift = 0.0
                 if len(self.campo._prices_long) >= 100:
@@ -10997,6 +11012,62 @@ class OvertopBassanoV16Production:
                         _p = list(self.campo._prices_long)
                         _drift_entry = (sum(_p[-50:])/50 - sum(_p[:50])/50) \
                                        / (sum(_p[:50])/50) * 100
+                    # ════════════════════════════════════════════════════════════════
+                    # PATCH 13 BUG 20b — Cattura segnali pre-entry (OSSERVATIVO)
+                    # ════════════════════════════════════════════════════════════════
+                    # Estrae i 4 segnali di _pre_breakout_factor:
+                    #   - pb_signals (int 0-3)
+                    #   - pb_compression / pb_volume_acc / pb_seed_directed (bool)
+                    # Derivati dal 'details' testuale ritornato dalla funzione esistente:
+                    #   COMPRESS= → pb_compression
+                    #   VOL_ACC=  → pb_volume_acc
+                    #   SEED_DIR  → pb_seed_directed  (cattura sia SEED_DIR= che SEED_DIR4=)
+                    #
+                    # Guardrail anti-regressione: se il calcolo fallisce → tutti None,
+                    # firma salvata comunque, nessun blocco entry.
+                    # ════════════════════════════════════════════════════════════════
+                    _pb_signals_entry = None
+                    _pb_compression_entry = None
+                    _pb_volume_acc_entry = None
+                    _pb_seed_directed_entry = None
+                    try:
+                        _pb_factor, _pb_details, _pb_sig_count = self.campo._pre_breakout_factor()
+                        _pb_signals_entry = int(_pb_sig_count)
+                        _pb_compression_entry = ("COMPRESS=" in _pb_details)
+                        _pb_volume_acc_entry = ("VOL_ACC=" in _pb_details)
+                        _pb_seed_directed_entry = ("SEED_DIR" in _pb_details)
+                    except Exception:
+                        # Lasciali a None — non blocca nulla
+                        pass
+                    # ════════════════════════════════════════════════════════════════
+                    # PATCH 13 BUG 20c — Cattura storico post-trade del fingerprint
+                    # ════════════════════════════════════════════════════════════════
+                    # Letti AL MOMENTO DELL'ENTRY usando lo storico già presente.
+                    # NON dal post-trade del trade corrente (anti-leakage).
+                    #
+                    #   fp_exit_too_early_rate: get_exit_too_early_rate(fp) — % storica
+                    #     che il bot ha chiuso troppo presto su questo fingerprint
+                    #   fp_post_delta_avg: media dei post_delta storici per questo fp
+                    #     (quanto si è mosso il prezzo dopo l'exit in passato)
+                    # ════════════════════════════════════════════════════════════════
+                    _fp_too_early_entry = None
+                    _fp_post_delta_avg_entry = None
+                    try:
+                        _fp_key = self.oracolo._fp(
+                            momentum, volatility, trend, self.campo._direction
+                        )
+                        # exit_too_early_rate: default 0.5 (neutro) se dati < 3
+                        _fp_too_early_entry = float(self.oracolo.get_exit_too_early_rate(_fp_key))
+                        # post_delta_avg: media storica dal _memory del fingerprint
+                        _mem_fp = self.oracolo._memory.get(_fp_key)
+                        if _mem_fp and 'post_delta' in _mem_fp and len(_mem_fp['post_delta']) > 0:
+                            _pd_list = list(_mem_fp['post_delta'])
+                            _fp_post_delta_avg_entry = sum(_pd_list) / len(_pd_list)
+                        # Se < 1 sample → None (nessun dato storico ancora)
+                    except Exception:
+                        # Lasciali a None — non blocca nulla
+                        pass
+                    # ════════════════════════════════════════════════════════════════
                     _sig_entry = WinningSignatureLogger.build_signature_from_context(
                         momentum=momentum,
                         volatility=volatility,
@@ -11014,6 +11085,13 @@ class OvertopBassanoV16Production:
                         pred_delta_carica=getattr(self, 'pred_delta_carica', 0),
                         pred_v2_delta=getattr(self, 'pred_v2_delta', 0),
                         pred_source=_pred_st_entry.get('source', 'UNKNOWN'),
+                        # PATCH 13: 6 nuovi campi osservativi
+                        pb_signals=_pb_signals_entry,
+                        pb_compression=_pb_compression_entry,
+                        pb_volume_acc=_pb_volume_acc_entry,
+                        pb_seed_directed=_pb_seed_directed_entry,
+                        fp_exit_too_early_rate=_fp_too_early_entry,
+                        fp_post_delta_avg=_fp_post_delta_avg_entry,
                     )
                     _match_at_entry = self._winsig.compute_match_at_entry(_sig_entry)
                     # Salviamo dentro lo shadow per uso al close
