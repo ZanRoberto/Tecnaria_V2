@@ -7017,6 +7017,25 @@ class OvertopBassanoV16Production:
         except Exception:
             self._winsig = None
 
+        # ════════════════════════════════════════════════════════════════
+        # PATCH 11 BUG 18a — Post-Win Rebalance Gate (memoria WIN_NET)
+        # ════════════════════════════════════════════════════════════════
+        # Diagnosi Roberto (18 mag 2026 mattina): "il secondo deve trovare
+        # lo stesso ambiente del primo per agire correttamente". Caso reale:
+        #   307  WIN  +$1.18  score 82.0  →
+        #   308  LOSS -$3.63  score 76.5  (rientro a 3m18s)
+        #   309  LOSS -$2.00  score 71.6  (rientro a poco)
+        # Tutti formalmente sopra soglia 40, ma score in deterioramento.
+        # PATCH 11 memorizza dato del WIN_NET e blocca rientri post-WIN
+        # nello stesso fingerprint se score sta degradando.
+        # ════════════════════════════════════════════════════════════════
+        self._last_win_score       = None   # score al momento del WIN_NET
+        self._last_win_soglia      = None   # soglia al momento del WIN_NET
+        self._last_win_fingerprint = None   # mom|vol|trend|dir
+        self._last_win_ts          = None   # timestamp chiusura WIN
+        self._last_win_pnl         = None   # pnl_netto del WIN
+        self._last_win_reason      = None   # reason del WIN
+
         # -- LATENCY TRACKER — misura slippage decisione→esecuzione -------
         # Registra la differenza tra prezzo al momento della DECISIONE
         # e prezzo al momento dell'APERTURA EFFETTIVA della shadow.
@@ -10434,6 +10453,77 @@ class OvertopBassanoV16Production:
                     _verbale["blocked_by"] = "PATCH10_NO_FRESH_SCORE_P1"
                     self._log_constitutional(_verbale, "PRE_OPEN_VETO_NO_FRESH_SCORE_P1")
                     return
+                # ════════════════════════════════════════════════════════════════
+                # PATCH 11 BUG 18c — Post-Win Rebalance Gate (P1)
+                # ════════════════════════════════════════════════════════════════
+                # Regola: dopo un WIN_NET significativo (>=$1 netto), per 5min,
+                # se il fingerprint corrente è uguale a quello del WIN, allora
+                # blocca rientri se score_now < last_win_score - 5.
+                # Cambio fingerprint = ambiente nuovo = entra libero (loggato).
+                # ════════════════════════════════════════════════════════════════
+                POST_WIN_REBALANCE_ENABLED = True
+                POST_WIN_WINDOW_SEC        = 300    # 5 minuti
+                POST_WIN_SCORE_TOLERANCE   = 5.0    # punti
+                try:
+                    if (POST_WIN_REBALANCE_ENABLED
+                        and self._last_win_score is not None
+                        and self._last_win_fingerprint is not None
+                        and self._last_win_ts is not None):
+                        _now_pw = time.time()
+                        _dt_pw  = _now_pw - self._last_win_ts
+                        if _dt_pw <= POST_WIN_WINDOW_SEC:
+                            _curr_fp = f"{momentum}|{volatility}|{trend}|{_dir}"
+                            if _curr_fp == self._last_win_fingerprint:
+                                _gate_score = self._last_win_score - POST_WIN_SCORE_TOLERANCE
+                                if score < _gate_score:
+                                    self._log_m2("🚧",
+                                        f"POST_WIN_REENTRY_BLOCKED score_now={score:.1f} "
+                                        f"last_win_score={self._last_win_score:.1f} "
+                                        f"gate={_gate_score:.1f} fp={_curr_fp} "
+                                        f"dt={_dt_pw:.0f}s reason=ENV_NOT_REBUILT path=P1")
+                                    _verbale["blocked_by"] = "PATCH11_POST_WIN_ENV_NOT_REBUILT_P1"
+                                    self._log_constitutional(_verbale, "PRE_OPEN_VETO_POST_WIN_REBALANCE_P1")
+                                    return
+                            else:
+                                self._log_m2("🆕",
+                                    f"POST_WIN_REENTRY_ALLOWED_NEW_FINGERPRINT "
+                                    f"curr={_curr_fp} last={self._last_win_fingerprint} "
+                                    f"dt={_dt_pw:.0f}s path=P1")
+                except Exception as _e_pwg:
+                    pass
+                # ════════════════════════════════════════════════════════════════
+
+                # ════════════════════════════════════════════════════════════════
+                # PATCH 12 BUG 19a — Drift Magnitude Entry Filter (P1)
+                # ════════════════════════════════════════════════════════════════
+                # Diagnosi certificata sui 41 trade reali nella tabella
+                # winning_signatures (analisi 18 mag 2026 mattina):
+                #   - 8/8 WIN_NET hanno |drift| >= 0.0063 (minimo osservato)
+                #   - 10/33 LOSS hanno |drift| < 0.006 (zona morta = punto morto)
+                # Filtro |drift| >= 0.006 cattura 100% dei WIN e blocca 30% delle LOSS.
+                # Falsi positivi: 0. PnL salvato stimato: +$24.83 su 41 trade.
+                # ════════════════════════════════════════════════════════════════
+                DRIFT_MIN_MAGNITUDE = 0.006   # PATCH 12: soglia minima drift
+                try:
+                    _p12_drift = 0.0
+                    if len(self.campo._prices_long) >= 100:
+                        _p_p12 = list(self.campo._prices_long)
+                        _avg_old_p12 = sum(_p_p12[:50]) / 50
+                        _avg_new_p12 = sum(_p_p12[-50:]) / 50
+                        if _avg_old_p12 > 0:
+                            _p12_drift = (_avg_new_p12 - _avg_old_p12) / _avg_old_p12 * 100
+                    if abs(_p12_drift) < DRIFT_MIN_MAGNITUDE:
+                        self._log_m2("🚧",
+                            f"ENTRY_BLOCKED_FLAT_DRIFT drift={_p12_drift:+.4f} "
+                            f"threshold={DRIFT_MIN_MAGNITUDE} path=P1_EXPLOSIVE "
+                            f"reason=ZONA_MORTA_MERCATO")
+                        _verbale["blocked_by"] = "PATCH12_FLAT_DRIFT"
+                        self._log_constitutional(_verbale, "PRE_OPEN_VETO_FLAT_DRIFT_P1")
+                        return
+                except Exception as _e_p12_p1:
+                    # Se errore nel calcolo drift, NON blocchiamo (conservativo)
+                    pass
+                # ════════════════════════════════════════════════════════════════
                 self._open_shadow_position(price, score, soglia, seed, size,
                                             momentum, volatility, trend,
                                             matrimonio_name, fingerprint_wr)
@@ -10760,6 +10850,70 @@ class OvertopBassanoV16Production:
                 _verbale["blocked_by"] = "PATCH10_NO_FRESH_SCORE_P2"
                 self._log_constitutional(_verbale, "PRE_OPEN_VETO_NO_FRESH_SCORE_P2")
                 return
+            # ════════════════════════════════════════════════════════════════
+            # PATCH 11 BUG 18d — Post-Win Rebalance Gate (P2)
+            # ════════════════════════════════════════════════════════════════
+            # Stessa logica di P1: dopo un WIN_NET significativo, per 5min,
+            # se fingerprint uguale al WIN e score in degrado → blocca.
+            # ════════════════════════════════════════════════════════════════
+            POST_WIN_REBALANCE_ENABLED = True
+            POST_WIN_WINDOW_SEC        = 300
+            POST_WIN_SCORE_TOLERANCE   = 5.0
+            try:
+                if (POST_WIN_REBALANCE_ENABLED
+                    and self._last_win_score is not None
+                    and self._last_win_fingerprint is not None
+                    and self._last_win_ts is not None):
+                    _now_pw = time.time()
+                    _dt_pw  = _now_pw - self._last_win_ts
+                    if _dt_pw <= POST_WIN_WINDOW_SEC:
+                        _curr_fp = f"{momentum}|{volatility}|{trend}|{_dir}"
+                        if _curr_fp == self._last_win_fingerprint:
+                            _gate_score = self._last_win_score - POST_WIN_SCORE_TOLERANCE
+                            if score < _gate_score:
+                                self._log_m2("🚧",
+                                    f"POST_WIN_REENTRY_BLOCKED score_now={score:.1f} "
+                                    f"last_win_score={self._last_win_score:.1f} "
+                                    f"gate={_gate_score:.1f} fp={_curr_fp} "
+                                    f"dt={_dt_pw:.0f}s reason=ENV_NOT_REBUILT path=P2")
+                                _verbale["blocked_by"] = "PATCH11_POST_WIN_ENV_NOT_REBUILT_P2"
+                                self._log_constitutional(_verbale, "PRE_OPEN_VETO_POST_WIN_REBALANCE_P2")
+                                return
+                        else:
+                            self._log_m2("🆕",
+                                f"POST_WIN_REENTRY_ALLOWED_NEW_FINGERPRINT "
+                                f"curr={_curr_fp} last={self._last_win_fingerprint} "
+                                f"dt={_dt_pw:.0f}s path=P2")
+            except Exception as _e_pwg2:
+                pass
+            # ════════════════════════════════════════════════════════════════
+
+            # ════════════════════════════════════════════════════════════════
+            # PATCH 12 BUG 19b — Drift Magnitude Entry Filter (P2)
+            # ════════════════════════════════════════════════════════════════
+            # Stessa logica di P1: se |drift| < 0.006 = zona morta = blocca.
+            # Filtro certificato su 41 trade reali da winning_signatures.
+            # ════════════════════════════════════════════════════════════════
+            DRIFT_MIN_MAGNITUDE = 0.006
+            try:
+                _p12_drift = 0.0
+                if len(self.campo._prices_long) >= 100:
+                    _p_p12 = list(self.campo._prices_long)
+                    _avg_old_p12 = sum(_p_p12[:50]) / 50
+                    _avg_new_p12 = sum(_p_p12[-50:]) / 50
+                    if _avg_old_p12 > 0:
+                        _p12_drift = (_avg_new_p12 - _avg_old_p12) / _avg_old_p12 * 100
+                if abs(_p12_drift) < DRIFT_MIN_MAGNITUDE:
+                    self._log_m2("🚧",
+                        f"ENTRY_BLOCKED_FLAT_DRIFT drift={_p12_drift:+.4f} "
+                        f"threshold={DRIFT_MIN_MAGNITUDE} path=P2_STANDARD "
+                        f"reason=ZONA_MORTA_MERCATO")
+                    _verbale["blocked_by"] = "PATCH12_FLAT_DRIFT"
+                    self._log_constitutional(_verbale, "PRE_OPEN_VETO_FLAT_DRIFT_P2")
+                    return
+            except Exception as _e_p12_p2:
+                pass
+            # ════════════════════════════════════════════════════════════════
 
             self._open_shadow_position(price, score, soglia, seed, size,
                                         momentum, volatility, trend,
@@ -11543,6 +11697,38 @@ class OvertopBassanoV16Production:
                             f"WINSIG close outcome={_outcome} "
                             f"match_at_entry={_match:.2f} pnl_n=${pnl:+.2f}")
             except Exception:
+                pass
+            # ════════════════════════════════════════════════════════════════
+
+            # ════════════════════════════════════════════════════════════════
+            # PATCH 11 BUG 18b — Salva memoria WIN_NET per gate post-win
+            # ════════════════════════════════════════════════════════════════
+            # Memorizza score/soglia/fingerprint/ts del WIN_NET appena chiuso,
+            # solo se WIN significativo (pnl_netto >= +$1.00).
+            # Verrà letto dal gate POST_WIN_REBALANCE alla prossima entry.
+            # ════════════════════════════════════════════════════════════════
+            POST_WIN_MIN_NETTO = 1.00   # PATCH 11: soglia "WIN significativo"
+            try:
+                if is_win and pnl >= POST_WIN_MIN_NETTO and self._shadow:
+                    _wsc = self._shadow.get('score')
+                    _wso = self._shadow.get('soglia')
+                    _wmo = (getattr(self, '_shadow_entry_momentum', '') or '')
+                    _wvo = (self._shadow_entry_volatility or '')
+                    _wtr = (self._shadow_entry_trend or '')
+                    _wdi = entry_direction or 'LONG'
+                    _wfp = f"{_wmo}|{_wvo}|{_wtr}|{_wdi}" if (_wmo and _wvo and _wtr) else None
+                    if _wsc is not None and _wso is not None and _wfp:
+                        self._last_win_score       = float(_wsc)
+                        self._last_win_soglia      = float(_wso)
+                        self._last_win_fingerprint = _wfp
+                        self._last_win_ts          = time.time()
+                        self._last_win_pnl         = float(pnl)
+                        self._last_win_reason      = reason
+                        self._log_m2("💎",
+                            f"POST_WIN_MEMO_SAVED score={self._last_win_score:.1f} "
+                            f"soglia={self._last_win_soglia:.1f} fp={_wfp} "
+                            f"pnl=${pnl:+.2f} window=300s")
+            except Exception as _e_pwm:
                 pass
             # ════════════════════════════════════════════════════════════════
 
