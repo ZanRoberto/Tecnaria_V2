@@ -10333,9 +10333,26 @@ class OvertopBassanoV16Production:
                     soglia_boost      = self._get_ia_soglia_boost(momentum, volatility, trend),
                     pred_score        = pred_score_ops_p1,
                 )
-                if _result_p1['veto'] and _eo_carica < 0.80:
-                    self._log_m2("🚫", f"PERCORSO1_VETO: {_result_p1['veto']} "
-                                       f"carica={_eo_carica:.2f} {momentum}|{volatility}|{trend}")
+                # ════════════════════════════════════════════════════════════════
+                # PATCH 10 BUG 17a — Fresh Vote Required (P1_EXPLOSIVE bypass off)
+                # ════════════════════════════════════════════════════════════════
+                # Background: prima di PATCH 10, il veto del Campo veniva
+                # rispettato solo sotto OI carica < 0.80. Sopra 0.80, il bot
+                # entrava comunque con score=0 soglia=0 (ereditati da _veto()).
+                # Era il terzo bypass nascosto: EXPLOSIVE_OVERRIDE.
+                #
+                # Diagnosi di Roberto (18 mag mattina): "qualcosa di sporco entra
+                # dopo il WIN, gatto che si morde la coda". Su 15 trade post-PATCH 9,
+                # 9 avevano score=0 soglia=0 → entry forzate da carica OI alta.
+                #
+                # Fix PATCH 10: veto = veto, sempre. Carica OI è log, non è
+                # autorizzazione. La filosofia "se la carica è alta entro lo
+                # stesso" è il vizio architetturale madre.
+                # ════════════════════════════════════════════════════════════════
+                if _result_p1['veto']:
+                    self._log_m2("🚫", f"P1_EXPLOSIVE_VETO_RESPECTED: {_result_p1['veto']} "
+                                       f"carica={_eo_carica:.2f} {momentum}|{volatility}|{trend} "
+                                       f"reason=PATCH10_NO_BYPASS_FROM_OI")
                     _verbale["blocked_by"] = f"ZONA1_PERCORSO1_VETO:{_result_p1['veto']}"
                     self._log_constitutional(_verbale, "PRE_SC_VETO_PERCORSO1_CAMPO")
                     return
@@ -10404,6 +10421,19 @@ class OvertopBassanoV16Production:
                                    f"size={size:.2f} {momentum}|{volatility}|{trend}")
                 _verbale["blocked_by"] = None  # è un'entrata
                 self._log_constitutional(_verbale, "ENTRY_OPENED_P1_EXPLOSIVE")
+                # ════════════════════════════════════════════════════════════════
+                # PATCH 10 BUG 17b — Fresh Vote Guard (P1)
+                # ════════════════════════════════════════════════════════════════
+                # Legge madre: NESSUNA ENTRY SENZA VOTO FRESCO.
+                # Se score<=0 o soglia<=0, qualunque path ci abbia portati qui,
+                # il trade non apre. Cattura anche quarti/quinti bypass futuri.
+                # ════════════════════════════════════════════════════════════════
+                if score <= 0 or soglia <= 0:
+                    self._log_m2("🛑", f"ENTRY_BLOCKED_NO_FRESH_SCORE score={score} "
+                                       f"soglia={soglia} path=P1_EXPLOSIVE")
+                    _verbale["blocked_by"] = "PATCH10_NO_FRESH_SCORE_P1"
+                    self._log_constitutional(_verbale, "PRE_OPEN_VETO_NO_FRESH_SCORE_P1")
+                    return
                 self._open_shadow_position(price, score, soglia, seed, size,
                                             momentum, volatility, trend,
                                             matrimonio_name, fingerprint_wr)
@@ -10716,6 +10746,20 @@ class OvertopBassanoV16Production:
             self._log_m2("🚀", f"ENTRY {_dir} score={score:.1f}/{soglia:.1f} "
                                f"size={size:.2f} sc={_sc_dec['azione']} "
                                f"regime={self._regime_current}")
+
+            # ════════════════════════════════════════════════════════════════
+            # PATCH 10 BUG 17c — Fresh Vote Guard (P2)
+            # ════════════════════════════════════════════════════════════════
+            # Legge madre: NESSUNA ENTRY SENZA VOTO FRESCO.
+            # Anche nel PERCORSO 2 (standard SC), se per qualche motivo
+            # arriviamo qui con score<=0 o soglia<=0, blocchiamo.
+            # ════════════════════════════════════════════════════════════════
+            if score <= 0 or soglia <= 0:
+                self._log_m2("🛑", f"ENTRY_BLOCKED_NO_FRESH_SCORE score={score} "
+                                   f"soglia={soglia} path=P2_STANDARD")
+                _verbale["blocked_by"] = "PATCH10_NO_FRESH_SCORE_P2"
+                self._log_constitutional(_verbale, "PRE_OPEN_VETO_NO_FRESH_SCORE_P2")
+                return
 
             self._open_shadow_position(price, score, soglia, seed, size,
                                         momentum, volatility, trend,
