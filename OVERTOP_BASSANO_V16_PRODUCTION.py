@@ -10502,8 +10502,17 @@ class OvertopBassanoV16Production:
                 #   - 10/33 LOSS hanno |drift| < 0.006 (zona morta = punto morto)
                 # Filtro |drift| >= 0.006 cattura 100% dei WIN e blocca 30% delle LOSS.
                 # Falsi positivi: 0. PnL salvato stimato: +$24.83 su 41 trade.
+                #
+                # ⚠️ ATTENZIONE UNITÀ DI MISURA (PATCH 12 UNITFIX — 18 mag pomeriggio):
+                # _p12_drift è in PERCENTUALE (formula con * 100), coerente con:
+                #   - winning_signatures._compute_signature (drift = ... * 100)
+                #   - CampoGravitazionale._drift_check (drift = ... * 100)
+                #   - IntelligenzaAutonoma._analisi_drift (drift_pct = ... * 100)
+                # NON TOGLIERE * 100: rompe la coerenza con i dati salvati.
+                # NON cambiare DRIFT_MIN_MAGNITUDE = 0.006: nasce dai dati DB
+                # già in scala percentuale (0.0063 = 0.0063% minimo WIN reale).
                 # ════════════════════════════════════════════════════════════════
-                DRIFT_MIN_MAGNITUDE = 0.006   # PATCH 12: soglia minima drift
+                DRIFT_MIN_MAGNITUDE = 0.006   # PATCH 12: soglia minima drift (PERCENTUALE)
                 try:
                     _p12_drift = 0.0
                     if len(self.campo._prices_long) >= 100:
@@ -10511,7 +10520,7 @@ class OvertopBassanoV16Production:
                         _avg_old_p12 = sum(_p_p12[:50]) / 50
                         _avg_new_p12 = sum(_p_p12[-50:]) / 50
                         if _avg_old_p12 > 0:
-                            _p12_drift = (_avg_new_p12 - _avg_old_p12) / _avg_old_p12
+                            _p12_drift = (_avg_new_p12 - _avg_old_p12) / _avg_old_p12 * 100
                     if abs(_p12_drift) < DRIFT_MIN_MAGNITUDE:
                         self._log_m2("🚧",
                             f"ENTRY_BLOCKED_FLAT_DRIFT drift={_p12_drift:+.4f} "
@@ -10893,8 +10902,11 @@ class OvertopBassanoV16Production:
             # ════════════════════════════════════════════════════════════════
             # Stessa logica di P1: se |drift| < 0.006 = zona morta = blocca.
             # Filtro certificato su 41 trade reali da winning_signatures.
+            #
+            # ⚠️ UNITÀ: _p12_drift è in PERCENTUALE (* 100), coerente con
+            # winning_signatures. Vedi commento esteso in P1 (riga ~10497).
             # ════════════════════════════════════════════════════════════════
-            DRIFT_MIN_MAGNITUDE = 0.006
+            DRIFT_MIN_MAGNITUDE = 0.006   # PATCH 12: soglia minima drift (PERCENTUALE)
             try:
                 _p12_drift = 0.0
                 if len(self.campo._prices_long) >= 100:
@@ -10902,7 +10914,7 @@ class OvertopBassanoV16Production:
                     _avg_old_p12 = sum(_p_p12[:50]) / 50
                     _avg_new_p12 = sum(_p_p12[-50:]) / 50
                     if _avg_old_p12 > 0:
-                        _p12_drift = (_avg_new_p12 - _avg_old_p12) / _avg_old_p12
+                        _p12_drift = (_avg_new_p12 - _avg_old_p12) / _avg_old_p12 * 100
                 if abs(_p12_drift) < DRIFT_MIN_MAGNITUDE:
                     self._log_m2("🚧",
                         f"ENTRY_BLOCKED_FLAT_DRIFT drift={_p12_drift:+.4f} "
