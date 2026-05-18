@@ -10511,7 +10511,7 @@ class OvertopBassanoV16Production:
                         _avg_old_p12 = sum(_p_p12[:50]) / 50
                         _avg_new_p12 = sum(_p_p12[-50:]) / 50
                         if _avg_old_p12 > 0:
-                            _p12_drift = (_avg_new_p12 - _avg_old_p12) / _avg_old_p12 * 100
+                            _p12_drift = (_avg_new_p12 - _avg_old_p12) / _avg_old_p12
                     if abs(_p12_drift) < DRIFT_MIN_MAGNITUDE:
                         self._log_m2("🚧",
                             f"ENTRY_BLOCKED_FLAT_DRIFT drift={_p12_drift:+.4f} "
@@ -10902,7 +10902,7 @@ class OvertopBassanoV16Production:
                     _avg_old_p12 = sum(_p_p12[:50]) / 50
                     _avg_new_p12 = sum(_p_p12[-50:]) / 50
                     if _avg_old_p12 > 0:
-                        _p12_drift = (_avg_new_p12 - _avg_old_p12) / _avg_old_p12 * 100
+                        _p12_drift = (_avg_new_p12 - _avg_old_p12) / _avg_old_p12
                 if abs(_p12_drift) < DRIFT_MIN_MAGNITUDE:
                     self._log_m2("🚧",
                         f"ENTRY_BLOCKED_FLAT_DRIFT drift={_p12_drift:+.4f} "
