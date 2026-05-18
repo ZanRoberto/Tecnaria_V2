@@ -8294,9 +8294,34 @@ class OvertopBassanoV16Production:
         if hasattr(self, '_last_sc_dec') and self._last_sc_dec:
             self.supercervello.registra_esito(self._last_sc_dec, is_win)
             self._last_sc_dec = None
-        self.realtime_engine.registra_trade({'matrimonio': matrimonio_name, 'pnl': pnl, 'is_win': is_win})
+        # ════════════════════════════════════════════════════════════════
+        # PATCH 8 BUG 15 — Single registra_trade Append
+        # ════════════════════════════════════════════════════════════════
+        # Background: prima di PATCH 8, ogni trade chiuso veniva passato
+        # DUE VOLTE a self.realtime_engine.registra_trade():
+        #   1. qui sotto con dict povero {matrimonio, pnl, is_win}
+        #   2. più sotto in _close_shadow_trade (riga ~11524) con dict
+        #      ricco di 10 campi (regime, volatility, trend, drift, score, …)
+        #
+        # Effetto: _trade_buffer (deque maxlen=200) conteneva DUE entries
+        # per ogni trade chiuso, falsando _analisi_l3_loss_streak:
+        #   - 1 LOSS reale appare come 2 LOSS consecutive → genera capsula
+        #     L3_STREAK_2 con boost_soglia +5
+        #   - 2 LOSS reali appaiono come 4 → boost più aggressivo
+        #
+        # Diagnosi di Roberto (17 mag 2026 sera): "esiste il killer che la 5
+        # riporta dentro, forse anche la 6 e tutta la filiera". PATCH 5 aveva
+        # fixato il doppio append su _m2_recent_trades; lo stesso pattern
+        # esisteva su _trade_buffer ed era mai stato visto prima.
+        #
+        # Fix PATCH 8: rimuovo la chiamata #1 (dict povero). Tengo la #2
+        # (dict ricco, 10 campi) che alimenta meglio l'analisi L2/L3.
+        # Rimuovo anche analizza_e_genera() qui sotto: registra_trade lo
+        # chiama già internamente quando _trade_count % _analisi_interval == 0.
+        # ════════════════════════════════════════════════════════════════
+        # (PATCH 8: chiamata povera rimossa. La chiamata ricca in
+        #  _close_shadow_trade resta come unico append a _trade_buffer.)
         self.log_analyzer.registra({'matrimonio': matrimonio_name, 'pnl': pnl, 'is_win': is_win})
-        self.realtime_engine.analizza_e_genera()
 
         # -- AutoCalibratore: registra osservazione ------------------------
         self.calibratore.registra_osservazione(
