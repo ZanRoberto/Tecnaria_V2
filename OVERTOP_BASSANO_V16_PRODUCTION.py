@@ -10225,6 +10225,62 @@ class OvertopBassanoV16Production:
             fingerprint_wr = self.oracolo.get_wr(momentum, volatility, trend, _dir)
             self._last_fingerprint_wr = fingerprint_wr
             _verbale["fp_wr"] = fingerprint_wr
+            # ════════════════════════════════════════════════════════════════
+            # PATCH 14 BUG 21 — Gate Oracolo fp_wr_raw_min (OPERATIVO)
+            # ════════════════════════════════════════════════════════════════
+            # DIAGNOSI FORENSE (18 mag 2026 sera):
+            #   Sui 237 trade storici (tabella trades), 93 trade (39%) sono entrati
+            #   con fp_wr_raw < 0.10 producendo WR 3.2% e -$165.65 netti.
+            #   L'Oracolo SAPEVA, ma il bot ignorava il dato e continuava a entrare.
+            #
+            # COMPORTAMENTO:
+            #   - Se il fingerprint ha samples >= 30 (memoria storica solida)
+            #     E fp_wr_raw < 0.10 (Oracolo dice "qui non si vince")
+            #   - BLOCCA l'entry, log ENTRY_BLOCKED_FP_WR_LOW, return
+            #   - Fingerprint NUOVI (samples < 30): non blocca (esplorazione consentita)
+            #
+            # SIMULAZIONE SU 237 TRADE STORICI:
+            #   - 93 trade bloccati (39% di evitamento)
+            #   - 3 WIN persi (-$6.76), 90 LOSS evitati (+$172.41)
+            #   - DELTA NETTO: +$165.65 (riduzione 42% del danno)
+            #
+            # GUARDRAIL:
+            #   - Soglia 0.10 (conservativa, scelta da Roberto)
+            #   - Min samples 30 (evita falsi positivi su fp poveri)
+            #   - BLOCK puro (no entry, no fee)
+            #   - Sentinella log: ENTRY_BLOCKED_FP_WR_LOW
+            #
+            # NON TOCCA: SC, soglia, breath/nerv/comparto, capsule, V2, Sinapsi
+            # ════════════════════════════════════════════════════════════════
+            FP_WR_MIN_THRESHOLD   = 0.10   # PATCH 14: WR storico minimo per entry
+            FP_WR_MIN_SAMPLES     = 30     # PATCH 14: minimo n samples per applicare gate
+            try:
+                _fp_key_p14 = self.oracolo._fp(momentum, volatility, trend, _dir)
+                _fp_mem_p14 = self.oracolo._memory.get(_fp_key_p14)
+                _fp_samples_p14 = float(_fp_mem_p14.get('samples', 0)) if _fp_mem_p14 else 0.0
+                if _fp_samples_p14 >= FP_WR_MIN_SAMPLES and fingerprint_wr < FP_WR_MIN_THRESHOLD:
+                    self._log_m2("🛑",
+                        f"ENTRY_BLOCKED_FP_WR_LOW fp={_fp_key_p14} "
+                        f"wr={fingerprint_wr:.3f} < {FP_WR_MIN_THRESHOLD:.2f} "
+                        f"samples={_fp_samples_p14:.0f} (>={FP_WR_MIN_SAMPLES})")
+                    # ════════════════════════════════════════════════════════════
+                    # PATCH 14 TRACEFIX (firma ChatGPT 18 mag 2026)
+                    # Tracciabilità investigativa nel verbale costituzionale.
+                    # Ogni blocco entry DEVE essere visibile nel verbale, non solo
+                    # nei log Render volatili. Senza questo, Roberto torna cieco
+                    # sui blocchi PATCH 14.
+                    # ════════════════════════════════════════════════════════════
+                    _verbale["blocked_by"] = "PATCH14_FP_WR_LOW"
+                    _verbale["fp_key"]     = _fp_key_p14
+                    _verbale["fp_samples"] = int(_fp_samples_p14)
+                    _verbale["fp_wr_raw"]  = round(float(fingerprint_wr), 4)
+                    self._log_constitutional(_verbale, "PRE_OPEN_VETO_FP_WR_LOW")
+                    return
+            except Exception as _p14e:
+                # Guardrail anti-regressione: in caso di errore, NON blocchiamo
+                # (preferiamo perdere il filtro che bloccare per bug)
+                log.debug(f"[P14_GATE_ERR] {_p14e}")
+            # ════════════════════════════════════════════════════════════════
             matrimonio_name = MatrimonioIntelligente.get_marriage(
                 momentum, volatility, trend).get("name", "WEAK_NEUTRAL")
 
