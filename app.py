@@ -5608,24 +5608,32 @@ def canvas_orch_status():
     if auth_err: return auth_err
     
     try:
+        # Bypass db_execute per uniformità (db_execute usa fetchone se query contiene COUNT)
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        cur = conn.cursor()
+        
         # Ultime 50 attivazioni shadow
-        rows = db_execute("""
+        cur.execute("""
             SELECT ts, capsula_id, stato_capsula, evento, azione_simulata
             FROM canvas_shadow_log
             ORDER BY id DESC LIMIT 50
-        """, fetch=True) or []
+        """)
+        rows = cur.fetchall() or []
         
         attivazioni = [{
             "ts": r[0], "capsula_id": r[1], "stato": r[2], "evento": r[3], "azione": r[4]
         } for r in rows]
         
         # Numero signatures registrate
-        sig_count = db_execute("""
+        cur.execute("""
             SELECT COUNT(*), COUNT(DISTINCT signature_hash) 
             FROM canvas_trade_signatures
-        """, fetch=True)
-        n_sig = sig_count[0][0] if sig_count else 0
-        n_unique = sig_count[0][1] if sig_count else 0
+        """)
+        sig_count = cur.fetchone()
+        n_sig = sig_count[0] if sig_count else 0
+        n_unique = sig_count[1] if sig_count else 0
+        
+        conn.close()
         
         return jsonify({
             "enabled": ORCHESTRATOR_ENABLED,
@@ -5648,7 +5656,10 @@ def canvas_orch_signatures():
     if auth_err: return auth_err
     
     try:
-        rows = db_execute("""
+        # Bypass db_execute (query GROUP BY con COUNT romperebbe il fetchone interno)
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        cur = conn.cursor()
+        cur.execute("""
             SELECT signature_hash, COUNT(*) as n,
                    AVG(pnl) as pnl_avg,
                    SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
@@ -5658,7 +5669,9 @@ def canvas_orch_signatures():
             FROM canvas_trade_signatures
             GROUP BY signature_hash
             ORDER BY n DESC LIMIT 30
-        """, fetch=True) or []
+        """)
+        rows = cur.fetchall() or []
+        conn.close()
         
         results = []
         for r in rows:
