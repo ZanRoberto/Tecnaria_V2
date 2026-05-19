@@ -5085,7 +5085,7 @@ def canvas_health():
 
 ORCHESTRATOR_ENABLED   = os.environ.get("ORCHESTRATOR_ENABLED", "true").lower() == "true"
 ORCHESTRATOR_INTERVAL  = int(os.environ.get("ORCHESTRATOR_INTERVAL_S", "10"))  # ogni 10s
-ORCHESTRATOR_MIN_OCCURRENCES = int(os.environ.get("ORCHESTRATOR_MIN_OCC", "5"))  # min N trade per auto-genesi capsula
+ORCHESTRATOR_MIN_OCCURRENCES = int(os.environ.get("ORCHESTRATOR_MIN_OCC", "2"))  # min N trade per auto-genesi capsula (Roberto: 2 basta)
 
 # Tabelle DB per orchestrator (create al boot)
 def _orchestrator_init_db():
