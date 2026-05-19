@@ -5060,6 +5060,631 @@ def canvas_health():
 # FINE BLOCCO CANVAS — inseriamo qui sotto il main esistente
 # ═══════════════════════════════════════════════════════════════════════════
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CANVAS ORCHESTRATOR — Giorno 2 (19 maggio 2026)
+# ═══════════════════════════════════════════════════════════════════════════
+# 
+# Thread separato che gira in parallelo al bot. Ogni N secondi:
+#   1. Legge le capsule dal disco (canvas/capsule/* e canvas/quarantena/*)
+#   2. Costruisce uno snapshot dello stato attuale (da heartbeat_data + bot)
+#   3. Per ogni capsula, valuta condizioni_attivazione contro lo snapshot
+#   4. Se attiva → logga "shadow activation" su DB (NON agisce sul bot)
+#   5. Aggiorna performance_score sul disco
+#
+# AUTO-GENERAZIONE CAPSULE (modo 1):
+#   Quando un trade chiude (rilevato via tabella trades del DB), l'orchestratore
+#   registra il vettore fisico pre-entry + esito. Se vede N trade con stesso
+#   pattern → SCRIVE una capsula automaticamente in canvas/quarantena/.
+#
+# REGOLA D'ORO GIORNO 2: shadow mode obbligatorio.
+#   L'orchestratore NON modifica il bot. Non chiude trade. Non blocca entry.
+#   Solo OSSERVA, LOGGA, SCRIVE capsule. Roberto vedrà sulla dashboard.
+#   Modalità live arriverà solo dopo verifica 24-48h.
+# ═══════════════════════════════════════════════════════════════════════════
+
+ORCHESTRATOR_ENABLED   = os.environ.get("ORCHESTRATOR_ENABLED", "true").lower() == "true"
+ORCHESTRATOR_INTERVAL  = int(os.environ.get("ORCHESTRATOR_INTERVAL_S", "10"))  # ogni 10s
+ORCHESTRATOR_MIN_OCCURRENCES = int(os.environ.get("ORCHESTRATOR_MIN_OCC", "5"))  # min N trade per auto-genesi capsula
+
+# Tabelle DB per orchestrator (create al boot)
+def _orchestrator_init_db():
+    """Crea tabelle DB per logging orchestrator."""
+    try:
+        db_execute("""
+            CREATE TABLE IF NOT EXISTS canvas_shadow_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT NOT NULL,
+                capsula_id TEXT NOT NULL,
+                stato_capsula TEXT,
+                evento TEXT,
+                snapshot_json TEXT,
+                azione_simulata TEXT
+            )
+        """)
+        db_execute("""
+            CREATE TABLE IF NOT EXISTS canvas_trade_signatures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_id TEXT,
+                ts_trade TEXT,
+                signature_hash TEXT NOT NULL,
+                signature_json TEXT,
+                pnl REAL,
+                peak_pnl REAL,
+                peak_at_s REAL,
+                duration_s REAL,
+                regime TEXT,
+                processata_per_genesi INTEGER DEFAULT 0
+            )
+        """)
+        db_execute("""
+            CREATE INDEX IF NOT EXISTS idx_canvas_sig_hash 
+            ON canvas_trade_signatures(signature_hash)
+        """)
+        log("[ORCHESTRATOR] ✅ Tabelle DB inizializzate")
+    except Exception as e:
+        log(f"[ORCHESTRATOR] ❌ Init DB: {e}")
+
+_orchestrator_init_db()
+
+
+def _orchestrator_load_capsule():
+    """Legge tutte le capsule dal disco. Restituisce dict {id: capsula_dict}."""
+    capsule = {}
+    for dir_path, stato_dir in [
+        (CANVAS_CAPSULE_DIR, "attiva"),
+        (CANVAS_QUARANTENA_DIR, "in_quarantena"),
+    ]:
+        if not os.path.isdir(dir_path):
+            continue
+        for fname in os.listdir(dir_path):
+            if not fname.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(dir_path, fname), "r", encoding="utf-8") as f:
+                    c = json.load(f)
+                cid = c.get("id")
+                if cid:
+                    c["_stato_disco"] = stato_dir
+                    c["_path"] = os.path.join(dir_path, fname)
+                    capsule[cid] = c
+            except Exception as e:
+                log(f"[ORCHESTRATOR] ⚠️ Capsula non leggibile {fname}: {e}")
+    return capsule
+
+
+def _orchestrator_evaluate_condition(regola, snapshot):
+    """Valuta una singola regola contro lo snapshot. Restituisce bool."""
+    try:
+        campo = regola.get("campo")
+        op = regola.get("operatore")
+        valore_atteso = regola.get("valore")
+        valore_attuale = snapshot.get(campo)
+        
+        if valore_attuale is None:
+            return False
+        
+        if op == "==":
+            return valore_attuale == valore_atteso
+        if op == "!=":
+            return valore_attuale != valore_atteso
+        if op == ">=":
+            return valore_attuale >= valore_atteso
+        if op == "<=":
+            return valore_attuale <= valore_atteso
+        if op == ">":
+            return valore_attuale > valore_atteso
+        if op == "<":
+            return valore_attuale < valore_atteso
+        if op == "in":
+            return valore_attuale in valore_atteso
+        return False
+    except Exception:
+        return False
+
+
+def _orchestrator_evaluate_capsula(capsula, snapshot):
+    """Valuta tutte le condizioni di attivazione. Restituisce bool."""
+    cond = capsula.get("condizioni_attivazione", {})
+    op_logico = cond.get("operatore", "AND").upper()
+    regole = cond.get("regole", [])
+    
+    if not regole:
+        return False
+    
+    risultati = [_orchestrator_evaluate_condition(r, snapshot) for r in regole]
+    
+    if op_logico == "AND":
+        return all(risultati)
+    if op_logico == "OR":
+        return any(risultati)
+    return False
+
+
+def _orchestrator_build_snapshot():
+    """Costruisce snapshot dello stato corrente per valutazione capsule."""
+    snapshot = {}
+    
+    try:
+        with heartbeat_lock:
+            hb = dict(heartbeat_data)
+        
+        # Campi base sempre disponibili
+        snapshot["mode"] = hb.get("mode", "UNKNOWN")
+        snapshot["status"] = hb.get("status", "UNKNOWN")
+        snapshot["capital"] = float(hb.get("capital", 0))
+        snapshot["trades"] = int(hb.get("trades", 0))
+        
+        # Stato bot (regime, OI, ecc.) — se disponibile
+        try:
+            global bot
+            if bot is not None:
+                snapshot["regime"] = getattr(bot, "_regime_current", "UNKNOWN")
+                snapshot["oi_carica"] = float(getattr(bot, "_oi_carica", 0) or 0)
+                snapshot["oi_stato"] = getattr(bot, "_oi_stato", "UNKNOWN")
+                snapshot["loss_streak"] = int(getattr(bot, "_loss_consecutivi", 0) or 0)
+                # Trade aperto?
+                snapshot["trade_aperto"] = bool(getattr(bot, "_trade_aperto", False))
+                if snapshot["trade_aperto"]:
+                    entry_ts = getattr(bot, "_trade_entry_ts", None)
+                    if entry_ts:
+                        snapshot["tempo_da_entry_s"] = (datetime.utcnow() - entry_ts).total_seconds()
+                    snapshot["pnl_corrente"] = float(getattr(bot, "_trade_pnl_corrente", 0) or 0)
+        except Exception:
+            pass
+        
+        snapshot["_ts"] = datetime.utcnow().isoformat() + "Z"
+        return snapshot
+    except Exception as e:
+        return {"_ts": datetime.utcnow().isoformat() + "Z", "_error": str(e)}
+
+
+def _orchestrator_log_shadow_activation(capsula, snapshot, attivata):
+    """Logga su DB l'attivazione (o non) di una capsula."""
+    try:
+        cid = capsula.get("id", "UNKNOWN")
+        stato = capsula.get("_stato_disco", "?")
+        evento = "ATTIVATA_SHADOW" if attivata else "NON_ATTIVATA"
+        
+        # Azione simulata (cosa avrebbe fatto se in modalità live)
+        azione = None
+        if attivata:
+            inietta = capsula.get("inietta", {})
+            azione = json.dumps({
+                "tipo": inietta.get("tipo_iniezione", "?"),
+                "azione": inietta.get("azione", "?"),
+                "motivazione": inietta.get("motivazione_uscita") or inietta.get("motivazione", "")
+            }, ensure_ascii=False)
+        
+        db_execute("""
+            INSERT INTO canvas_shadow_log (ts, capsula_id, stato_capsula, evento, snapshot_json, azione_simulata)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            datetime.utcnow().isoformat() + "Z",
+            cid,
+            stato,
+            evento,
+            json.dumps(snapshot, ensure_ascii=False)[:5000],  # cap
+            azione
+        ))
+        
+        # Aggiorna performance_score sul disco (solo per attivazioni)
+        if attivata:
+            _orchestrator_update_perf_score(capsula)
+    except Exception as e:
+        log(f"[ORCHESTRATOR] ⚠️ Log shadow: {e}")
+
+
+def _orchestrator_update_perf_score(capsula):
+    """Aggiorna il performance_score della capsula sul disco."""
+    try:
+        path = capsula.get("_path")
+        if not path or not os.path.exists(path):
+            return
+        
+        with open(path, "r", encoding="utf-8") as f:
+            c = json.load(f)
+        
+        ps = c.setdefault("performance_score", {})
+        ps["attivazioni_totali"] = int(ps.get("attivazioni_totali", 0)) + 1
+        # Shadow counters: contiamo qui solo le attivazioni; outcome arriva post-trade
+        ps["_aggiornato_il"] = datetime.utcnow().isoformat() + "Z"
+        
+        log_att = c.setdefault("log_attivazioni", [])
+        if len(log_att) < 50:  # cap log inline
+            log_att.append({
+                "ts": ps["_aggiornato_il"],
+                "tipo": "shadow"
+            })
+        
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(c, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        log(f"[ORCHESTRATOR] ⚠️ Update perf: {e}")
+
+
+def _orchestrator_signature_from_trade(trade_row):
+    """
+    Estrae signature fisica dal trade chiuso. 
+    Restituisce (hash, dict).
+    """
+    import hashlib
+    try:
+        # trade_row è un dict (o tuple) dalla tabella trades
+        # Schema atteso: event_type, asset, price, size, pnl, direction, reason, data_json
+        data_json = trade_row.get("data_json", "{}") if isinstance(trade_row, dict) else "{}"
+        try:
+            data = json.loads(data_json)
+        except Exception:
+            data = {}
+        
+        # Campi fisici discreti (bucketizzati per riconoscere pattern simili)
+        regime = data.get("regime", "UNKNOWN")
+        momentum = data.get("momentum", "UNKNOWN")
+        volatility = data.get("volatility", "UNKNOWN")
+        trend = data.get("trend", "UNKNOWN")
+        oi_carica_bucket = round(float(data.get("oi_carica", 0) or 0) * 10) / 10  # 0.0, 0.1, ..., 1.0
+        direction = trade_row.get("direction", "LONG") if isinstance(trade_row, dict) else "LONG"
+        
+        sig_dict = {
+            "regime": regime,
+            "momentum": momentum,
+            "volatility": volatility,
+            "trend": trend,
+            "oi_carica_bucket": oi_carica_bucket,
+            "direction": direction,
+        }
+        
+        sig_str = json.dumps(sig_dict, sort_keys=True)
+        sig_hash = hashlib.sha256(sig_str.encode()).hexdigest()[:16]
+        
+        return sig_hash, sig_dict
+    except Exception as e:
+        log(f"[ORCHESTRATOR] ⚠️ Signature: {e}")
+        return None, None
+
+
+def _orchestrator_register_closed_trade(trade_row):
+    """Quando un trade chiude (event_type=EXIT), registra la signature per analisi."""
+    try:
+        sig_hash, sig_dict = _orchestrator_signature_from_trade(trade_row)
+        if not sig_hash:
+            return
+        
+        data_json = trade_row.get("data_json", "{}") if isinstance(trade_row, dict) else "{}"
+        try:
+            data = json.loads(data_json)
+        except Exception:
+            data = {}
+        
+        db_execute("""
+            INSERT INTO canvas_trade_signatures 
+            (trade_id, ts_trade, signature_hash, signature_json, pnl, peak_pnl, peak_at_s, duration_s, regime)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            str(trade_row.get("id", "")) if isinstance(trade_row, dict) else "",
+            datetime.utcnow().isoformat() + "Z",
+            sig_hash,
+            json.dumps(sig_dict),
+            float(trade_row.get("pnl", 0) or 0),
+            float(data.get("peak_pnl", 0) or 0),
+            float(data.get("peak_at", 0) or 0),
+            float(data.get("duration", 0) or 0),
+            sig_dict.get("regime", "?")
+        ))
+    except Exception as e:
+        log(f"[ORCHESTRATOR] ⚠️ Register trade: {e}")
+
+
+def _orchestrator_try_genesis(sig_hash):
+    """
+    Verifica se una signature ha raggiunto soglia per genesi capsula automatica.
+    Se sì → SCRIVE capsula in canvas/quarantena/.
+    """
+    try:
+        # Conta trade con questa signature
+        rows = db_execute("""
+            SELECT pnl, peak_pnl, peak_at_s, duration_s, regime, signature_json
+            FROM canvas_trade_signatures
+            WHERE signature_hash = ? AND processata_per_genesi = 0
+        """, (sig_hash,), fetch=True) or []
+        
+        if len(rows) < ORCHESTRATOR_MIN_OCCURRENCES:
+            return
+        
+        # Statistiche
+        n = len(rows)
+        pnls = [float(r[0]) for r in rows]
+        peaks = [float(r[1]) for r in rows if r[1] is not None]
+        peak_ats = [float(r[2]) for r in rows if r[2] is not None]
+        durations = [float(r[3]) for r in rows if r[3] is not None]
+        
+        n_wins = sum(1 for p in pnls if p > 0)
+        wr = n_wins / n
+        pnl_medio = sum(pnls) / n
+        peak_pnl_medio = (sum(peaks) / len(peaks)) if peaks else 0
+        peak_at_medio = (sum(peak_ats) / len(peak_ats)) if peak_ats else 0
+        dur_medio = (sum(durations) / len(durations)) if durations else 0
+        
+        # Signature originale
+        try:
+            sig_dict = json.loads(rows[0][5])
+        except Exception:
+            sig_dict = {}
+        regime = rows[0][4] or "UNKNOWN"
+        
+        # Costruisci capsula nuova
+        capsula_id = f"AUTOGEN_{regime}_{sig_hash}"
+        
+        # Già esiste?
+        for d in (CANVAS_CAPSULE_DIR, CANVAS_QUARANTENA_DIR):
+            if os.path.exists(os.path.join(d, capsula_id + ".json")):
+                # già generata, marca i trade come processati e basta
+                db_execute("""
+                    UPDATE canvas_trade_signatures
+                    SET processata_per_genesi = 1
+                    WHERE signature_hash = ? AND processata_per_genesi = 0
+                """, (sig_hash,))
+                return
+        
+        nuova_capsula = {
+            "_commento": f"Capsula AUTO-GENERATA dall'orchestratore. Pattern osservato {n} volte. NON ancora promossa.",
+            "id": capsula_id,
+            "versione": "1.0",
+            "stato": "in_quarantena",
+            "metadati": {
+                "creata_da": "orchestrator_autogenesi",
+                "creata_il": datetime.utcnow().isoformat() + "Z",
+                "motivazione_creazione": f"Pattern signature {sig_hash} osservato {n} volte. WR {wr*100:.0f}%, PnL medio ${pnl_medio:+.2f}.",
+                "approvata_da_umano": False,
+                "n_osservazioni": n,
+                "wr_storico": round(wr, 3),
+                "pnl_medio": round(pnl_medio, 3),
+                "peak_pnl_medio": round(peak_pnl_medio, 3),
+                "peak_at_medio_s": round(peak_at_medio, 1),
+                "duration_media_s": round(dur_medio, 1),
+            },
+            "condizioni_attivazione": {
+                "operatore": "AND",
+                "regole": [
+                    {"campo": "regime", "operatore": "==", "valore": sig_dict.get("regime", "UNKNOWN")},
+                    {"campo": "momentum", "operatore": "==", "valore": sig_dict.get("momentum", "UNKNOWN")},
+                    {"campo": "volatility", "operatore": "==", "valore": sig_dict.get("volatility", "UNKNOWN")},
+                ]
+            },
+            "inietta": {
+                "tipo_iniezione": "informazione_pattern",
+                "_nota": "Capsula osservativa pura. Logga il riconoscimento ma non agisce. Roberto deciderà se aggiungere comportamento.",
+                "wr_atteso": round(wr, 3),
+                "pnl_atteso": round(pnl_medio, 3),
+                "peak_atteso": round(peak_pnl_medio, 3),
+                "finestra_attesa_s": round(peak_at_medio, 1),
+            },
+            "scenari_uscita_per_regina": {},
+            "capsule_che_attivo": [],
+            "capsule_che_disattivo_temporaneamente": [],
+            "in_caso_di_incertezza_chiama_canvas": {"abilitato": False},
+            "regole_di_quarantena": {
+                "attivazioni_in_shadow_richieste": 20,
+                "attivazioni_in_shadow_attuali": 0,
+                "_nota": "Capsula osservativa — promozione decisa manualmente da Roberto."
+            },
+            "performance_score": {
+                "attivazioni_totali": 0,
+                "shadow_wins": 0,
+                "shadow_losses": 0,
+                "shadow_pnl_cumulato": 0.0,
+                "_aggiornato_il": None
+            },
+            "log_attivazioni": [],
+            "veto_umano": {
+                "abilitato": True,
+                "puo_essere_disattivata_in_qualunque_momento_da": ["Roberto"],
+                "dashboard_endpoint": f"/canvas/capsule/{capsula_id}/disable"
+            },
+            "tracciabilita": {
+                "ogni_modifica_genera_nuova_versione": True,
+                "storia_modifiche": [{
+                    "azione": "auto_genesi",
+                    "timestamp": datetime.utcnow().isoformat() + "Z",
+                    "signature_hash": sig_hash,
+                    "n_trade_base": n
+                }]
+            }
+        }
+        
+        # Scrivi su disco
+        out_path = os.path.join(CANVAS_QUARANTENA_DIR, capsula_id + ".json")
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(nuova_capsula, f, indent=2, ensure_ascii=False)
+        
+        # Marca i trade come processati
+        db_execute("""
+            UPDATE canvas_trade_signatures
+            SET processata_per_genesi = 1
+            WHERE signature_hash = ? AND processata_per_genesi = 0
+        """, (sig_hash,))
+        
+        log(f"[ORCHESTRATOR] 🌱 CAPSULA AUTO-GENERATA: {capsula_id} (n={n}, WR={wr*100:.0f}%)")
+    except Exception as e:
+        log(f"[ORCHESTRATOR] ⚠️ Genesi: {e}")
+
+
+def _orchestrator_scan_new_trades():
+    """
+    Scansiona tabella trades cercando EXIT non ancora registrate in canvas_trade_signatures.
+    Per ogni trade nuovo: registra signature + tenta genesi.
+    """
+    try:
+        # Trade EXIT non ancora processati
+        rows = db_execute("""
+            SELECT t.id, t.event_type, t.asset, t.price, t.size, t.pnl, t.direction, t.reason, t.data_json
+            FROM trades t
+            WHERE t.event_type = 'EXIT'
+            AND NOT EXISTS (
+                SELECT 1 FROM canvas_trade_signatures s WHERE s.trade_id = CAST(t.id AS TEXT)
+            )
+            ORDER BY t.id DESC
+            LIMIT 20
+        """, fetch=True) or []
+        
+        signatures_da_verificare = set()
+        for r in rows:
+            trade = {
+                "id": r[0], "event_type": r[1], "asset": r[2], "price": r[3],
+                "size": r[4], "pnl": r[5], "direction": r[6], "reason": r[7], "data_json": r[8]
+            }
+            _orchestrator_register_closed_trade(trade)
+            sig_hash, _ = _orchestrator_signature_from_trade(trade)
+            if sig_hash:
+                signatures_da_verificare.add(sig_hash)
+        
+        # Tenta genesi per ogni signature
+        for sig_hash in signatures_da_verificare:
+            _orchestrator_try_genesis(sig_hash)
+    except Exception as e:
+        log(f"[ORCHESTRATOR] ⚠️ Scan trades: {e}")
+
+
+def _orchestrator_tick():
+    """Un singolo ciclo dell'orchestratore."""
+    try:
+        # 1. Carica capsule dal disco
+        capsule = _orchestrator_load_capsule()
+        
+        # 2. Costruisci snapshot stato
+        snapshot = _orchestrator_build_snapshot()
+        
+        # 3. Valuta ogni capsula
+        attivate = 0
+        for cid, capsula in capsule.items():
+            if _orchestrator_evaluate_capsula(capsula, snapshot):
+                _orchestrator_log_shadow_activation(capsula, snapshot, attivata=True)
+                attivate += 1
+        
+        # 4. Scansiona nuovi trade chiusi (per genesi)
+        _orchestrator_scan_new_trades()
+        
+        # Heartbeat orchestrator
+        if attivate > 0:
+            log(f"[ORCHESTRATOR] tick: capsule attivate in shadow = {attivate}/{len(capsule)}")
+    except Exception as e:
+        log(f"[ORCHESTRATOR] ❌ Tick: {e}")
+        import traceback
+        log(traceback.format_exc())
+
+
+def orchestrator_thread():
+    """Loop principale orchestratore — gira come thread separato."""
+    if not ORCHESTRATOR_ENABLED:
+        log("[ORCHESTRATOR] disabilitato via env ORCHESTRATOR_ENABLED")
+        return
+    
+    log(f"[ORCHESTRATOR] 🚀 Avvio — intervallo {ORCHESTRATOR_INTERVAL}s — MODALITÀ SHADOW (no impatto trade)")
+    time.sleep(30)  # delay iniziale: aspetta che bot sia pronto
+    
+    while True:
+        try:
+            _orchestrator_tick()
+        except Exception as e:
+            log(f"[ORCHESTRATOR] ❌ Loop: {e}")
+        time.sleep(ORCHESTRATOR_INTERVAL)
+
+
+# Avvia thread
+if ORCHESTRATOR_ENABLED:
+    threading.Thread(target=orchestrator_thread, daemon=True, name='canvas_orchestrator').start()
+    log("[MAIN] ✅ Canvas Orchestrator thread avviato (shadow mode)")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CANVAS ORCHESTRATOR — Endpoint di lettura per Roberto
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route('/canvas/orchestrator/status', methods=['GET'])
+def canvas_orch_status():
+    """Stato corrente orchestratore + ultime attivazioni shadow."""
+    auth_err = _canvas_auth()
+    if auth_err: return auth_err
+    
+    try:
+        # Ultime 50 attivazioni shadow
+        rows = db_execute("""
+            SELECT ts, capsula_id, stato_capsula, evento, azione_simulata
+            FROM canvas_shadow_log
+            ORDER BY id DESC LIMIT 50
+        """, fetch=True) or []
+        
+        attivazioni = [{
+            "ts": r[0], "capsula_id": r[1], "stato": r[2], "evento": r[3], "azione": r[4]
+        } for r in rows]
+        
+        # Numero signatures registrate
+        sig_count = db_execute("""
+            SELECT COUNT(*), COUNT(DISTINCT signature_hash) 
+            FROM canvas_trade_signatures
+        """, fetch=True)
+        n_sig = sig_count[0][0] if sig_count else 0
+        n_unique = sig_count[0][1] if sig_count else 0
+        
+        return jsonify({
+            "enabled": ORCHESTRATOR_ENABLED,
+            "interval_s": ORCHESTRATOR_INTERVAL,
+            "modalita": "shadow",
+            "n_attivazioni_shadow_totali": len(attivazioni),
+            "ultime_attivazioni": attivazioni[:20],
+            "n_trade_signatures_registrate": n_sig,
+            "n_signatures_uniche": n_unique,
+            "soglia_genesi_capsula": ORCHESTRATOR_MIN_OCCURRENCES
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/canvas/orchestrator/signatures', methods=['GET'])
+def canvas_orch_signatures():
+    """Distribuzione delle signature dei trade chiusi."""
+    auth_err = _canvas_auth()
+    if auth_err: return auth_err
+    
+    try:
+        rows = db_execute("""
+            SELECT signature_hash, COUNT(*) as n,
+                   AVG(pnl) as pnl_avg,
+                   SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
+                   regime,
+                   MAX(signature_json) as sig_json,
+                   MAX(processata_per_genesi) as gen
+            FROM canvas_trade_signatures
+            GROUP BY signature_hash
+            ORDER BY n DESC LIMIT 30
+        """, fetch=True) or []
+        
+        results = []
+        for r in rows:
+            try:
+                sig = json.loads(r[5]) if r[5] else {}
+            except Exception:
+                sig = {}
+            results.append({
+                "hash": r[0],
+                "n_trade": r[1],
+                "pnl_medio": round(float(r[2] or 0), 3),
+                "wins": int(r[3] or 0),
+                "wr": round(float(r[3] or 0) / max(1, int(r[1])), 3),
+                "regime": r[4],
+                "signature": sig,
+                "capsula_generata": bool(r[6])
+            })
+        
+        return jsonify({"signatures": results, "count": len(results)}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FINE BLOCCO ORCHESTRATOR — main esistente segue
+# ═══════════════════════════════════════════════════════════════════════════
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     log(f"[MAIN] 🚀 MISSION CONTROL V6.0 + AI BRIDGE — porta {port}")
