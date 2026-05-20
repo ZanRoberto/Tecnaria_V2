@@ -5520,7 +5520,7 @@ def _orchestrator_scan_new_trades():
         rows = db_execute("""
             SELECT t.id, t.event_type, t.asset, t.price, t.size, t.pnl, t.direction, t.reason, t.data_json
             FROM trades t
-            WHERE t.event_type = 'EXIT'
+            WHERE t.event_type IN ('EXIT', 'M2_EXIT')
             AND NOT EXISTS (
                 SELECT 1 FROM canvas_trade_signatures s WHERE s.trade_id = CAST(t.id AS TEXT)
             )
