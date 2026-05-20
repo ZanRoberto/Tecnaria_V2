@@ -11086,6 +11086,24 @@ class OvertopBassanoV16Production:
             self._shadow_min_price         = price
             self._shadow_matrimonio        = matrimonio_name
 
+            # ═══════════════════════════════════════════════════════════
+            # PATCH 16 BUG 23 — Hook CapsulaCanvas APERTURA REALE
+            # self._shadow è stato appena creato → trade APERTO veramente.
+            # Promuovo la valutazione pending (se presente) e registro
+            # ENTRY_OPEN_REALE per chiudere il cerchio con observe_exit.
+            # ═══════════════════════════════════════════════════════════
+            try:
+                if getattr(self, "canvas", None) is not None:
+                    _ct_open = _verbale.get("_canvas_tid") if isinstance(_verbale, dict) else None
+                    if _ct_open:
+                        # Salvo nel shadow per recupero a close
+                        self._shadow["_canvas_tid"] = _ct_open
+                        # Chiamo hook observe_entry_open (skill v1.1+)
+                        if hasattr(self.canvas, "observe_entry_open"):
+                            self.canvas.observe_entry_open(_ct_open, self._shadow)
+            except Exception as _coe:
+                log.debug(f"[CANVAS_HOOK_OPEN_ERR] {_coe}")
+
             # ════════════════════════════════════════════════════════════════
             # PATCH 6 BUG 13 — Cattura firma ambientale + match WIN precedenti
             # ════════════════════════════════════════════════════════════════
@@ -11198,18 +11216,6 @@ class OvertopBassanoV16Production:
             except Exception as _wse:
                 # Mai bloccare l'entry per un problema del logger osservativo
                 pass
-
-            # ═══════════════════════════════════════════════════════════
-            # PATCH 15 BUG 22 — Trasferisco _canvas_tid da verbale a shadow
-            # _verbale["_canvas_tid"] è stato settato nell'hook di entry.
-            # Lo salvo dentro self._shadow per recuperarlo a close.
-            # ═══════════════════════════════════════════════════════════
-            try:
-                _ct = _verbale.get("_canvas_tid") if isinstance(_verbale, dict) else None
-                if _ct and self._shadow:
-                    self._shadow["_canvas_tid"] = _ct
-            except Exception as _csv:
-                log.debug(f"[CANVAS_TID_TRANSFER_ERR] {_csv}")
             # ════════════════════════════════════════════════════════════════
 
             # ── LATENCY TRACKER: misura slippage decisione→esecuzione ────
