@@ -679,6 +679,17 @@ try:
         _CANVAS_AVAILABLE = True
     except Exception as _e_canvas:
         _CANVAS_AVAILABLE = False
+
+    # ═══════════════════════════════════════════════════════════════
+    # PATCH 17 — SKILL REGINA — CapsulaMemoria
+    # Vive in file capsula_memoria.py. Memoria viva per Claude.
+    # Kill switch: env MEMORIA_DEAD=true
+    # ═══════════════════════════════════════════════════════════════
+    try:
+        from capsula_memoria import CapsulaMemoria, set_memoria
+        _MEMORIA_AVAILABLE = True
+    except Exception as _e_memoria:
+        _MEMORIA_AVAILABLE = False
     _CE_AVAILABLE = True
 except ImportError:
     _CE_AVAILABLE = False
@@ -6976,6 +6987,38 @@ class OvertopBassanoV16Production:
                 log.warning(f"[CANVAS] init fallita (silenziato): {_e_cv}")
                 self.canvas = None
 
+        # ═══════════════════════════════════════════════════════════════
+        # PATCH 17 — SKILL REGINA — CapsulaMemoria
+        # Memoria viva per Claude tra sessioni. 5 stadi di crescita.
+        # Auto-scoperte, narrazione Markdown, dialogo con canvas.
+        # ═══════════════════════════════════════════════════════════════
+        self.memoria = None
+        self._memoria_sessione_id = None
+        if _MEMORIA_AVAILABLE:
+            try:
+                self.memoria = CapsulaMemoria(
+                    bot_ref=self,
+                    db_path=DB_PATH,
+                    canvas_ref=self.canvas
+                )
+                set_memoria(self.memoria)
+                _stato_mem = self.memoria.stato_vitale()
+                log.info(f"[MEMORIA] 👑 skill regina caricata — "
+                         f"stadio={_stato_mem.get('stadio')} "
+                         f"osservazioni={_stato_mem.get('osservazioni')}")
+                # Apri sessione di lavoro automatica
+                try:
+                    self._memoria_sessione_id = self.memoria.apri_sessione(
+                        ai_nome="V16_BOT",
+                        ai_versione="PATCH17",
+                        titolo=f"Sessione bot avviato {time.strftime('%Y-%m-%d %H:%M')}"
+                    )
+                except Exception as _e_sess:
+                    log.debug(f"[MEMORIA] apri_sessione fallita: {_e_sess}")
+            except Exception as _e_mem:
+                log.warning(f"[MEMORIA] init fallita (silenziato): {_e_mem}")
+                self.memoria = None
+
         self.log_analyzer    = LogAnalyzer()
         self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
         self.calibratore     = AutoCalibratore()
@@ -11086,24 +11129,6 @@ class OvertopBassanoV16Production:
             self._shadow_min_price         = price
             self._shadow_matrimonio        = matrimonio_name
 
-            # ═══════════════════════════════════════════════════════════
-            # PATCH 16 BUG 23 — Hook CapsulaCanvas APERTURA REALE
-            # self._shadow è stato appena creato → trade APERTO veramente.
-            # Promuovo la valutazione pending (se presente) e registro
-            # ENTRY_OPEN_REALE per chiudere il cerchio con observe_exit.
-            # ═══════════════════════════════════════════════════════════
-            try:
-                if getattr(self, "canvas", None) is not None:
-                    _ct_open = _verbale.get("_canvas_tid") if isinstance(_verbale, dict) else None
-                    if _ct_open:
-                        # Salvo nel shadow per recupero a close
-                        self._shadow["_canvas_tid"] = _ct_open
-                        # Chiamo hook observe_entry_open (skill v1.1+)
-                        if hasattr(self.canvas, "observe_entry_open"):
-                            self.canvas.observe_entry_open(_ct_open, self._shadow)
-            except Exception as _coe:
-                log.debug(f"[CANVAS_HOOK_OPEN_ERR] {_coe}")
-
             # ════════════════════════════════════════════════════════════════
             # PATCH 6 BUG 13 — Cattura firma ambientale + match WIN precedenti
             # ════════════════════════════════════════════════════════════════
@@ -11216,6 +11241,18 @@ class OvertopBassanoV16Production:
             except Exception as _wse:
                 # Mai bloccare l'entry per un problema del logger osservativo
                 pass
+
+            # ═══════════════════════════════════════════════════════════
+            # PATCH 15 BUG 22 — Trasferisco _canvas_tid da verbale a shadow
+            # _verbale["_canvas_tid"] è stato settato nell'hook di entry.
+            # Lo salvo dentro self._shadow per recuperarlo a close.
+            # ═══════════════════════════════════════════════════════════
+            try:
+                _ct = _verbale.get("_canvas_tid") if isinstance(_verbale, dict) else None
+                if _ct and self._shadow:
+                    self._shadow["_canvas_tid"] = _ct
+            except Exception as _csv:
+                log.debug(f"[CANVAS_TID_TRANSFER_ERR] {_csv}")
             # ════════════════════════════════════════════════════════════════
 
             # ── LATENCY TRACKER: misura slippage decisione→esecuzione ────
@@ -12398,6 +12435,61 @@ class OvertopBassanoV16Production:
                     )
             except Exception as _cxe:
                 log.debug(f"[CANVAS_HOOK_EXIT_ERR] {_cxe}")
+
+            # ═══════════════════════════════════════════════════════════
+            # PATCH 17 — Hook CapsulaMemoria exit (SKILL REGINA)
+            # Alimenta la memoria viva con ogni trade chiuso.
+            # Scatena auto-scoperte interne se MEMORIA_AUTOSCOPERTE=on.
+            # ═══════════════════════════════════════════════════════════
+            try:
+                if getattr(self, "memoria", None) is not None:
+                    _mem_tid = (self._shadow.get("_canvas_tid")
+                                if self._shadow else None) or f"unk_{int(time.time()*1000)}"
+                    # Calcolo outcome se non già fatto sopra
+                    try:
+                        _mem_outcome = _canvas_outcome
+                    except NameError:
+                        if is_win:
+                            _mem_outcome = "WIN_NET"
+                        elif pnl_gross > 0:
+                            _mem_outcome = "LOSS_FEE"
+                        else:
+                            _mem_outcome = "LOSS_REAL"
+                    # Fingerprint da self._shadow (entry context)
+                    _mem_fp = (
+                        f"{self._shadow_entry_momentum or '?'}|"
+                        f"{self._shadow_entry_volatility or '?'}|"
+                        f"{self._shadow_entry_trend or '?'}|"
+                        f"{entry_direction or '?'}"
+                    ) if self._shadow_entry_momentum else "?|?|?|?"
+                    # Capsule voto se disponibile dal verbale
+                    _mem_capvoto = {}
+                    try:
+                        if isinstance(_verbale, dict):
+                            _mem_capvoto = {
+                                "block_score": _verbale.get("capsule_block_score", 0),
+                                "boost_score": _verbale.get("capsule_boost_score", 0),
+                                "reasons":     _verbale.get("capsule_reasons", []),
+                            }
+                    except Exception:
+                        pass
+                    self.memoria.osserva_trade_chiuso({
+                        "trade_id":     _mem_tid,
+                        "ts_open":      self._shadow_entry_time,
+                        "ts_close":     time.time(),
+                        "outcome":      _mem_outcome,
+                        "pnl_netto":    float(pnl),
+                        "durata_s":     float(trade_duration) if trade_duration else 0.0,
+                        "fingerprint":  _mem_fp,
+                        "capsule_voto": _mem_capvoto,
+                        "reason_close": str(reason),
+                        "contesto":     {
+                            "regime": self._regime_current,
+                            "score":  getattr(self, '_last_score', None),
+                        },
+                    })
+            except Exception as _mem_e:
+                log.debug(f"[MEMORIA_HOOK_EXIT_ERR] {_mem_e}")
 
         except Exception as e:
             import traceback
