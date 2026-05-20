@@ -669,6 +669,16 @@ class StabilityTelemetry:
 # ===========================================================================
 try:
     from capsule_executor import CapsuleExecutor
+    # ═══════════════════════════════════════════════════════════════
+    # PATCH 15 BUG 22 — Skill esterna CapsulaCanvas
+    # Vive in file capsula_canvas.py. Modulo indipendente.
+    # Livelli armati via env CANVAS_L1..L6, kill switch CANVAS_DEAD.
+    # ═══════════════════════════════════════════════════════════════
+    try:
+        from capsula_canvas import CapsulaCanvas
+        _CANVAS_AVAILABLE = True
+    except Exception as _e_canvas:
+        _CANVAS_AVAILABLE = False
     _CE_AVAILABLE = True
 except ImportError:
     _CE_AVAILABLE = False
@@ -6952,6 +6962,20 @@ class OvertopBassanoV16Production:
             log.warning("[CM] ⚠️ Fallback ai sistemi originali")
         # -----------------------------------------------------------------
 
+        # ═══════════════════════════════════════════════════════════════
+        # PATCH 15 BUG 22 — Skill esterna CapsulaCanvas
+        # Osserva tutto senza toccare il motore. Modulo indipendente.
+        # Livelli L1+L2 ON di default, L3-L6 abilitabili via env.
+        # ═══════════════════════════════════════════════════════════════
+        self.canvas = None
+        if _CANVAS_AVAILABLE:
+            try:
+                self.canvas = CapsulaCanvas(bot_ref=self, db_path=DB_PATH)
+                log.info(f"[CANVAS] ✅ skill caricata — stato={self.canvas.status()}")
+            except Exception as _e_cv:
+                log.warning(f"[CANVAS] init fallita (silenziato): {_e_cv}")
+                self.canvas = None
+
         self.log_analyzer    = LogAnalyzer()
         self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
         self.calibratore     = AutoCalibratore()
@@ -10319,6 +10343,20 @@ class OvertopBassanoV16Production:
                 except Exception as _le:
                     log.debug(f"[CAPSULE_DEP_ERR] {_le}")
 
+                # ═══════════════════════════════════════════════════════
+                # PATCH 15 BUG 22 — Hook CapsulaCanvas (osservativo)
+                # Skill esterna che registra il fotogramma di entry.
+                # Try/except totale: mai blocca il motore.
+                # ═══════════════════════════════════════════════════════
+                try:
+                    if getattr(self, "canvas", None) is not None:
+                        _canvas_tid = f"t_{int(time.time()*1000)}"
+                        # Salva trade_id nel _verbale per recupero a close
+                        _verbale["_canvas_tid"] = _canvas_tid
+                        self.canvas.observe_entry(_verbale, trade_id=_canvas_tid)
+                except Exception as _ce:
+                    log.debug(f"[CANVAS_HOOK_ENTRY_ERR] {_ce}")
+
             # ── CALCOLA EFFECTIVE REGIME ─────────────────────────────────────
             _now_eo    = time.time()
             _fuoco_age = _now_eo - getattr(self, '_last_fuoco_event_ts', 0)
@@ -11160,6 +11198,18 @@ class OvertopBassanoV16Production:
             except Exception as _wse:
                 # Mai bloccare l'entry per un problema del logger osservativo
                 pass
+
+            # ═══════════════════════════════════════════════════════════
+            # PATCH 15 BUG 22 — Trasferisco _canvas_tid da verbale a shadow
+            # _verbale["_canvas_tid"] è stato settato nell'hook di entry.
+            # Lo salvo dentro self._shadow per recuperarlo a close.
+            # ═══════════════════════════════════════════════════════════
+            try:
+                _ct = _verbale.get("_canvas_tid") if isinstance(_verbale, dict) else None
+                if _ct and self._shadow:
+                    self._shadow["_canvas_tid"] = _ct
+            except Exception as _csv:
+                log.debug(f"[CANVAS_TID_TRANSFER_ERR] {_csv}")
             # ════════════════════════════════════════════════════════════════
 
             # ── LATENCY TRACKER: misura slippage decisione→esecuzione ────
@@ -12316,6 +12366,32 @@ class OvertopBassanoV16Production:
                     }
             except Exception as _lte:
                 log.debug(f"[LATENCY_EXPORT] {_lte}")
+
+            # ═══════════════════════════════════════════════════════════
+            # PATCH 15 BUG 22 — Hook CapsulaCanvas exit (osservativo)
+            # Chiude il cerchio con outcome reale del trade.
+            # Try/except totale: mai blocca il close.
+            # ═══════════════════════════════════════════════════════════
+            try:
+                if getattr(self, "canvas", None) is not None:
+                    _canvas_tid_close = (self._shadow.get("_canvas_tid")
+                                         if self._shadow else None) or f"unk_{int(time.time()*1000)}"
+                    # Outcome: WIN_NET / LOSS_FEE / LOSS_REAL / fallback
+                    if is_win:
+                        _canvas_outcome = "WIN_NET"
+                    elif pnl_gross > 0:
+                        _canvas_outcome = "LOSS_FEE"
+                    else:
+                        _canvas_outcome = "LOSS_REAL"
+                    self.canvas.observe_exit(
+                        trade_id=_canvas_tid_close,
+                        outcome=_canvas_outcome,
+                        pnl_netto=float(pnl),
+                        durata_s=float(trade_duration) if trade_duration else 0.0,
+                        reason=str(reason)
+                    )
+            except Exception as _cxe:
+                log.debug(f"[CANVAS_HOOK_EXIT_ERR] {_cxe}")
 
         except Exception as e:
             import traceback
