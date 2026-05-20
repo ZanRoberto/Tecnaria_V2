@@ -80,7 +80,7 @@ class CapsulaCanvas:
     """
 
     # Versione skill (cambierà ad ogni evoluzione auto-correttiva)
-    VERSION = "1.0.0"
+    VERSION = "1.1.0"
 
     # Schema tabella DB
     SCHEMA_SNAPSHOTS = """
@@ -192,23 +192,27 @@ class CapsulaCanvas:
 
     def observe_entry(self, verbale: Dict[str, Any], trade_id: str = None) -> None:
         """
-        Hook chiamato da V16 quando un'entry sta per essere eseguita o bloccata.
+        Hook chiamato da V16 alla DEPOSIZIONE CAPSULE.
+        v1.1: registra come ENTRY_VALUTAZIONE (può essere bloccata dopo).
+        L'apertura vera è registrata da observe_entry_open() chiamato
+        dal motore SOLO quando self._shadow viene creato.
 
         Args:
             verbale: dict con tutti i sensori, capsule_voto, sc_decision, ecc.
-            trade_id: identificatore unico del trade (può essere ts o id DB)
+            trade_id: identificatore unico (dovrebbe arrivare anche a observe_entry_open)
         """
         if CANVAS_DEAD or not self.levels_armed["L1_OCCHI"] or not self._initialized:
             return
 
         try:
-            tid = trade_id or f"t_{int(time.time()*1000)}"
+            tid = trade_id or f"v_{int(time.time()*1000)}"
 
-            # Estraggo fingerprint
+            # Estraggo fingerprint (v1.1: leggo direction dal verbale o dai sensori)
+            _dir = verbale.get('direction') or verbale.get('_dir') or '?'
             fp = f"{verbale.get('momentum','?')}|{verbale.get('volatility','?')}|" \
-                 f"{verbale.get('trend','?')}|{verbale.get('direction','?')}"
+                 f"{verbale.get('trend','?')}|{_dir}"
 
-            # Snapshot sensori (subset utile, non tutto il verbale)
+            # Snapshot sensori
             sensori = {
                 "score":        verbale.get("score"),
                 "soglia":       verbale.get("soglia"),
@@ -221,7 +225,6 @@ class CapsulaCanvas:
                 "regime":       verbale.get("regime"),
             }
 
-            # Snapshot voto capsule (se presente)
             capsule_voto = {
                 "block_score":     verbale.get("capsule_block_score"),
                 "boost_score":     verbale.get("capsule_boost_score"),
@@ -233,17 +236,19 @@ class CapsulaCanvas:
             sc_decision = verbale.get("sc_decision") or ""
             blocked_by = verbale.get("blocked_by") or ""
 
-            evento = "ENTRY_BLOCKED" if blocked_by else "ENTRY_OPEN"
+            # v1.1: evento differenziato
+            # Se blocked_by è già settato → la valutazione è bloccata da una patch
+            evento = "ENTRY_VALUTAZIONE_BLOCCATA" if blocked_by else "ENTRY_VALUTAZIONE"
 
-            # Salvo nello stato pending (aspetta l'exit)
+            # Salvo nello stato pending (aspetta l'apertura vera per promuoverlo)
             self._pending_entries[tid] = {
                 "entry_ts": time.time(),
                 "fingerprint": fp,
                 "sensori": sensori,
                 "capsule_voto": capsule_voto,
+                "promosso_a_open": False,
             }
 
-            # Scrivo snapshot in DB
             if self.levels_armed["L2_MEMORIA"]:
                 self._db_write(
                     """INSERT INTO canvas_snapshots
@@ -260,13 +265,79 @@ class CapsulaCanvas:
 
             self._observe_count += 1
 
-            # L3 RAGIONA — confronto con passato (placeholder)
             if self.levels_armed["L3_RAGIONA"]:
                 self._reason_on_entry(tid, fp, sensori, capsule_voto)
 
         except Exception as e:
             self._error_count += 1
             log.debug(f"[CANVAS_OBSERVE_ENTRY_ERR] {e}")
+
+    def observe_entry_open(self, trade_id: str, shadow_dict: Dict[str, Any]) -> None:
+        """
+        v1.1: Hook chiamato da V16 SUBITO DOPO `self._shadow = {...}`.
+        Questa è l'apertura REALE del trade. Promuove la valutazione precedente
+        (se trovata) e salva un evento ENTRY_OPEN_REALE per chiusura del cerchio.
+
+        Args:
+            trade_id: identificatore unico (stesso usato in observe_entry)
+            shadow_dict: contenuto di self._shadow (sensori finali dell'apertura)
+        """
+        if CANVAS_DEAD or not self.levels_armed["L1_OCCHI"] or not self._initialized:
+            return
+
+        try:
+            tid = trade_id or f"o_{int(time.time()*1000)}"
+
+            # Promuovo la valutazione pending (se esiste)
+            pending = self._pending_entries.get(tid)
+            if pending:
+                pending["promosso_a_open"] = True
+                pending["open_ts"] = time.time()
+                pending["shadow_open"] = {
+                    "price_entry":  shadow_dict.get("price_entry"),
+                    "direction":    shadow_dict.get("direction"),
+                    "score":        shadow_dict.get("score"),
+                    "soglia":       shadow_dict.get("soglia"),
+                    "size":         shadow_dict.get("size"),
+                    "fingerprint_wr": shadow_dict.get("fingerprint_wr"),
+                    "seed":         shadow_dict.get("seed"),
+                    "regime_entry": shadow_dict.get("regime_entry"),
+                    "matrimonio":   shadow_dict.get("matrimonio"),
+                }
+                fp = pending["fingerprint"]
+            else:
+                # Nessuna valutazione pending: registro comunque
+                fp = f"{shadow_dict.get('momentum_entry','?')}|" \
+                     f"{shadow_dict.get('volatility_entry','?')}|" \
+                     f"{shadow_dict.get('trend_entry','?')}|" \
+                     f"{shadow_dict.get('direction','?')}"
+
+            # Scrivo evento ENTRY_OPEN_REALE in DB
+            if self.levels_armed["L2_MEMORIA"]:
+                self._db_write(
+                    """INSERT INTO canvas_snapshots
+                       (evento, trade_id, fingerprint, sensori_json, note)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        "ENTRY_OPEN_REALE", tid, fp,
+                        json.dumps({
+                            "price_entry":  shadow_dict.get("price_entry"),
+                            "direction":    shadow_dict.get("direction"),
+                            "score":        shadow_dict.get("score"),
+                            "soglia":       shadow_dict.get("soglia"),
+                            "size":         shadow_dict.get("size"),
+                            "fingerprint_wr": shadow_dict.get("fingerprint_wr"),
+                            "seed":         shadow_dict.get("seed"),
+                            "regime_entry": shadow_dict.get("regime_entry"),
+                            "matrimonio":   shadow_dict.get("matrimonio"),
+                        }, default=str),
+                        "promosso_da_valutazione" if pending else "open_senza_valutazione_pending",
+                    )
+                )
+
+        except Exception as e:
+            self._error_count += 1
+            log.debug(f"[CANVAS_OBSERVE_OPEN_ERR] {e}")
 
     def observe_exit(self, trade_id: str, outcome: str, pnl_netto: float,
                      durata_s: float, reason: str = "") -> None:
