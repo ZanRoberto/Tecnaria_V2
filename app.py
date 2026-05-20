@@ -5520,7 +5520,7 @@ def _orchestrator_scan_new_trades():
         rows = db_execute("""
             SELECT t.id, t.event_type, t.asset, t.price, t.size, t.pnl, t.direction, t.reason, t.data_json
             FROM trades t
-            WHERE t.event_type IN ('EXIT', 'M2_EXIT')
+            WHERE t.event_type = 'EXIT'
             AND NOT EXISTS (
                 SELECT 1 FROM canvas_trade_signatures s WHERE s.trade_id = CAST(t.id AS TEXT)
             )
@@ -5756,6 +5756,85 @@ def canvas_conoscenza_info():
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FINE BLOCCO CAPSULA DELLA CONOSCENZA EMBEDDED
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PATCH 17 — ENDPOINT SKILL REGINA — CapsulaMemoria
+# 
+# La capsula_memoria vive nel bot V16. Esponiamo qui i suoi endpoint pubblici
+# in modo che Claude futura (o qualsiasi AI) possa fare web_fetch e tornare
+# viva al punto giusto dopo un cambio chat.
+#
+# Importante: la skill capsula_memoria.py è importata e istanziata da V16.
+# Qui ne leggiamo solo lo stato via il singleton get_memoria().
+# Se la capsula non è viva (V16 spento o crash), gli endpoint rispondono
+# in modo educato senza crash.
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route('/canvas/memoria', methods=['GET'])
+def canvas_memoria():
+    """
+    Narrativa Markdown della SKILL REGINA — per Claude web_fetch.
+    Restituisce un racconto leggibile in italiano dello stato del progetto.
+    """
+    try:
+        # Import qui dentro per evitare crash se file non presente
+        from capsula_memoria import get_memoria
+        mem = get_memoria()
+        if mem is None:
+            return ("# CAPSULA MEMORIA non disponibile\n\n"
+                    "La SKILL REGINA non è stata ancora istanziata.\n\n"
+                    "Possibili cause:\n"
+                    "- Il bot V16 non è in esecuzione\n"
+                    "- Il file capsula_memoria.py non è importato\n"
+                    "- Errore al boot del bot\n\n"
+                    "Roberto può verificare con `md5sum ~/project/src/capsula_memoria.py`."), \
+                   503, {"Content-Type": "text/markdown; charset=utf-8"}
+        narr = mem.narra_te_stessa(finestra_giorni=7)
+        return narr, 200, {"Content-Type": "text/markdown; charset=utf-8"}
+    except ImportError:
+        return ("# capsula_memoria non importabile\n\n"
+                "Il file capsula_memoria.py manca dal server o ha errori."), \
+               503, {"Content-Type": "text/markdown; charset=utf-8"}
+    except Exception as e:
+        return f"# Errore lettura memoria\n\n{e}", \
+               500, {"Content-Type": "text/markdown; charset=utf-8"}
+
+
+@app.route('/canvas/memoria/json', methods=['GET'])
+def canvas_memoria_json():
+    """JSON completo della memoria — per debugging e consumo programmatico."""
+    try:
+        from capsula_memoria import get_memoria
+        mem = get_memoria()
+        if mem is None:
+            return jsonify({"errore": "capsula_memoria non istanziata",
+                            "suggerimento": "verifica che V16 sia in esecuzione"}), 503
+        return jsonify(mem.narra_json(finestra_giorni=7)), 200
+    except ImportError:
+        return jsonify({"errore": "capsula_memoria.py non importabile"}), 503
+    except Exception as e:
+        return jsonify({"errore": str(e)}), 500
+
+
+@app.route('/canvas/memoria/stadio', methods=['GET'])
+def canvas_memoria_stadio():
+    """Stato vitale rapido: stadio, osservazioni, contatori tabelle."""
+    try:
+        from capsula_memoria import get_memoria
+        mem = get_memoria()
+        if mem is None:
+            return jsonify({"errore": "capsula_memoria non istanziata"}), 503
+        return jsonify(mem.status()), 200
+    except ImportError:
+        return jsonify({"errore": "capsula_memoria.py non importabile"}), 503
+    except Exception as e:
+        return jsonify({"errore": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FINE BLOCCO PATCH 17 — ENDPOINT MEMORIA
 # ═══════════════════════════════════════════════════════════════════════════
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
