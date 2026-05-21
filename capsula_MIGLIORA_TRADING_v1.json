@@ -1,0 +1,53 @@
+{
+  "_descrizione": "La prima capsula GIUDICE del sistema OVERTOP V16. Nasce il 21 maggio 2026 mattina, come conseguenza della filosofia v2.0 di Roberto. È il vertice della gerarchia. Tutto sotto di lei (operatori, muscoli) esiste perché lei deve funzionare. Quando lei segnala NON_FUNZIONA, l'AI cerca quale operatore sotto ha contribuito al fallimento.",
+
+  "id": "giudice_migliora_trading_v1",
+  "ruolo": "MIGLIORA_TRADING",
+  "tipo": "GIUDICE",
+  "stato": "FUNZIONA",
+
+  "funzione_validazione": {
+    "descrizione": "Io funziono se il bot non perde nel periodo di osservazione, oppure se perde meno di quanto perdeva nel periodo precedente equivalente.",
+    "criterio": {
+      "tipo_misura": "pnl_cumulativo_periodo",
+      "periodo_osservazione_ore": 24,
+      "soglia_assoluta_funziona": "pnl_totale_24h >= 0",
+      "soglia_relativa_funziona": "pnl_totale_24h >= pnl_totale_24h_precedente",
+      "regola_or": "io funziono se almeno UNA delle due soglie (assoluta OR relativa) è soddisfatta",
+      "fonte_dati": "GET /trading/status (campo pnl + campo total_trades) confrontato con snapshot 24h fa"
+    }
+  },
+
+  "logica": {
+    "azione_quando_funziona": {
+      "descrizione": "Resto vigile, non interferisco. Registro in /canvas/memoria che il bot non perde in questo periodo.",
+      "frequenza_check": "ogni 1 ora",
+      "log_event": "GIUDICE_OK: bot in profitto o stabile vs periodo precedente"
+    },
+    "azione_quando_NON_funziona": {
+      "descrizione": "Segnalo NON_FUNZIONA, scrivo evento nella CapsulaMemoria, chiamo l'AI decisore tecnico per identificare l'OPERATORE sottostante che ha contribuito al fallimento.",
+      "log_event": "GIUDICE_FAIL: bot in perdita E peggiora vs periodo precedente",
+      "trigger_propagazione": "AI deve fetchare /signal_tracker e /canvas/orchestrator/signatures, identificare il contesto con peggior PnL nel periodo, e cercare quale OPERATORE presidia quel contesto. Se nessun operatore lo presidia, l'AI ne crea uno con /canvas/skillcap/crea."
+    },
+    "non_agisce_direttamente": "Questo è un GIUDICE puro. Non modifica trade, non blocca entry, non cambia size. Osserva il risultato finale e attiva la catena evolutiva degli operatori sottostanti."
+  },
+
+  "metadata": {
+    "creata_da": "Claude (sotto direttiva di Roberto)",
+    "data_concettuale": "20-21 maggio 2026",
+    "frase_di_nascita_di_Roberto": "MIGLIORA_TRADING funziona se il bot non perde è OBBLIGATORIO. È il risultato finale che giustifica l'esistenza dell'intero sistema.",
+    "posizione_nella_gerarchia": "VERTICE — sopra tutti gli OPERATORI e MUSCOLI del sistema OVERTOP",
+    "operatori_che_la_serviranno": [
+      "verranno creati man mano che il GIUDICE segnala NON_FUNZIONA",
+      "primo candidato evidente: VETO_SHORT_IN_FUOCO_BLOCCATO (Veritas misura -$13.941 persi)"
+    ]
+  },
+
+  "memoria_eventi": {
+    "_descrizione": "Eventi auto-segnalati dalla capsula. Si popola via interventi futuri.",
+    "voci": []
+  },
+
+  "scritta_da": "Claude",
+  "versione_capsula": "v1"
+}
