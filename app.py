@@ -6129,6 +6129,389 @@ def canvas_skillcap_frontiera_replace():
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# BLOCCO CAPSULE AUTONOME — Filosofia v2.0 (21 maggio 2026)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Endpoint per gestire capsule autonome secondo filosofia v2.0:
+#   - GET  /canvas/capsule              → lista tutte le capsule vive
+#   - GET  /canvas/capsule/<id>         → singola capsula con stato
+#   - POST /canvas/skillcap/crea        → crea NUOVA capsula (ruolo nuovo)
+#   - POST /canvas/skillcap/<id>/modifica    → MODIFICA logica interna (ruolo invariato)
+#   - POST /canvas/skillcap/<id>/sostituisci → CANCELLA e ricrea stesso ruolo
+#
+# FILOSOFIA: stato binario FUNZIONA/NON_FUNZIONA, ruolo immutabile,
+# gerarchia GIUDICE/OPERATORE/MUSCOLO, AI decisore tecnico.
+#
+# PERSISTENZA: ogni capsula = un file JSON in /var/data/canvas/capsule/<id>.json
+# Le sostituite vanno in /var/data/canvas/archivio/<id>_<timestamp>.json
+#
+# SCHEMA CAPSULA (validato all'ingresso):
+# {
+#   "id": "snake_case_unique",
+#   "ruolo": "RUOLO_IMMUTABILE",
+#   "tipo": "GIUDICE" | "OPERATORE" | "MUSCOLO",
+#   "funzione_validazione": {
+#     "descrizione": "io funziono se...",
+#     "criterio": <oggetto specifico per tipo>
+#   },
+#   "logica": <oggetto specifico per tipo>,
+#   "stato": "FUNZIONA" | "NON_FUNZIONA",
+#   "creata_il": <ISO>,
+#   "modificata_il": <ISO>,
+#   "scritta_da": "Claude" | "DeepSeek" | "Roberto"
+# }
+# ═══════════════════════════════════════════════════════════════════════════
+
+TIPI_VALIDI = ("GIUDICE", "OPERATORE", "MUSCOLO")
+STATI_VALIDI = ("FUNZIONA", "NON_FUNZIONA")
+
+
+def _capsula_path(capsula_id: str) -> str:
+    """Path JSON per una capsula. ID non deve contenere slash o '..'."""
+    safe_id = "".join(c for c in capsula_id if c.isalnum() or c in ("_", "-"))
+    return os.path.join(CANVAS_CAPSULE_DIR, f"{safe_id}.json")
+
+
+def _archivio_path(capsula_id: str) -> str:
+    """Path archivio con timestamp."""
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    safe_id = "".join(c for c in capsula_id if c.isalnum() or c in ("_", "-"))
+    return os.path.join(CANVAS_ARCHIVIO_DIR, f"{safe_id}_{ts}.json")
+
+
+def _valida_schema_capsula(data: dict, modalita: str = "crea") -> tuple:
+    """
+    Valida schema capsula. Ritorna (ok: bool, errore: str|None).
+    modalita: 'crea' richiede tutti i campi. 'modifica' è più permissiva.
+    """
+    if not isinstance(data, dict):
+        return False, "body deve essere oggetto JSON"
+
+    if modalita == "crea":
+        required = ("id", "ruolo", "tipo", "funzione_validazione", "logica")
+        for k in required:
+            if k not in data:
+                return False, f"campo obbligatorio mancante: {k}"
+
+    if "tipo" in data and data["tipo"] not in TIPI_VALIDI:
+        return False, f"tipo deve essere uno di: {TIPI_VALIDI}"
+
+    if "stato" in data and data["stato"] not in STATI_VALIDI:
+        return False, f"stato deve essere uno di: {STATI_VALIDI}"
+
+    if "id" in data:
+        cid = data["id"]
+        if not isinstance(cid, str) or not cid:
+            return False, "id deve essere stringa non vuota"
+        if not all(c.isalnum() or c in ("_", "-") for c in cid):
+            return False, "id può contenere solo alfanumerici, _ e -"
+
+    if "ruolo" in data:
+        ruolo = data["ruolo"]
+        if not isinstance(ruolo, str) or not ruolo:
+            return False, "ruolo deve essere stringa non vuota"
+
+    if "funzione_validazione" in data:
+        fv = data["funzione_validazione"]
+        if not isinstance(fv, dict):
+            return False, "funzione_validazione deve essere oggetto"
+        if "descrizione" not in fv:
+            return False, "funzione_validazione.descrizione obbligatoria"
+
+    return True, None
+
+
+def _carica_capsula(capsula_id: str):
+    """Carica capsula da disco. Ritorna dict o None."""
+    path = _capsula_path(capsula_id)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        log(f"[CAPSULA_LOAD_ERR] {capsula_id}: {e}")
+        return None
+
+
+def _salva_capsula(capsula: dict) -> bool:
+    """Salva capsula su disco in modo atomico."""
+    try:
+        Path(CANVAS_CAPSULE_DIR).mkdir(parents=True, exist_ok=True)
+        path = _capsula_path(capsula["id"])
+        tmp = path + ".tmp"
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(capsula, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+        return True
+    except Exception as e:
+        log(f"[CAPSULA_SAVE_ERR] {e}")
+        return False
+
+
+def _archivia_capsula(capsula: dict) -> bool:
+    """Sposta capsula in archivio (per /sostituisci)."""
+    try:
+        Path(CANVAS_ARCHIVIO_DIR).mkdir(parents=True, exist_ok=True)
+        path = _archivio_path(capsula["id"])
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(capsula, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        log(f"[CAPSULA_ARCH_ERR] {e}")
+        return False
+
+
+def _lista_capsule_disco() -> list:
+    """Tutte le capsule vive sul disco (da /canvas/capsule/*.json)."""
+    out = []
+    try:
+        if not os.path.isdir(CANVAS_CAPSULE_DIR):
+            return out
+        for fn in sorted(os.listdir(CANVAS_CAPSULE_DIR)):
+            if not fn.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(CANVAS_CAPSULE_DIR, fn), 'r', encoding='utf-8') as f:
+                    out.append(json.load(f))
+            except Exception as e:
+                log(f"[CAPSULA_LIST_ERR] {fn}: {e}")
+    except Exception as e:
+        log(f"[CAPSULA_LIST_DIR_ERR] {e}")
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /canvas/capsule_v2 — lista capsule v2.0 (PUBBLICO)
+# ─────────────────────────────────────────────────────────────────────────
+# NOTA: /canvas/capsule (senza v2) è già usato dal sistema vecchio (riga 4894).
+# Per non rompere niente, le nuove capsule v2.0 vivono sotto /canvas/capsule_v2.
+# Quando il vecchio sistema sarà smantellato, si può rinominare.
+@app.route('/canvas/capsule_v2', methods=['GET'])
+def canvas_capsule_v2_list():
+    """Lista capsule v2.0 con ruolo, tipo, stato."""
+    try:
+        capsule = _lista_capsule_disco()
+        # Filtra solo quelle con schema v2.0 (hanno campo 'tipo' tra TIPI_VALIDI)
+        v2 = [c for c in capsule if c.get("tipo") in TIPI_VALIDI]
+        # Aggregazione per dashboard
+        per_tipo = {"GIUDICE": 0, "OPERATORE": 0, "MUSCOLO": 0}
+        per_stato = {"FUNZIONA": 0, "NON_FUNZIONA": 0}
+        for c in v2:
+            per_tipo[c["tipo"]] = per_tipo.get(c["tipo"], 0) + 1
+            stato = c.get("stato", "FUNZIONA")
+            per_stato[stato] = per_stato.get(stato, 0) + 1
+        return jsonify({
+            "totale": len(v2),
+            "per_tipo": per_tipo,
+            "per_stato": per_stato,
+            "capsule": v2
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /canvas/capsule_v2/<id> — singola capsula (PUBBLICO)
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/capsule_v2/<capsula_id>', methods=['GET'])
+def canvas_capsule_v2_get(capsula_id):
+    """Dettaglio singola capsula."""
+    try:
+        capsula = _carica_capsula(capsula_id)
+        if capsula is None:
+            return jsonify({"error": "capsula non trovata", "id": capsula_id}), 404
+        return jsonify(capsula), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# POST /canvas/skillcap/crea — crea NUOVA capsula (AUTH)
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/skillcap/crea', methods=['POST'])
+def canvas_skillcap_crea():
+    """
+    Crea una NUOVA capsula con ruolo MAI esistito prima.
+    Body: schema capsula completo (id, ruolo, tipo, funzione_validazione, logica).
+    Errore 409 se id già esiste.
+    """
+    auth_err = _canvas_auth()
+    if auth_err:
+        return auth_err
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        ok, err = _valida_schema_capsula(data, modalita="crea")
+        if not ok:
+            return jsonify({"error": err}), 400
+
+        # Verifica unicità id
+        if _carica_capsula(data["id"]) is not None:
+            return jsonify({
+                "error": "capsula con questo id esiste già. Usa /modifica o /sostituisci.",
+                "id": data["id"]
+            }), 409
+
+        # Verifica unicità ruolo (principio_2: una capsula = un ruolo)
+        esistenti = _lista_capsule_disco()
+        for e in esistenti:
+            if e.get("ruolo") == data["ruolo"]:
+                return jsonify({
+                    "error": f"ruolo '{data['ruolo']}' già presidiato da capsula '{e.get('id')}'. Usa /sostituisci se vuoi rifare la logica.",
+                    "ruolo": data["ruolo"],
+                    "capsula_esistente": e.get("id")
+                }), 409
+
+        # Stamp temporali e stato iniziale
+        now = datetime.utcnow().isoformat() + "Z"
+        if "stato" not in data:
+            data["stato"] = "FUNZIONA"  # default alla nascita
+        data["creata_il"] = now
+        data["modificata_il"] = now
+        if "scritta_da" not in data:
+            data["scritta_da"] = "AI"
+
+        if not _salva_capsula(data):
+            return jsonify({"error": "errore salvataggio su disco"}), 500
+
+        log(f"[CAPSULA_CREATA] {data['id']} | ruolo={data['ruolo']} | tipo={data['tipo']}")
+        return jsonify({
+            "ok": True,
+            "id": data["id"],
+            "ruolo": data["ruolo"],
+            "tipo": data["tipo"],
+            "stato": data["stato"]
+        }), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# POST /canvas/skillcap/<id>/modifica — MODIFICA logica (AUTH)
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/skillcap/<capsula_id>/modifica', methods=['POST'])
+def canvas_skillcap_modifica(capsula_id):
+    """
+    MODIFICA in-place della logica interna. Ruolo INVARIATO.
+    Body: campi da aggiornare (logica, funzione_validazione, stato).
+    Errore 400 se body cambia 'ruolo' (immutabile).
+    """
+    auth_err = _canvas_auth()
+    if auth_err:
+        return auth_err
+    try:
+        esistente = _carica_capsula(capsula_id)
+        if esistente is None:
+            return jsonify({"error": "capsula non trovata", "id": capsula_id}), 404
+
+        data = request.get_json(force=True, silent=True) or {}
+
+        # Principio_2: ruolo immutabile
+        if "ruolo" in data and data["ruolo"] != esistente.get("ruolo"):
+            return jsonify({
+                "error": "ruolo IMMUTABILE. Non puoi cambiare il ruolo di una capsula. Per cambiare ruolo serve /sostituisci.",
+                "ruolo_attuale": esistente.get("ruolo"),
+                "ruolo_proposto": data["ruolo"]
+            }), 400
+
+        # Validazione campi modificabili
+        ok, err = _valida_schema_capsula(data, modalita="modifica")
+        if not ok:
+            return jsonify({"error": err}), 400
+
+        # Merge: parto da esistente, sovrascrivo solo campi forniti
+        nuova = dict(esistente)
+        for k, v in data.items():
+            if k in ("id", "creata_il"):
+                continue  # immutabili
+            nuova[k] = v
+        nuova["modificata_il"] = datetime.utcnow().isoformat() + "Z"
+
+        if not _salva_capsula(nuova):
+            return jsonify({"error": "errore salvataggio"}), 500
+
+        log(f"[CAPSULA_MODIFICATA] {capsula_id} | ruolo={nuova.get('ruolo')} | stato={nuova.get('stato')}")
+        return jsonify({
+            "ok": True,
+            "id": capsula_id,
+            "ruolo": nuova.get("ruolo"),
+            "modificata_il": nuova["modificata_il"]
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# POST /canvas/skillcap/<id>/sostituisci — CANCELLA + ricrea stesso ruolo (AUTH)
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/skillcap/<capsula_id>/sostituisci', methods=['POST'])
+def canvas_skillcap_sostituisci(capsula_id):
+    """
+    CANCELLA capsula esistente (in archivio) e ne crea una nuova con STESSO ruolo.
+    Body: nuova capsula con campo 'ruolo' obbligatoriamente uguale a quella sostituita.
+    """
+    auth_err = _canvas_auth()
+    if auth_err:
+        return auth_err
+    try:
+        esistente = _carica_capsula(capsula_id)
+        if esistente is None:
+            return jsonify({"error": "capsula non trovata", "id": capsula_id}), 404
+
+        data = request.get_json(force=True, silent=True) or {}
+        ok, err = _valida_schema_capsula(data, modalita="crea")
+        if not ok:
+            return jsonify({"error": err}), 400
+
+        # Principio_2: il ruolo deve combaciare
+        if data.get("ruolo") != esistente.get("ruolo"):
+            return jsonify({
+                "error": "ruolo della sostituta deve coincidere con la sostituita",
+                "ruolo_attuale": esistente.get("ruolo"),
+                "ruolo_proposto": data.get("ruolo")
+            }), 400
+
+        # Archivia la vecchia
+        if not _archivia_capsula(esistente):
+            return jsonify({"error": "errore archiviazione vecchia capsula"}), 500
+
+        # Cancella vecchia dal disco vivo
+        try:
+            os.remove(_capsula_path(capsula_id))
+        except Exception as e:
+            log(f"[CAPSULA_DEL_ERR] {capsula_id}: {e}")
+
+        # Salva nuova (può avere id diverso se lo desideri, ma stesso ruolo)
+        now = datetime.utcnow().isoformat() + "Z"
+        data["creata_il"] = now
+        data["modificata_il"] = now
+        data["sostituisce"] = capsula_id
+        if "stato" not in data:
+            data["stato"] = "FUNZIONA"
+        if "scritta_da" not in data:
+            data["scritta_da"] = "AI"
+
+        if not _salva_capsula(data):
+            return jsonify({"error": "errore salvataggio nuova"}), 500
+
+        log(f"[CAPSULA_SOSTITUITA] {capsula_id} → {data['id']} | ruolo={data['ruolo']}")
+        return jsonify({
+            "ok": True,
+            "sostituita": capsula_id,
+            "nuova_id": data["id"],
+            "ruolo": data["ruolo"],
+            "archiviata": True
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FINE BLOCCO CAPSULE AUTONOME
+# ═══════════════════════════════════════════════════════════════════════════
+
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     log(f"[MAIN] 🚀 MISSION CONTROL V6.0 + AI BRIDGE — porta {port}")
