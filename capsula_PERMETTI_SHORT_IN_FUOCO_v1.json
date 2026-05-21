@@ -1,0 +1,61 @@
+{
+  "_descrizione": "Prima capsula OPERATORE del sistema OVERTOP V16. Nasce sotto la GIUDICE MIGLIORA_TRADING. Presidia il contesto FUOCO_SHORT che, secondo Veritas, ha generato perdite di profitto stimate per -$13.941 dovute ai SHORT bloccati dal SC. Questa capsula NON modifica il bot. Misura cosa accade ai SHORT che il bot fa in regime FUOCO_SHORT, e dichiara FUNZIONA se permettere quei SHORT è cumulativamente vantaggioso.",
+
+  "id": "operatore_permetti_short_in_fuoco_v1",
+  "ruolo": "PERMETTI_SHORT_IN_FUOCO",
+  "tipo": "OPERATORE",
+  "stato": "FUNZIONA",
+
+  "presidia_contesto": {
+    "regime": "FUOCO_SHORT",
+    "direzione_target": "SHORT",
+    "descrizione": "Quando il bot vede regime FUOCO_SHORT (oi_stato_short = FUOCO con oi_carica_short >= 0.70), questa capsula è quella incaricata di dire se ha senso fare SHORT in quel contesto."
+  },
+
+  "funzione_validazione": {
+    "descrizione": "Io funziono se: sui trade SHORT chiusi in regime FUOCO_SHORT, il PnL cumulativo netto è >= 0 su almeno N occorrenze.",
+    "criterio": {
+      "tipo_misura": "pnl_cumulativo_contesto",
+      "filtro_regime": "FUOCO_SHORT",
+      "filtro_direzione": "SHORT",
+      "min_occorrenze": 5,
+      "soglia_pnl_funziona": "pnl_cumulativo_netto >= 0",
+      "fonte_dati": "SELECT pnl FROM trades WHERE event_type IN ('M2_EXIT','EXIT') AND direction LIKE 'SHORT%' AND json_extract(data_json,'$.regime')='FUOCO_SHORT'",
+      "regola_storia_insufficiente": "Se occorrenze < min_occorrenze, assumo FUNZIONA per prudenza (non ho dati per dire il contrario)"
+    }
+  },
+
+  "logica": {
+    "azione_quando_funziona": {
+      "descrizione": "Resto in attesa. Continuo a osservare il PnL dei SHORT in FUOCO_SHORT. Se rimango FUNZIONA per >= 30 giorni con >= 20 occorrenze, posso essere considerata STABILE e essere usata come argomento per un cambio architetturale del bot V16 (sbloccare i SHORT in FUOCO).",
+      "frequenza_check": "ogni 1 ora",
+      "log_event": "OPERATORE_OK: permettere SHORT in FUOCO è vantaggioso (pnl_cum >= 0)"
+    },
+    "azione_quando_NON_funziona": {
+      "descrizione": "Segnalo NON_FUNZIONA. Il decisore tecnico AI deve decidere: modificare i parametri (es. alzare la soglia oi_carica per essere più selettiva) o sostituire la logica (es. richiedere conferma di un altro segnale fisico prima di permettere SHORT).",
+      "log_event": "OPERATORE_FAIL: i SHORT in FUOCO_SHORT perdono cumulativamente",
+      "trigger_propagazione": "AI deve analizzare la sequenza di trade negativi: c'è un sotto-contesto specifico (es. FUOCO_SHORT in regime RANGING vs TRENDING) che genera la perdita? Se sì, modificare la capsula stringendo il filtro_regime. Se no, sostituire la capsula con logica diversa."
+    }
+  },
+
+  "relazione_con_giudice": {
+    "giudice_di_riferimento": "giudice_migliora_trading_v1",
+    "ruolo_del_giudice": "MIGLIORA_TRADING",
+    "logica_di_propagazione": "Quando la GIUDICE segnala NON_FUNZIONA e il contesto FUOCO_SHORT compare nei trade peggiori del periodo, l'AI deve interrogare questa OPERATORE e decidere modifica/sostituzione."
+  },
+
+  "metadata": {
+    "creata_da": "Claude (sotto direttiva di Roberto)",
+    "data_concettuale": "20-21 maggio 2026",
+    "dato_di_partenza_che_la_giustifica": "Veritas misura $13.941 di profitto perso sui SHORT bloccati in contesto FUOCO_SHORT (hit_rate 46% su 62.700 osservazioni). Quel valore è la motivazione della nascita di questa capsula.",
+    "ATTENZIONE_HOOK_BOT_MANCANTE": "Al momento della nascita (21 maggio 2026), il bot OVERTOP V16 NON consulta questa capsula prima di decidere se permettere o bloccare un SHORT in FUOCO. La capsula osserva il PnL dei trade che il bot fa autonomamente. Per renderla operativa (cioè perché il bot agisca SECONDO la capsula), servirà un hook in OVERTOP_BASSANO_V16_PRODUCTION.py al momento della decisione SHORT. Quello è un secondo cantiere, da fare con cura chirurgica."
+  },
+
+  "memoria_eventi": {
+    "_descrizione": "Eventi auto-segnalati dalla capsula. Si popola via interventi futuri.",
+    "voci": []
+  },
+
+  "scritta_da": "Claude",
+  "versione_capsula": "v1"
+}
