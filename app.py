@@ -6657,9 +6657,80 @@ def _valutatore_pnl_cumulativo_periodo(capsula: dict) -> dict:
                 "dati": {}, "valutazione_skipped": True, "errore": str(e)}
 
 
+def _valutatore_pnl_cumulativo_contesto(capsula: dict) -> dict:
+    """
+    Valutatore per criterio.tipo_misura == 'pnl_cumulativo_contesto'.
+    Usato dagli OPERATORI che presidiano un regime/direzione specifico.
+
+    Legge dalla tabella trades del DB SQLite filtrando per:
+      - event_type IN ('M2_EXIT', 'EXIT')
+      - direction LIKE filtro_direzione + '%'   (es. 'SHORT%' matcha 'SHORT' e 'SHORT_SHADOW')
+      - json_extract(data_json, '$.regime') = filtro_regime
+    Calcola sum(pnl) e count.
+
+    Logica:
+      - Se count < min_occorrenze → FUNZIONA per prudenza (storia insufficiente)
+      - Se sum(pnl) >= 0 → FUNZIONA
+      - Se sum(pnl) < 0 → NON_FUNZIONA
+    """
+    try:
+        criterio = capsula["funzione_validazione"]["criterio"]
+        filtro_regime = criterio.get("filtro_regime")
+        filtro_direzione = criterio.get("filtro_direzione")
+        min_occ = int(criterio.get("min_occorrenze", 5))
+        if not filtro_regime or not filtro_direzione:
+            return {"skip": True, "motivo": "filtro_regime o filtro_direzione mancanti"}
+
+        # Query DB
+        try:
+            with sqlite3.connect(DB_PATH, timeout=5) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("""
+                    SELECT pnl, direction, json_extract(data_json, '$.regime') AS regime
+                    FROM trades
+                    WHERE event_type IN ('M2_EXIT','EXIT')
+                      AND direction LIKE ?
+                      AND json_extract(data_json, '$.regime') = ?
+                """, (filtro_direzione + '%', filtro_regime)).fetchall()
+        except Exception as e:
+            return {"skip": True, "motivo": f"errore query DB: {e}"}
+
+        occorrenze = len(rows)
+        pnl_cumulativo = sum(float(r["pnl"] or 0) for r in rows)
+
+        dati = {
+            "filtro_regime": filtro_regime,
+            "filtro_direzione": filtro_direzione,
+            "occorrenze": occorrenze,
+            "min_occorrenze_richieste": min_occ,
+            "pnl_cumulativo": round(pnl_cumulativo, 4),
+        }
+
+        # Regola storia insufficiente
+        if occorrenze < min_occ:
+            return {
+                "stato": "FUNZIONA",
+                "motivo": f"occorrenze {occorrenze} < min {min_occ} — storia insufficiente, assumo FUNZIONA",
+                "dati": dati,
+                "valutazione_skipped": True
+            }
+
+        # Valutazione vera
+        funziona = pnl_cumulativo >= 0
+        stato = "FUNZIONA" if funziona else "NON_FUNZIONA"
+        motivo = f"su {occorrenze} trade {filtro_direzione} in regime {filtro_regime}: pnl_cum = ${pnl_cumulativo:.2f} {'>= 0 (OK)' if funziona else '< 0 (FAIL)'}"
+
+        return {"stato": stato, "motivo": motivo, "dati": dati}
+
+    except Exception as e:
+        return {"stato": "FUNZIONA", "motivo": f"errore valutazione: {e}",
+                "dati": {}, "valutazione_skipped": True, "errore": str(e)}
+
+
 # Registry dei valutatori: chiave = tipo_misura dichiarato in criterio
 VALUTATORI = {
     "pnl_cumulativo_periodo": _valutatore_pnl_cumulativo_periodo,
+    "pnl_cumulativo_contesto": _valutatore_pnl_cumulativo_contesto,
     # Futuri valutatori si registrano qui:
     # "wr_periodo": _valutatore_wr_periodo,
     # "drawdown_max": _valutatore_drawdown,
