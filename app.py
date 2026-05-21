@@ -6512,6 +6512,321 @@ def canvas_skillcap_sostituisci(capsula_id):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# BLOCCO AUTO-VERIFICA CAPSULE — Filosofia v2.0 viva (21 maggio 2026)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Il thread daemon che fa vivere davvero le capsule.
+# Ogni N minuti, per ogni capsula sul disco:
+#   1. Identifica il VALUTATORE giusto in base al criterio.tipo_misura
+#   2. Esegue la funzione_validazione contro lo stato attuale del bot
+#   3. Se il risultato cambia stato (FUNZIONA <-> NON_FUNZIONA), aggiorna
+#      la capsula sul disco e registra evento in CapsulaMemoria
+#
+# ESTENDIBILE: nuovi tipi di criterio si aggiungono come funzioni in
+# VALUTATORI. Nessuna riscrittura del loop.
+#
+# KILL SWITCH: env var CAPSULE_AUTO_VERIFICA=false → loop spento
+# FREQUENZA: env var CAPSULE_VERIFICA_INTERVAL_SECONDS (default 3600 = 1h)
+#
+# REGISTRAZIONE EVENTI: ogni cambio di stato genera una voce in
+# capsula["memoria_eventi"]["voci"]. Se è disponibile CapsulaMemoria, scrive
+# anche lì un ricordo di tipo REGOLA.
+# ═══════════════════════════════════════════════════════════════════════════
+
+CAPSULE_AUTO_VERIFICA_ENABLED = os.environ.get("CAPSULE_AUTO_VERIFICA", "true").lower() == "true"
+CAPSULE_VERIFICA_INTERVAL_SECONDS = int(os.environ.get("CAPSULE_VERIFICA_INTERVAL_SECONDS", "3600"))
+
+# Memoria circolare snapshot bot per confronti temporali (es. 24h fa)
+# Lista di tuple (timestamp, capital, total_trades, pnl_totale)
+_bot_snapshots_history = []
+_BOT_SNAPSHOTS_MAX = 200  # tieni ~8 giorni a 1h
+
+
+def _registra_snapshot_bot():
+    """Registra snapshot attuale del bot nella history (per confronti temporali)."""
+    try:
+        _b = _get_bot_safe()
+        if _b is None:
+            return
+        snap = {
+            "ts": time.time(),
+            "capital": float(getattr(_b, "capital", 0) or 0),
+            "total_trades": int(getattr(_b, "total_trades", 0) or 0),
+            "wins": int(getattr(_b, "wins", 0) or 0),
+            "losses": int(getattr(_b, "losses", 0) or 0),
+        }
+        _bot_snapshots_history.append(snap)
+        # Trim circolare
+        if len(_bot_snapshots_history) > _BOT_SNAPSHOTS_MAX:
+            del _bot_snapshots_history[0:len(_bot_snapshots_history) - _BOT_SNAPSHOTS_MAX]
+    except Exception as e:
+        log(f"[CAPSULE_VERIFICA] errore snapshot: {e}")
+
+
+def _trova_snapshot_a(ore_fa: float):
+    """Ritorna lo snapshot più vicino a N ore fa, o None se non c'è abbastanza storia."""
+    if not _bot_snapshots_history:
+        return None
+    target_ts = time.time() - (ore_fa * 3600)
+    # Cerca lo snapshot più vicino al target_ts
+    closest = min(_bot_snapshots_history, key=lambda s: abs(s["ts"] - target_ts))
+    # Considera valido solo se è entro ±20% della finestra
+    if abs(closest["ts"] - target_ts) > (ore_fa * 3600 * 0.2):
+        return None
+    return closest
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# VALUTATORI — uno per ogni tipo_misura dichiarato nelle capsule
+# ─────────────────────────────────────────────────────────────────────────
+
+def _valutatore_pnl_cumulativo_periodo(capsula: dict) -> dict:
+    """
+    Valutatore per criterio.tipo_misura == 'pnl_cumulativo_periodo'.
+    Usa il criterio della capsula per decidere FUNZIONA o NON_FUNZIONA.
+
+    Ritorna: {stato: ..., motivo: ..., dati: {...}}
+    """
+    try:
+        criterio = capsula["funzione_validazione"]["criterio"]
+        periodo_ore = float(criterio.get("periodo_osservazione_ore", 24))
+
+        _b = _get_bot_safe()
+        if _b is None:
+            return {"stato": "FUNZIONA", "motivo": "bot non disponibile, non posso valutare — assumo FUNZIONA per non falsare",
+                    "dati": {}, "valutazione_skipped": True}
+
+        capital_now = float(getattr(_b, "capital", 0) or 0)
+        wins_now = int(getattr(_b, "wins", 0) or 0)
+        losses_now = int(getattr(_b, "losses", 0) or 0)
+
+        snap_passato = _trova_snapshot_a(periodo_ore)
+        if snap_passato is None:
+            # Non ho ancora abbastanza storia per il periodo richiesto
+            return {"stato": "FUNZIONA",
+                    "motivo": f"storia insufficiente per finestra {periodo_ore}h — assumo FUNZIONA",
+                    "dati": {"capital_now": capital_now, "snapshots_disponibili": len(_bot_snapshots_history)},
+                    "valutazione_skipped": True}
+
+        capital_passato = snap_passato.get("capital", 0)
+        pnl_periodo = capital_now - capital_passato
+
+        # Soglia ASSOLUTA: pnl_periodo >= 0
+        soglia_assoluta_ok = pnl_periodo >= 0
+
+        # Soglia RELATIVA: confronto vs periodo precedente equivalente
+        snap_doppio_periodo = _trova_snapshot_a(periodo_ore * 2)
+        soglia_relativa_ok = False
+        pnl_periodo_precedente = None
+        if snap_doppio_periodo is not None:
+            pnl_periodo_precedente = capital_passato - snap_doppio_periodo.get("capital", 0)
+            soglia_relativa_ok = pnl_periodo >= pnl_periodo_precedente
+
+        # OR delle due soglie (come da criterio della capsula)
+        funziona = soglia_assoluta_ok or soglia_relativa_ok
+        stato = "FUNZIONA" if funziona else "NON_FUNZIONA"
+
+        motivo_parts = []
+        if soglia_assoluta_ok:
+            motivo_parts.append(f"pnl {periodo_ore}h = ${pnl_periodo:.2f} >= 0 (OK assoluta)")
+        else:
+            motivo_parts.append(f"pnl {periodo_ore}h = ${pnl_periodo:.2f} < 0 (FAIL assoluta)")
+        if pnl_periodo_precedente is not None:
+            if soglia_relativa_ok:
+                motivo_parts.append(f"e pnl {periodo_ore}h precedente era ${pnl_periodo_precedente:.2f}, quindi non sto peggiorando (OK relativa)")
+            else:
+                motivo_parts.append(f"e pnl {periodo_ore}h precedente era ${pnl_periodo_precedente:.2f}, sto peggiorando (FAIL relativa)")
+
+        return {
+            "stato": stato,
+            "motivo": " | ".join(motivo_parts),
+            "dati": {
+                "capital_now": capital_now,
+                "capital_passato_24h": capital_passato,
+                "pnl_periodo": pnl_periodo,
+                "pnl_periodo_precedente": pnl_periodo_precedente,
+                "wins_now": wins_now,
+                "losses_now": losses_now,
+                "soglia_assoluta_ok": soglia_assoluta_ok,
+                "soglia_relativa_ok": soglia_relativa_ok
+            }
+        }
+    except Exception as e:
+        return {"stato": "FUNZIONA", "motivo": f"errore valutazione: {e}",
+                "dati": {}, "valutazione_skipped": True, "errore": str(e)}
+
+
+# Registry dei valutatori: chiave = tipo_misura dichiarato in criterio
+VALUTATORI = {
+    "pnl_cumulativo_periodo": _valutatore_pnl_cumulativo_periodo,
+    # Futuri valutatori si registrano qui:
+    # "wr_periodo": _valutatore_wr_periodo,
+    # "drawdown_max": _valutatore_drawdown,
+    # "wr_contesto_specifico": _valutatore_wr_contesto,
+}
+
+
+def _verifica_singola_capsula(capsula: dict) -> dict:
+    """
+    Verifica una capsula. Ritorna risultato del valutatore o info skip.
+    """
+    try:
+        criterio = capsula.get("funzione_validazione", {}).get("criterio", {})
+        tipo_misura = criterio.get("tipo_misura")
+        if not tipo_misura:
+            return {"skip": True, "motivo": "nessun tipo_misura nel criterio"}
+        valutatore = VALUTATORI.get(tipo_misura)
+        if valutatore is None:
+            return {"skip": True, "motivo": f"valutatore non implementato per tipo_misura='{tipo_misura}'"}
+        return valutatore(capsula)
+    except Exception as e:
+        return {"skip": True, "motivo": f"errore: {e}"}
+
+
+def _registra_evento_capsula(capsula: dict, evento: dict) -> dict:
+    """Aggiunge un evento al campo memoria_eventi.voci e ritorna la capsula aggiornata."""
+    if "memoria_eventi" not in capsula:
+        capsula["memoria_eventi"] = {"_descrizione": "Eventi auto-segnalati.", "voci": []}
+    if "voci" not in capsula["memoria_eventi"]:
+        capsula["memoria_eventi"]["voci"] = []
+    capsula["memoria_eventi"]["voci"].append(evento)
+    # Trim a 100 eventi più recenti per non far esplodere il file
+    if len(capsula["memoria_eventi"]["voci"]) > 100:
+        capsula["memoria_eventi"]["voci"] = capsula["memoria_eventi"]["voci"][-100:]
+    return capsula
+
+
+def auto_verifica_thread():
+    """
+    Thread daemon: ogni N secondi, registra snapshot bot + verifica tutte le capsule.
+    """
+    log(f"[CAPSULE_AUTO_VERIFICA] thread avviato | interval={CAPSULE_VERIFICA_INTERVAL_SECONDS}s | enabled={CAPSULE_AUTO_VERIFICA_ENABLED}")
+    if not CAPSULE_AUTO_VERIFICA_ENABLED:
+        log("[CAPSULE_AUTO_VERIFICA] DISABILITATO via env var CAPSULE_AUTO_VERIFICA")
+        return
+
+    # All'avvio aspetta 60s che il bot si stabilizzi
+    time.sleep(60)
+
+    while True:
+        try:
+            # 1. Registra snapshot bot (per confronti temporali)
+            _registra_snapshot_bot()
+
+            # 2. Verifica tutte le capsule sul disco
+            capsule = _lista_capsule_disco()
+            verificate = 0
+            cambi_stato = 0
+            for c in capsule:
+                if c.get("tipo") not in TIPI_VALIDI:
+                    continue
+                if "id" not in c:
+                    continue
+
+                risultato = _verifica_singola_capsula(c)
+                if risultato.get("skip"):
+                    log(f"[CAPSULE_AUTO_VERIFICA] {c['id']}: SKIP ({risultato.get('motivo')})")
+                    continue
+                if risultato.get("valutazione_skipped"):
+                    # Valutatore ha eseguito ma con dati insufficienti — non cambio stato, ma loggo
+                    log(f"[CAPSULE_AUTO_VERIFICA] {c['id']}: dati insufficienti — {risultato.get('motivo')}")
+                    verificate += 1
+                    continue
+
+                nuovo_stato = risultato.get("stato")
+                stato_attuale = c.get("stato", "FUNZIONA")
+                verificate += 1
+
+                if nuovo_stato != stato_attuale:
+                    cambi_stato += 1
+                    # Aggiorna capsula
+                    c["stato"] = nuovo_stato
+                    c["modificata_il"] = datetime.utcnow().isoformat() + "Z"
+                    # Registra evento
+                    evento = {
+                        "ts": datetime.utcnow().isoformat() + "Z",
+                        "tipo_evento": "CAMBIO_STATO_AUTO",
+                        "stato_precedente": stato_attuale,
+                        "stato_nuovo": nuovo_stato,
+                        "motivo": risultato.get("motivo", ""),
+                        "dati": risultato.get("dati", {})
+                    }
+                    _registra_evento_capsula(c, evento)
+                    _salva_capsula(c)
+                    log(f"[CAPSULE_AUTO_VERIFICA] {c['id']}: {stato_attuale} → {nuovo_stato} | {risultato.get('motivo')}")
+
+                    # Scrivi anche in CapsulaMemoria se disponibile
+                    try:
+                        mem = _get_memoria_safe()
+                        if mem is not None and nuovo_stato == "NON_FUNZIONA":
+                            mem.ricorda_roberto(
+                                tipo="REGOLA",
+                                contenuto=f"Capsula {c.get('ruolo')} ({c['id']}) segnala NON_FUNZIONA",
+                                contesto=risultato.get("motivo", ""),
+                                importanza=8,
+                                tags=["capsula", "non_funziona", c.get("tipo", ""), c.get("ruolo", "")]
+                            )
+                    except Exception as me:
+                        log(f"[CAPSULE_AUTO_VERIFICA] errore memoria: {me}")
+
+            if verificate > 0:
+                log(f"[CAPSULE_AUTO_VERIFICA] tick OK | verificate={verificate} | cambi_stato={cambi_stato} | snapshots_history={len(_bot_snapshots_history)}")
+
+        except Exception as e:
+            log(f"[CAPSULE_AUTO_VERIFICA] errore tick: {e}")
+            import traceback
+            log(traceback.format_exc())
+
+        time.sleep(CAPSULE_VERIFICA_INTERVAL_SECONDS)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Endpoint manuale per forzare verifica (utile per debug/test)
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/capsule_v2/<capsula_id>/verifica_ora', methods=['POST'])
+def canvas_capsule_v2_verifica_ora(capsula_id):
+    """
+    Forza la verifica immediata di una capsula. Restituisce risultato del valutatore
+    SENZA modificare lo stato della capsula sul disco (è un dry-run).
+    Utile per test, debug, e per Claude/DeepSeek che vogliono vedere "cosa dice la
+    capsula adesso" senza aspettare il tick.
+    """
+    auth_err = _canvas_auth()
+    if auth_err:
+        return auth_err
+    try:
+        c = _carica_capsula(capsula_id)
+        if c is None:
+            return jsonify({"error": "capsula non trovata", "id": capsula_id}), 404
+        risultato = _verifica_singola_capsula(c)
+        return jsonify({
+            "id": capsula_id,
+            "ruolo": c.get("ruolo"),
+            "stato_su_disco": c.get("stato"),
+            "stato_calcolato_ora": risultato.get("stato"),
+            "valutazione": risultato,
+            "snapshots_history": len(_bot_snapshots_history)
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Avvio del thread auto-verifica
+# ─────────────────────────────────────────────────────────────────────────
+if CAPSULE_AUTO_VERIFICA_ENABLED:
+    threading.Thread(target=auto_verifica_thread, daemon=True, name='capsule_auto_verifica').start()
+    log("[MAIN] ✅ Thread auto-verifica capsule avviato")
+else:
+    log("[MAIN] ⚠️ Thread auto-verifica capsule DISABILITATO via env")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FINE BLOCCO AUTO-VERIFICA CAPSULE
+# ═══════════════════════════════════════════════════════════════════════════
+
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     log(f"[MAIN] 🚀 MISSION CONTROL V6.0 + AI BRIDGE — porta {port}")
