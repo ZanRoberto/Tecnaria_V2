@@ -231,6 +231,27 @@ class CapsulaMemoria:
         self.bot       = bot_ref
         self.canvas    = canvas_ref          # riferimento a CapsulaCanvas se disponibile
         self._initialized = False
+        # ─────────────────────────────────────────────────────────────
+        # COMPAT SHIM 21mag2026 — diagnosi delle 21:06 (Claude+Roberto)
+        # V16 era originariamente accoppiato a una classe MemoriaMatrimoni
+        # (V16 riga 3253) con attributi: divorzio (set), sposi (set),
+        # separazione (set), trust (dict). Quando CapsulaMemoria ha
+        # sostituito MemoriaMatrimoni come self.memoria del bot, V16 ha
+        # continuato a chiamare questi attributi in 4 punti diversi:
+        #   - riga 10513 (divorzio_set = self.memoria.divorzio)
+        #   - riga 10717 (idem)
+        #   - riga 13270 (lambda: list(self.memoria.divorzio))
+        #   - riga 3921  (len(memoria.divorzio))
+        # Senza questo shim, V16 crashava ogni 5s su shadow_entry
+        # con AttributeError. Diagnosi reale: bot fermo 6 ore il 21mag
+        # tra 14:43 e 21:06 fino al fix.
+        # NIENTE LOGICA MATRIMONIALE QUI — solo attributi vuoti per
+        # compatibilità di accesso. La logica matrimoni vive in V16.
+        # ─────────────────────────────────────────────────────────────
+        self.divorzio    = set()
+        self.sposi       = set()
+        self.separazione = set()
+        self.trust       = {}
         self._error_count = 0
 
         if MEMORIA_DEAD:
