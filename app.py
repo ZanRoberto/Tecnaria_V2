@@ -5757,6 +5757,378 @@ def canvas_conoscenza_info():
 # ═══════════════════════════════════════════════════════════════════════════
 # FINE BLOCCO CAPSULA DELLA CONOSCENZA EMBEDDED
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BLOCCO ENDPOINT CAPSULE — Skill Esterne (21 maggio 2026)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Espone via HTTP le due skill esterne già collegate al motore V16:
+#   - capsula_canvas.py  (CapsulaCanvas)  → osservatore di entry/exit
+#   - capsula_memoria.py (CapsulaMemoria) → memoria viva tra sessioni Claude
+#
+# IMPORTANTE — DA LEGGERE PRIMA DI MODIFICARE:
+#   Le capsule sono istanziate DENTRO V16 al boot (vedi V16 righe 6981-7015).
+#   V16 chiama set_memoria(self.memoria) → singleton accessibile da qui.
+#   capsula_canvas.py NON ha set_canvas() chiamato dal V16 attuale, quindi
+#   accediamo via `bot.canvas` (variabile globale di app.py, vedi riga 626).
+#
+# DESIGN:
+#   - try/except totale: se il bot non è ancora pronto, restituisce 503
+#   - GET pubblici per /canvas/memoria* (leggibili da Claude web_fetch)
+#   - POST con auth Roberto per scritture manuali
+#   - Nessun endpoint modifica trade o decisioni del bot
+#
+# ENDPOINT ESPOSTI:
+#   GET  /canvas/memoria             → narrativa Markdown (per Claude)
+#   GET  /canvas/memoria/json        → JSON completo (debug)
+#   GET  /canvas/memoria/stadio      → stadio attuale + criteri prossimo
+#   POST /canvas/memoria/ricorda     → Roberto inserisce ricordo manuale [auth]
+#   GET  /canvas/skill/status        → stato di entrambe le capsule (per dashboard)
+#   GET  /canvas/snapshots           → ultimi 20 snapshot canvas
+#   GET  /canvas/scoperte            → ultime 20 scoperte canvas
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _get_bot_safe():
+    """Ritorna l'istanza bot se pronta, altrimenti None. Mai solleva."""
+    try:
+        return bot if 'bot' in globals() and bot is not None else None
+    except Exception:
+        return None
+
+
+def _get_memoria_safe():
+    """
+    Ritorna l'istanza CapsulaMemoria via singleton del modulo capsula_memoria.
+    Se non importabile (file mancante), ritorna None.
+    """
+    try:
+        from capsula_memoria import get_memoria
+        return get_memoria()
+    except Exception:
+        return None
+
+
+def _get_canvas_safe():
+    """
+    Ritorna l'istanza CapsulaCanvas via bot.canvas.
+    Il V16 attuale non chiama set_canvas(), quindi passiamo da bot.
+    """
+    _b = _get_bot_safe()
+    if _b is None:
+        return None
+    return getattr(_b, "canvas", None)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /canvas/memoria — narrativa Markdown (PUBBLICO, no auth)
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/memoria', methods=['GET'])
+def canvas_memoria_narrativa():
+    """
+    Restituisce la narrazione Markdown della CapsulaMemoria.
+    Pubblico: leggibile da Claude futura via web_fetch senza credenziali.
+    Query param opzionale: ?giorni=N (default 7).
+    """
+    try:
+        mem = _get_memoria_safe()
+        if mem is None:
+            return jsonify({"error": "CapsulaMemoria non disponibile",
+                            "hint": "bot non ancora avviato o capsula_memoria.py mancante"}), 503
+        try:
+            giorni = int(request.args.get('giorni', 7))
+            giorni = max(1, min(giorni, 90))
+        except Exception:
+            giorni = 7
+        testo = mem.narra_te_stessa(finestra_giorni=giorni)
+        # Markdown plain text, non JSON: Claude lo legge come testo
+        return testo, 200, {'Content-Type': 'text/markdown; charset=utf-8'}
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /canvas/memoria/json — narrativa JSON (PUBBLICO, no auth)
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/memoria/json', methods=['GET'])
+def canvas_memoria_json():
+    """JSON completo della narrazione. Per debug e integrazioni programmatiche."""
+    try:
+        mem = _get_memoria_safe()
+        if mem is None:
+            return jsonify({"error": "CapsulaMemoria non disponibile"}), 503
+        try:
+            giorni = int(request.args.get('giorni', 7))
+            giorni = max(1, min(giorni, 90))
+        except Exception:
+            giorni = 7
+        return jsonify(mem.narra_json(finestra_giorni=giorni)), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /canvas/memoria/stadio — stato vitale (PUBBLICO)
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/memoria/stadio', methods=['GET'])
+def canvas_memoria_stadio():
+    """Stadio attuale (NEONATA/BAMBINA/ADOLESCENTE/ADULTA/SAGGIA) + criteri prossimo."""
+    try:
+        mem = _get_memoria_safe()
+        if mem is None:
+            return jsonify({"error": "CapsulaMemoria non disponibile"}), 503
+        return jsonify(mem.stato_vitale()), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# POST /canvas/memoria/ricorda — Roberto inserisce ricordo manuale (AUTH)
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/memoria/ricorda', methods=['POST'])
+def canvas_memoria_ricorda():
+    """
+    Roberto inserisce un ricordo nella capsula memoria.
+    Body JSON: {tipo, contenuto, contesto?, importanza?, tags?}
+    tipo: DECISIONE | FRASE | VISIONE | REGOLA | EMOZIONE
+    """
+    auth_err = _canvas_auth()
+    if auth_err:
+        return auth_err
+    try:
+        mem = _get_memoria_safe()
+        if mem is None:
+            return jsonify({"error": "CapsulaMemoria non disponibile"}), 503
+        data = request.get_json(force=True, silent=True) or {}
+        tipo = data.get('tipo', '').strip().upper()
+        contenuto = data.get('contenuto', '').strip()
+        if not tipo or not contenuto:
+            return jsonify({"error": "campi obbligatori: tipo, contenuto"}), 400
+        if tipo not in ('DECISIONE', 'FRASE', 'VISIONE', 'REGOLA', 'EMOZIONE'):
+            return jsonify({"error": f"tipo non valido: {tipo}",
+                            "validi": ['DECISIONE','FRASE','VISIONE','REGOLA','EMOZIONE']}), 400
+        ok = mem.ricorda_roberto(
+            tipo=tipo,
+            contenuto=contenuto,
+            contesto=data.get('contesto', ''),
+            importanza=int(data.get('importanza', 5)),
+            tags=data.get('tags', [])
+        )
+        return jsonify({"ok": bool(ok), "tipo": tipo}), 200 if ok else 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /canvas/skill/status — stato delle due capsule (PUBBLICO)
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/skill/status', methods=['GET'])
+def canvas_skill_status():
+    """
+    Stato sintetico delle due skill esterne.
+    Utile per dashboard: dice se le capsule sono attive e contano.
+    """
+    try:
+        mem = _get_memoria_safe()
+        cv = _get_canvas_safe()
+        out = {
+            "memoria": mem.status() if mem else {"available": False},
+            "canvas":  cv.status()  if cv  else {"available": False},
+            "bot_ready": _get_bot_safe() is not None,
+        }
+        return jsonify(out), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /canvas/snapshots — ultimi snapshot del canvas (AUTH)
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/snapshots', methods=['GET'])
+def canvas_snapshots():
+    """Ultimi N snapshot fisici osservati dal canvas (default 20, max 100)."""
+    auth_err = _canvas_auth()
+    if auth_err:
+        return auth_err
+    try:
+        cv = _get_canvas_safe()
+        if cv is None:
+            return jsonify({"error": "CapsulaCanvas non disponibile"}), 503
+        try:
+            n = int(request.args.get('n', 20))
+            n = max(1, min(n, 100))
+        except Exception:
+            n = 20
+        return jsonify({"snapshots": cv.recent_snapshots(n=n), "count": n}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /canvas/scoperte — ultime scoperte del canvas (AUTH)
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/scoperte', methods=['GET'])
+def canvas_scoperte():
+    """Ultime N scoperte del canvas (default 20, max 100)."""
+    auth_err = _canvas_auth()
+    if auth_err:
+        return auth_err
+    try:
+        cv = _get_canvas_safe()
+        if cv is None:
+            return jsonify({"error": "CapsulaCanvas non disponibile"}), 503
+        try:
+            n = int(request.args.get('n', 20))
+            n = max(1, min(n, 100))
+        except Exception:
+            n = 20
+        return jsonify({"scoperte": cv.recent_scoperte(n=n), "count": n}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FINE BLOCCO ENDPOINT CAPSULE
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BLOCCO SKILLCAP FRONTIERA — il protocollo vivo per Claude futura (21 mag 2026)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Scopo: eliminare la cecità delle istanze Claude tra le sessioni.
+# La skillcap di frontiera è il documento che la prossima Claude fetcha
+# all'inizio di ogni chat per sapere: quali endpoint esistono, quali sono i
+# payload, quali procedure operative seguire. È un organismo che cresce.
+#
+# File JSON statico: /var/data/canvas/skillcap_frontiera.json (se non c'è,
+# usa il bundle inline come fallback).
+# ═══════════════════════════════════════════════════════════════════════════
+
+SKILLCAP_FRONTIERA_PATH = os.path.join(CANVAS_DIR, "skillcap_frontiera.json")
+
+
+def _load_skillcap_frontiera():
+    """Carica la skillcap dal disco. Se non esiste, ritorna fallback minimo."""
+    try:
+        if os.path.exists(SKILLCAP_FRONTIERA_PATH):
+            with open(SKILLCAP_FRONTIERA_PATH, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        log(f"[FRONTIERA] errore lettura: {e}")
+    # Fallback minimo se il file non c'è ancora
+    return {
+        "id": "SKILLCAP_FRONTIERA_v1_fallback",
+        "stato": "non_caricata",
+        "messaggio": "Il file skillcap_frontiera.json non è stato ancora caricato in /var/data/canvas/. Roberto deve fare upload o POST iniziale.",
+        "URL_BASE_DEL_BOT": "https://tecnaria-v2.onrender.com"
+    }
+
+
+def _save_skillcap_frontiera(data: dict) -> bool:
+    """Salva la skillcap su disco in modo atomico."""
+    try:
+        Path(CANVAS_DIR).mkdir(parents=True, exist_ok=True)
+        tmp_path = SKILLCAP_FRONTIERA_PATH + ".tmp"
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, SKILLCAP_FRONTIERA_PATH)
+        return True
+    except Exception as e:
+        log(f"[FRONTIERA] errore scrittura: {e}")
+        return False
+
+
+@app.route('/canvas/skillcap/frontiera', methods=['GET'])
+def canvas_skillcap_frontiera_get():
+    """
+    GET pubblico: ritorna la skillcap frontiera attuale.
+    Una nuova Claude la fetcha all'inizio di ogni chat per non essere cieca.
+    """
+    try:
+        data = _load_skillcap_frontiera()
+        return jsonify(data), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/canvas/skillcap/frontiera/upgrade', methods=['POST'])
+def canvas_skillcap_frontiera_upgrade():
+    """
+    POST con auth: aggiunge una voce alla skillcap frontiera.
+    Body JSON: {sezione: <nome_sezione>, voce: <oggetto_da_aggiungere>}
+    Esempio:
+      {"sezione": "MEMORIA_SKILLCAP_DI_SUCCESSO",
+       "voce": {"id": "VETO_FUOCO_SHORT", "effetto": "WR +6%"}}
+
+    Se la sezione è una lista, fa append. Se è un dict, fa merge.
+    Se non esiste, la crea come lista.
+    """
+    auth_err = _canvas_auth()
+    if auth_err:
+        return auth_err
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        sezione = body.get('sezione', '').strip()
+        voce = body.get('voce')
+        if not sezione or voce is None:
+            return jsonify({"error": "campi obbligatori: sezione, voce"}), 400
+
+        data = _load_skillcap_frontiera()
+        # Inizializza sezione se manca
+        if sezione not in data:
+            data[sezione] = []
+
+        existing = data[sezione]
+        if isinstance(existing, list):
+            existing.append(voce)
+        elif isinstance(existing, dict) and isinstance(voce, dict):
+            existing.update(voce)
+        else:
+            # Tipo incompatibile: salva con timestamp per non perdere dati
+            data[sezione + "_voce_aggiunta_" + str(int(time.time()))] = voce
+
+        # Bump versione
+        if 'VERSIONING' not in data or not isinstance(data['VERSIONING'], dict):
+            data['VERSIONING'] = {}
+        data['VERSIONING']['ultimo_upgrade'] = datetime.utcnow().isoformat() + "Z"
+
+        if _save_skillcap_frontiera(data):
+            return jsonify({"ok": True, "sezione": sezione,
+                            "voci_in_sezione": len(data[sezione]) if isinstance(data[sezione], list) else "dict"}), 200
+        return jsonify({"error": "errore salvataggio"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/canvas/skillcap/frontiera/replace', methods=['POST'])
+def canvas_skillcap_frontiera_replace():
+    """
+    POST con auth: sostituisce L'INTERA skillcap frontiera con il body JSON.
+    Usalo per il caricamento iniziale o per un upgrade di versione (v1 → v2).
+    Body: il JSON completo della nuova skillcap.
+    """
+    auth_err = _canvas_auth()
+    if auth_err:
+        return auth_err
+    try:
+        body = request.get_json(force=True, silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "body deve essere un oggetto JSON"}), 400
+        if 'id' not in body:
+            return jsonify({"error": "skillcap deve avere campo 'id'"}), 400
+        if _save_skillcap_frontiera(body):
+            return jsonify({"ok": True, "id": body.get('id')}), 200
+        return jsonify({"error": "errore salvataggio"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FINE BLOCCO SKILLCAP FRONTIERA
+# ═══════════════════════════════════════════════════════════════════════════
+
+
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     log(f"[MAIN] 🚀 MISSION CONTROL V6.0 + AI BRIDGE — porta {port}")
