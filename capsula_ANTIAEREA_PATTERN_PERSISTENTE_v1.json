@@ -1,0 +1,59 @@
+{
+  "_descrizione": "Prima capsula MUSCOLO del sistema OVERTOP V16. Nasce il 22 maggio 2026 dopo l'intuizione di Roberto: 'se 3 LOSS persistono nella stessa firma in 15 minuti, sappiamo che li' va attivata la contraerea oltre lo scudo'. Non aggiunge parametri nuovi: usa solo regime, direzione, exit_reason e timestamp. La sua intelligenza sta nel guardare la STORIA RECENTE, non il singolo trade.",
+
+  "id": "muscolo_antiaerea_pattern_persistente_v1",
+  "ruolo": "BLOCCA_PATTERN_RICORRENTE_IN_FINESTRA_TEMPORALE",
+  "tipo": "MUSCOLO",
+  "stato": "FUNZIONA",
+
+  "presidia_contesto": {
+    "regime": "RANGING",
+    "direzione_target": "LONG",
+    "descrizione": "Presidia il contesto principale dove il bot vive (99.7% dei trade). Se vede pattern di LOSS persistenti in finestra temporale, attiva il blocco."
+  },
+
+  "funzione_validazione": {
+    "descrizione": "Io funziono se, nelle finestre temporali in cui ero ATTIVA, il PnL cumulativo dei trade bloccati sarebbe stato negativo. Cioe': ho impedito perdite reali, non opportunita' vincenti.",
+    "criterio": {
+      "tipo_misura": "antiaerea_temporale",
+      "finestra_minuti": 15,
+      "n_loss_per_attivare": 3,
+      "durata_blocco_minuti": 30,
+      "pattern": {
+        "regime": "RANGING",
+        "direction": "LONG"
+      },
+      "min_attivazioni": 10,
+      "soglia_pnl_funziona": "pnl_bloccato_totale < 0 (i trade che ho bloccato erano effettivamente perdenti)"
+    }
+  },
+
+  "logica": {
+    "azione_quando_attiva_e_funziona": {
+      "descrizione": "Resto vigile. Continuo a monitorare la finestra temporale. Quando V16 chiede /per_contesto, gli rispondo che il contesto e' bloccato. Registro evento ATTIVAZIONE_ANTIAEREA in memoria_eventi.",
+      "frequenza_check": "ad ogni call /per_contesto da V16"
+    },
+    "azione_quando_NON_funziona": {
+      "descrizione": "Segnalo NON_FUNZIONA. Il decisore tecnico AI deve decidere: modificare i parametri (finestra piu' larga? n_loss diverso?) o sostituire la logica.",
+      "trigger_propagazione": "AI deve analizzare loss_sfuggiti e attivazioni storiche per capire se la finestra temporale e' sbagliata o se il pattern non e' realmente persistente."
+    },
+    "non_modifica_capsule_pari_grado": "Questa capsula non sostituisce le altre capsule MUSCOLO. Convive con loro."
+  },
+
+  "metadata": {
+    "creata_da": "Claude (sotto direttiva di Roberto)",
+    "data_concettuale": "22 maggio 2026 mattina",
+    "frase_di_nascita_di_Roberto": "Sai che alle 6 del mattino e' quando ti bucano lo scudo. La' la contraerea deve essere attivata oltre lo scudo.",
+    "dato_di_partenza": "Osservazione: il 20 maggio 14:33-14:43 il bot ha fatto 5 LOSS in 10 minuti con stessa firma (RANGING+LONG+ZONA_MORTA). Il 19 maggio 18:04-18:35: 3 LOSS. Il 20 maggio 11:22-11:40: 3 LOSS. Pattern persistenti ricorrenti.",
+    "stima_impatto": "Se la capsula blocca 4 attacchi/giorno x 3 trade/attacco x $2.50/trade = ~$30/giorno salvati. Su 30 giorni: ~$900. Non recupera il drawdown -$697 ma ferma l'emorragia.",
+    "ATTENZIONE_HOOK_BOT": "La capsula vive ma NON e' ancora attiva sul bot finche' V16 non chiama /per_contesto per BLOCCA. Quando V16 lo fara' (flag CAPSULE_V2_HOOK_ENABLED=true), la capsula iniziera' a influenzare le entry."
+  },
+
+  "memoria_eventi": {
+    "_descrizione": "Eventi di attivazione registrati. Si popolano quando _antiaerea_attiva_ora ritorna True.",
+    "voci": []
+  },
+
+  "scritta_da": "Claude",
+  "versione_capsula": "v1"
+}
