@@ -7103,6 +7103,13 @@ class OvertopBassanoV16Production:
         self._shadow_min_price = None
         self._shadow_matrimonio = None
 
+        # HOOK CAPSULE V2.0 — 22mag2026 (filosofia v2.0 Roberto)
+        # Quando un'entry shadow viene aperta, chiediamo a /canvas/capsule_v2/per_contesto
+        # se c'è una capsula OPERATORE che presidia questo contesto. Se sì, salviamo il suo
+        # ID qui. All'exit, attribuiamo il PnL a quella capsula via /attribuisci_trade.
+        # Tutto sotto flag env CAPSULE_V2_HOOK_ENABLED. Default OFF — nessun effetto sul bot.
+        self._shadow_capsula_v2_attribuita = None
+
         # PATCH 6 BUG 13 — WinningSignatureLogger (osservatore puro)
         # Registra firma vincente all'exit, calcola match all'entry.
         # Non modifica decisioni del bot. Solo dati per il report.
@@ -11129,6 +11136,37 @@ class OvertopBassanoV16Production:
             self._shadow_min_price         = price
             self._shadow_matrimonio        = matrimonio_name
 
+            # ═════════════════════════════════════════════════════════════════
+            # HOOK CAPSULE V2.0 — Entry Side (22mag2026)
+            # ─────────────────────────────────────────────────────────────────
+            # Se è attivo il flag CAPSULE_V2_HOOK_ENABLED, chiediamo a /canvas
+            # se c'è una capsula OPERATORE che presidia questo (regime, direction).
+            # Salviamo l'eventuale ID per attribuirgli il PnL all'exit.
+            # NOTA: NON modifica la decisione del bot. V16 ha già deciso di entrare.
+            # Questa è SOLO una telefonata "ehi, chi presidia? me lo segno".
+            # ═════════════════════════════════════════════════════════════════
+            self._shadow_capsula_v2_attribuita = None
+            if os.environ.get("CAPSULE_V2_HOOK_ENABLED", "false").lower() == "true":
+                try:
+                    import requests as _rq_cv2
+                    _direction = self._shadow.get('direction', 'LONG')
+                    _r_cv2 = _rq_cv2.get(
+                        "http://localhost:10000/canvas/capsule_v2/per_contesto",
+                        params={"regime": self._regime_current,
+                                "direction": _direction,
+                                "tipo": "OPERATORE"},
+                        timeout=2
+                    )
+                    if _r_cv2.status_code == 200:
+                        _cap_v2 = _r_cv2.json().get("capsula")
+                        if _cap_v2 and _cap_v2.get("stato") == "FUNZIONA":
+                            self._shadow_capsula_v2_attribuita = _cap_v2.get("id")
+                            self._log_m2("🧬", f"CAPSULE_V2_ENTRY: trade attribuito a {self._shadow_capsula_v2_attribuita} "
+                                              f"(ruolo={_cap_v2.get('ruolo')})")
+                except Exception as _e_cv2:
+                    # Niente blocchi. V16 procede come se l'hook non esistesse.
+                    pass
+
             # ════════════════════════════════════════════════════════════════
             # PATCH 6 BUG 13 — Cattura firma ambientale + match WIN precedenti
             # ════════════════════════════════════════════════════════════════
@@ -12233,6 +12271,42 @@ class OvertopBassanoV16Production:
                 conn.close()
             except Exception as e:
                 log.error(f"[M2_DB] Errore salvataggio trade: {e}")
+
+            # ═════════════════════════════════════════════════════════════════
+            # HOOK CAPSULE V2.0 — Exit Side (22mag2026)
+            # ─────────────────────────────────────────────────────────────────
+            # Se all'entry abbiamo salvato una capsula da attribuire, le diciamo
+            # ora "prenditi questo PnL". La capsula aggiorna pnl_cumulativo
+            # e n_trade_attribuiti. Auto-valutazione FUNZIONA/NON_FUNZIONA
+            # avverrà al prossimo tick del thread auto_verifica.
+            # ═════════════════════════════════════════════════════════════════
+            if (self._shadow_capsula_v2_attribuita and
+                os.environ.get("CAPSULE_V2_HOOK_ENABLED", "false").lower() == "true"):
+                try:
+                    import requests as _rq_cv2x
+                    _cap_id = self._shadow_capsula_v2_attribuita
+                    _r_cv2x = _rq_cv2x.post(
+                        f"http://localhost:10000/canvas/capsule_v2/{_cap_id}/attribuisci_trade",
+                        json={
+                            "pnl": round(pnl, 4),
+                            "is_win": bool(is_win),
+                            "direction": self._shadow.get('direction', 'LONG'),
+                            "regime": self._regime_current,
+                            "reason": reason,
+                        },
+                        timeout=2
+                    )
+                    if _r_cv2x.status_code == 200:
+                        _d = _r_cv2x.json()
+                        self._log_m2("🧬", f"CAPSULE_V2_EXIT: pnl {pnl:+.2f}$ attribuito a {_cap_id} | "
+                                          f"cum={_d.get('pnl_cumulativo_totale', 0):+.2f}$ "
+                                          f"n={_d.get('n_trade_attribuiti_totale', 0)}")
+                    else:
+                        log.warning(f"[CAPSULE_V2_EXIT] attribuzione fallita status={_r_cv2x.status_code}")
+                except Exception as _e_cv2x:
+                    log.debug(f"[CAPSULE_V2_EXIT] errore: {_e_cv2x}")
+                finally:
+                    self._shadow_capsula_v2_attribuita = None
 
             # -- PERSISTI IL CERVELLO - Oracolo, Memoria, Calibratore ----------
             self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
