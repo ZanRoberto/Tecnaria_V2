@@ -12308,6 +12308,49 @@ class OvertopBassanoV16Production:
                 finally:
                     self._shadow_capsula_v2_attribuita = None
 
+            # ═════════════════════════════════════════════════════════════════
+            # HOOK LOSS SFUGGITI (22mag2026) — Roberto: "se il loss passa
+            # comunque, lì va riguardato il tutto"
+            # ─────────────────────────────────────────────────────────────────
+            # Se il trade è in LOSS e nessuna capsula v2 lo aveva preso in
+            # carico (cioè self._shadow_capsula_v2_attribuita era None
+            # all'entry), allora è un LOSS SFUGGITO: lo registriamo nella
+            # tabella loss_sfuggiti con TUTTO il contesto, perché Roberto/AI
+            # possano analizzarlo e modificare le capsule esistenti per
+            # vederlo la prossima volta.
+            # ═════════════════════════════════════════════════════════════════
+            if (not is_win and pnl < 0 and
+                os.environ.get("CAPSULE_V2_HOOK_ENABLED", "false").lower() == "true"):
+                try:
+                    import requests as _rq_loss
+                    _payload_loss = {
+                        "pnl": round(pnl, 4),
+                        "regime": self._regime_current,
+                        "direction": f"{self._shadow.get('direction', 'LONG')}_SHADOW",
+                        "exit_reason": reason,
+                        "momentum": self._shadow_entry_momentum,
+                        "volatility": self._shadow_entry_volatility,
+                        "trend": self._shadow_entry_trend,
+                        "matrimonio": self._shadow_matrimonio,
+                        "capsule_attive_count": 0,  # Per ora 0 — nessuna capsula v2 ha bloccato
+                        "contesto_completo": {
+                            "score": round(self._shadow.get("score", 0), 2),
+                            "soglia": round(self._shadow.get("soglia", 0), 2),
+                            "entry_price": self._shadow.get("price_entry", 0),
+                            "duration": round(trade_duration, 1),
+                            "peak_pnl": round(self._trade_peak_pnl, 4),
+                            "fp_wr": round(self._shadow.get("fingerprint_wr", 0), 4),
+                        }
+                    }
+                    _rq_loss.post(
+                        "http://localhost:10000/canvas/loss_sfuggiti/registra",
+                        json=_payload_loss,
+                        timeout=2
+                    )
+                    self._log_m2("📋", f"LOSS_SFUGGITO registrato: {pnl:+.2f}$ regime={self._regime_current} reason={reason}")
+                except Exception as _e_loss:
+                    log.debug(f"[LOSS_SFUGGITO] errore: {_e_loss}")
+
             # -- PERSISTI IL CERVELLO - Oracolo, Memoria, Calibratore ----------
             self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
 
