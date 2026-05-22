@@ -6731,11 +6731,266 @@ def _valutatore_pnl_cumulativo_contesto(capsula: dict) -> dict:
 VALUTATORI = {
     "pnl_cumulativo_periodo": _valutatore_pnl_cumulativo_periodo,
     "pnl_cumulativo_contesto": _valutatore_pnl_cumulativo_contesto,
+    "pnl_attribuito_diretto": None,  # registrato sotto dopo la sua definizione
     # Futuri valutatori si registrano qui:
     # "wr_periodo": _valutatore_wr_periodo,
     # "drawdown_max": _valutatore_drawdown,
-    # "wr_contesto_specifico": _valutatore_wr_contesto,
 }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BLOCCO ATTRIBUZIONE TRADE → CAPSULA — Filosofia v2.0 viva (22 maggio 2026)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Ogni decisione del bot DEVE essere attribuibile a una capsula.
+# Quando il bot:
+#   - vuole fare entry → chiede "/canvas/capsule_v2/per_contesto?regime=X&direction=Y"
+#     - se c'è una capsula PERMETTE-questo-contesto FUNZIONA → entry attribuita a lei
+#     - se c'è una capsula BLOCCA-questo-contesto FUNZIONA → entry bloccata, attribuita a lei
+#     - se nessuna capsula presidia → fallback alla logica V16 originale
+#   - chiude un trade → chiama "/canvas/capsule_v2/<id>/attribuisci_trade" con il PnL
+#     - la capsula riceve PnL nel suo pnl_cumulativo
+#     - n_trade_attribuiti +=1
+#     - se pnl_cumulativo < 0 dopo soglia → segnala NON_FUNZIONA
+#
+# Questo è IL collegamento mancante. Senza, le capsule sono dichiarazioni
+# senza prova. Con, ogni capsula è giudicata DAI SUOI RISULTATI.
+#
+# REGOLA DI ROBERTO: "Sono i risultati ottenuti che premiano le scelte."
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _capsula_per_contesto(regime: str, direction: str, tipo_filtro: str = None) -> dict:
+    """
+    Cerca una capsula che presidia il contesto (regime, direzione).
+    Ritorna la prima capsula trovata o None.
+
+    Args:
+        regime: es. "FUOCO_SHORT", "RANGING", "EXPLOSIVE"
+        direction: es. "LONG", "SHORT"
+        tipo_filtro: opzionale, filtra per "GIUDICE"/"OPERATORE"/"MUSCOLO"
+
+    La capsula deve avere campo presidia_contesto con regime e direzione_target.
+    """
+    try:
+        capsule = _lista_capsule_disco()
+        for c in capsule:
+            if tipo_filtro and c.get("tipo") != tipo_filtro:
+                continue
+            pres = c.get("presidia_contesto", {})
+            if not isinstance(pres, dict):
+                continue
+            cap_regime = pres.get("regime", "").upper()
+            cap_direction = pres.get("direzione_target", "").upper()
+            if cap_regime == regime.upper() and cap_direction == direction.upper():
+                return c
+        return None
+    except Exception as e:
+        log(f"[CAPSULA_PER_CONTESTO_ERR] {e}")
+        return None
+
+
+def _valutatore_pnl_attribuito_diretto(capsula: dict) -> dict:
+    """
+    Valutatore per criterio.tipo_misura == 'pnl_attribuito_diretto'.
+    Usa i campi pnl_cumulativo e n_trade_attribuiti che il bot scrive
+    direttamente sulla capsula via /attribuisci_trade.
+
+    È il valutatore PIÙ AFFIDABILE: misura SOLO trade che il bot ha fatto
+    citando questa specifica capsula. Niente query SQL, niente filtri DB.
+    """
+    try:
+        criterio = capsula["funzione_validazione"]["criterio"]
+        min_occ = int(criterio.get("min_occorrenze", 5))
+        soglia_pnl = float(criterio.get("soglia_pnl_funziona", 0))
+
+        pnl_cum = float(capsula.get("pnl_cumulativo", 0))
+        n_trade = int(capsula.get("n_trade_attribuiti", 0))
+
+        dati = {
+            "pnl_cumulativo": round(pnl_cum, 4),
+            "n_trade_attribuiti": n_trade,
+            "min_occorrenze_richieste": min_occ,
+            "soglia_pnl": soglia_pnl,
+            "ultimo_trade_attribuito_ts": capsula.get("ultimo_trade_attribuito_ts")
+        }
+
+        if n_trade < min_occ:
+            return {
+                "stato": "FUNZIONA",
+                "motivo": f"trade attribuiti {n_trade} < min {min_occ} — assumo FUNZIONA per prudenza",
+                "dati": dati,
+                "valutazione_skipped": True
+            }
+
+        funziona = pnl_cum >= soglia_pnl
+        stato = "FUNZIONA" if funziona else "NON_FUNZIONA"
+        motivo = (f"su {n_trade} trade attribuiti: pnl_cum = ${pnl_cum:.2f} "
+                  f"{'>=' if funziona else '<'} ${soglia_pnl:.2f} "
+                  f"({'OK' if funziona else 'FAIL'})")
+        return {"stato": stato, "motivo": motivo, "dati": dati}
+
+    except Exception as e:
+        return {"stato": "FUNZIONA", "motivo": f"errore: {e}",
+                "dati": {}, "valutazione_skipped": True}
+
+
+# Registriamo il nuovo valutatore
+VALUTATORI["pnl_attribuito_diretto"] = _valutatore_pnl_attribuito_diretto
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /canvas/capsule_v2/per_contesto — V16 chiede chi presidia un contesto
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/capsule_v2/per_contesto', methods=['GET'])
+def canvas_capsule_v2_per_contesto():
+    """
+    V16 chiama questo prima di decidere un'entry.
+    Query params:
+      - regime (es. "FUOCO_SHORT")
+      - direction (es. "SHORT")
+      - tipo (opzionale, "OPERATORE" / "GIUDICE" / "MUSCOLO")
+
+    Risposta:
+      - 200 + {capsula: {...}} se trovata
+      - 200 + {capsula: null} se nessuna presidia → V16 usa fallback originale
+    """
+    try:
+        regime = request.args.get('regime', '').upper()
+        direction = request.args.get('direction', '').upper()
+        tipo_filtro = request.args.get('tipo', '').upper() or None
+
+        if not regime or not direction:
+            return jsonify({"error": "regime e direction obbligatori"}), 400
+
+        c = _capsula_per_contesto(regime, direction, tipo_filtro)
+        if c is None:
+            return jsonify({"capsula": None, "regime": regime, "direction": direction}), 200
+
+        # Risposta sintetica per V16: solo quello che gli serve per decidere
+        return jsonify({
+            "capsula": {
+                "id": c.get("id"),
+                "ruolo": c.get("ruolo"),
+                "tipo": c.get("tipo"),
+                "stato": c.get("stato"),
+                "pnl_cumulativo": c.get("pnl_cumulativo", 0),
+                "n_trade_attribuiti": c.get("n_trade_attribuiti", 0)
+            },
+            "regime": regime,
+            "direction": direction
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# POST /canvas/capsule_v2/<id>/attribuisci_trade — V16 attribuisce PnL
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/capsule_v2/<capsula_id>/attribuisci_trade', methods=['POST'])
+def canvas_capsule_v2_attribuisci_trade(capsula_id):
+    """
+    V16 chiama questo quando chiude un trade. Body:
+    {
+      "pnl": 1.65,
+      "is_win": true,
+      "direction": "LONG_SHADOW",
+      "regime": "RANGING",
+      "reason": "EXIT_E46_S50_WIN_NET_+1.7",
+      "ts": "2026-05-22T07:11:36Z"  (opzionale)
+    }
+
+    NON richiede auth (chiamato da V16 internamente).
+    Aggiorna pnl_cumulativo, n_trade_attribuiti, ultimo_trade_attribuito_ts
+    della capsula. Aggiunge evento a memoria_eventi.
+    """
+    try:
+        c = _carica_capsula(capsula_id)
+        if c is None:
+            return jsonify({"error": "capsula non trovata", "id": capsula_id}), 404
+
+        data = request.get_json(force=True, silent=True) or {}
+        pnl = float(data.get("pnl", 0))
+        is_win = bool(data.get("is_win", pnl >= 0))
+        ts = data.get("ts") or datetime.utcnow().isoformat() + "Z"
+
+        # Aggiorna campi capsula
+        c["pnl_cumulativo"] = float(c.get("pnl_cumulativo", 0)) + pnl
+        c["n_trade_attribuiti"] = int(c.get("n_trade_attribuiti", 0)) + 1
+        c["ultimo_trade_attribuito_ts"] = ts
+        c["modificata_il"] = datetime.utcnow().isoformat() + "Z"
+
+        # Aggiunge evento sintetico in memoria_eventi
+        evento = {
+            "ts": ts,
+            "tipo_evento": "TRADE_ATTRIBUITO",
+            "pnl": round(pnl, 4),
+            "is_win": is_win,
+            "direction": data.get("direction"),
+            "regime": data.get("regime"),
+            "reason": data.get("reason"),
+            "pnl_cumulativo_dopo": round(c["pnl_cumulativo"], 4),
+            "n_trade_dopo": c["n_trade_attribuiti"]
+        }
+        _registra_evento_capsula(c, evento)
+
+        # Salva
+        if not _salva_capsula(c):
+            return jsonify({"error": "errore salvataggio"}), 500
+
+        log(f"[CAPSULA_TRADE_ATTRIBUITO] {capsula_id}: pnl={pnl:+.2f} "
+            f"cum={c['pnl_cumulativo']:+.2f} n={c['n_trade_attribuiti']}")
+
+        return jsonify({
+            "ok": True,
+            "id": capsula_id,
+            "pnl_attribuito": pnl,
+            "pnl_cumulativo_totale": round(c["pnl_cumulativo"], 4),
+            "n_trade_attribuiti_totale": c["n_trade_attribuiti"]
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /canvas/capsule_v2/<id>/risultati — vedere com'è andata
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/capsule_v2/<capsula_id>/risultati', methods=['GET'])
+def canvas_capsule_v2_risultati(capsula_id):
+    """
+    Vedere risultati di una capsula: pnl_cum, n_trade, eventi recenti.
+    Pubblico. Utile per dashboard e per DeepSeek nel loop autonomo.
+    """
+    try:
+        c = _carica_capsula(capsula_id)
+        if c is None:
+            return jsonify({"error": "capsula non trovata"}), 404
+
+        eventi = c.get("memoria_eventi", {}).get("voci", [])
+        # Solo gli eventi trade (esclusione cambi stato)
+        eventi_trade = [e for e in eventi if e.get("tipo_evento") == "TRADE_ATTRIBUITO"]
+
+        return jsonify({
+            "id": capsula_id,
+            "ruolo": c.get("ruolo"),
+            "tipo": c.get("tipo"),
+            "stato": c.get("stato"),
+            "pnl_cumulativo": c.get("pnl_cumulativo", 0),
+            "n_trade_attribuiti": c.get("n_trade_attribuiti", 0),
+            "ultimo_trade_ts": c.get("ultimo_trade_attribuito_ts"),
+            "eventi_trade_count": len(eventi_trade),
+            "ultimi_5_trade": eventi_trade[-5:] if eventi_trade else [],
+            "pnl_medio_per_trade": (round(c.get("pnl_cumulativo", 0) / c.get("n_trade_attribuiti", 1), 4)
+                                    if c.get("n_trade_attribuiti", 0) > 0 else None)
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FINE BLOCCO ATTRIBUZIONE TRADE → CAPSULA
+# ═══════════════════════════════════════════════════════════════════════════
 
 
 def _verifica_singola_capsula(capsula: dict) -> dict:
