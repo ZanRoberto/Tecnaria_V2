@@ -1,59 +1,59 @@
 {
-  "_descrizione": "Prima capsula MUSCOLO del sistema OVERTOP V16. Nasce il 22 maggio 2026 dopo l'intuizione di Roberto: 'se 3 LOSS persistono nella stessa firma in 15 minuti, sappiamo che li' va attivata la contraerea oltre lo scudo'. Non aggiunge parametri nuovi: usa solo regime, direzione, exit_reason e timestamp. La sua intelligenza sta nel guardare la STORIA RECENTE, non il singolo trade.",
+  "_descrizione": "Capsula MUSCOLO antiaerea v2 — REGOLA-22-MAGGIO-ROBERTO. Riscritta dopo l'osservazione di Roberto: 'se aspetti 3 LOSS in finestra di 15 min sfuggira sempre'. Niente finestre. UN solo LOSS con firma X marca la firma PERICOLOSA. La firma resta pericolosa finche un WIN successivo con stessa firma la pulisce.",
 
   "id": "muscolo_antiaerea_pattern_persistente_v1",
-  "ruolo": "BLOCCA_PATTERN_RICORRENTE_IN_FINESTRA_TEMPORALE",
+  "ruolo": "BLOCCA_FIRMA_PERICOLOSA_DOPO_PRIMO_LOSS",
   "tipo": "MUSCOLO",
   "stato": "FUNZIONA",
 
   "presidia_contesto": {
     "regime": "RANGING",
     "direzione_target": "LONG",
-    "descrizione": "Presidia il contesto principale dove il bot vive (99.7% dei trade). Se vede pattern di LOSS persistenti in finestra temporale, attiva il blocco."
+    "descrizione": "Presidia il contesto principale del bot (99.7% dei trade). Marca firme pericolose dopo 1 LOSS, blocca i successivi trade con stessa firma."
   },
 
   "funzione_validazione": {
-    "descrizione": "Io funziono se, nelle finestre temporali in cui ero ATTIVA, il PnL cumulativo dei trade bloccati sarebbe stato negativo. Cioe': ho impedito perdite reali, non opportunita' vincenti.",
+    "descrizione": "Io funziono se i trade che ho bloccato sarebbero stati cumulativamente perdenti. Ho impedito perdite reali, non opportunita vincenti.",
     "criterio": {
       "tipo_misura": "antiaerea_temporale",
-      "finestra_minuti": 15,
-      "n_loss_per_attivare": 3,
-      "durata_blocco_minuti": 30,
+      "logica": "1_LOSS_BASTA_NO_FINESTRA",
+      "firma_definizione": "(regime, direction, momentum, volatility, trend, matrimonio)",
+      "regola_attivazione": "Se ultimo trade con firma X chiude LOSS → firma X marcata PERICOLOSA",
+      "regola_pulizia": "Se un trade con firma X chiude WIN → firma X torna NEUTRA",
       "pattern": {
         "regime": "RANGING",
         "direction": "LONG"
       },
-      "min_attivazioni": 10,
-      "soglia_pnl_funziona": "pnl_bloccato_totale < 0 (i trade che ho bloccato erano effettivamente perdenti)"
+      "min_attivazioni": 5,
+      "soglia_pnl_funziona": "pnl_bloccato_totale < 0"
     }
   },
 
   "logica": {
     "azione_quando_attiva_e_funziona": {
-      "descrizione": "Resto vigile. Continuo a monitorare la finestra temporale. Quando V16 chiede /per_contesto, gli rispondo che il contesto e' bloccato. Registro evento ATTIVAZIONE_ANTIAEREA in memoria_eventi.",
+      "descrizione": "Quando V16 chiede /per_contesto con firma completa, se la firma e PERICOLOSA rispondo BLOCCA. Niente attese, niente conteggi, niente finestre. UN LOSS basta.",
       "frequenza_check": "ad ogni call /per_contesto da V16"
     },
     "azione_quando_NON_funziona": {
-      "descrizione": "Segnalo NON_FUNZIONA. Il decisore tecnico AI deve decidere: modificare i parametri (finestra piu' larga? n_loss diverso?) o sostituire la logica.",
-      "trigger_propagazione": "AI deve analizzare loss_sfuggiti e attivazioni storiche per capire se la finestra temporale e' sbagliata o se il pattern non e' realmente persistente."
+      "descrizione": "Segnalo NON_FUNZIONA. AI deve decidere se firma troppo grossolana o troppo fine.",
+      "trigger_propagazione": "AI analizza loss_sfuggiti e attivazioni: se molti WIN bloccati → firma sbagliata. Se quasi nessuno → tutto bene."
     },
-    "non_modifica_capsule_pari_grado": "Questa capsula non sostituisce le altre capsule MUSCOLO. Convive con loro."
+    "non_modifica_capsule_pari_grado": "Questa capsula convive con altre capsule MUSCOLO."
   },
 
   "metadata": {
     "creata_da": "Claude (sotto direttiva di Roberto)",
-    "data_concettuale": "22 maggio 2026 mattina",
-    "frase_di_nascita_di_Roberto": "Sai che alle 6 del mattino e' quando ti bucano lo scudo. La' la contraerea deve essere attivata oltre lo scudo.",
-    "dato_di_partenza": "Osservazione: il 20 maggio 14:33-14:43 il bot ha fatto 5 LOSS in 10 minuti con stessa firma (RANGING+LONG+ZONA_MORTA). Il 19 maggio 18:04-18:35: 3 LOSS. Il 20 maggio 11:22-11:40: 3 LOSS. Pattern persistenti ricorrenti.",
-    "stima_impatto": "Se la capsula blocca 4 attacchi/giorno x 3 trade/attacco x $2.50/trade = ~$30/giorno salvati. Su 30 giorni: ~$900. Non recupera il drawdown -$697 ma ferma l'emorragia.",
-    "ATTENZIONE_HOOK_BOT": "La capsula vive ma NON e' ancora attiva sul bot finche' V16 non chiama /per_contesto per BLOCCA. Quando V16 lo fara' (flag CAPSULE_V2_HOOK_ENABLED=true), la capsula iniziera' a influenzare le entry."
+    "data_concettuale": "22 maggio 2026 — versione v2 niente finestre",
+    "frase_di_nascita_di_Roberto": "Se aspetti 3 trade in finestra di 15 minuti sfuggira sempre. UN LOSS basta.",
+    "dato_di_partenza_v2": "22mag: 3 LOSS sfuggiti distribuiti su 43 min (11:08, 11:14, 11:51). Finestra 15min non li intercetta. Con regola 1-LOSS-basta: primo LOSS marca firma, secondo bloccato, terzo bloccato.",
+    "ATTENZIONE_HOOK_BOT": "Per attivare il BLOCCO MUSCOLO serve un secondo hook V16 prima dell entry."
   },
 
   "memoria_eventi": {
-    "_descrizione": "Eventi di attivazione registrati. Si popolano quando _antiaerea_attiva_ora ritorna True.",
+    "_descrizione": "Eventi di attivazione: quando la capsula blocca un trade per firma pericolosa.",
     "voci": []
   },
 
   "scritta_da": "Claude",
-  "versione_capsula": "v1"
+  "versione_capsula": "v1.1-no-finestre"
 }
