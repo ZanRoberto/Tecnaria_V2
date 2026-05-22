@@ -6993,6 +6993,407 @@ def canvas_capsule_v2_risultati(capsula_id):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# BLOCCO ANTIAEREA TEMPORALE + LOSS SFUGGITI — Filosofia v2.0 viva (22 maggio 2026)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Roberto ha detto: "Sai che alle 6 del mattino è quando ti bucano. Lì la
+# contraerea deve essere attivata oltre lo scudo." E ha aggiunto: "Se la
+# capsula non identifica bene e passa il LOSS comunque, lì va riguardato
+# il tutto."
+#
+# Questo blocco implementa DUE meccanismi complementari:
+#
+# 1) ANTIAEREA TEMPORALE: rileva pattern di LOSS persistenti in finestra
+#    temporale (es. 3 LOSS con stessa firma in 15 min). Quando attivo, V16
+#    chiede via /per_contesto e ottiene "BLOCCA per N minuti".
+#
+# 2) LOSS SFUGGITI: ogni trade chiuso in LOSS senza essere stato bloccato
+#    da nessuna capsula viene registrato in tabella loss_sfuggiti con
+#    TUTTO il contesto all'entry (regime, direzione, exit_reason, momentum,
+#    volatility, ecc.). È la materia prima per identificare cosa non vediamo.
+#
+# Roberto/Claude/DeepSeek leggono /canvas/loss_sfuggiti, vedono il pattern,
+# MODIFICANO la capsula esistente (non ne creano una nuova). La capsula
+# impara dalla propria cecità — non si moltiplica, si raffina.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Creazione tabella loss_sfuggiti se non esiste
+# ─────────────────────────────────────────────────────────────────────────
+
+def _init_tabella_loss_sfuggiti():
+    """Crea tabella loss_sfuggiti se non esiste. Chiamata al boot."""
+    try:
+        with sqlite3.connect(DB_PATH, timeout=5) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS loss_sfuggiti (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    pnl REAL,
+                    regime TEXT,
+                    direction TEXT,
+                    exit_reason TEXT,
+                    momentum TEXT,
+                    volatility TEXT,
+                    trend TEXT,
+                    matrimonio TEXT,
+                    capsule_attive_count INTEGER DEFAULT 0,
+                    contesto_completo_json TEXT,
+                    analizzato INTEGER DEFAULT 0,
+                    note_analisi TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_loss_sfuggiti_ts
+                ON loss_sfuggiti(ts DESC)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_loss_sfuggiti_pattern
+                ON loss_sfuggiti(regime, direction, exit_reason)
+            """)
+            conn.commit()
+        log("[LOSS_SFUGGITI] tabella inizializzata")
+    except Exception as e:
+        log(f"[LOSS_SFUGGITI] errore init tabella: {e}")
+
+
+# Inizializza tabella al caricamento del modulo
+try:
+    _init_tabella_loss_sfuggiti()
+except Exception:
+    pass
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# VALUTATORE ANTIAEREA TEMPORALE
+# ─────────────────────────────────────────────────────────────────────────
+
+def _valutatore_antiaerea_temporale(capsula: dict) -> dict:
+    """
+    Valutatore per criterio.tipo_misura == 'antiaerea_temporale'.
+
+    Logica:
+      - Legge dal DB i trade chiusi negli ultimi N minuti
+      - Filtra per firma (regime + direction + exit_reason se presente)
+      - Conta i LOSS
+      - Se LOSS >= soglia → capsula in stato ATTIVATA (segnale ai V16 di bloccare)
+      - Misura il PnL totale dei trade bloccati: se < 0 → la capsula FUNZIONA
+                                                  se >= 0 → la capsula NON_FUNZIONA
+                                                  (perché avrebbe potuto vincere)
+
+    Questa è una capsula che si auto-attiva e si auto-disattiva
+    ciclicamente. Lo stato "ATTIVATA" non è in FUNZIONA/NON_FUNZIONA;
+    è un campo separato `attiva_ora` letto dal hook V16.
+    """
+    try:
+        criterio = capsula["funzione_validazione"]["criterio"]
+        finestra_min = float(criterio.get("finestra_minuti", 15))
+        n_loss_attiva = int(criterio.get("n_loss_per_attivare", 3))
+        pattern_filtro = criterio.get("pattern", {})
+        regime_f = pattern_filtro.get("regime", "")
+        direction_f = pattern_filtro.get("direction", "")
+
+        min_attivazioni = int(criterio.get("min_attivazioni", 10))
+
+        # Recupera trade ultimi N minuti
+        cutoff_ts = (datetime.utcnow() - timedelta(minutes=finestra_min)).isoformat()
+
+        rows = []
+        try:
+            with sqlite3.connect(DB_PATH, timeout=5) as conn:
+                conn.row_factory = sqlite3.Row
+                q = """
+                    SELECT pnl, reason, direction, timestamp,
+                           json_extract(data_json, '$.regime') AS regime
+                    FROM trades
+                    WHERE event_type IN ('M2_EXIT','EXIT')
+                      AND timestamp >= ?
+                """
+                params = [cutoff_ts]
+                if regime_f:
+                    q += " AND json_extract(data_json, '$.regime') = ?"
+                    params.append(regime_f)
+                if direction_f:
+                    q += " AND direction LIKE ?"
+                    params.append(direction_f + '%')
+                rows = conn.execute(q, params).fetchall()
+        except Exception as e:
+            return {"skip": True, "motivo": f"errore query: {e}"}
+
+        n_loss = sum(1 for r in rows if (r["pnl"] or 0) < 0)
+        n_total = len(rows)
+        pnl_recente = sum(float(r["pnl"] or 0) for r in rows)
+
+        # Verifica se è in stato di attivazione
+        attiva_ora = n_loss >= n_loss_attiva
+
+        # Carica storia attivazioni dalla memoria_eventi
+        eventi = capsula.get("memoria_eventi", {}).get("voci", [])
+        eventi_attiv = [e for e in eventi if e.get("tipo_evento") == "ATTIVAZIONE_ANTIAEREA"]
+        n_attivazioni_storiche = len(eventi_attiv)
+
+        # PnL totale dei trade bloccati durante attivazioni precedenti
+        pnl_bloccato_totale = sum(float(e.get("pnl_trade_bloccati", 0))
+                                  for e in eventi_attiv)
+
+        dati = {
+            "finestra_minuti": finestra_min,
+            "n_loss_ultima_finestra": n_loss,
+            "n_total_ultima_finestra": n_total,
+            "pnl_ultima_finestra": round(pnl_recente, 4),
+            "attiva_ora": attiva_ora,
+            "n_attivazioni_storiche": n_attivazioni_storiche,
+            "pnl_bloccato_totale": round(pnl_bloccato_totale, 4),
+            "pattern": pattern_filtro
+        }
+
+        # Storia insufficiente: poche attivazioni passate per giudicare
+        if n_attivazioni_storiche < min_attivazioni:
+            return {
+                "stato": "FUNZIONA",
+                "motivo": f"attivazioni storiche {n_attivazioni_storiche} < {min_attivazioni} — assumo FUNZIONA",
+                "dati": dati,
+                "valutazione_skipped": True
+            }
+
+        # Valutazione vera: i trade bloccati erano davvero perdenti?
+        # Se pnl_bloccato_totale < 0 → io ho impedito perdite → FUNZIONO
+        # Se pnl_bloccato_totale >= 0 → ho bloccato trade vincenti → NON_FUNZIONO
+        funziona = pnl_bloccato_totale < 0
+        stato = "FUNZIONA" if funziona else "NON_FUNZIONA"
+        motivo = (f"su {n_attivazioni_storiche} attivazioni, "
+                  f"pnl_bloccato_totale = ${pnl_bloccato_totale:.2f} "
+                  f"{'< 0 (corretto bloccavo)' if funziona else '>= 0 (bloccavo trade buoni)'}")
+
+        return {"stato": stato, "motivo": motivo, "dati": dati}
+
+    except Exception as e:
+        return {"stato": "FUNZIONA", "motivo": f"errore: {e}",
+                "dati": {}, "valutazione_skipped": True}
+
+
+# Registra il nuovo valutatore
+VALUTATORI["antiaerea_temporale"] = _valutatore_antiaerea_temporale
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Helper: verifica se una capsula antiaerea è ATTIVA ORA
+# ─────────────────────────────────────────────────────────────────────────
+
+def _antiaerea_attiva_ora(capsula: dict) -> bool:
+    """
+    Verifica se la capsula antiaerea è in stato di blocco ATTIVO ADESSO.
+    Chiamata da /per_contesto quando V16 chiede.
+    Calcola al volo guardando i trade recenti.
+    """
+    try:
+        if capsula.get("tipo") != "MUSCOLO":
+            return False
+        criterio = capsula.get("funzione_validazione", {}).get("criterio", {})
+        if criterio.get("tipo_misura") != "antiaerea_temporale":
+            return False
+
+        finestra_min = float(criterio.get("finestra_minuti", 15))
+        n_loss_attiva = int(criterio.get("n_loss_per_attivare", 3))
+        pattern_filtro = criterio.get("pattern", {})
+        regime_f = pattern_filtro.get("regime", "")
+        direction_f = pattern_filtro.get("direction", "")
+
+        cutoff_ts = (datetime.utcnow() - timedelta(minutes=finestra_min)).isoformat()
+
+        with sqlite3.connect(DB_PATH, timeout=5) as conn:
+            q = """
+                SELECT COUNT(*) FROM trades
+                WHERE event_type IN ('M2_EXIT','EXIT')
+                  AND pnl < 0
+                  AND timestamp >= ?
+            """
+            params = [cutoff_ts]
+            if regime_f:
+                q += " AND json_extract(data_json, '$.regime') = ?"
+                params.append(regime_f)
+            if direction_f:
+                q += " AND direction LIKE ?"
+                params.append(direction_f + '%')
+            n_loss = conn.execute(q, params).fetchone()[0]
+
+        return n_loss >= n_loss_attiva
+
+    except Exception as e:
+        log(f"[ANTIAEREA_CHECK_ERR] {e}")
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Aggiorno _capsula_per_contesto per includere antiaerea bloccante
+# ─────────────────────────────────────────────────────────────────────────
+
+def _capsula_blocca_contesto(regime: str, direction: str) -> dict:
+    """
+    Ritorna una capsula MUSCOLO antiaerea ATTIVA che blocca questo contesto,
+    oppure None.
+
+    V16 chiama questa via /per_contesto?tipo=BLOCCA per sapere se deve
+    saltare l'entry.
+    """
+    try:
+        capsule = _lista_capsule_disco()
+        for c in capsule:
+            if c.get("tipo") != "MUSCOLO":
+                continue
+            criterio = c.get("funzione_validazione", {}).get("criterio", {})
+            if criterio.get("tipo_misura") != "antiaerea_temporale":
+                continue
+            # Pattern match
+            pattern_filtro = criterio.get("pattern", {})
+            cap_regime = pattern_filtro.get("regime", "").upper()
+            cap_direction = pattern_filtro.get("direction", "").upper()
+            if cap_regime and cap_regime != regime.upper():
+                continue
+            if cap_direction and cap_direction != direction.upper():
+                continue
+            # È del contesto giusto. Verifica se attiva ora
+            if _antiaerea_attiva_ora(c):
+                return c
+        return None
+    except Exception as e:
+        log(f"[ANTIAEREA_BLOCCA_ERR] {e}")
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# POST /canvas/loss_sfuggiti/registra — V16 registra un LOSS sfuggito
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/loss_sfuggiti/registra', methods=['POST'])
+def canvas_loss_sfuggiti_registra():
+    """
+    V16 chiama questo quando chiude un trade in LOSS che NESSUNA capsula
+    aveva bloccato. Body:
+    {
+      "pnl": -2.85,
+      "regime": "RANGING",
+      "direction": "LONG_SHADOW",
+      "exit_reason": "ZONA_MORTA_dur3s_RAN",
+      "momentum": "DEBOLE",
+      "volatility": "BASSA",
+      "trend": "SIDEWAYS",
+      "matrimonio": "RANGE_DEAD",
+      "capsule_attive_count": 0,
+      "contesto_completo": {...tutto il context...}
+    }
+    """
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        if data.get("pnl", 0) >= 0:
+            return jsonify({"error": "non è un LOSS (pnl >= 0)"}), 400
+
+        ts = data.get("ts") or datetime.utcnow().isoformat() + "Z"
+
+        with sqlite3.connect(DB_PATH, timeout=5) as conn:
+            conn.execute("""
+                INSERT INTO loss_sfuggiti
+                  (ts, pnl, regime, direction, exit_reason,
+                   momentum, volatility, trend, matrimonio,
+                   capsule_attive_count, contesto_completo_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                ts,
+                float(data.get("pnl", 0)),
+                data.get("regime"),
+                data.get("direction"),
+                data.get("exit_reason"),
+                data.get("momentum"),
+                data.get("volatility"),
+                data.get("trend"),
+                data.get("matrimonio"),
+                int(data.get("capsule_attive_count", 0)),
+                json.dumps(data.get("contesto_completo", {}), ensure_ascii=False)
+            ))
+            conn.commit()
+
+        log(f"[LOSS_SFUGGITO] pnl={data.get('pnl')} regime={data.get('regime')} reason={data.get('exit_reason')}")
+
+        return jsonify({"ok": True}), 201
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# GET /canvas/loss_sfuggiti — lista LOSS sfuggiti per analisi
+# ─────────────────────────────────────────────────────────────────────────
+@app.route('/canvas/loss_sfuggiti', methods=['GET'])
+def canvas_loss_sfuggiti_list():
+    """
+    Lista LOSS sfuggiti con filtri.
+    Query params:
+      - limit (default 50, max 500)
+      - regime, direction (filtri opzionali)
+      - solo_non_analizzati (true/false)
+    """
+    try:
+        limit = min(int(request.args.get('limit', 50)), 500)
+        regime = request.args.get('regime')
+        direction = request.args.get('direction')
+        solo_non_analizzati = request.args.get('solo_non_analizzati', '').lower() == 'true'
+
+        q = "SELECT * FROM loss_sfuggiti WHERE 1=1"
+        params = []
+        if regime:
+            q += " AND regime = ?"
+            params.append(regime)
+        if direction:
+            q += " AND direction LIKE ?"
+            params.append(direction + '%')
+        if solo_non_analizzati:
+            q += " AND analizzato = 0"
+        q += " ORDER BY ts DESC LIMIT ?"
+        params.append(limit)
+
+        with sqlite3.connect(DB_PATH, timeout=5) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(q, params).fetchall()
+
+        out = []
+        for r in rows:
+            d = dict(r)
+            # Parse del JSON contesto se presente
+            if d.get("contesto_completo_json"):
+                try:
+                    d["contesto_completo"] = json.loads(d.pop("contesto_completo_json"))
+                except Exception:
+                    d["contesto_completo"] = None
+            out.append(d)
+
+        # Aggregazione per pattern (utile per vedere subito i raggruppamenti)
+        with sqlite3.connect(DB_PATH, timeout=5) as conn:
+            conn.row_factory = sqlite3.Row
+            aggregato = conn.execute("""
+                SELECT regime, direction, exit_reason,
+                       COUNT(*) as n, SUM(pnl) as pnl_tot,
+                       AVG(pnl) as pnl_avg
+                FROM loss_sfuggiti
+                GROUP BY regime, direction, exit_reason
+                ORDER BY pnl_tot ASC
+                LIMIT 10
+            """).fetchall()
+            top_pattern = [dict(r) for r in aggregato]
+
+        return jsonify({
+            "totale_visti": len(out),
+            "loss_sfuggiti": out,
+            "top_pattern_raggruppati": top_pattern
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FINE BLOCCO ANTIAEREA TEMPORALE + LOSS SFUGGITI
+# ═══════════════════════════════════════════════════════════════════════════
+
+
 def _verifica_singola_capsula(capsula: dict) -> dict:
     """
     Verifica una capsula. Ritorna risultato del valutatore o info skip.
