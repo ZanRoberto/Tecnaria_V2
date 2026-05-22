@@ -232,21 +232,20 @@ class CapsulaMemoria:
         self.canvas    = canvas_ref          # riferimento a CapsulaCanvas se disponibile
         self._initialized = False
         # ─────────────────────────────────────────────────────────────
-        # COMPAT SHIM 21mag2026 — diagnosi delle 21:06 (Claude+Roberto)
-        # V16 era originariamente accoppiato a una classe MemoriaMatrimoni
-        # (V16 riga 3253) con attributi: divorzio (set), sposi (set),
-        # separazione (set), trust (dict). Quando CapsulaMemoria ha
+        # COMPAT SHIM 21mag2026 — diagnosi iterativa Claude+Roberto
+        # V16 era originariamente accoppiato a MemoriaMatrimoni (riga 3253)
+        # con attributi (divorzio/sposi/separazione/trust) E metodi
+        # (get_trust/get_status/record_trade). Quando CapsulaMemoria ha
         # sostituito MemoriaMatrimoni come self.memoria del bot, V16 ha
-        # continuato a chiamare questi attributi in 4 punti diversi:
-        #   - riga 10513 (divorzio_set = self.memoria.divorzio)
-        #   - riga 10717 (idem)
-        #   - riga 13270 (lambda: list(self.memoria.divorzio))
-        #   - riga 3921  (len(memoria.divorzio))
-        # Senza questo shim, V16 crashava ogni 5s su shadow_entry
-        # con AttributeError. Diagnosi reale: bot fermo 6 ore il 21mag
-        # tra 14:43 e 21:06 fino al fix.
-        # NIENTE LOGICA MATRIMONIALE QUI — solo attributi vuoti per
-        # compatibilità di accesso. La logica matrimoni vive in V16.
+        # continuato a chiamarli.
+        # SCAN COMPLETO V16: V16 chiama 7 cose su self.memoria:
+        #   ✅ apri_sessione, osserva_trade_chiuso, stato_vitale (esistono)
+        #   ✅ divorzio (attributo shim aggiunto)
+        #   ❌ get_trust, get_status, record_trade (shim metodo qui sotto)
+        # I metodi shim ritornano valori NEUTRI: V16 procede come se
+        # nessun matrimonio fosse mai stato osservato.
+        # Storia: bot fermo 6h (14:43-21:06 21mag su divorzio) + altre ore
+        # (notte 21mag→22mag su get_trust). Questa è la patch DEFINITIVA.
         # ─────────────────────────────────────────────────────────────
         self.divorzio    = set()
         self.sposi       = set()
@@ -938,6 +937,44 @@ class CapsulaMemoria:
                 return row[0] if row else 0
         except Exception:
             return -1
+
+
+
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # COMPAT SHIM METODI — Per V16 legacy MemoriaMatrimoni
+    # Aggiunti il 22mag2026 02:51 dopo diagnosi crash get_trust.
+    # V16 chiama questi metodi sperando di trovare MemoriaMatrimoni.
+    # Ritorniamo valori NEUTRI così V16 procede senza crash.
+    # ═════════════════════════════════════════════════════════════════════════
+
+    def get_trust(self, matrimonio_name: str = "") -> float:
+        """
+        SHIM per V16 legacy. MemoriaMatrimoni ritornava un float in [0,1]
+        rappresentante il trust verso quel matrimonio.
+        Noi ritorniamo 0.5 (neutro): V16 non prenderà decisioni basate su
+        trust storico, ma non crasherà.
+        """
+        return 0.5
+
+    def get_status(self, matrimonio_name: str = "") -> tuple:
+        """
+        SHIM per V16 legacy. MemoriaMatrimoni ritornava (can_enter: bool, status: str).
+        Noi ritorniamo (True, 'NEUTRO'): V16 può entrare, status neutrale.
+        Conservativo: non blocchiamo niente che V16 vorrebbe permettere.
+        """
+        return (True, "NEUTRO")
+
+    def record_trade(self, matrimonio_name: str = "", is_win: bool = False,
+                     wr_expected: float = 0.5) -> None:
+        """
+        SHIM per V16 legacy. MemoriaMatrimoni registrava win/loss per matrimonio.
+        Noi non facciamo nulla: V16 ha già altre vie per registrare trade
+        (CapsulaCanvas.observe_exit, tabella trades DB, CapsulaMemoria.osserva_trade_chiuso).
+        Questo shim evita solo il crash, non duplica logica.
+        """
+        # No-op intenzionale. V16 non si aspetta valore di ritorno.
+        return None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
