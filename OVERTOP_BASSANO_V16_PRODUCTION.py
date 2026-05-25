@@ -5211,91 +5211,43 @@ class CampoGravitazionale:
     # -- RSI + MACD: I CONSIGLIERI ----------------------------------------
 
     def _update_rsi(self):
-        """Calcola RSI a 14 periodi sui prezzi recenti."""
-        prices = list(self._prices_ta)
-        if len(prices) < self._rsi_period + 1:
-            return
-        changes = [prices[i+1] - prices[i] for i in range(len(prices)-1)]
-        recent = changes[-(self._rsi_period):]
-        gains = [c for c in recent if c > 0]
-        losses_raw = [-c for c in recent if c < 0]
-        avg_gain = sum(gains) / self._rsi_period if gains else 0
-        avg_loss = sum(losses_raw) / self._rsi_period if losses_raw else 0.001
-        rs = avg_gain / max(avg_loss, 0.001)
-        self._last_rsi = 100 - (100 / (1 + rs))
+        """
+        DISARMATO 23mag2026 — RSI rimosso dal sistema decisionale.
+        RSI non parla il paradigma fisico (energia/OI/fuoco) ed è rumore a 60s.
+        _last_rsi resta a 50.0 (init) per sempre. Funzione lasciata vuota
+        per compatibilità con eventuali chiamate esistenti.
+        Mai più deve aprire porte ai ladri o chiuderle a chi porta soldi.
+        """
+        return
 
     def _update_macd(self):
-        """Calcola MACD (12/26/9) sui prezzi recenti."""
-        prices = list(self._prices_ta)
-        if len(prices) < self._macd_slow + self._macd_signal:
-            return
-
-        def ema(data, period):
-            """EMA semplificata."""
-            if len(data) < period:
-                return sum(data) / len(data) if data else 0
-            mult = 2 / (period + 1)
-            result = sum(data[:period]) / period
-            for val in data[period:]:
-                result = (val - result) * mult + result
-            return result
-
-        ema_fast = ema(prices, self._macd_fast)
-        ema_slow = ema(prices, self._macd_slow)
-        self._last_macd = ema_fast - ema_slow
-        self._last_macd_signal = self._last_macd * 0.8
-        self._last_macd_hist = self._last_macd - self._last_macd_signal
+        """
+        DISARMATO 23mag2026 — MACD rimosso dal sistema decisionale.
+        Stesso motivo di RSI: indicatore classico non compatibile con
+        paradigma fisico (energia/OI/fuoco), rumore a 60s.
+        _last_macd, _last_macd_signal, _last_macd_hist restano a 0.0 (init)
+        per sempre. Funzione lasciata vuota per compatibilità con chiamate esistenti.
+        Mai più deve aprire porte ai ladri o chiuderle a chi porta soldi.
+        """
+        return
 
     def _rsi_score(self) -> float:
         """
-        ★ RSI CONSIGLIERE - ipervenduto o ipercomprato?
-        LONG:  RSI < 30 = buono (ipervenduto, rimbalzo) | RSI > 70 = cattivo (ipercomprato)
-        SHORT: RSI > 70 = buono (ipercomprato, crollo)  | RSI < 30 = cattivo (ipervenduto)
+        DISARMATO 23mag2026 — RSI rimosso dal sistema decisionale.
+        Ritorna sempre 0.0. Tutti i consumatori (4692, 4832, 13417) ricevono
+        contributo nullo, indipendentemente da W_RSI.
+        Mai più deve aprire porte ai ladri o chiuderle a chi porta soldi.
         """
-        rsi = self._last_rsi
-        if self._direction == "SHORT":
-            # Invertito: ipercomprato = buono per SHORT
-            if rsi > 75:   return 1.0
-            elif rsi > 65: return 0.80
-            elif rsi > 55: return 0.60
-            elif rsi > 45: return 0.40
-            elif rsi > 35: return 0.30
-            elif rsi > 25: return 0.15
-            else:          return 0.0
-        else:
-            # LONG: ipervenduto = buono
-            if rsi < 25:   return 1.0
-            elif rsi < 35: return 0.80
-            elif rsi < 45: return 0.60
-            elif rsi < 55: return 0.40
-            elif rsi < 65: return 0.30
-            elif rsi < 75: return 0.15
-            else:          return 0.0
+        return 0.0
 
     def _macd_score(self) -> float:
         """
-        ★ MACD CONSIGLIERE - il trend sta nascendo o morendo?
-        LONG:  MACD positivo crescente = buono | negativo decrescente = cattivo
-        SHORT: MACD negativo decrescente = buono | positivo crescente = cattivo
+        DISARMATO 23mag2026 — MACD rimosso dal sistema decisionale.
+        Ritorna sempre 0.0. Tutti i consumatori (4693, 4833, 13418) ricevono
+        contributo nullo, indipendentemente da W_MACD.
+        Mai più deve aprire porte ai ladri o chiuderle a chi porta soldi.
         """
-        macd = self._last_macd
-        hist = self._last_macd_hist
-        if self._direction == "SHORT":
-            # Invertito: bearish = buono per SHORT
-            if macd < 0 and hist < 0:    return 1.0    # bearish forte
-            elif hist < 0:                return 0.70   # sotto signal
-            elif abs(hist) < abs(macd) * 0.1 if macd != 0 else True: return 0.40
-            elif hist > 0 and macd < 0:   return 0.25
-            elif hist > 0 and macd > 0:   return 0.0    # bullish forte = cattivo per SHORT
-            return 0.35
-        else:
-            # LONG: bullish = buono
-            if macd > 0 and hist > 0:    return 1.0
-            elif hist > 0:                return 0.70
-            elif abs(hist) < abs(macd) * 0.1 if macd != 0 else True: return 0.40
-            elif hist < 0 and macd > 0:   return 0.25
-            elif hist < 0 and macd < 0:   return 0.0
-            return 0.35
+        return 0.0
 
     def _veto(self, reason: str) -> dict:
         return {'enter': False, 'score': 0.0, 'soglia': 0.0,
