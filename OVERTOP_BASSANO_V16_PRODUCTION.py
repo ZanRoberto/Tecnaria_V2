@@ -356,7 +356,26 @@ class WinningSignatureLogger:
                                       pb_volume_acc=None,
                                       pb_seed_directed=None,
                                       fp_exit_too_early_rate=None,
-                                      fp_post_delta_avg=None):
+                                      fp_post_delta_avg=None,
+                                      # ════════════════════════════════════════════════════════════════
+                                      # CABLAGGIO_25MAG2026 — TESTIMONI TSUNAMI nella firma trade
+                                      # ════════════════════════════════════════════════════════════════
+                                      # Aggiunti 10 testimoni (Tsunami 3 timeframe + confidenza).
+                                      # I valori vengono letti via self.tsunami.last_decision() al
+                                      # momento della chiamata (riga ~11200), seguendo lo stesso
+                                      # pattern di _record_phantom (riga 12696).
+                                      # Default None: backward-compat.
+                                      # ════════════════════════════════════════════════════════════════
+                                      ts_30s_strength=None,
+                                      ts_30s_direction=None,
+                                      ts_30s_coerenza=None,
+                                      ts_2min_strength=None,
+                                      ts_2min_direction=None,
+                                      ts_2min_coerenza=None,
+                                      ts_10min_strength=None,
+                                      ts_10min_direction=None,
+                                      ts_10min_coerenza=None,
+                                      ts_confidenza=None):
         """Helper: costruisce un dict-firma dai sensori live."""
         sig = {
             'momentum': momentum,
@@ -387,6 +406,19 @@ class WinningSignatureLogger:
             if fp_exit_too_early_rate is not None else None
         sig['fp_post_delta_avg'] = round(float(fp_post_delta_avg), 4) \
             if fp_post_delta_avg is not None else None
+        # ════════════════════════════════════════════════════════════════
+        # CABLAGGIO_25MAG2026: scrivo i 10 testimoni Tsunami nella firma
+        # ════════════════════════════════════════════════════════════════
+        sig['ts_30s_strength']  = round(float(ts_30s_strength), 4)  if ts_30s_strength is not None else None
+        sig['ts_30s_direction'] = ts_30s_direction if ts_30s_direction else None
+        sig['ts_30s_coerenza']  = round(float(ts_30s_coerenza), 4)  if ts_30s_coerenza is not None else None
+        sig['ts_2min_strength']  = round(float(ts_2min_strength), 4)  if ts_2min_strength is not None else None
+        sig['ts_2min_direction'] = ts_2min_direction if ts_2min_direction else None
+        sig['ts_2min_coerenza']  = round(float(ts_2min_coerenza), 4)  if ts_2min_coerenza is not None else None
+        sig['ts_10min_strength']  = round(float(ts_10min_strength), 4)  if ts_10min_strength is not None else None
+        sig['ts_10min_direction'] = ts_10min_direction if ts_10min_direction else None
+        sig['ts_10min_coerenza']  = round(float(ts_10min_coerenza), 4)  if ts_10min_coerenza is not None else None
+        sig['ts_confidenza']      = int(ts_confidenza) if ts_confidenza is not None else None
         return sig
 
 
@@ -8483,6 +8515,33 @@ class OvertopBassanoV16Production:
             self._m2_ctx_stats[_ctx_str]['wins']    += 1 if is_win else 0
             self._m2_ctx_stats[_ctx_str]['pnl_sum'] += pnl
 
+        # ════════════════════════════════════════════════════════════════
+        # DECAY_25MAG2026 — DEADLOCK FIX (intervento di capoprogetto)
+        # ════════════════════════════════════════════════════════════════
+        # Roberto ha verificato: 8/11 silenzi >= 1h sono causati da
+        # SC streak >= 4 che blocca tutto. _m2_loss_streak si azzerava SOLO
+        # con un WIN. Ma SC bloccava ogni entry → no WIN possibili → 
+        # solo restart manuale del processo liberava (silenzi 40h e 64h).
+        #
+        # FIX: ogni 30 min senza nuovi LOSS, streak scende di 1.
+        # Effetto: streak da 12 scende a 0 in 6h invece di restare 64h.
+        # Il bot si auto-guarisce senza restart manuale.
+        #
+        # NOTA importante: questo NON disabilita SC streak >= 4.
+        # SC continua a proteggere dopo 4 LOSS reali consecutivi.
+        # Ma quando il mercato si rinfresca, il bot torna operativo.
+        # ════════════════════════════════════════════════════════════════
+        DECAY_MINUTI = 30  # ogni N min senza LOSS, streak -= 1
+        if hasattr(self, '_m2_last_loss_time') and self._m2_last_loss_time and self._m2_loss_streak > 0:
+            minuti_senza_loss = (now - self._m2_last_loss_time) / 60.0
+            decadimenti = int(minuti_senza_loss / DECAY_MINUTI)
+            if decadimenti > 0:
+                _streak_prima = self._m2_loss_streak
+                self._m2_loss_streak = max(0, self._m2_loss_streak - decadimenti)
+                if _streak_prima != self._m2_loss_streak:
+                    self._log_m2("⏳", f"DECAY_STREAK: {_streak_prima} → {self._m2_loss_streak} "
+                                       f"(dopo {minuti_senza_loss:.0f}min senza LOSS, -{decadimenti})")
+
         if is_win:
             self._m2_loss_streak = 0
         else:
@@ -11195,6 +11254,40 @@ class OvertopBassanoV16Production:
                         # Lasciali a None — non blocca nulla
                         pass
                     # ════════════════════════════════════════════════════════════════
+                    # CABLAGGIO_25MAG2026 — Estrazione TESTIMONI TSUNAMI per firma trade
+                    # ════════════════════════════════════════════════════════════════
+                    # Replica esatta del pattern di _record_phantom (riga 12696-12713).
+                    # I valori vivono in self.tsunami.last_decision()['verdetti'][tf]
+                    # con tf in {'30s', '2min', '10min'} e last_decision()['confidenza'].
+                    # Default None se Tsunami non istanziato o decisione assente:
+                    # backward-compat garantita.
+                    # ════════════════════════════════════════════════════════════════
+                    _ts_30s_str = _ts_30s_dir = _ts_30s_coe = None
+                    _ts_2_str = _ts_2_dir = _ts_2_coe = None
+                    _ts_10_str = _ts_10_dir = _ts_10_coe = None
+                    _ts_conf = None
+                    try:
+                        if hasattr(self, 'tsunami') and self.tsunami is not None:
+                            _last_ts = self.tsunami.last_decision()
+                            if _last_ts is not None:
+                                _v_ts = _last_ts.get('verdetti', {})
+                                _t30 = _v_ts.get('30s', {})
+                                _ts_30s_str = _t30.get('strength')
+                                _ts_30s_dir = _t30.get('direction')
+                                _ts_30s_coe = _t30.get('coerenza')
+                                _t2 = _v_ts.get('2min', {})
+                                _ts_2_str = _t2.get('strength')
+                                _ts_2_dir = _t2.get('direction')
+                                _ts_2_coe = _t2.get('coerenza')
+                                _t10 = _v_ts.get('10min', {})
+                                _ts_10_str = _t10.get('strength')
+                                _ts_10_dir = _t10.get('direction')
+                                _ts_10_coe = _t10.get('coerenza')
+                                _ts_conf = _last_ts.get('confidenza')
+                    except Exception:
+                        # Mai bloccare l'entry per un errore di lettura Tsunami
+                        pass
+                    # ════════════════════════════════════════════════════════════════
                     _sig_entry = WinningSignatureLogger.build_signature_from_context(
                         momentum=momentum,
                         volatility=volatility,
@@ -11208,9 +11301,12 @@ class OvertopBassanoV16Production:
                         drift=_drift_entry,
                         score=score,
                         soglia=soglia,
-                        pred_delta_fuoco=getattr(self, 'pred_delta_fuoco', 0),
-                        pred_delta_carica=getattr(self, 'pred_delta_carica', 0),
-                        pred_v2_delta=getattr(self, 'pred_v2_delta', 0),
+                        # CABLAGGIO_25MAG2026: leggi da heartbeat_data (dove vengono scritti)
+                        # PRIMA: getattr(self, '...', 0) → sempre 0 (attributo inesistente, bug cablaggio)
+                        # DOPO: self.heartbeat_data.get(...) → valori reali calcolati a riga 9688-9689 / 6318
+                        pred_delta_fuoco=(self.heartbeat_data.get('pred_delta_fuoco', 0) if hasattr(self, 'heartbeat_data') else 0),
+                        pred_delta_carica=(self.heartbeat_data.get('pred_delta_carica', 0) if hasattr(self, 'heartbeat_data') else 0),
+                        pred_v2_delta=(self.heartbeat_data.get('pred_v2_delta', 0) if hasattr(self, 'heartbeat_data') else 0),
                         pred_source=_pred_st_entry.get('source', 'UNKNOWN'),
                         # PATCH 13: 6 nuovi campi osservativi
                         pb_signals=_pb_signals_entry,
@@ -11219,6 +11315,17 @@ class OvertopBassanoV16Production:
                         pb_seed_directed=_pb_seed_directed_entry,
                         fp_exit_too_early_rate=_fp_too_early_entry,
                         fp_post_delta_avg=_fp_post_delta_avg_entry,
+                        # CABLAGGIO_25MAG2026: passo i 10 testimoni Tsunami estratti sopra
+                        ts_30s_strength=_ts_30s_str,
+                        ts_30s_direction=_ts_30s_dir,
+                        ts_30s_coerenza=_ts_30s_coe,
+                        ts_2min_strength=_ts_2_str,
+                        ts_2min_direction=_ts_2_dir,
+                        ts_2min_coerenza=_ts_2_coe,
+                        ts_10min_strength=_ts_10_str,
+                        ts_10min_direction=_ts_10_dir,
+                        ts_10min_coerenza=_ts_10_coe,
+                        ts_confidenza=_ts_conf,
                     )
                     _match_at_entry = self._winsig.compute_match_at_entry(_sig_entry)
                     # Salviamo dentro lo shadow per uso al close
