@@ -725,8 +725,6 @@ try:
     _CE_AVAILABLE = True
 except ImportError:
     _CE_AVAILABLE = False
-    _CANVAS_AVAILABLE = False
-    _MEMORIA_AVAILABLE = False
     log.warning("[CE] capsule_executor.py non trovato")
 
 try:
@@ -7089,16 +7087,6 @@ class OvertopBassanoV16Production:
         self._shadow_min_price = None
         self._shadow_matrimonio = None
 
-        # ════════════════════════════════════════════════════════════════
-        # PHASE GATE — 25mag2026
-        # ════════════════════════════════════════════════════════════════
-        # Scopo: uscire dalla trappola dei loss a grappolo.
-        # Non guarda il singolo trade isolato: misura la fase del prezzo
-        # negli ultimi 2/5/10 minuti e impedisce LONG contro scarico
-        # oppure SHORT contro carico. Kill switch: PHASE_GATE_ENABLED=false.
-        self._phase_ticks = deque(maxlen=30000)   # (ts, price), circa 10-15 min anche con molti tick
-        self._last_phase_snapshot = None
-
         # HOOK CAPSULE V2.0 — 22mag2026 (filosofia v2.0 Roberto)
         # Quando un'entry shadow viene aperta, chiediamo a /canvas/capsule_v2/per_contesto
         # se c'è una capsula OPERATORE che presidia questo contesto. Se sì, salviamo il suo
@@ -7984,7 +7972,6 @@ class OvertopBassanoV16Production:
         _seed_quick = self.seed_scorer.score()
         _seed_val = _seed_quick.get('score', 0.0) if _seed_quick.get('reason') != 'insufficient_data' else 0.0
         self.campo.feed_tick(price, self._last_volume, _seed_val)
-        self._phase_feed_tick(price)
 
         contesto = self.analyzer.analyze(regime=self._regime_current, drift=_drift_for_classify)
 
@@ -8600,177 +8587,6 @@ class OvertopBassanoV16Production:
             self._log_m2("[CFG]️", f"STATO → {self._state} (loss_streak={self._m2_loss_streak} recent_wr={recent_wr:.0%} cooldown={self._m2_cooldown_until - now:.0f}s)")
             self.telemetry.log_state_change(old_state, self._state, self._m2_loss_streak,
                 self._regime_current, self.campo._direction, self._shadow is not None)
-
-    # ════════════════════════════════════════════════════════════════
-    # PHASE GATE — 25mag2026
-    # ════════════════════════════════════════════════════════════════
-    # Patch chirurgica contro la trappola osservata da Roberto:
-    # il bot non perde per "un trade brutto" isolato, ma per fasi intere
-    # da 20-40 minuti in cui continua a prendere LONG mentre il mercato
-    # scarica, o SHORT mentre il mercato carica.
-    #
-    # Questa logica NON sostituisce SC. È un filtro fisico di coerenza
-    # direzionale prima dell'entry: se la fase recente è chiaramente
-    # opposta alla direzione del Campo, non c'è scena da tradare.
-    # Kill switch: PHASE_GATE_ENABLED=false.
-    # ════════════════════════════════════════════════════════════════
-    def _phase_feed_tick(self, price: float):
-        """Mantiene una finestra temporale reale dei prezzi recenti."""
-        try:
-            if not hasattr(self, '_phase_ticks') or self._phase_ticks is None:
-                self._phase_ticks = deque(maxlen=30000)
-            now = time.time()
-            self._phase_ticks.append((now, float(price)))
-
-            # Pruning temporale: teniamo massimo 15 minuti reali.
-            cutoff = now - 900.0
-            while len(self._phase_ticks) > 2 and self._phase_ticks[0][0] < cutoff:
-                self._phase_ticks.popleft()
-        except Exception:
-            pass
-
-    @staticmethod
-    def _phase_price_before(ticks, target_ts: float):
-        """Prezzo più vicino disponibile prima di target_ts."""
-        try:
-            for ts, p in reversed(ticks):
-                if ts <= target_ts:
-                    return float(p)
-            return float(ticks[0][1]) if ticks else None
-        except Exception:
-            return None
-
-    def _phase_snapshot(self, price: float = None) -> dict:
-        """Costruisce snapshot 2/5/10 minuti per capire la fase."""
-        try:
-            ticks = list(getattr(self, '_phase_ticks', []) or [])
-            now = time.time()
-            if price is None:
-                price = ticks[-1][1] if ticks else getattr(self, '_last_price', 0.0)
-            price = float(price or 0.0)
-
-            if len(ticks) < 30:
-                return {"ready": False, "reason": "PHASE_INSUFFICIENT_TICKS", "n": len(ticks)}
-
-            coverage = now - ticks[0][0]
-            min_cov = float(os.environ.get("PHASE_MIN_COVERAGE_SEC", "300"))
-            if coverage < min_cov:
-                return {
-                    "ready": False,
-                    "reason": f"PHASE_INSUFFICIENT_COVERAGE_{coverage:.0f}s",
-                    "coverage_s": round(coverage, 1),
-                    "n": len(ticks),
-                }
-
-            p2  = self._phase_price_before(ticks, now - 120.0)
-            p5  = self._phase_price_before(ticks, now - 300.0)
-            p10 = self._phase_price_before(ticks, now - 600.0)
-
-            # Se il processo non ha ancora 10 minuti, usa il più vecchio per d10:
-            if p10 is None:
-                p10 = float(ticks[0][1])
-            if p5 is None:
-                p5 = float(ticks[0][1])
-            if p2 is None:
-                p2 = float(ticks[0][1])
-
-            recent10 = [float(p) for ts, p in ticks if ts >= now - 600.0]
-            if not recent10:
-                recent10 = [float(p) for ts, p in ticks]
-            hi = max(recent10)
-            lo = min(recent10)
-            rng = max(0.0001, hi - lo)
-            pos = max(0.0, min(1.0, (price - lo) / rng))
-
-            d2  = price - p2
-            d5  = price - p5
-            d10 = price - p10
-
-            return {
-                "ready": True,
-                "coverage_s": round(coverage, 1),
-                "n": len(ticks),
-                "price": round(price, 2),
-                "p2": round(p2, 2),
-                "p5": round(p5, 2),
-                "p10": round(p10, 2),
-                "d2": round(d2, 2),
-                "d5": round(d5, 2),
-                "d10": round(d10, 2),
-                "range10": round(rng, 2),
-                "pos10": round(pos, 3),
-            }
-        except Exception as e:
-            return {"ready": False, "reason": f"PHASE_ERROR:{e}"}
-
-    def _phase_entry_gate(self, direction: str, price: float) -> tuple:
-        """
-        Ritorna (blocked, reason, snapshot).
-
-        Regole simmetriche:
-        - LONG bloccato se la fase 10/5/2 minuti è di scarico chiaro.
-        - SHORT bloccato se la fase 10/5/2 minuti è di carico chiaro.
-
-        Soglie via env per non hardcodare a vita:
-        PHASE_BLOCK_10M_USD default 35
-        PHASE_BLOCK_5M_USD  default 22
-        PHASE_BLOCK_2M_USD  default 8
-        """
-        try:
-            if os.environ.get("PHASE_GATE_ENABLED", "true").lower() not in ("true", "1", "yes"):
-                snap = self._phase_snapshot(price)
-                self._last_phase_snapshot = snap
-                return False, "PHASE_GATE_DISABLED", snap
-
-            direction = (direction or getattr(self.campo, '_direction', 'LONG') or 'LONG').upper()
-            snap = self._phase_snapshot(price)
-            self._last_phase_snapshot = snap
-
-            if not snap.get("ready"):
-                return False, snap.get("reason", "PHASE_NOT_READY"), snap
-
-            t10 = float(os.environ.get("PHASE_BLOCK_10M_USD", "35"))
-            t5  = float(os.environ.get("PHASE_BLOCK_5M_USD",  "22"))
-            t2  = float(os.environ.get("PHASE_BLOCK_2M_USD",  "8"))
-
-            d10 = float(snap.get("d10", 0.0))
-            d5  = float(snap.get("d5", 0.0))
-            d2  = float(snap.get("d2", 0.0))
-            pos = float(snap.get("pos10", 0.5))
-
-            # Scarico/caduta: LONG contro corrente.
-            scarico_long = (
-                (d10 <= -t10 and d5 <= -t2) or
-                (d5  <= -t5  and d2 <= -t2) or
-                (d10 <= -t5 and d5 < 0 and pos <= 0.25)
-            )
-
-            # Carico/salita: SHORT contro corrente.
-            carico_short = (
-                (d10 >= t10 and d5 >= t2) or
-                (d5  >= t5  and d2 >= t2) or
-                (d10 >= t5 and d5 > 0 and pos >= 0.75)
-            )
-
-            if direction == "LONG" and scarico_long:
-                return True, (
-                    f"PHASE_SCARICO_LONG d10={d10:+.2f} d5={d5:+.2f} "
-                    f"d2={d2:+.2f} pos10={pos:.2f}"
-                ), snap
-
-            if direction == "SHORT" and carico_short:
-                return True, (
-                    f"PHASE_CARICO_SHORT d10={d10:+.2f} d5={d5:+.2f} "
-                    f"d2={d2:+.2f} pos10={pos:.2f}"
-                ), snap
-
-            return False, (
-                f"PHASE_OK d10={d10:+.2f} d5={d5:+.2f} "
-                f"d2={d2:+.2f} pos10={pos:.2f}"
-            ), snap
-        except Exception as e:
-            # Fail-open: mai crashare il bot per un sensore.
-            return False, f"PHASE_GATE_ERROR:{e}", {"ready": False, "reason": str(e)}
 
     def _state_engine_can_enter(self) -> tuple:
         """Ritorna (can_enter: bool, reason: str). Gate PRIMA di qualsiasi entry."""
@@ -10201,9 +10017,6 @@ class OvertopBassanoV16Production:
             # ESITO (per il log finale)
             "percorso":             None,   # 'P1_EXPLOSIVE' | 'P2_NORMALE'
             "blocked_by":           None,
-            # PHASE GATE — 25mag2026
-            "phase_gate":           None,
-            "phase_snapshot":       None,
         }
 
         try:
@@ -10236,20 +10049,6 @@ class OvertopBassanoV16Production:
                 self._log_m2("🔇", f"SEED_INSUFFICIENTE score={seed.get('score',0):.2f}")
                 _verbale["blocked_by"] = "ZONA1_SEED_INSUFFICIENT"
                 self._log_constitutional(_verbale, "PRE_SC_VETO_SEED_INSUFFICIENT")
-                return
-
-            # ── PHASE GATE (veto fisico 4) — 25mag2026 ─────────────────────
-            # Roberto: i loss arrivano a grappoli; bisogna leggere la fase
-            # 5-10 minuti, non solo il singolo fingerprint all'entry.
-            _phase_block, _phase_reason, _phase_snap = self._phase_entry_gate(
-                getattr(self.campo, '_direction', 'LONG'), price
-            )
-            _verbale["phase_gate"] = _phase_reason
-            _verbale["phase_snapshot"] = _phase_snap
-            if _phase_block:
-                self._log_m2("🧭", f"PHASE_GATE BLOCCA: {_phase_reason}")
-                _verbale["blocked_by"] = f"ZONA1_PHASE_GATE:{_phase_reason}"
-                self._log_constitutional(_verbale, "PRE_SC_VETO_PHASE_GATE")
                 return
 
             # ════════════════════════════════════════════════════════════════
@@ -11342,7 +11141,6 @@ class OvertopBassanoV16Production:
                 "momentum_entry":   momentum,
                 "volatility_entry": volatility,
                 "trend_entry":      trend,
-                "phase_entry":      getattr(self, '_last_phase_snapshot', None),
             }
             self._shadow_entry_time        = time.time()
             self._shadow_max_price         = price
@@ -12518,7 +12316,6 @@ class OvertopBassanoV16Production:
                           "pnl_netto": round(pnl, 4),
                           "pnl_lordo": round(pnl_gross, 4),
                           "duration": round(trade_duration, 1),
-                          "phase_entry": self._shadow.get("phase_entry"),
                           # V16: forensic score components
                           "sc_seed":   round(min(1.0,max(0.0,(self._shadow.get("seed",0)-0.20)/0.60))*25, 2),
                           "fp_wr_raw": round(self._shadow.get("fingerprint_wr", 0), 4),
@@ -12601,7 +12398,6 @@ class OvertopBassanoV16Production:
                             "entry_price": self._shadow.get("price_entry", 0),
                             "duration": round(trade_duration, 1),
                             "peak_pnl": round(self._trade_peak_pnl, 4),
-                            "phase_entry": self._shadow.get("phase_entry"),
                             "fp_wr": round(self._shadow.get("fingerprint_wr", 0), 4),
                         }
                     }
