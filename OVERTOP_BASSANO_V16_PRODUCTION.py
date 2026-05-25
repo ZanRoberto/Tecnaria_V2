@@ -722,9 +722,26 @@ try:
         _MEMORIA_AVAILABLE = True
     except Exception as _e_memoria:
         _MEMORIA_AVAILABLE = False
+    # ═══════════════════════════════════════════════════════════════
+    # PATCH 18 — CAPSULA FASE (25mag2026)
+    # Scoperta Roberto Zan: WIN/LOSS arrivano in cluster temporali.
+    # La fase del mercato (delta prezzo 2/5/10 min) è il vero
+    # discriminante. Capsula adattiva con 6 livelli armabili.
+    # Kill switch: env CAPSULA_FASE_DEAD=true
+    # Default: L1+L2+L3 attivi (OBSERVER, non blocca).
+    # Per attivare blocco: env CAPSULA_FASE_L4=true
+    # ═══════════════════════════════════════════════════════════════
+    try:
+        from capsula_fase import CapsulaFase
+        _FASE_AVAILABLE = True
+    except Exception as _e_fase:
+        _FASE_AVAILABLE = False
     _CE_AVAILABLE = True
 except ImportError:
     _CE_AVAILABLE = False
+    _CANVAS_AVAILABLE = False
+    _MEMORIA_AVAILABLE = False
+    _FASE_AVAILABLE = False
     log.warning("[CE] capsule_executor.py non trovato")
 
 try:
@@ -7003,6 +7020,28 @@ class OvertopBassanoV16Production:
                 log.warning(f"[MEMORIA] init fallita (silenziato): {_e_mem}")
                 self.memoria = None
 
+        # ═══════════════════════════════════════════════════════════════
+        # PATCH 18 — CAPSULA FASE (25mag2026)
+        # Scoperta Roberto: WIN/LOSS in cluster temporali, la fase del
+        # mercato (delta prezzo 2/5/10 min) discrimina meglio dei 32
+        # testimoni-opinione. Capsula adattiva con 6 livelli.
+        # Default armato: L1 OCCHI + L2 MEMORIA + L3 PROPONE (observer).
+        # L4 DECIDE arma blocco vero (default OFF).
+        # ═══════════════════════════════════════════════════════════════
+        self.capsula_fase = None
+        if _FASE_AVAILABLE:
+            try:
+                self.capsula_fase = CapsulaFase(bot_ref=self, db_path=DB_PATH)
+                _stato_fase = self.capsula_fase.get_verdetto()
+                log.info(f"[CAPSULA_FASE] 🌊 v{_stato_fase.get('version')} attiva — "
+                         f"stato={_stato_fase.get('stato')} "
+                         f"soglie d10={_stato_fase.get('soglia_d10')} "
+                         f"d5={_stato_fase.get('soglia_d5')} "
+                         f"d2={_stato_fase.get('soglia_d2')}")
+            except Exception as _e_fase:
+                log.warning(f"[CAPSULA_FASE] init fallita (silenziato): {_e_fase}")
+                self.capsula_fase = None
+
         self.log_analyzer    = LogAnalyzer()
         self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
         self.calibratore     = AutoCalibratore()
@@ -7573,6 +7612,16 @@ class OvertopBassanoV16Production:
 
         # Aggiorna prezzo live ad ogni tick
         self._last_price = price
+
+        # ════════════════════════════════════════════════════════════════
+        # PATCH 18 — CAPSULA FASE: alimentazione buffer prezzi (25mag2026)
+        # ════════════════════════════════════════════════════════════════
+        # try/except totale: mai bloccare il tick loop per la capsula.
+        if self.capsula_fase is not None:
+            try:
+                self.capsula_fase.feed_tick(now, price)
+            except Exception:
+                pass
 
         # ════════════════════════════════════════════════════════════════
         # PASSO 10 — PREDICTION TRACKER (chiamato ogni tick, sola lettura)
@@ -10034,6 +10083,38 @@ class OvertopBassanoV16Production:
                 self._log_constitutional(_verbale, "PRE_SC_VETO_ANTI_DUPLICATE")
                 return
             self._last_entry_tick = _now_tick
+
+            # ════════════════════════════════════════════════════════════════
+            # PATCH 18 — CAPSULA FASE (25mag2026)
+            # Veto fisico 1.5: consulta la capsula fase.
+            # 
+            # In modalità OBSERVER (L4 DECIDE OFF, default):
+            #   - la capsula registra il suo verdetto (BLOCCA/PASSA)
+            #   - ma NON blocca il trade (lascia decidere il sistema vecchio)
+            #   - serve per raccogliere dati e validare la regola
+            #
+            # In modalità BLOCCANTE (L4 DECIDE ON):
+            #   - la capsula blocca davvero se verdetto = BLOCCA
+            #   - usata SOLO dopo che L3 ha dimostrato precisione ≥70%
+            # ════════════════════════════════════════════════════════════════
+            if self.capsula_fase is not None:
+                try:
+                    _cf_dir = getattr(self.campo, '_direction', 'LONG')
+                    _cf_tid = f"trade_{int(_now_tick * 10)}"
+                    _cf_ok, _cf_motivo = self.capsula_fase.consulta(direction=_cf_dir, trade_id=_cf_tid)
+                    _verbale["capsula_fase_motivo"] = _cf_motivo
+                    _verbale["capsula_fase_blocking"] = self.capsula_fase.is_blocking()
+                    if not _cf_ok and self.capsula_fase.is_blocking():
+                        self._log_m2("🌊", f"CAPSULA_FASE BLOCCA: {_cf_motivo}")
+                        _verbale["blocked_by"] = f"ZONA1_CAPSULA_FASE:{_cf_motivo}"
+                        self._log_constitutional(_verbale, "PRE_SC_VETO_CAPSULA_FASE")
+                        return
+                    elif not _cf_ok:
+                        # L3 OBSERVER: logga ma non blocca
+                        self._log_m2("👁", f"CAPSULA_FASE suggerirebbe blocco (OBSERVER): {_cf_motivo}")
+                except Exception as _e_cf:
+                    # Fail-open totale: mai bloccare per errore della capsula
+                    log.debug(f"[CAPSULA_FASE_ERR_CONSULTA] {_e_cf}")
 
             # ── STATE ENGINE (veto fisico 2) ───────────────────────────────
             can_enter, gate_reason = self._state_engine_can_enter()
@@ -12666,6 +12747,34 @@ class OvertopBassanoV16Production:
                     })
             except Exception as _mem_e:
                 log.debug(f"[MEMORIA_HOOK_EXIT_ERR] {_mem_e}")
+
+            # ═══════════════════════════════════════════════════════════
+            # PATCH 18 — Hook CapsulaFase exit (osserva outcome)
+            # Lega la fase osservata all'entry con l'esito reale del trade.
+            # Aggiorna statistiche di precisione e auto-quarantena (L6).
+            # ═══════════════════════════════════════════════════════════
+            try:
+                if getattr(self, "capsula_fase", None) is not None:
+                    # trade_id deve essere lo stesso usato in consulta()
+                    _cf_tid = (self._shadow.get("_cf_tid")
+                              if self._shadow else None) or f"unk_{int(time.time()*1000)}"
+                    try:
+                        _cf_outcome = _canvas_outcome
+                    except NameError:
+                        if is_win:
+                            _cf_outcome = "WIN_NET"
+                        elif pnl_gross > 0:
+                            _cf_outcome = "LOSS_FEE"
+                        else:
+                            _cf_outcome = "LOSS_REAL"
+                    self.capsula_fase.observe_outcome(
+                        trade_id=_cf_tid,
+                        outcome=_cf_outcome,
+                        pnl_netto=float(pnl),
+                        durata_s=float(trade_duration) if trade_duration else 0.0
+                    )
+            except Exception as _cf_oe:
+                log.debug(f"[CAPSULA_FASE_HOOK_EXIT_ERR] {_cf_oe}")
 
         except Exception as e:
             import traceback
