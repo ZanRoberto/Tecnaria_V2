@@ -5951,12 +5951,24 @@ class SuperCervello:
                          f"→ BLOCCA")
                 return self._out("BLOCCA", 0.5, 0, f"streak_{loss_streak}", 0.90)
 
-        # VERITAS: Oracolo FUOCO con carica alta — SC non blocca mai
-        # 373 segnali: SC blocca $112 di guadagni reali quando Oracolo ha ragione
-        # Carica 0.90 = fisica confermata — entra sempre
-        # ECCEZIONE: EXPLOSIVE è troppo volatile — FUOCO non affidabile
-        if oi_stato == "FUOCO" and oi_carica >= 0.75 and regime != "EXPLOSIVE":
-            return self._out("ENTRA", 1.3, -5, f"VERITAS_FUOCO_c{oi_carica:.2f}", oi_carica)
+        # ════════════════════════════════════════════════════════════════
+        # FIX 26mag2026 (Roberto): RIMOZIONE BYPASS VERITAS_FUOCO
+        # ════════════════════════════════════════════════════════════════
+        # Era: oi_stato=FUOCO + oi_carica>=0.75 → ENTRA SUBITO (bypass capsule)
+        # Storia: scritto quando le capsule erano stupide e il SC doveva
+        #         agire da solo. "373 segnali, $112 di guadagni" — vero allora.
+        # Oggi:   le capsule TOSSICO (CTX/REGIME/MAT) sono cresciute con
+        #         WR misurato su 88-187 sample. Hanno depositato 4253 hits
+        #         sul pattern killer. Bypassarle ha aperto 144 trade a WR 20.8%
+        #         (-$249.66 documentati).
+        # Fix:    VERITAS_FUOCO diventa DEPOSIZIONE A FAVORE, non bypass.
+        #         Si aggiunge ai pesi del giudice. Le capsule possono
+        #         controbilanciarlo. Il SC PESA, non DECRETA da solo.
+        # ════════════════════════════════════════════════════════════════
+        # Veto FP_TOSSICO viene PRIMA. Se le capsule sono unanimi sul tossico,
+        # nemmeno OI FUOCO supera il veto. Il bot ha alleati, li ascolta.
+        # Eccezione VERITAS_FUOCO sopra FP_TOSSICO mantenuta SOLO se le
+        # capsule sono SILENTI (block_score basso → no "TOSSICO" deposto).
 
         # VETO ASSOLUTO FINGERPRINT TOSSICO
         # Se il fingerprint ha 20+ campioni con WR < 45% — blocca sempre
