@@ -736,12 +736,29 @@ try:
         _FASE_AVAILABLE = True
     except Exception as _e_fase:
         _FASE_AVAILABLE = False
+    # ═══════════════════════════════════════════════════════════════
+    # PATCH 19 — CAPSULA TSUNAMI DISCORDE (27mag2026)
+    # Scoperta Roberto: trade 206 LONG aperto mentre 3 Tsunami su 3 DOWN
+    # con ts_confidenza=2 (massima). Il muro TSUNAMI_DISCORDE era stato
+    # disinnescato dal refactor SC SOVRANO. La capsula adattogena impara
+    # dai 17.657 phantom_forensic quali configurazioni hanno WR basso e
+    # propone blocchi basati sui DATI, non su soglie hardcoded.
+    # Kill switch: env CAPSULA_TSUNAMI_DISCORDE_DEAD=true
+    # Default: L1+L2+L3+L5 attivi (OBSERVER, non blocca).
+    # Per attivare blocco vero: env CAP_TS_L4_DECIDE=true
+    # ═══════════════════════════════════════════════════════════════
+    try:
+        from capsula_tsunami_discorde import CapsulaTsunamiDiscorde
+        _CAP_TSUNAMI_AVAILABLE = True
+    except Exception as _e_cap_ts:
+        _CAP_TSUNAMI_AVAILABLE = False
     _CE_AVAILABLE = True
 except ImportError:
     _CE_AVAILABLE = False
     _CANVAS_AVAILABLE = False
     _MEMORIA_AVAILABLE = False
     _FASE_AVAILABLE = False
+    _CAP_TSUNAMI_AVAILABLE = False
     log.warning("[CE] capsule_executor.py non trovato")
 
 try:
@@ -7054,6 +7071,25 @@ class OvertopBassanoV16Production:
                 log.warning(f"[CAPSULA_FASE] init fallita (silenziato): {_e_fase}")
                 self.capsula_fase = None
 
+        # ═══════════════════════════════════════════════════════════════
+        # PATCH 19 — CAPSULA TSUNAMI DISCORDE (27mag2026)
+        # Capsula adattogena che impara dai 17.657 phantom_forensic.
+        # Sostituisce la deposizione muta del TSUNAMI_DISCORDE con
+        # un verdetto fondato sui dati. Niente soglie hardcoded.
+        # ═══════════════════════════════════════════════════════════════
+        self.cap_tsunami = None
+        if _CAP_TSUNAMI_AVAILABLE:
+            try:
+                self.cap_tsunami = CapsulaTsunamiDiscorde(db_path=DB_PATH)
+                _stato_ts = self.cap_tsunami.get_verdetto()
+                log.info(f"[CAP_TSUNAMI] 🌊 v{_stato_ts.get('version')} attiva — "
+                         f"stato={_stato_ts.get('stato')} "
+                         f"configurazioni={_stato_ts.get('mappa',{}).get('n_configurazioni',0)} "
+                         f"bloccanti={_stato_ts.get('mappa',{}).get('n_bloccanti',0)}")
+            except Exception as _e_cts:
+                log.warning(f"[CAP_TSUNAMI] init fallita (silenziato): {_e_cts}")
+                self.cap_tsunami = None
+
         self.log_analyzer    = LogAnalyzer()
         self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
         self.calibratore     = AutoCalibratore()
@@ -10371,6 +10407,43 @@ class OvertopBassanoV16Production:
                             _verbale["tsunami_discorde"] = True
                             # NESSUN return. Tsunami ha deposto la discordanza.
                             self._tsunami_size_mult = _ts_decision.size_mult
+
+                            # ════════════════════════════════════════════════════════════════
+                            # PATCH 19 — CONSULTO CAPSULA TSUNAMI DISCORDE (27mag2026)
+                            # La capsula adattogena ha la mappa delle 17.657 phantom.
+                            # Sa quali configurazioni hanno WR basso. Decide su DATI.
+                            # ════════════════════════════════════════════════════════════════
+                            if self.cap_tsunami is not None:
+                                try:
+                                    # Estraggo le direction reali dal sistema Tsunami
+                                    _ts30_dir = getattr(getattr(self, '_ts_30s', None), 'direction', 'NONE') or 'NONE'
+                                    _ts2m_dir = getattr(getattr(self, '_ts_2min', None), 'direction', 'NONE') or 'NONE'
+                                    _ts10_dir = getattr(getattr(self, '_ts_10min', None), 'direction', 'NONE') or 'NONE'
+                                    _ts_conf  = int(getattr(_ts_decision, 'confidenza', 0) or 0)
+                                    _ct_tid = f"trade_{int(_now_tick * 10)}" if '_now_tick' in dir() else f"trade_{int(time.time()*10)}"
+
+                                    _ct_ok, _ct_motivo = self.cap_tsunami.consulta(
+                                        direction_campo=_campo_dir,
+                                        ts_30s_dir=_ts30_dir,
+                                        ts_2min_dir=_ts2m_dir,
+                                        ts_10min_dir=_ts10_dir,
+                                        ts_confidenza=_ts_conf,
+                                        trade_id=_ct_tid,
+                                    )
+                                    _verbale["cap_tsunami_motivo"] = _ct_motivo
+                                    _verbale["cap_tsunami_blocking"] = self.cap_tsunami.is_blocking()
+
+                                    if not _ct_ok and self.cap_tsunami.is_blocking():
+                                        self._log_m2("🌊", f"CAP_TSUNAMI BLOCCA: {_ct_motivo}")
+                                        _verbale["blocked_by"] = f"CAP_TSUNAMI:{_ct_motivo}"
+                                        self._log_constitutional(_verbale, "PRE_SC_VETO_CAP_TSUNAMI")
+                                        return
+                                    elif "OBSERVER_WOULD_BLOCK" in _ct_motivo:
+                                        # L4 OFF: la capsula avrebbe bloccato ma sta osservando
+                                        self._log_m2("👁", f"CAP_TSUNAMI suggerirebbe blocco (OBSERVER): {_ct_motivo}")
+                                except Exception as _e_ct:
+                                    # FAIL-OPEN totale
+                                    log.debug(f"[CAP_TSUNAMI_HOOK_ERR] {_e_ct}")
                     else:
                         self._log_m2("🌊", f"TSUNAMI dep: OK {_ts_dir} conf={_ts_decision.confidenza}/3")
                         self._tsunami_size_mult = _ts_decision.size_mult
@@ -12787,6 +12860,33 @@ class OvertopBassanoV16Production:
                     )
             except Exception as _cf_oe:
                 log.debug(f"[CAPSULA_FASE_HOOK_EXIT_ERR] {_cf_oe}")
+
+            # ═══════════════════════════════════════════════════════════
+            # PATCH 19 — Hook CapsulaTsunamiDiscorde exit
+            # Lega il verdetto Tsunami con l'esito reale del trade.
+            # Permette alla capsula di misurare la sua precisione e
+            # in futuro (L5) di ricalibrare i propri criteri.
+            # ═══════════════════════════════════════════════════════════
+            try:
+                if getattr(self, "cap_tsunami", None) is not None:
+                    _ct_tid = (self._shadow.get("_ct_tid")
+                              if self._shadow else None) or f"unk_{int(time.time()*1000)}"
+                    try:
+                        _ct_outcome = _canvas_outcome
+                    except NameError:
+                        if is_win:
+                            _ct_outcome = "WIN_NET"
+                        elif pnl_gross > 0:
+                            _ct_outcome = "LOSS_FEE"
+                        else:
+                            _ct_outcome = "LOSS_REAL"
+                    self.cap_tsunami.observe_outcome(
+                        trade_id=_ct_tid,
+                        outcome=_ct_outcome,
+                        pnl_netto=float(pnl),
+                    )
+            except Exception as _ct_oe:
+                log.debug(f"[CAP_TSUNAMI_HOOK_EXIT_ERR] {_ct_oe}")
 
         except Exception as e:
             import traceback
