@@ -736,29 +736,12 @@ try:
         _FASE_AVAILABLE = True
     except Exception as _e_fase:
         _FASE_AVAILABLE = False
-    # ═══════════════════════════════════════════════════════════════
-    # PATCH 19 — CAPSULA TSUNAMI DISCORDE (27mag2026)
-    # Scoperta Roberto: trade 206 LONG aperto mentre 3 Tsunami su 3 DOWN
-    # con ts_confidenza=2 (massima). Il muro TSUNAMI_DISCORDE era stato
-    # disinnescato dal refactor SC SOVRANO. La capsula adattogena impara
-    # dai 17.657 phantom_forensic quali configurazioni hanno WR basso e
-    # propone blocchi basati sui DATI, non su soglie hardcoded.
-    # Kill switch: env CAPSULA_TSUNAMI_DISCORDE_DEAD=true
-    # Default: L1+L2+L3+L5 attivi (OBSERVER, non blocca).
-    # Per attivare blocco vero: env CAP_TS_L4_DECIDE=true
-    # ═══════════════════════════════════════════════════════════════
-    try:
-        from capsula_tsunami_discorde import CapsulaTsunamiDiscorde
-        _CAP_TSUNAMI_AVAILABLE = True
-    except Exception as _e_cap_ts:
-        _CAP_TSUNAMI_AVAILABLE = False
     _CE_AVAILABLE = True
 except ImportError:
     _CE_AVAILABLE = False
     _CANVAS_AVAILABLE = False
     _MEMORIA_AVAILABLE = False
     _FASE_AVAILABLE = False
-    _CAP_TSUNAMI_AVAILABLE = False
     log.warning("[CE] capsule_executor.py non trovato")
 
 try:
@@ -7071,25 +7054,6 @@ class OvertopBassanoV16Production:
                 log.warning(f"[CAPSULA_FASE] init fallita (silenziato): {_e_fase}")
                 self.capsula_fase = None
 
-        # ═══════════════════════════════════════════════════════════════
-        # PATCH 19 — CAPSULA TSUNAMI DISCORDE (27mag2026)
-        # Capsula adattogena che impara dai 17.657 phantom_forensic.
-        # Sostituisce la deposizione muta del TSUNAMI_DISCORDE con
-        # un verdetto fondato sui dati. Niente soglie hardcoded.
-        # ═══════════════════════════════════════════════════════════════
-        self.cap_tsunami = None
-        if _CAP_TSUNAMI_AVAILABLE:
-            try:
-                self.cap_tsunami = CapsulaTsunamiDiscorde(db_path=DB_PATH)
-                _stato_ts = self.cap_tsunami.get_verdetto()
-                log.info(f"[CAP_TSUNAMI] 🌊 v{_stato_ts.get('version')} attiva — "
-                         f"stato={_stato_ts.get('stato')} "
-                         f"configurazioni={_stato_ts.get('mappa',{}).get('n_configurazioni',0)} "
-                         f"bloccanti={_stato_ts.get('mappa',{}).get('n_bloccanti',0)}")
-            except Exception as _e_cts:
-                log.warning(f"[CAP_TSUNAMI] init fallita (silenziato): {_e_cts}")
-                self.cap_tsunami = None
-
         self.log_analyzer    = LogAnalyzer()
         self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
         self.calibratore     = AutoCalibratore()
@@ -10407,53 +10371,6 @@ class OvertopBassanoV16Production:
                             _verbale["tsunami_discorde"] = True
                             # NESSUN return. Tsunami ha deposto la discordanza.
                             self._tsunami_size_mult = _ts_decision.size_mult
-
-                            # ════════════════════════════════════════════════════════════════
-                            # PATCH 19 — CONSULTO CAPSULA TSUNAMI DISCORDE (27mag2026)
-                            # La capsula adattogena ha la mappa delle 17.657 phantom.
-                            # Sa quali configurazioni hanno WR basso. Decide su DATI.
-                            # FIX 27mag2026 13:00: estrazione corretta da self.tsunami.last_decision()
-                            # ════════════════════════════════════════════════════════════════
-                            if self.cap_tsunami is not None:
-                                try:
-                                    # Estraggo le direction reali dal sistema Tsunami
-                                    # (stessa logica di winning_signatures riga 11436+)
-                                    _ts30_dir = 'NONE'
-                                    _ts2m_dir = 'NONE'
-                                    _ts10_dir = 'NONE'
-                                    _ts_conf  = 0
-                                    if hasattr(self, 'tsunami') and self.tsunami is not None:
-                                        _last_ts = self.tsunami.last_decision()
-                                        if _last_ts is not None:
-                                            _v_ts = _last_ts.get('verdetti', {})
-                                            _ts30_dir = _v_ts.get('30s', {}).get('direction')  or 'NONE'
-                                            _ts2m_dir = _v_ts.get('2min', {}).get('direction') or 'NONE'
-                                            _ts10_dir = _v_ts.get('10min', {}).get('direction') or 'NONE'
-                                            _ts_conf  = int(_last_ts.get('confidenza') or 0)
-                                    _ct_tid = f"trade_{int(_now_tick * 10)}" if '_now_tick' in dir() else f"trade_{int(time.time()*10)}"
-
-                                    _ct_ok, _ct_motivo = self.cap_tsunami.consulta(
-                                        direction_campo=_campo_dir,
-                                        ts_30s_dir=_ts30_dir,
-                                        ts_2min_dir=_ts2m_dir,
-                                        ts_10min_dir=_ts10_dir,
-                                        ts_confidenza=_ts_conf,
-                                        trade_id=_ct_tid,
-                                    )
-                                    _verbale["cap_tsunami_motivo"] = _ct_motivo
-                                    _verbale["cap_tsunami_blocking"] = self.cap_tsunami.is_blocking()
-
-                                    if not _ct_ok and self.cap_tsunami.is_blocking():
-                                        self._log_m2("🌊", f"CAP_TSUNAMI BLOCCA: {_ct_motivo}")
-                                        _verbale["blocked_by"] = f"CAP_TSUNAMI:{_ct_motivo}"
-                                        self._log_constitutional(_verbale, "PRE_SC_VETO_CAP_TSUNAMI")
-                                        return
-                                    elif "OBSERVER_WOULD_BLOCK" in _ct_motivo:
-                                        # L4 OFF: la capsula avrebbe bloccato ma sta osservando
-                                        self._log_m2("👁", f"CAP_TSUNAMI suggerirebbe blocco (OBSERVER): {_ct_motivo}")
-                                except Exception as _e_ct:
-                                    # FAIL-OPEN totale
-                                    log.debug(f"[CAP_TSUNAMI_HOOK_ERR] {_e_ct}")
                     else:
                         self._log_m2("🌊", f"TSUNAMI dep: OK {_ts_dir} conf={_ts_decision.confidenza}/3")
                         self._tsunami_size_mult = _ts_decision.size_mult
@@ -10882,6 +10799,72 @@ class OvertopBassanoV16Production:
                     # Se errore nel calcolo drift, NON blocchiamo (conservativo)
                     pass
                 # ════════════════════════════════════════════════════════════════
+                # FIX TRACCIATURA 27mag2026 (Roberto):
+                # Percorso 1 EXPLOSIVE apriva trade SENZA registrare firma né canvas.
+                # Risultato: 179 trade su 386 invisibili nelle analisi (46%).
+                # Include i WIN più grossi (+$15.38). Fix: replico gli hook che
+                # Percorso 2 ha già a riga ~10500 e ~11425, ma SOLO QUI ed in modo
+                # minimo (senza i 32 campi della firma — non sono tutti calcolati
+                # a questo punto del codice, ma i campi base sì).
+                # ════════════════════════════════════════════════════════════════
+                # Hook 1/2: canvas observe_entry per Percorso 1
+                try:
+                    if getattr(self, "canvas", None) is not None:
+                        _canvas_tid_p1 = f"t_{int(time.time()*1000)}_P1"
+                        _verbale["_canvas_tid"] = _canvas_tid_p1
+                        _verbale["_path"] = "P1_EXPLOSIVE"
+                        # Salvo per transfer in _open_shadow_position
+                        self._pending_canvas_tid_p1 = _canvas_tid_p1
+                        self.canvas.observe_entry(_verbale, trade_id=_canvas_tid_p1)
+                except Exception as _ce_p1:
+                    log.debug(f"[CANVAS_HOOK_ENTRY_P1_ERR] {_ce_p1}")
+
+                # Hook 2/2: winsig per Percorso 1 (firma minimale - campi disponibili)
+                try:
+                    if hasattr(self, '_winsig') and self._winsig is not None:
+                        # Estraggo Tsunami se disponibile (stessa logica P2)
+                        _ts30_p1 = _ts2m_p1 = _ts10_p1 = None
+                        _ts_conf_p1 = None
+                        try:
+                            if hasattr(self, 'tsunami') and self.tsunami is not None:
+                                _last_ts_p1 = self.tsunami.last_decision()
+                                if _last_ts_p1 is not None:
+                                    _v_ts_p1 = _last_ts_p1.get('verdetti', {})
+                                    _ts30_p1 = _v_ts_p1.get('30s', {}).get('direction')
+                                    _ts2m_p1 = _v_ts_p1.get('2min', {}).get('direction')
+                                    _ts10_p1 = _v_ts_p1.get('10min', {}).get('direction')
+                                    _ts_conf_p1 = _last_ts_p1.get('confidenza')
+                        except Exception:
+                            pass
+
+                        _sig_p1 = WinningSignatureLogger.build_signature_from_context(
+                            momentum=momentum,
+                            volatility=volatility,
+                            trend=trend,
+                            direction=self.campo._direction,
+                            regime=self._regime_current,
+                            oi_stato=self._oi_stato,
+                            oi_carica=self._oi_carica,
+                            vol_pressure=getattr(self.campo, '_last_vol_pressure', None),
+                            rsi=None,
+                            drift=_p12_drift if '_p12_drift' in dir() else None,
+                            score=score,
+                            soglia=soglia,
+                            pred_delta_fuoco=(self.heartbeat_data.get('pred_delta_fuoco', 0) if hasattr(self, 'heartbeat_data') else 0),
+                            pred_delta_carica=(self.heartbeat_data.get('pred_delta_carica', 0) if hasattr(self, 'heartbeat_data') else 0),
+                            pred_v2_delta=(self.heartbeat_data.get('pred_v2_delta', 0) if hasattr(self, 'heartbeat_data') else 0),
+                            pred_source="P1_EXPLOSIVE",
+                            ts_30s_direction=_ts30_p1,
+                            ts_2min_direction=_ts2m_p1,
+                            ts_10min_direction=_ts10_p1,
+                            ts_confidenza=_ts_conf_p1,
+                        )
+                        # Salvo per close — uso un attributo separato che _open_shadow
+                        # transferirà nello _shadow (riga 11220+)
+                        self._pending_winsig_p1 = _sig_p1
+                except Exception as _we_p1:
+                    log.debug(f"[WINSIG_HOOK_ENTRY_P1_ERR] {_we_p1}")
+
                 self._open_shadow_position(price, score, soglia, seed, size,
                                             momentum, volatility, trend,
                                             matrimonio_name, fingerprint_wr)
@@ -11322,6 +11305,23 @@ class OvertopBassanoV16Production:
             self._shadow_max_price         = price
             self._shadow_min_price         = price
             self._shadow_matrimonio        = matrimonio_name
+
+            # FIX TRACCIATURA 27mag2026: trasferisco la firma P1 nel _shadow.
+            # Setattata in _evaluate_shadow_entry Percorso 1 PRIMA di chiamare
+            # _open_shadow_position. Alla chiusura (riga ~12104+) il check
+            # "_winsig_entry in self._shadow" sarà True e la firma viene salvata.
+            if hasattr(self, '_pending_winsig_p1') and self._pending_winsig_p1 is not None:
+                self._shadow['_winsig_entry'] = self._pending_winsig_p1
+                self._shadow['_winsig_match_at_entry'] = None  # non calcolato in P1
+                self._pending_winsig_p1 = None  # consumato
+
+            # FIX TRACCIATURA 27mag2026: trasferisco _canvas_tid P1 nel _shadow.
+            # Per Percorso 2 il transfer avviene in _evaluate_shadow_entry riga 11513.
+            # Per Percorso 1 NON c'era. Aggiunto qui: leggo l'attributo temporaneo
+            # _pending_canvas_tid_p1 settato prima della chiamata e lo trasferisco.
+            if hasattr(self, '_pending_canvas_tid_p1') and self._pending_canvas_tid_p1:
+                self._shadow['_canvas_tid'] = self._pending_canvas_tid_p1
+                self._pending_canvas_tid_p1 = None  # consumato
 
             # ═════════════════════════════════════════════════════════════════
             # HOOK CAPSULE V2.0 — Entry Side (22mag2026)
@@ -12870,33 +12870,6 @@ class OvertopBassanoV16Production:
                     )
             except Exception as _cf_oe:
                 log.debug(f"[CAPSULA_FASE_HOOK_EXIT_ERR] {_cf_oe}")
-
-            # ═══════════════════════════════════════════════════════════
-            # PATCH 19 — Hook CapsulaTsunamiDiscorde exit
-            # Lega il verdetto Tsunami con l'esito reale del trade.
-            # Permette alla capsula di misurare la sua precisione e
-            # in futuro (L5) di ricalibrare i propri criteri.
-            # ═══════════════════════════════════════════════════════════
-            try:
-                if getattr(self, "cap_tsunami", None) is not None:
-                    _ct_tid = (self._shadow.get("_ct_tid")
-                              if self._shadow else None) or f"unk_{int(time.time()*1000)}"
-                    try:
-                        _ct_outcome = _canvas_outcome
-                    except NameError:
-                        if is_win:
-                            _ct_outcome = "WIN_NET"
-                        elif pnl_gross > 0:
-                            _ct_outcome = "LOSS_FEE"
-                        else:
-                            _ct_outcome = "LOSS_REAL"
-                    self.cap_tsunami.observe_outcome(
-                        trade_id=_ct_tid,
-                        outcome=_ct_outcome,
-                        pnl_netto=float(pnl),
-                    )
-            except Exception as _ct_oe:
-                log.debug(f"[CAP_TSUNAMI_HOOK_EXIT_ERR] {_ct_oe}")
 
         except Exception as e:
             import traceback
