@@ -736,12 +736,37 @@ try:
         _FASE_AVAILABLE = True
     except Exception as _e_fase:
         _FASE_AVAILABLE = False
+    # ═══════════════════════════════════════════════════════════════
+    # PATCH 19 — CAPSULA TSUNAMI DISCORDE (27mag2026)
+    # Capsula adattogena per discordanze Tsunami vs campo.
+    # ═══════════════════════════════════════════════════════════════
+    try:
+        from capsula_tsunami_discorde import CapsulaTsunamiDiscorde
+        _CAP_TSUNAMI_AVAILABLE = True
+    except Exception as _e_cap_ts:
+        _CAP_TSUNAMI_AVAILABLE = False
+    # ═══════════════════════════════════════════════════════════════
+    # PATCH 20 — CAPSULA MATRIGNA / SuperRisponditrice (27mag2026)
+    # Capsula che GENERA capsule figlie adattogene per ogni firma di
+    # mercato. Le firme nuove diventano capsule autonome. Le firme
+    # storiche partono con stats già mature dal DB.
+    # Visione Roberto: "se arriva un mercato nuovo, il SuperRisponditore
+    # dovrebbe creare la capsula".
+    # Kill: env CAPSULA_MATRIGNA_DEAD=true | Decide: CAP_MAT_L4_DECIDE=true
+    # ═══════════════════════════════════════════════════════════════
+    try:
+        from capsula_matrigna import CapsulaMatrigna
+        _CAP_MATRIGNA_AVAILABLE = True
+    except Exception as _e_cap_mat:
+        _CAP_MATRIGNA_AVAILABLE = False
     _CE_AVAILABLE = True
 except ImportError:
     _CE_AVAILABLE = False
     _CANVAS_AVAILABLE = False
     _MEMORIA_AVAILABLE = False
     _FASE_AVAILABLE = False
+    _CAP_TSUNAMI_AVAILABLE = False
+    _CAP_MATRIGNA_AVAILABLE = False
     log.warning("[CE] capsule_executor.py non trovato")
 
 try:
@@ -7054,6 +7079,40 @@ class OvertopBassanoV16Production:
                 log.warning(f"[CAPSULA_FASE] init fallita (silenziato): {_e_fase}")
                 self.capsula_fase = None
 
+        # ═══════════════════════════════════════════════════════════════
+        # PATCH 19 — CAPSULA TSUNAMI DISCORDE (27mag2026)
+        # ═══════════════════════════════════════════════════════════════
+        self.cap_tsunami = None
+        if _CAP_TSUNAMI_AVAILABLE:
+            try:
+                self.cap_tsunami = CapsulaTsunamiDiscorde(db_path=DB_PATH)
+                _stato_ts = self.cap_tsunami.get_verdetto()
+                log.info(f"[CAP_TSUNAMI] 🌊 v{_stato_ts.get('version')} attiva — "
+                         f"stato={_stato_ts.get('stato')} "
+                         f"configurazioni={_stato_ts.get('mappa',{}).get('n_configurazioni',0)} "
+                         f"bloccanti={_stato_ts.get('mappa',{}).get('n_bloccanti',0)}")
+            except Exception as _e_cts:
+                log.warning(f"[CAP_TSUNAMI] init fallita (silenziato): {_e_cts}")
+                self.cap_tsunami = None
+
+        # ═══════════════════════════════════════════════════════════════
+        # PATCH 20 — CAPSULA MATRIGNA / SuperRisponditrice (27mag2026)
+        # Genera capsule figlie adattogene per ogni firma di mercato.
+        # Al boot legge winning_signatures+trades.data_json e popola.
+        # ═══════════════════════════════════════════════════════════════
+        self.matrigna = None
+        if _CAP_MATRIGNA_AVAILABLE:
+            try:
+                self.matrigna = CapsulaMatrigna(db_path=DB_PATH)
+                _stato_mat = self.matrigna.get_verdetto()
+                log.info(f"[CAP_MATRIGNA] 👵 v{_stato_mat.get('version')} attiva — "
+                         f"stato={_stato_mat.get('stato')} "
+                         f"capsule figlie={_stato_mat.get('capsule',{}).get('totali',0)} "
+                         f"bloccanti={_stato_mat.get('capsule',{}).get('per_verdetto',{}).get('BLOCCA',0)}")
+            except Exception as _e_mat:
+                log.warning(f"[CAP_MATRIGNA] init fallita (silenziato): {_e_mat}")
+                self.matrigna = None
+
         self.log_analyzer    = LogAnalyzer()
         self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
         self.calibratore     = AutoCalibratore()
@@ -10865,6 +10924,35 @@ class OvertopBassanoV16Production:
                 except Exception as _we_p1:
                     log.debug(f"[WINSIG_HOOK_ENTRY_P1_ERR] {_we_p1}")
 
+                # ════════════════════════════════════════════════════════════════
+                # PATCH 20 — CONSULTO CAPSULA MATRIGNA (Percorso 1)
+                # La matrigna consulta la capsula figlia per questa firma.
+                # In OBSERVER L4 OFF: registra ma non blocca.
+                # ════════════════════════════════════════════════════════════════
+                if getattr(self, "matrigna", None) is not None:
+                    try:
+                        _mat_tid = self._pending_canvas_tid_p1 or f"t_{int(time.time()*1000)}_P1"
+                        _mat_ok, _mat_motivo, _mat_info = self.matrigna.consulta(
+                            momentum=momentum,
+                            volatility=volatility,
+                            trend=trend,
+                            regime=self._regime_current,
+                            direction=self.campo._direction,
+                            trade_id=_mat_tid,
+                        )
+                        _verbale["matrigna_motivo"] = _mat_motivo
+                        _verbale["matrigna_stato"] = _mat_info.get('stato')
+                        _verbale["matrigna_verdetto"] = _mat_info.get('verdetto')
+                        if not _mat_ok and self.matrigna.is_blocking():
+                            self._log_m2("👵", f"MATRIGNA BLOCCA P1: {_mat_motivo}")
+                            _verbale["blocked_by"] = f"MATRIGNA:{_mat_info.get('firma_key','?')}"
+                            self._log_constitutional(_verbale, "PRE_OPEN_VETO_MATRIGNA_P1")
+                            return
+                        elif "OBSERVER_WOULD_BLOCK" in _mat_motivo:
+                            self._log_m2("👁", f"MATRIGNA suggerirebbe blocco (OBSERVER P1): {_mat_motivo}")
+                    except Exception as _e_mat_p1:
+                        log.debug(f"[MATRIGNA_HOOK_P1_ERR] {_e_mat_p1}")
+
                 self._open_shadow_position(price, score, soglia, seed, size,
                                             momentum, volatility, trend,
                                             matrimonio_name, fingerprint_wr)
@@ -11255,6 +11343,33 @@ class OvertopBassanoV16Production:
             except Exception as _e_p12_p2:
                 pass
             # ════════════════════════════════════════════════════════════════
+
+            # ════════════════════════════════════════════════════════════════
+            # PATCH 20 — CONSULTO CAPSULA MATRIGNA (Percorso 2)
+            # ════════════════════════════════════════════════════════════════
+            if getattr(self, "matrigna", None) is not None:
+                try:
+                    _mat_tid_p2 = _verbale.get("_canvas_tid") or f"t_{int(time.time()*1000)}_P2"
+                    _mat_ok, _mat_motivo, _mat_info = self.matrigna.consulta(
+                        momentum=momentum,
+                        volatility=volatility,
+                        trend=trend,
+                        regime=self._regime_current,
+                        direction=self.campo._direction,
+                        trade_id=_mat_tid_p2,
+                    )
+                    _verbale["matrigna_motivo"] = _mat_motivo
+                    _verbale["matrigna_stato"] = _mat_info.get('stato')
+                    _verbale["matrigna_verdetto"] = _mat_info.get('verdetto')
+                    if not _mat_ok and self.matrigna.is_blocking():
+                        self._log_m2("👵", f"MATRIGNA BLOCCA P2: {_mat_motivo}")
+                        _verbale["blocked_by"] = f"MATRIGNA:{_mat_info.get('firma_key','?')}"
+                        self._log_constitutional(_verbale, "PRE_OPEN_VETO_MATRIGNA_P2")
+                        return
+                    elif "OBSERVER_WOULD_BLOCK" in _mat_motivo:
+                        self._log_m2("👁", f"MATRIGNA suggerirebbe blocco (OBSERVER P2): {_mat_motivo}")
+                except Exception as _e_mat_p2:
+                    log.debug(f"[MATRIGNA_HOOK_P2_ERR] {_e_mat_p2}")
 
             self._open_shadow_position(price, score, soglia, seed, size,
                                         momentum, volatility, trend,
@@ -12870,6 +12985,32 @@ class OvertopBassanoV16Production:
                     )
             except Exception as _cf_oe:
                 log.debug(f"[CAPSULA_FASE_HOOK_EXIT_ERR] {_cf_oe}")
+
+            # ═══════════════════════════════════════════════════════════
+            # PATCH 20 — CapsulaMatrigna observe_outcome
+            # Alimenta la capsula figlia con l'esito del trade.
+            # Questa è la cosa fondamentale: ogni trade chiuso fa imparare
+            # la capsula relativa. La SuperRisponditrice cresce con ogni
+            # osservazione.
+            # ═══════════════════════════════════════════════════════════
+            try:
+                if getattr(self, "matrigna", None) is not None:
+                    _mat_tid_ex = (self._shadow.get("_canvas_tid")
+                                   if self._shadow else None) or f"unk_{int(time.time()*1000)}"
+                    self.matrigna.observe_outcome(
+                        trade_id=_mat_tid_ex,
+                        momentum=self._shadow_entry_momentum or '?',
+                        volatility=self._shadow_entry_volatility or '?',
+                        trend=self._shadow_entry_trend or '?',
+                        regime=self._regime_current or '?',
+                        direction=getattr(self.campo, '_direction', '?'),
+                        pnl_netto=float(pnl),
+                        duration=float(trade_duration) if trade_duration else 0.0,
+                        peak_pnl=float(self._trade_peak_pnl) if hasattr(self, '_trade_peak_pnl') else 0.0,
+                        peak_delta_s=0.0,
+                    )
+            except Exception as _mat_oe:
+                log.debug(f"[CAP_MATRIGNA_HOOK_EXIT_ERR] {_mat_oe}")
 
         except Exception as e:
             import traceback
