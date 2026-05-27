@@ -10412,14 +10412,24 @@ class OvertopBassanoV16Production:
                             # PATCH 19 — CONSULTO CAPSULA TSUNAMI DISCORDE (27mag2026)
                             # La capsula adattogena ha la mappa delle 17.657 phantom.
                             # Sa quali configurazioni hanno WR basso. Decide su DATI.
+                            # FIX 27mag2026 13:00: estrazione corretta da self.tsunami.last_decision()
                             # ════════════════════════════════════════════════════════════════
                             if self.cap_tsunami is not None:
                                 try:
                                     # Estraggo le direction reali dal sistema Tsunami
-                                    _ts30_dir = getattr(getattr(self, '_ts_30s', None), 'direction', 'NONE') or 'NONE'
-                                    _ts2m_dir = getattr(getattr(self, '_ts_2min', None), 'direction', 'NONE') or 'NONE'
-                                    _ts10_dir = getattr(getattr(self, '_ts_10min', None), 'direction', 'NONE') or 'NONE'
-                                    _ts_conf  = int(getattr(_ts_decision, 'confidenza', 0) or 0)
+                                    # (stessa logica di winning_signatures riga 11436+)
+                                    _ts30_dir = 'NONE'
+                                    _ts2m_dir = 'NONE'
+                                    _ts10_dir = 'NONE'
+                                    _ts_conf  = 0
+                                    if hasattr(self, 'tsunami') and self.tsunami is not None:
+                                        _last_ts = self.tsunami.last_decision()
+                                        if _last_ts is not None:
+                                            _v_ts = _last_ts.get('verdetti', {})
+                                            _ts30_dir = _v_ts.get('30s', {}).get('direction')  or 'NONE'
+                                            _ts2m_dir = _v_ts.get('2min', {}).get('direction') or 'NONE'
+                                            _ts10_dir = _v_ts.get('10min', {}).get('direction') or 'NONE'
+                                            _ts_conf  = int(_last_ts.get('confidenza') or 0)
                                     _ct_tid = f"trade_{int(_now_tick * 10)}" if '_now_tick' in dir() else f"trade_{int(time.time()*10)}"
 
                                     _ct_ok, _ct_motivo = self.cap_tsunami.consulta(
