@@ -8712,6 +8712,35 @@ class OvertopBassanoV16Production:
         """Ritorna (can_enter: bool, reason: str). Gate PRIMA di qualsiasi entry."""
         now = time.time()
 
+        # ════════════════════════════════════════════════════════════════
+        # FIX DEADLOCK STREAK (28mag, Roberto):
+        # Il decay dello streak viveva in _state_engine_update(), che gira
+        # SOLO alla chiusura di un trade. Ma quando SC blocca per streak>=4,
+        # NON si apre nulla → NON si chiude nulla → il decay non scattava MAI.
+        # Lo streak restava a 4 all'infinito (osservato: 5h ferme con streak_4,
+        # storico: silenzi 40h/64h sbloccati solo da restart manuale).
+        # SOLUZIONE: il decay deve girare anche quando il bot è bloccato, cioè
+        # QUI, a ogni tentativo di entry, non solo alla chiusura trade.
+        # Identica formula del decay originale (30 min/punto). Non disabilita
+        # la protezione SC streak>=4: la lascia decadere quando il mercato
+        # si rinfresca, esattamente come previsto dal commento a riga ~8646.
+        # ════════════════════════════════════════════════════════════════
+        DECAY_MINUTI_TICK = 30  # ogni N min senza nuovo LOSS, streak -= 1
+        if (getattr(self, '_m2_last_loss_time', None)
+                and self._m2_loss_streak > 0):
+            _minuti_senza_loss = (now - self._m2_last_loss_time) / 60.0
+            _decadimenti = int(_minuti_senza_loss / DECAY_MINUTI_TICK)
+            if _decadimenti > 0:
+                _streak_prima = self._m2_loss_streak
+                self._m2_loss_streak = max(0, self._m2_loss_streak - _decadimenti)
+                if _streak_prima != self._m2_loss_streak:
+                    # Avanzo il riferimento temporale dei decadimenti consumati,
+                    # così il prossimo punto scade dopo altri 30 min reali e
+                    # non tutto in un colpo al tick successivo.
+                    self._m2_last_loss_time = self._m2_last_loss_time + _decadimenti * DECAY_MINUTI_TICK * 60.0
+                    self._log_m2("⏳", f"DECAY_STREAK_TICK: {_streak_prima} → {self._m2_loss_streak} "
+                                       f"(dopo {_minuti_senza_loss:.0f}min senza LOSS, gate entry)")
+
         # -- COOLDOWN ATTIVO → non entrare ------------------------------
         if now < self._m2_cooldown_until:
             remaining = self._m2_cooldown_until - now
