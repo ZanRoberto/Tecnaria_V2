@@ -12225,6 +12225,24 @@ class OvertopBassanoV16Production:
             # Override da SuperCapsule Oracle se presente
             PROFIT_FLOOR_HIGH = max(_cm_profit_min, PROFIT_FLOOR_HIGH)
 
+            # ════════════════════════════════════════════════════════════════
+            # PRENDI ALLO SMORZAMENTO (29mag, Roberto):
+            # "Appena sente lo smorzamento deve prendere — non attendere
+            #  l'inversione." Quando il profitto è GIÀ BUONO e il decelerometro
+            #  sente che l'impulso rallenta FORTE, prende subito il massimo,
+            #  SENZA aspettare il ritracciamento (retreat) come fa la VOLPE.
+            # ARMATA SOLO sopra PROFIT_FLOOR_LOW: su trade piccoli o in perdita
+            #  NON scatta → non ricrea il problema dell'uscita precoce sui loss.
+            # Il decelerometro misura il RALLENTAMENTO (mom_fast < mom_slow),
+            #  non il momentum morto: prende mentre il prezzo è ancora alto.
+            # ════════════════════════════════════════════════════════════════
+            DECEL_TAKE_PROFIT = 0.65  # rallentamento forte (= soglia decelerometro)
+            if (current_pnl >= PROFIT_FLOOR_LOW
+                    and decel_score_val >= DECEL_TAKE_PROFIT):
+                self._close_shadow_trade(price,
+                    f"SMORZ_TAKE_E{exit_energy}_{_entry_mom}_decel{decel_score_val:.2f}_WIN_{current_pnl:+.1f}")
+                return
+
             if current_pnl > 0 and max_profit > 0:
                 # ═══════════════════════════════════════════════════════════
                 # VOLPE — PROFIT_LOCK A 4 LIVELLI calibrati per momentum
