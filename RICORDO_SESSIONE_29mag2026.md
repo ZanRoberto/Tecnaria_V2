@@ -63,6 +63,18 @@ dando più voce al giudizio economico e meno all'OI carica.
 
 ---
 
+## FIX PRENDI-ALLO-SMORZAMENTO (29mag, file MD5 cc8cc9d8)
+Roberto ha osservato: trade arrivato a +5.6 ma chiuso a +3.3 (LOCK_EVAP) —
+"appena sente lo smorzamento deve prendere, non attendere l'inversione".
+DIAGNOSI: nell'uscita M2 il decel_score era solo 1/4 dell'exit_energy (diluito),
+quindi il bot usciva DOPO il ritracciamento. FIX: canale diretto a riga ~12229 —
+se current_pnl >= PROFIT_FLOOR_LOW E decel_score >= 0.65 → chiude subito
+(reason SMORZ_TAKE_...), senza aspettare il retreat. Armato SOLO sopra profitto
+buono → non scatta su trade piccoli/in perdita (non ricrea uscita precoce sui loss).
+VERIFICA: cercare reason "SMORZ_TAKE_" nei trade in profitto invece di "LOCK_EVAP_".
+Se i win chiudono più vicini al loro max_profit, funziona.
+Il decelerometro era GIÀ alimentato (riga 7813) e GIÀ letto da M2 (riga 12027).
+
 ## CAUSA DEL DRAWDOWN -$697 (capita)
 Le capsule protettive furono rimosse l'8 maggio (briefing: capsule V15 cancellate,
 73 RA eliminate). Senza memoria protettiva, dal 14 maggio il bot ha aperto a
@@ -79,8 +91,11 @@ Il fix pesi è iniziato. Trovati 3 "guardiani" che tenevano l'OI dominante:
 - GUARDIANO 1 (riga ~5501, calibrazione) → **FATTO E DEPLOYATO**. Invertito il
   pavimento: ora campo_carica MAX 30% (era MIN 30%), signal_tracker MIN 13%
   (era MAX 25%). L'economia è libera di salire. File MD5 7ffc72bba653198042b7cf34b2d22b84
-- GUARDIANO 2 (riga ~3811, boot) → DA FARE. Se campo_carica<0.30 lo resetta a
-  0.30. Rimuovere il check "if <0.30", tenere solo "if >0.45".
+- GUARDIANO 2 (riga ~3811, boot) → **PREPARATO, IN CANNA, NON ANCORA DEPLOYATO**.
+  File pronto: OVERTOP_BASSANO_V16_PRODUCTION_G2.py MD5 a7767dde2d94230c9389e4c1497c4e92.
+  Rimosso il check "campo_carica<0.30 = degradato" che resettava OI a 0.30 ad ogni
+  boot (annullava G1). Ora resetta solo se pesi davvero corrotti (somma fuori 0.5-1.5
+  o OI>0.45). DEPLOYARE SOLO DOPO aver verificato che G1 funziona (pesi si muovono).
 - GUARDIANO 3 (riga ~1126, capsula AUTO_SC_PESI_FIX) → DA FARE. Se campo<0.25
   genera capsula che lo ripristina a 0.35. Invertire in "if >0.45".
 VERIFICA G1: dashboard pannello "Pesi organi" → campo_carica deve poter scendere
