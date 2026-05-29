@@ -3591,6 +3591,21 @@ class PersistenzaStato:
                 CREATE INDEX IF NOT EXISTS idx_phf_block_reason
                 ON phantom_forensic(block_reason, is_win)
             """)
+            # ════════════════════════════════════════════════════════════════
+            # FIX MFE/MAE (28mag, Roberto): aggiungo 4 colonne forensiche per
+            # registrare la TRAIETTORIA del prezzo, non solo il punto di chiusura.
+            # max_price = prezzo MASSIMO raggiunto durante la vita del fantasma
+            # min_price = prezzo MINIMO raggiunto durante la vita del fantasma
+            # mfe_usd = movimento favorevole massimo in dollari (direzionale)
+            # mae_usd = movimento avverso massimo in dollari (direzionale)
+            # ALTER è idempotente: se la colonna esiste già, ignora silenziosamente.
+            # ════════════════════════════════════════════════════════════════
+            for _col, _typ in [("max_price","REAL"),("min_price","REAL"),
+                               ("mfe_usd","REAL"),("mae_usd","REAL")]:
+                try:
+                    conn.execute(f"ALTER TABLE phantom_forensic ADD COLUMN {_col} {_typ}")
+                except Exception:
+                    pass  # colonna già esistente
             conn.commit()
             conn.close()
         except Exception as e:
@@ -13428,6 +13443,29 @@ class OvertopBassanoV16Production:
                 if "TSUNAMI" in block:
                     import sqlite3 as _sql
                     _duration = time.time() - ph.get('entry_time', time.time())
+
+                    # ── FIX MFE/MAE (28mag, Roberto) ─────────────────────────
+                    # max_price/min_price sono tracciati a ogni tick in
+                    # _update_phantoms. Da quelli derivo MFE (movimento
+                    # favorevole) e MAE (movimento avverso) IN DOLLARI per
+                    # LONG e SHORT. Esposizione = $5000 (come PnL lordo nel
+                    # tracking, riga ~13234). Da questi 4 numeri la firma
+                    # vera del trade emerge: dove andava il prezzo, non
+                    # solo dove abbiamo chiuso.
+                    # ──────────────────────────────────────────────────────────
+                    _ph_max   = ph.get('max_price', ph['price_entry'])
+                    _ph_min   = ph.get('min_price', ph['price_entry'])
+                    _ph_pe    = ph['price_entry']
+                    _ph_exp   = 5000.0
+                    _ph_btc   = _ph_exp / _ph_pe if _ph_pe else 0.0
+                    _ph_dir   = ph.get('direction', 'LONG')
+                    if _ph_dir == 'LONG':
+                        _mfe_usd = round((_ph_max - _ph_pe) * _ph_btc, 4)  # quanto è salito a favore
+                        _mae_usd = round((_ph_pe - _ph_min) * _ph_btc, 4)  # quanto è sceso contro
+                    else:  # SHORT
+                        _mfe_usd = round((_ph_pe - _ph_min) * _ph_btc, 4)  # favorevole se scende
+                        _mae_usd = round((_ph_max - _ph_pe) * _ph_btc, 4)  # avverso se sale
+
                     _conn = _sql.connect(DB_PATH)
                     _conn.execute("""
                         INSERT INTO phantom_forensic (
@@ -13439,11 +13477,13 @@ class OvertopBassanoV16Production:
                             ts_confidenza,
                             seed_score, oi_carica, rsi, macd,
                             momentum, volatility, trend, regime, matrimonio,
-                            score, soglia
+                            score, soglia,
+                            max_price, min_price, mfe_usd, mae_usd
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
                                   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                                   ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                  ?, ?)
+                                  ?, ?,
+                                  ?, ?, ?, ?)
                     """, (
                         ph.get('entry_time'), time.time(), block, ph.get('direction','LONG'),
                         ph['price_entry'], price, round(pnl_netto, 4), 1 if is_win_netto else 0, _duration,
@@ -13457,6 +13497,7 @@ class OvertopBassanoV16Production:
                         ph.get('trend',''), ph.get('regime',''),
                         ph.get('_fp_matrimonio',''),
                         ph.get('_fp_score'), ph.get('_fp_soglia'),
+                        _ph_max, _ph_min, _mfe_usd, _mae_usd,
                     ))
                     _conn.commit()
                     _conn.close()
