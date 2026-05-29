@@ -93,6 +93,50 @@ puliti e mirati → la regola funziona. Controllare nei prossimi giorni: capsule
 con samples=1 e se vengono poi pulite o restano. Questo dirà se 1 è la soglia giusta
 o se serve un compromesso (es. 2).
 
+## FIX FLOOR CIECO — NON SI ENTRA A ENERGIA BASSA (29mag, file MD5 edc79421)
+Occhi di volpe sui trade reali: TUTTI i loss escono a soglia 35 (energia bassa),
+TUTTI i win a soglia 65 (energia alta). Frontiera netta. Roberto: "non dobbiamo
+entrare nel trade con energia bassa! È CIECO!". CAUSA TROVATA (riga ~5001): il
+floor d'entrata scendeva fino a 34 fidandosi del pred_score, MA la predizione
+indovina solo ~51.8% (accuracy_segno, a volte 22.5%) — cieca, testa-o-croce.
+Dava le chiavi della porta a un oracolo che non vede.
+FIX: (1) _floor_dyn non scende mai sotto SCORE_FLOOR=48 ("sotto = rumore puro",
+lo dice il codice stesso a riga 940), qualunque sia il pred_score. (2) Blindato
+anche il soglia_boost (riga ~5030): pavimento _floor_dyn invece di soglia_min_ctx
+(che poteva scendere a 24-34). Verificato in simulazione: 7 scenari estremi tutti >=48.
+EFFETTO ATTESO: il bot farà MOLTI MENO trade (solo alta energia) — pochi colpi buoni
+invece di tanti a vuoto. Cecchino, non mucca. DA OSSERVARE: spariscono i trade
+EXIT_E.._S35 (i loss da -$2)? Restano solo i S65 (i win)? Se sì, è il fix che
+cambia il segno. Se il bot non trada PER NIENTE per giorni, 48 è troppo alto → valutare 44.
+
+## FIX CARICA VIVA — LA FISICA CHE PRECEDE (29mag sera, file MD5 71c23522)
+Intuizione di Roberto (ritrovata, la diceva da mesi alle AI): "prima della vittoria
+c'è un'energia che la segnala, ma può MORIRE se non ha forza sufficiente. Il vincente
+ha la sua identità da vincente PRIMA di partire". Metafora: tiro al piattello — non
+spari all'uscita (entrata), becchi la TRAIETTORIA (la carica che sale/vive).
+SCOPERTA: la fisica era GIÀ nel codice! _pre_breakout_factor (riga 5186) calcola già
+i SEED DIREZIONALI (carica che sale per 5 tick = impulso vivo). MA era schiacciata a
+factor 0.92 (effetto 8%, sprecato) — riconosciuta e buttata via, stessa malattia
+dell'OI che soffocava l'economia.
+PROVA NEI DATI: sc_seed 25→+4.03 (vince) ma anche sc_seed 25→-2.65 (muore). Stesso
+valore, identità opposta: uno saliva (vivo), uno scendeva (morto). Il VALORE non basta,
+serve la DIREZIONE della carica.
+FIX (2 colpi):
+1. Liberata la carica viva: factor 0.82 (3/3 segnali, forte) / 0.90 (2/3) / 0.96 (1)
+   / 1.00 (morta=nessuno sconto). Prima era 0.92/0.96/1.00/1.00 (quasi nullo).
+2. Registrata la TRAIETTORIA: nel data_json ora c'è seed_traj (ultimi 5 valori) e
+   seed_dir (derivata: >0 viva, <=0 morta). Da DOMANI ogni trade dice se la carica
+   era viva o morta all'entrata.
+DA OSSERVARE (la prova che mancava): tra qualche giorno, query su seed_dir — i
+vincenti hanno seed_dir>0 (carica viva) e i perdenti seed_dir<=0? Se sì, la fisica
+di Roberto è dimostrata e si può rendere seed_dir>0 CONDIZIONE D'ENTRATA obbligatoria.
+NOTA: la soglia di ENTRATA pulita (dal 12mag, solo score validi) mostra PnL netto
+positivo SOLO sopra score 85 (8 trade +3.7, vs tutto negativo sotto). Ma Roberto ha
+ragione: 85 all'ENTRATA è troppo restrittivo — conta la carica che sale DURANTE/PRIMA,
+non il valore puntuale all'ingresso. Per questo il fix è sulla carica viva, non un
+floor a 85. Il floor resta a 48 (fix precedente); valutare se alzarlo dopo aver visto
+i dati seed_dir.
+
 ## CAUSA DEL DRAWDOWN -$697 (capita)
 Le capsule protettive furono rimosse l'8 maggio (briefing: capsule V15 cancellate,
 73 RA eliminate). Senza memoria protettiva, dal 14 maggio il bot ha aperto a
