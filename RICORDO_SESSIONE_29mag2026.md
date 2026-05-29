@@ -137,6 +137,38 @@ non il valore puntuale all'ingresso. Per questo il fix è sulla carica viva, non
 floor a 85. Il floor resta a 48 (fix precedente); valutare se alzarlo dopo aver visto
 i dati seed_dir.
 
+## FIX POST-MORTEM ROTTO + ZONA_MORTA (29mag sera, file MD5 5aed3e5d)
+DUE fix legati alla svolta "timeframe lungo":
+1. POST-MORTEM (phantom_forensic) era MORTO dal 14 maggio. Causa trovata (riga ~13536):
+   salvava SOLO i blocchi con "TSUNAMI" nel nome (if "TSUNAMI" in block). Dal 14mag i
+   blocchi sono diventati CTX_TOSSICO/SC_BLOCCA/REGIME_TOSSICO/FP_TOSSICO — mai "TSUNAMI"
+   → filtro sempre falso → zero righe forensic da 14 giorni. FIX: registra TUTTI i blocchi
+   (if block:). Da ora il sistema di verifica di Roberto ("cosa è accaduto dopo la chiusura")
+   torna a vedere. ERA QUESTO che impediva di sapere se tenere aperto conviene.
+2. ZONA_MORTA disattivata (riga ~11964): chiudeva i trade giovani (2-10s) in perdita per
+   TEMPO. Contro la regola di Roberto "se non ha guadagnato vai avanti, non chiudere per
+   tempo". Ora il tempo non taglia più; restano solo PROFITTO (esce sopra fee) e STOP 2%.
+
+## SVOLTA STRATEGICA — TIMEFRAME LUNGO (29mag sera) — DA COMPLETARE
+Roberto: "lo scalping a 60s non guadagna (la fee uccide). Se non maciniamo a 60,
+NON chiudere il trade — vai avanti finché non guadagna. Se ha guadagnato chiudi."
+VINCOLO CASSA: max 2 minuti aperto (oltre, le operazioni si accodano e la cassa si
+satura — "lì cade l'asino"). Stop loss 2% INTATTO come unico freno sulle perdite.
+DA FARE (prossima sessione): scrivere il TIMEOUT a 120s in M2 (sostituire i vecchi
+TIMEOUT_DD a duration_avg*5). NON ancora fatto stasera.
+NOTA DATI: phantom_forensic vecchio aveva mfe_usd inaffidabile (pre-fix) e i fantasmi
+sono crollati (4/giorno). Per questo NON abbiamo potuto verificare il numero giusto del
+timeout sui dati. 120s è vincolo OPERATIVO (cassa), non statistico. Col forensic ora
+riparato, tra qualche giorno avremo i dati veri per confermarlo o correggerlo.
+
+## IDEA FUTURA — SCANNER (supporti/resistenze + carica viva)
+Roberto vuole uno scanner che legge supporti/resistenze e proietta l'andamento, entra
+se profitto/blocca se loss. ATTENZIONE (Claude): è un cantiere NUOVO di settimane, non
+un fix. Rischio: è la stessa famiglia del pred_score che indovina solo 51.8% (cieco).
+I supporti funzionano su timeframe lunghi, non 60s — coerente con la svolta. PROPOSTA:
+unire scanner ("dove": supporto forte) + carica viva ("quando": seed_dir>0 impulso vivo)
+→ entra solo quando coincidono. Da progettare in sessione dedicata, NON di fretta.
+
 ## CAUSA DEL DRAWDOWN -$697 (capita)
 Le capsule protettive furono rimosse l'8 maggio (briefing: capsule V15 cancellate,
 73 RA eliminate). Senza memoria protettiva, dal 14 maggio il bot ha aperto a
