@@ -74,6 +74,19 @@ L'83% del danno (-$579) viene da 4 contesti RANGING LONG:
 - MEDIO|ALTA|SIDEWAYS|RANGING|LONG   (24t, WR 20.8%, -$32)
 - MEDIO|BASSA|SIDEWAYS|RANGING|LONG  (76t, WR 34.2%, -$96)
 
+## AGGIORNAMENTO — GUARDIANO 1 FATTO (29mag, file MD5 7ffc72bb)
+Il fix pesi è iniziato. Trovati 3 "guardiani" che tenevano l'OI dominante:
+- GUARDIANO 1 (riga ~5501, calibrazione) → **FATTO E DEPLOYATO**. Invertito il
+  pavimento: ora campo_carica MAX 30% (era MIN 30%), signal_tracker MIN 13%
+  (era MAX 25%). L'economia è libera di salire. File MD5 7ffc72bba653198042b7cf34b2d22b84
+- GUARDIANO 2 (riga ~3811, boot) → DA FARE. Se campo_carica<0.30 lo resetta a
+  0.30. Rimuovere il check "if <0.30", tenere solo "if >0.45".
+- GUARDIANO 3 (riga ~1126, capsula AUTO_SC_PESI_FIX) → DA FARE. Se campo<0.25
+  genera capsula che lo ripristina a 0.35. Invertire in "if >0.45".
+VERIFICA G1: dashboard pannello "Pesi organi" → campo_carica deve poter scendere
+sotto 0.30 e signal_tracker salire sopra 0.13. Se si muovono, G1 funziona.
+ORDINE: osservare G1 qualche ora PRIMA di fare G2. Uno per volta.
+
 ## RIMASTO DA FARE
 1. **Scrivere i 4 blocchi tossici** in capsule_permanenti. Bloccato dal DB lock
    (il bot tiene il DB occupato). Va fatto o a bot fermo, o facendoli creare al
