@@ -8045,16 +8045,29 @@ class OvertopBassanoV16Production:
                     _last_ctx = (self.heartbeat_data or {}).get('narratore_trade_stats', {}).get('last_context', '')
                     _trade_analisi = (self.heartbeat_data or {}).get('trade_analisi', [])
                     _ultima_analisi = _trade_analisi[-1].get('analisi', '') if _trade_analisi else ''
-                    # V16: BLOCCA_CONTESTO non viene mai salvata permanentemente — genera loop vizioso
-                    _salva = (_azione_cap not in ('BLOCCA_CONTESTO', 'blocca_entry', 'BLOCCA_ENTRY'))
+                    # ════════════════════════════════════════════════════════
+                    # PASSO A FIX AMNESIA (29mag, Roberto): prima i blocchi NON
+                    # venivano salvati ('genera loop vizioso') → ogni riavvio il
+                    # bot dimenticava quali firme erano tossiche e ricominciava a
+                    # perderci (435 trade RANGING WR16.8% = -$697, costo amnesia).
+                    # ORA i blocchi PERSISTONO. Il loop vizioso (blocco eterno) è
+                    # evitato NON dall'amnesia ma dalla REGOLA ANTIAEREA:
+                    # _pulisci_blocco_se_win() cancella il blocco quando 2 WIN
+                    # consecutivi della stessa firma dimostrano che il contesto
+                    # è cambiato. Memoria che persiste ma non è prigione perpetua.
+                    # ════════════════════════════════════════════════════════
+                    _salva = True  # tutte le capsule persistono, inclusi i blocchi
                     if _salva:
                         _prompt_ctx = (
                             f"MEMORIA per {_last_ctx}: {_azione_cap} "
                             f"n={_n_trades} wr={round(_wr_now*100)}% — {_ultima_analisi[:200]}"
                         ) if _ultima_analisi else ''
+                        # Firma completa nei params: serve all'antiaerea per
+                        # sapere QUALE firma questo blocco protegge.
+                        _params_save = dict(_cap.get('params', {}))
                         self._salva_capsula_permanente({
                             'id': _cid, 'azione': _azione_cap,
-                            'params': _cap.get('params', {}),
+                            'params': _params_save,
                             'motivo': _cap.get('motivo', ''),
                             'forza': _forza, 'contesto': _last_ctx,
                             'ts': _cap.get('ts', ''),
@@ -12816,6 +12829,21 @@ class OvertopBassanoV16Production:
             except Exception as _nr_e:
                 log.debug(f"[NARRATORE_TRADE] {_nr_e}")
 
+            # ════════════════════════════════════════════════════════════════
+            # PASSO A — REGOLA ANTIAEREA (29mag, Roberto):
+            # Su ogni trade chiuso, se è WIN, verifica se la firma esatta ha
+            # accumulato abbastanza WIN consecutivi da PULIRE un eventuale blocco
+            # permanente. È il meccanismo che impedisce la prigione perpetua:
+            # un contesto bloccato può sempre redimersi dimostrando di vincere.
+            # Firma = momentum|volatility|trend|regime|direction (5 dimensioni).
+            # ════════════════════════════════════════════════════════════════
+            try:
+                _aa_firma = (f"{self._shadow_entry_momentum}|{self._shadow_entry_volatility}|"
+                             f"{self._shadow_entry_trend}|{self._regime_current}|{entry_direction}")
+                self._pulisci_blocco_se_win(_aa_firma, is_win)
+            except Exception as _aa_e:
+                log.debug(f"[ANTIAEREA] {_aa_e}")
+
             # ── ORACLE WIN TRIGGER — cattura pattern vincente ────────────
             # Ogni trade vincente genera snapshot e trigger per Oracle Auto.
             # Oracle analizza perché ha vinto e genera capsule che amplifica quel pattern.
@@ -14354,6 +14382,85 @@ class OvertopBassanoV16Production:
             log.info(f"[CAPSULA_PERM] Salvata: {capsula.get('id')} {capsula.get('azione')}")
         except Exception as e:
             log.error(f"[CAPSULA_PERM_SAVE] {e}")
+
+    # ════════════════════════════════════════════════════════════════════
+    # PASSO A — REGOLA ANTIAEREA (29mag, Roberto)
+    # ════════════════════════════════════════════════════════════════════
+    # Un blocco permanente protegge una firma tossica. Ma se il mercato
+    # cambia e quella firma torna a vincere, il blocco deve cadere — altrimenti
+    # è prigione perpetua (il "loop vizioso" che prima si evitava con l'amnesia).
+    # REGOLA: 2 WIN CONSECUTIVI della STESSA firma cancellano il blocco.
+    #   - perché 2 e non 1: in RANGING un singolo win può essere rumore/fortuna;
+    #     due di fila sulla stessa firma è molto meno probabile sia caso.
+    #   - un LOSS della firma azzera il contatore (deve essere consecutivi).
+    # NOTA PASSO B (futuro): "win" qui usa is_win del simulatore. Quando i dati
+    # MFE/MAE saranno maturi, sostituire con "win = MFE reale >= soglia fee".
+    SOGLIA_WIN_PULIZIA = 2  # win consecutivi stessa firma per pulire un blocco
+
+    def _pulisci_blocco_se_win(self, firma: str, is_win: bool):
+        """Regola antiaerea: 2 win consecutivi stessa firma → cancella blocco."""
+        if not hasattr(self, '_aa_win_consecutivi'):
+            self._aa_win_consecutivi = {}
+
+        if not is_win:
+            # Loss → azzera il contatore di QUESTA firma (devono essere consecutivi)
+            self._aa_win_consecutivi[firma] = 0
+            return
+
+        # Win → incrementa il contatore della firma
+        _n = self._aa_win_consecutivi.get(firma, 0) + 1
+        self._aa_win_consecutivi[firma] = _n
+
+        if _n < self.SOGLIA_WIN_PULIZIA:
+            return  # non ancora abbastanza win consecutivi
+
+        # ── Soglia raggiunta: cerca e cancella blocchi permanenti di questa firma ──
+        try:
+            import json as _j
+            _mom, _vol, _tr, _reg, _dir = (firma.split('|') + ['', '', '', '', ''])[:5]
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            _rows = conn.execute("""
+                SELECT id, azione, params_json, contesto FROM capsule_permanenti
+                WHERE azione IN ('blocca_entry','BLOCCA_ENTRY','BLOCCA_CONTESTO')
+            """).fetchall()
+            _puliti = []
+            for _r in _rows:
+                # Matcha la firma: i blocchi salvano la firma nei params o nel contesto
+                try:
+                    _p = _j.loads(_r['params_json']) if _r['params_json'] else {}
+                except Exception:
+                    _p = {}
+                # Match se momentum|volatility|trend coincidono (le 3 dimensioni
+                # sempre presenti nei blocchi CTX_TOSSICO) ed eventualmente dir/regime
+                _match = (
+                    str(_p.get('momentum', '')) == _mom and
+                    str(_p.get('volatility', '')) == _vol and
+                    str(_p.get('trend', '')) == _tr
+                ) or (f"{_mom}|{_vol}|{_tr}" in str(_r['contesto'] or ''))
+                if _match:
+                    conn.execute("DELETE FROM capsule_permanenti WHERE id=?", (_r['id'],))
+                    _puliti.append(_r['id'])
+                    # Rimuovi anche dalla RAM (capsule_ragionatore + CI attiva)
+                    try:
+                        if self.heartbeat_data is not None:
+                            _cr = self.heartbeat_data.get('capsule_ragionatore', [])
+                            self.heartbeat_data['capsule_ragionatore'] = [
+                                c for c in _cr if c.get('id') != _r['id']
+                            ]
+                        if hasattr(self, 'ci') and _r['id'] in getattr(self.ci, '_capsule_attive', {}):
+                            self.ci._capsule_attive.pop(_r['id'], None)
+                    except Exception:
+                        pass
+            conn.commit()
+            conn.close()
+            if _puliti:
+                self._aa_win_consecutivi[firma] = 0  # reset dopo pulizia
+                log.info(f"[ANTIAEREA] 🧹 firma {firma} → {self.SOGLIA_WIN_PULIZIA} WIN consecutivi: "
+                         f"PULITI {len(_puliti)} blocchi {_puliti}")
+        except Exception as e:
+            log.error(f"[ANTIAEREA_PULIZIA] {e}")
+
 
     def _carica_storia_dal_db(self):
         """Al boot resetta narratore — non eredita storia di sessioni precedenti.
