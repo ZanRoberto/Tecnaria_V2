@@ -5496,11 +5496,20 @@ class VeritatisTracker:
                 elif hit_rate <= 0.40:
                     pesi['campo_carica'] = max(0.05, pesi['campo_carica'] - STEP)
 
-            # Pavimento/soffitto pesi — campo_carica non scende mai sotto 30%
-            # signal_tracker non sale mai sopra 25% — non deve dominare
-            pesi['campo_carica']   = max(0.30, pesi['campo_carica'])
-            pesi['signal_tracker'] = min(0.25, pesi['signal_tracker'])
-            pesi['oracolo_fp']     = max(0.15, pesi['oracolo_fp'])
+            # ════════════════════════════════════════════════════════════════
+            # GUARDIANO 1 RIBILANCIATO (29mag, Roberto):
+            # PRIMA: campo_carica MIN 30% (OI costretto a dominare),
+            #        signal_tracker MAX 25% (economia soffocata).
+            # Questo costringeva il bot a decidere sull'ENERGIA OI (che non dà
+            # direzione) invece che sulla CONVENIENZA (che sa: TRENDING_BEAR vince,
+            # RANGING LONG perde — 128k campioni Signal Tracker).
+            # ORA: campo_carica MAX 30% (OI non può dominare),
+            #      signal_tracker MIN 13% (economia libera di crescere).
+            # Coerente coi PESI_DEFAULT (campo 0.22, signal 0.13).
+            # ════════════════════════════════════════════════════════════════
+            pesi['campo_carica']   = min(0.30, pesi['campo_carica'])   # OI: tetto 30%, non dominante
+            pesi['signal_tracker'] = max(0.13, pesi['signal_tracker']) # economia: pavimento 13%, può salire
+            pesi['oracolo_fp']     = max(0.10, pesi['oracolo_fp'])     # pavimento abbassato
             # Rinormalizza sempre a somma 1.0
             tot = sum(pesi.values())
             for k in pesi:
