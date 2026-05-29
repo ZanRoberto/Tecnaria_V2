@@ -75,6 +75,24 @@ VERIFICA: cercare reason "SMORZ_TAKE_" nei trade in profitto invece di "LOCK_EVA
 Se i win chiudono più vicini al loro max_profit, funziona.
 Il decelerometro era GIÀ alimentato (riga 7813) e GIÀ letto da M2 (riga 12027).
 
+## FIX MIN_SAMPLES — UN LOSS MARCA (29mag, file MD5 f72009eb)
+Roberto: "una capsula non deve aspettare 3 loss per imparare, basta UNA — lo avevo
+già segnalato ma fu ignorato". Verificato nei dati: capsule nascevano con samples=3
+(es. DEBOLE_ALTA_SIDEWAYS subìto 3 → protetto 68250). Trovato MIN_SAMPLES_L3=3 a
+riga 943. DECISIONE (Claude, delegato da Roberto):
+- MIN_SAMPLES_L3 = 1 → capsula EVENTO IMMEDIATO nasce dal PRIMO loss (regola antiaerea)
+- MIN_SAMPLES_L2 = 8 (INTATTO) → la statistica di tendenza resta onesta, non su 1 campione
+- regime largo (_analisi_l3_regime_tossico) già protetto da soglia interna 10 → niente
+  bug "blocca tutto RANGING su pochi loss"
+RAZIONALE: "marca subito per EVENTO (L3), giudica con calma per STATISTICA (L2)".
+Sono due mestieri diversi. Il commento riga 1458 "era 3 troppo aggressivo→10" è solo
+documentazione vecchia, NON codice attivo.
+DA OSSERVARE (sperimentale): con L3=1, nascono capsule da 1 solo loss. Se nascono
+troppe capsule-rumore, l'antiaerea le pulisce con 2 win. Se invece i blocchi sono
+puliti e mirati → la regola funziona. Controllare nei prossimi giorni: capsule nuove
+con samples=1 e se vengono poi pulite o restano. Questo dirà se 1 è la soglia giusta
+o se serve un compromesso (es. 2).
+
 ## CAUSA DEL DRAWDOWN -$697 (capita)
 Le capsule protettive furono rimosse l'8 maggio (briefing: capsule V15 cancellate,
 73 RA eliminate). Senza memoria protettiva, dal 14 maggio il bot ha aperto a
