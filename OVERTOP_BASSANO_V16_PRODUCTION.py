@@ -940,7 +940,13 @@ class IntelligenzaAutonoma:
     SCORE_FLOOR       = 48     # sotto questo = rumore puro
     STOP_LOSS_PCT     = 0.01   # 1% margine max loss per trade
     MIN_SAMPLES_L2    = 8      # campioni minimi per capsule L2
-    MIN_SAMPLES_L3    = 3      # campioni minimi per capsule L3 (evento immediato)
+    # ANTIAEREA (29mag, Roberto): "UN loss con firma X marca la firma."
+    # Il cancello generale scende a 1 → l'apprendimento di FIRMA PRECISA parte
+    # dal PRIMO loss. La prudenza contro "blocca tutto il regime su pochi
+    # campioni" è applicata INTERNAMENTE solo all'analisi regime-largo
+    # (MIN_SAMPLES_REGIME), non più come cancello che frena tutto.
+    MIN_SAMPLES_L3    = 1      # firma precisa: marca dal primo loss
+    MIN_SAMPLES_REGIME = 8     # regime largo: resta prudente (evita "blocca tutto RANGING")
     MAX_CAPSULE_AGE   = 86400  # 24h max vita capsule L2 senza conferma
     MAX_CAPSULE_EVENT = 3600   # 1h max vita capsule L3
 
