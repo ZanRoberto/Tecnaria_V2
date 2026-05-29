@@ -4996,15 +4996,25 @@ class CampoGravitazionale:
         #   pred_score 70%  →  floor 38  (predizione viva, si fida)
         #   pred_score 85%+ →  floor 34  (predizione molto viva, ottimo)
         # ════════════════════════════════════════════════════════════════════
+        # ════════════════════════════════════════════════════════════════════
+        # FIX 29mag (Roberto): "È CIECO — non si entra con energia bassa!"
+        # Il floor scendeva fino a 34 fidandosi del pred_score. Ma la predizione
+        # indovina ~51.8% (accuracy_segno) — testa o croce, CIECA. Dava le chiavi
+        # della porta a un oracolo che non vede. Risultato: tutti i LOSS a S35
+        # (energia bassa), tutti i WIN a S65 (energia alta) — la frontiera è netta.
+        # ORA: il floor dinamico NON scende mai sotto SCORE_FLOOR (48), che il
+        # codice stesso definisce "sotto = rumore puro". La predizione può alzare
+        # la prudenza ma NON può più aprire la porta sull'energia bassa.
+        # ════════════════════════════════════════════════════════════════════
         _pred_score_floor = kwargs.get('pred_score', 0.0)
         if _pred_score_floor >= 85:
-            _floor_dyn = 34
+            _floor_dyn = 48   # era 34 — mai sotto rumore puro, anche se "sicura"
         elif _pred_score_floor >= 70:
-            _floor_dyn = 38
+            _floor_dyn = 48   # era 38
         elif _pred_score_floor >= 50:
-            _floor_dyn = 44
+            _floor_dyn = 48   # era 44
         elif _pred_score_floor >= 30:
-            _floor_dyn = 47
+            _floor_dyn = 49   # era 47
         else:
             _floor_dyn = 50  # cold start: prudenza
 
@@ -5017,7 +5027,9 @@ class CampoGravitazionale:
         # all'osservazione del mercato. Il pavimento proporzionale resta valido.
         soglia_boost = kwargs.get('soglia_boost', 0.0)
         if soglia_boost > 0:
-            soglia = max(soglia_min_ctx, min(dynamic_max, soglia + soglia_boost))
+            # FIX 29mag: pavimento = _floor_dyn (48), NON soglia_min_ctx (che
+            # poteva scendere a 24-34). Nemmeno il boost riapre la porta sotto rumore.
+            soglia = max(_floor_dyn, min(dynamic_max, soglia + soglia_boost))
 
         # -- DECISIONE -----------------------------------------------------
         # Salva score e soglia per heartbeat/grafico
@@ -5241,18 +5253,25 @@ class CampoGravitazionale:
                 details.append(f"SEED_DIR4={avg_deriv:+.3f}")
 
         # -- CALCOLA FATTORE -----------------------------------------------
-        # CALIBRATO SU DATI REALI (6 trade shadow 16/03/2026):
-        #   3/3 segnali: 2 WIN +$27.29, 1 LOSS -$1.28 → WR 66%, R/R 21:1
-        #   2/3 segnali: 0 WIN, 3 LOSS -$0.78 → WR 0% → QUASI DISABILITATO
-        #   Solo il 3/3 pieno abbassa significativamente la soglia.
+        # ════════════════════════════════════════════════════════════════
+        # CARICA VIVA (29mag, Roberto) — la fisica che precede la vittoria.
+        # "Prima della vittoria c'è un'energia che lo segnala — ma può morire
+        #  se non ha forza sufficiente. Il vincente ha la sua identità PRIMA."
+        # I seed direzionali (carica che SALE per 5 tick = impulso vivo che
+        # nasce) erano riconosciuti ma schiacciati a 0.92 (effetto 8%, sprecato).
+        # ORA la carica viva pesa davvero: più segnali concordi → più forza →
+        # soglia più bassa (il bot entra dove l'impulso nasce). Carica morta
+        # o piatta (signals 0) → NON tocca nulla (resta prudente).
+        # Come il tiro al piattello: non spari all'uscita, becchi la traiettoria.
+        # ════════════════════════════════════════════════════════════════
         if signals >= 3:
-            factor = 0.92    # segnala ma NON crea buchi - i LOSS SMORZ a soglia bassa sono la prova
+            factor = 0.82    # carica VIVA e forte: impulso che nasce, entra
         elif signals >= 2:
-            factor = 0.96    # quasi nessun effetto - 2/3 perde troppo
+            factor = 0.90    # carica viva media: effetto moderato
         elif signals >= 1:
-            factor = 1.00    # un segnale = nessun effetto
+            factor = 0.96    # un segnale: piccolo aiuto
         else:
-            factor = 1.00    # niente - soglia invariata
+            factor = 1.00    # carica morta/piatta: nessuno sconto, prudenza
 
         detail_str = f"pb={factor:.2f}({signals}/3 {'+'.join(details)})" if signals > 0 else ""
         return factor, detail_str, signals
@@ -12706,6 +12725,12 @@ class OvertopBassanoV16Production:
                           "peak_pnl":     round(self._trade_peak_pnl, 4),
                           "peak_delta_s": round(self._trade_peak_ts - self._shadow_entry_time, 1)
                                          if self._trade_peak_ts and self._shadow_entry_time else 0,
+                          # CARICA VIVA (29mag, Roberto): traiettoria del seed
+                          # PRIMA dell'entrata. seed_dir>0 = carica viva (saliva,
+                          # impulso che nasce), <=0 = carica morta/piatta.
+                          # Da qui si dimostra: il vincente ha la carica viva prima.
+                          "seed_traj": list(getattr(self.campo, "_seed_history", []))[-5:],
+                          "seed_dir":  round((lambda s: (s[-1]-s[0])/max(len(s)-1,1) if len(s)>=2 else 0.0)(list(getattr(self.campo,"_seed_history",[]))[-5:]), 4),
                       })))
                 conn.commit()
                 conn.close()
