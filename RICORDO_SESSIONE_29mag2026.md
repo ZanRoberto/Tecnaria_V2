@@ -169,6 +169,25 @@ I supporti funzionano su timeframe lunghi, non 60s — coerente con la svolta. P
 unire scanner ("dove": supporto forte) + carica viva ("quando": seed_dir>0 impulso vivo)
 → entra solo quando coincidono. Da progettare in sessione dedicata, NON di fretta.
 
+## FIX CADAVERE RSI NELLA DIREZIONE — SHORT SBLOCCATO (29mag sera, file MD5 88014ef5)
+BUG GRAVE trovato da Roberto: il bot non va MAI short anche quando il mercato urla
+short. Screenshot SuperCervello: SHORT 0.546 > LONG 0.460, eppure resta LONG.
+CAUSA: RSI/MACD disarmati il 23mag (_rsi_score=0, W_RSI=0) NELLO SCORE — pulito lì.
+MA la logica di FLIP direzione (riga ~9516) leggeva ancora _last_rsi=50 (fisso). L'unica
+via per SHORT in RANGING (OI_SHORT_FORTE) era sepolta dentro "elif _rsi_now<30" che con
+RSI=50 NON scatta MAI → in RANGING (regime quasi sempre attivo) il bot NON poteva flippare
+a short. "Mente (50), vota, distrugge." È la stessa malattia del filtro TSUNAMI e dei
+guardiani pesi: un pezzo spento che nessuno toglie dal voto.
+FIX: rimosso _rsi_now dalla logica direzione. SHORT in RANGING ora scatta sui segnali VIVI:
+OI_short >= 0.85 (FUOCO/CARICA) + drift < -0.002 + cooldown. SHORT in non-ranging su
+bearish_streak>=3. Nessun veto RSI.
+VERIFICA: nei log M2 deve comparire "FLIP → SHORT in RANGING" (prima MAI) e nei trade
+dei SHORT_SHADOW accanto ai LONG_SHADOW. Se il bot inizia a girare short quando il
+mercato scende → occhio destro riaperto.
+ATTENZIONE prossima istanza: RSI e MACD sono DISARMATI DI PROPOSITO da Roberto (23mag).
+NON riattivarli. NON farli votare. Se trovi _last_rsi=50 che entra in qualche decisione,
+è un CADAVERE che vota — toglilo, non riaccenderlo.
+
 ## CAUSA DEL DRAWDOWN -$697 (capita)
 Le capsule protettive furono rimosse l'8 maggio (briefing: capsule V15 cancellate,
 73 RA eliminate). Senza memoria protettiva, dal 14 maggio il bot ha aperto a
