@@ -12428,14 +12428,18 @@ class OvertopBassanoV16Production:
             if duration > duration_avg * 5 and drawdown_pct > 1.0:
                 self._close_shadow_trade(price, "TIMEOUT_DD")
                 return
-            # FIX 11mag-notte: timeout assoluto da 3 min → 30 min
-            # MOTIVAZIONE: la simulazione del 9mag mostra che holding 20-60 min
-            # avrebbe portato +$32 invece di -$30. Test empirico: 1 sola posizione
-            # alla volta (verificato self._shadow è singola), TIMEOUT_DD a 1%
-            # drawdown lavora come circuit breaker intelligente. Se il test
-            # produce risultati negativi nei log, ripristinare a 180.
-            if duration > 1800:
-                self._close_shadow_trade(price, "TIMEOUT_MAX_30M")
+            # ════════════════════════════════════════════════════════════════
+            # VINCOLO CASSA — MAX 8 MINUTI (30mag, Roberto)
+            # ════════════════════════════════════════════════════════════════
+            # Capitale 10k$, esposizione 5k$/trade. Se i trade restano aperti
+            # 30 min, la coda accumula esposizione (10 trade × 5k = 50k su 10k
+            # di cassa) → la cassa si satura e blocca le opportunità nuove.
+            # Roberto: "massimo tempo 8 minuti". 8 min = 480s.
+            # Il fix timeframe-lungo (sopra) lascia respirare i trade immaturi,
+            # ma il tetto cassa resta INVALICABILE: oltre 480s si chiude e basta.
+            TIMEOUT_MAX_CASSA = 480   # 8 minuti — vincolo cassa, non negoziabile
+            if duration > TIMEOUT_MAX_CASSA:
+                self._close_shadow_trade(price, f"TIMEOUT_MAX_8M_dur{int(duration)}s")
                 return
 
         except Exception as e:
