@@ -11958,12 +11958,19 @@ class OvertopBassanoV16Production:
             #   RANGING (mercato fermo) → 2-10s come prima (originale V13.5)
             #   EXPLOSIVE/TRENDING_BULL/TRENDING_BEAR → lascia respirare ≥15s
             # In regimi vivi 3-9s è respirazione, non morte del trade.
+            # ════════════════════════════════════════════════════════════════
+            # REGOLA TIMEFRAME LUNGO (29mag, Roberto): "non blocchiamo il trade
+            # se non abbiamo guadagnato. Se abbiamo guadagnato lo chiudiamo, se
+            # non abbiamo guadagnato andiamo avanti." A 60s la fee ($2) uccide:
+            # il movimento medio non la copre. Il trade DEVE poter maturare.
+            # ZONA_MORTA chiudeva i trade giovani (2-10s) in perdita per TEMPO —
+            # DISATTIVATA. Il tempo non chiude più. Chiudono solo:
+            #  - il PROFITTO (sopra, quando supera la fee → incassa)
+            #  - lo STOP LOSS 2% (HARD_STOP qui sotto, INTATTO → il freno se frana)
+            # ════════════════════════════════════════════════════════════════
             _regime_now = getattr(self, "_regime_current", "RANGING") or "RANGING"
-            _zm_min, _zm_max = (2.0, 10.0) if _regime_now == "RANGING" else (15.0, 30.0)
-            if _zm_min <= duration < _zm_max and current_pnl_real < 0:
-                self._log_m2("💀", f"ZONA_MORTA dur={duration:.1f}s pnl=${current_pnl_real:+.2f} reg={_regime_now}")
-                self._close_shadow_trade(price, f"ZONA_MORTA_dur{duration:.0f}s_{_regime_now[:3]}")
-                return
+            # ZONA_MORTA disattivata: non si taglia per tempo un trade in perdita.
+            # (Lo stop loss 2% qui sotto resta il solo freno sulle perdite.)
 
             HARD_STOP_USD = self.STOP_LIVE
             if current_pnl_real < -HARD_STOP_USD:
@@ -13526,7 +13533,12 @@ class OvertopBassanoV16Production:
             # Roberto: "Sono gli unici soldi che possiamo prendere".
             # ════════════════════════════════════════════════════════════════
             try:
-                if "TSUNAMI" in block:
+                # FIX 29mag (Roberto): il post-mortem registrava SOLO i blocchi
+                # con "TSUNAMI" nel nome. Dal 14mag i blocchi sono diventati
+                # CTX_TOSSICO/SC_BLOCCA/REGIME_TOSSICO (mai "TSUNAMI") → il filtro
+                # era sempre falso → forensic MORTO dal 14 maggio. Ora registra
+                # TUTTI i blocchi: il sistema di verifica torna a vedere il dopo.
+                if block:  # qualunque blocco, non solo TSUNAMI
                     import sqlite3 as _sql
                     _duration = time.time() - ph.get('entry_time', time.time())
 
