@@ -12390,10 +12390,37 @@ class OvertopBassanoV16Production:
                         f"lordo=${current_pnl:+.2f} netto=${pnl_netto_stimato:+.2f}")
                     # NON return: continua agli altri controlli (timeout, drawdown)
                 else:
-                    # LOSS vera: chiusura come prima
-                    self._close_shadow_trade(price,
-                        f"EXIT_E{exit_energy}_S{exit_soglia}_LOSS_{current_pnl:+.1f}")
-                    return
+                    # ════════════════════════════════════════════════════════
+                    # TIMEFRAME LUNGO (30mag, Roberto) — "se non ha guadagnato,
+                    # vai avanti; se ha guadagnato, chiudi."
+                    # ════════════════════════════════════════════════════════
+                    # PROVA SUI DATI (403 trade): in RANGING LONG il lordo medio
+                    # è +0.47 (la DIREZIONE è giusta), ma -587$ netti perché il
+                    # bot chiudeva i trade a calo-energia (S35) appena andavano
+                    # un soffio sotto zero (-0.04, -0.19, -0.10...) senza dare
+                    # tempo di risalire e pagare la fee.
+                    # ORA: una perdita LIEVE (entro -fee) NON chiude per energia.
+                    # Il trade respira come il SUBFEE qui sopra. Lo chiudono solo
+                    # i freni VERI già attivi più sotto:
+                    #   - HARD_STOP 2% (frana)
+                    #   - TIMEOUT_DD (drawdown >1% oltre durata media)
+                    #   - TIMEOUT_MAX_30M (assoluto)
+                    #   - o torna in profitto e incassa
+                    # PALETTO SICUREZZA: se la perdita è già SERIA (oltre -fee,
+                    # cioè il trade sta franando davvero) → chiude subito, non si
+                    # aspetta. Così non trasformiamo tanti -0.20 in pochi -10.
+                    _fee_loss_floor = float(getattr(self, "FEE_TRADE", 2.00))
+                    if current_pnl <= -_fee_loss_floor:
+                        # Perdita seria: chiudi (freno energia legittimo)
+                        self._close_shadow_trade(price,
+                            f"EXIT_E{exit_energy}_S{exit_soglia}_LOSS_{current_pnl:+.1f}")
+                        return
+                    else:
+                        # Perdita lieve: NON chiudere per energia. Lascia maturare.
+                        self._log_m2("🟢",
+                            f"HOLD_IMMATURO E{exit_energy} S{exit_soglia} "
+                            f"lordo=${current_pnl:+.2f} (sotto fee, lascio respirare)")
+                        # NON return: prosegue ai freni veri (HARD_STOP, TIMEOUT_DD)
 
             # -- TIMEOUT SAFETY - solo se l'exit intelligente non chiude -----
             # Niente TIMEOUT_3X - l'exit intelligente decide.
