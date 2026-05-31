@@ -1,4 +1,43 @@
 # STATO OVERTOP V16 — 31 maggio 2026
+
+```
+╔══════════════════════════════════════════════════════════════════════╗
+║                                                                        ║
+║   ⚖️  LA TAVOLA DI MOSÈ — IL KILLER  (31mag2026, scoperto da Roberto)  ║
+║                                                                        ║
+║   "TUTTI NASCONO FEMMINA. IL MASCHIO SI MANIFESTA ENTRO UN TEMPO       ║
+║    PRECISO, PERCHÉ HA GLI ELEMENTI PIÙ GRANDI."                        ║
+║                                                                        ║
+║   ┌──────────────────────────────────────────────────────────────┐   ║
+║   │  ENERGIA (E) ≥ 40  →  88% WIN   (71 win / 10 loss)  = MASCHIO  │   ║
+║   │  ENERGIA (E) <  40 →  28% WIN   (34 win / 89 loss)  = FEMMINA  │   ║
+║   └──────────────────────────────────────────────────────────────┘   ║
+║                                                                        ║
+║   DIMOSTRATO SU 204 TRADE REALI. Frontiera NETTA a 40 (non graduale:  ║
+║   E30-40 e E<30 hanno lo STESSO 28% → o sei sopra 40 o sei femmina).   ║
+║                                                                        ║
+║   IL KILLER: dai al trade il tempo di manifestarsi (≈35s, i win vivono ║
+║   ~100s, i loss ~35s). Se resta sotto E40 ED è in perdita → FEMMINA    ║
+║   non manifestata → MOLLALA SUBITO, non bruciare la fee tenendola.     ║
+║                                                                        ║
+║   Questo CORREGGE il "timeframe lungo" (30mag) che teneva aperte le    ║
+║   femmine sperando respirassero — ed era ciò che trasformava i -2$     ║
+║   in -6$ (peggiorava i loss). I dati hanno dato ragione a Roberto.     ║
+║                                                                        ║
+║   Codice: dentro MD5 551ac1a3 — cerca "KILLER_E40" (4 occorrenze).     ║
+║   Interruttori: KILLER_E40_OFF | KILLER_E_SOGLIA=40 | KILLER_TEMPO=35  ║
+║   Log quando agisce: ⚰️ KILLER_E40 nel log M2.                         ║
+║                                                                        ║
+║   DA RAFFINARE (microscopio): il "tempo preciso" esatto (a che SECONDO ║
+║   il maschio raggiunge E40) lo darà la curva_nascita quando il bot     ║
+║   aprirà trade. Il 35s è la migliore stima dai dati di durata.         ║
+║                                                                        ║
+║   NON RIMETTERE IN DISCUSSIONE QUESTA FRONTIERA SENZA RIMISURARLA SUI  ║
+║   DATI. È SCRITTA SULLA PIETRA. 88% vs 28% su 204 trade reali.         ║
+║                                                                        ║
+╚══════════════════════════════════════════════════════════════════════╝
+```
+
 ## Da caricare all'inizio della prossima chat. Sostituisce il RICORDO_30mag per la parte trading.
 
 > Claude: leggi questo PRIMA di toccare codice. È lo stato reale e VERIFICATO sui dati al 31 maggio.
@@ -8,7 +47,13 @@
 ---
 
 ## IL FILE CHE GIRA / DA DEPLOYARE
-- **MD5 NUOVO da deployare: `40d40b5a77c9bdb6c452a9103a36f8df`** — 14.695 righe — riga 1 `#!/usr/bin/env python3`
+- **MD5 ULTIMO (col KILLER E40): `551ac1a30642eb645d6215c44b9a21de`** — 14.863 righe.
+- Catena 31mag completa: `527a63df` (fix uscita 30mag) → `c50b806f` (porta SHORT bear) →
+  `40d40b5a` (fix tracciatura direction/regime) → `587070ea` (microscopio curva_nascita) →
+  `289f104c` (capsula regime_edge agganciata, 4 hook) → **`551ac1a3` (KILLER E40)** ← DEPLOYARE QUESTO.
+- File compagno: `capsula_regime_edge.py` (MD5 968b7960) deve stare nel repo accanto al bot.
+- AL DEPLOY verificare md5sum container = `551ac1a30642eb645d6215c44b9a21de`. Log killer: ⚰️ KILLER_E40.
+- (storico) MD5 precedente: `40d40b5a77c9bdb6c452a9103a36f8df` — 14.695 righe — riga 1 `#!/usr/bin/env python3`
 - Nome: `OVERTOP_BASSANO_V16_PRODUCTION.py` — Procfile `web: python app.py` — live tecnaria-v2.onrender.com
 - DB: `/var/data/trading_data.db` (227 MB) — PAPER — capitale 10.000$ — env `DB_PATH=/var/data/...`
 - Catena MD5: `527a63df` (30mag, fix uscita, girava) → `c50b806f` (31mag, +porta SHORT in TRENDING_BEAR,
