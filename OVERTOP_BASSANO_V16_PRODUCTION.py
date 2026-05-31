@@ -9400,6 +9400,34 @@ class OvertopBassanoV16Production:
             campo._direction_bearish_streak = 0
             self._log_m2("🔄", f"FLIP → LONG in EXPLOSIVE (bullish_energy={_bullish_energy} drift={drift:+.3f}%)")
 
+        # ════════════════════════════════════════════════════════════════
+        # TRENDING_BEAR GATE — LA PORTA FISICA ALLO SHORT (31mag, Roberto)
+        # ════════════════════════════════════════════════════════════════
+        # Finora il campo poteva andare SHORT solo in EXPLOSIVE o RANGING.
+        # In TRENDING_BEAR — il regime dove i dati storici danno allo SHORT
+        # il WR più alto (SHORT|*|*|DOWN 48-55%) — non c'era nessuna porta:
+        # in trend ribassista il campo restava LONG e non si girava mai.
+        #
+        # Principio (Roberto): la capsula/gate AGISCE SUBITO dove la fisica
+        # dice profitto. Qui la fisica è già dichiarata dal REGIME stesso:
+        # TRENDING_BEAR = il mercato sta scendendo in modo strutturato, non
+        # è uno spike. Quindi NON serve una soglia di drift inventata: riuso
+        # bearish_energy, la misura fisica composita già calcolata sopra
+        # (momentum veloce giù, MACD giù, decel bassa, drift giù). Soglia >=2
+        # = stessa permissività del gate EXPLOSIVE, coerente.
+        # Lo STREAK non è richiesto: il regime BEAR è già la conferma. "Subito".
+        #
+        # NB: questo apre SOLO la nascita del flip (infrastruttura). La
+        # decisione se il trade nasce davvero resta a valle (SC + capsule).
+        # L'antiaerea sulle firme perdenti è il passo successivo, non qui.
+        if (self._regime_current == "TRENDING_BEAR" and campo._direction == "LONG"
+                and bearish_energy >= 2 and cooldown_ok):
+            campo._direction = "SHORT"
+            campo._direction_last_change = now
+            campo._direction_bearish_streak = 0
+            self._log_m2("🔄", f"FLIP → SHORT in TRENDING_BEAR "
+                              f"(bearish_energy={bearish_energy} drift={drift:+.3f}%)")
+
         # -- RANGING GATE: in laterale NON flippare a SHORT --------------
         # ECCEZIONE VERITAS: se il Veritas vede movimento ribassista reale
         # con delta_60s < -20 su almeno 5 segnali → lo SHORT è legittimo
@@ -10226,6 +10254,10 @@ class OvertopBassanoV16Production:
             "momentum":         momentum,
             "volatility":       volatility,
             "trend":            trend,
+            # FIX TRACCIATURA (31mag): direction mancava del tutto nel verbale
+            # → la fingerprint canvas usciva "?|?|?|?" senza direzione. Uso lo
+            # stato del campo, sempre disponibile (LONG o SHORT). Copre P1 e P2.
+            "direction":        self.campo._direction,
             # TSUNAMI (statuto Passo 3 — tsunami.vota())
             "tsunami_vote":         None,
             "tsunami_confidence":   None,
@@ -10257,7 +10289,10 @@ class OvertopBassanoV16Production:
             "breath_fase":          None,
             "breath_energia":       None,
             # CONTESTO BASE
-            "regime":               None,
+            # FIX TRACCIATURA (31mag): era None alla nascita e veniva riempito
+            # DOPO la chiamata a observe_entry → la snapshot registrava regime
+            # mancante. Popolato subito col regime corrente.
+            "regime":               self._regime_current,
             "oi_carica":            None,
             "oi_stato":             None,
             "oi_carica_short":      None,
