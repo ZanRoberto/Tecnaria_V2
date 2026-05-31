@@ -124,6 +124,24 @@ Esistono DUE antiaeree e NON sono la stessa cosa:
 - PERCHÉ NON ORA: il marcatore va costruito sui dati di short reali in bear, che oggi sono ZERO (real=0).
   Scriverlo adesso = progettare sul vuoto = errore "prima i dati". Prima la porta produce short reali, poi si marca.
 
+## STATO FINALE SESSIONE 31mag (verificato sui log live 10:14)
+- DEPLOY RIUSCITO: container gira `40d40b5a77c9bdb6c452a9103a36f8df` (verificato md5sum + grep =1 e =1).
+  ATTENZIONE: i primi 2 "deploy verdi" di oggi (c50b806f, primo 40d40b5a) NON erano arrivati sul container
+  — girava ancora 527a63df. Problema di catena git/Render mai diagnosticato (git log/status non lanciati).
+  Il 3° deploy è arrivato davvero. LEZIONE: il "verde" Render NON è prova; solo md5sum sul container lo è.
+- BOT VIVO E FUNZIONANTE: log 10:14 mostrano tick processati, EVENT_FUOCO, CAPSULE dep, SC_BLOCCA in tempo
+  reale. (Nota: l'endpoint /trading/status mostrava last_tick 04:23 = stato VECCHIO IN CACHE, non bot morto.
+  Claude aveva dato un FALSO ALLARME "WebSocket morto" leggendo la cache — poi corretto sui log live.)
+- PERCHÉ canvas count=0 negli ultimi minuti: in RANGING il bot BLOCCA prima di arrivare a observe_entry
+  (REGIME_TOSSICO_RANGING_LONG, CTX_TOSSICO). Quindi il canvas registra solo i trade che PASSANO il blocco,
+  non quelli bloccati. Il fix tracciatura (direction/regime) è probabilmente OK ma non verificabile finché
+  il bot blocca tutto in RANGING — non raggiunge il punto di scrittura. Si verificherà quando un trade passa.
+- SCELTA APERTA (da decidere a mente fresca): far registrare al canvas ANCHE le valutazioni BLOCCATE, non
+  solo quelle passate. Serve se si vuole che le capsule imparino dai blocchi (blocco giusto vs win tagliato).
+  Oggi la scatola nera vede metà storia.
+- SHORT: la porta TRENDING_BEAR è deployata e attiva, ma il mercato è RANGING → nessun flip short, CORRETTO.
+  Aspetta un trend ribassista vero. Niente da fare se non attendere.
+
 ## RUOLO OPERATIVO (chiarito da Roberto 31mag)
 Roberto NON è programmatore: mette analisi+intuito. Claude FA il lavoro tecnico fino in fondo, decide le cose
 di mestiere (non rimbalzare scelte tecniche su Roberto), spiega in italiano comportamento (mai sintassi), dice
