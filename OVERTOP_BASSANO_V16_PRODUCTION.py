@@ -11896,6 +11896,46 @@ class OvertopBassanoV16Production:
             self._shadow = None
 
 
+    def _save_curva_nascita(self, trade_ts, firma, curva):
+        """
+        CURVA DI NASCITA — MICROSCOPIO (31mag, Roberto).
+        Salva l'INTERA curva dei primi ~10s di vita del trade: lista di
+        (secondi_da_nascita, pnl_live, peak_so_far) a OGNI tick. Una riga per
+        trade. Da qui si vede lo schizzo iniziale e il punto esatto di
+        maturazione/morte — il dato per smascherare il bastardo. Solo osserva.
+        """
+        try:
+            if not curva:
+                return
+            n_punti = len(curva)
+            pnl_finale_nascita = curva[-1][1]
+            peak_nascita = max((p[2] for p in curva), default=0.0)
+            t_peak = next((p[0] for p in curva if p[2] >= peak_nascita), None)
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS curva_nascita (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trade_ts     REAL,
+                    firma        TEXT,
+                    n_punti      INTEGER,
+                    peak_nascita REAL,
+                    t_peak_s     REAL,
+                    pnl_a_10s    REAL,
+                    curva_json   TEXT,
+                    created_ts   REAL DEFAULT (strftime('%s','now'))
+                )
+            """)
+            conn.execute("""
+                INSERT INTO curva_nascita
+                    (trade_ts, firma, n_punti, peak_nascita, t_peak_s, pnl_a_10s, curva_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (trade_ts, firma, n_punti, round(peak_nascita, 4),
+                  t_peak, round(pnl_finale_nascita, 4), json.dumps(curva)))
+            conn.commit()
+            conn.close()
+        except Exception as _e:
+            log.debug(f"[SAVE_CURVA_NASCITA_ERR] {_e}")
+
     def _evaluate_shadow_exit(self, price, momentum, volatility, trend):
         """Stessa logica di uscita V15 + BreathEngine V16 per timing ottimale."""
         try:
@@ -11921,6 +11961,38 @@ class OvertopBassanoV16Production:
 
             # CRITICO: direzione al momento dell'ENTRY, non quella attuale
             entry_direction = self._shadow.get("direction", "LONG")
+
+            # ════════════════════════════════════════════════════════════
+            # CURVA DI NASCITA — MICROSCOPIO (31mag, Roberto)
+            # ════════════════════════════════════════════════════════════
+            # NON 4 fotografie (occhiali) — OGNI TICK nei primi 10s di vita
+            # (microscopio). Cattura lo SCHIZZO iniziale e il momento esatto
+            # in cui il trade matura o muore, che tra due checkpoint fissi si
+            # perdeva. Su stream @aggTrade arrivano più tick/sec → curva densa.
+            # Dopo 10s STOP (la nascita è finita, non serve più). Solo osserva.
+            # In memoria durante la vita del trade; flush unico nel DB alla fine
+            # dei 10s → niente scrittura a raffica, niente disco pieno.
+            try:
+                if duration <= 10.5:
+                    _micro = self._shadow.setdefault('_micro_nascita', [])
+                    _micro.append((round(duration, 3), round(_pnl_live, 4),
+                                   round(self._trade_peak_pnl, 4)))
+                elif not self._shadow.get('_micro_flushed'):
+                    self._shadow['_micro_flushed'] = True
+                    _firma_n = (f"{self._shadow.get('momentum_entry','?')}|"
+                                f"{self._shadow.get('volatility_entry','?')}|"
+                                f"{self._shadow.get('trend_entry','?')}|"
+                                f"{self._shadow.get('regime_entry', self._regime_current)}|"
+                                f"{entry_direction}")
+                    self._save_curva_nascita(
+                        trade_ts=self._shadow_entry_time,
+                        firma=_firma_n,
+                        curva=self._shadow.get('_micro_nascita', []),
+                    )
+            except Exception as _ne:
+                log.debug(f"[CURVA_NASCITA_ERR] {_ne}")
+
+
 
             # ── CAPSULE INTELLIGENTE EXIT — uscita anticipata predittiva ────
             if duration > 5:
