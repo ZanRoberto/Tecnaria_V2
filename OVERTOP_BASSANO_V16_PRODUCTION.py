@@ -759,6 +759,18 @@ try:
         _CAP_MATRIGNA_AVAILABLE = True
     except Exception as _e_cap_mat:
         _CAP_MATRIGNA_AVAILABLE = False
+    # ═══════════════════════════════════════════════════════════════
+    # CAPSULA REGIME-EDGE (31mag2026) — Gioca dove i win pagano i loss.
+    # Sui dati reali oracolo_snapshot: SIDEWAYS = merda (perdita reale
+    # dimostrata), UP/trend = campo buono (WR 55-78%, ma simulato).
+    # Nasce OSSERVATRICE (L3): osserva e registra, NON tocca il bot.
+    # Kill: env CAPSULA_REGIME_EDGE_DEAD=true | Decide: CAPSULA_REGIME_EDGE_L4=true
+    # ═══════════════════════════════════════════════════════════════
+    try:
+        from capsula_regime_edge import CapsulaRegimeEdge
+        _CAP_REGIME_EDGE_AVAILABLE = True
+    except Exception as _e_cap_re:
+        _CAP_REGIME_EDGE_AVAILABLE = False
     _CE_AVAILABLE = True
 except ImportError:
     _CE_AVAILABLE = False
@@ -767,6 +779,7 @@ except ImportError:
     _FASE_AVAILABLE = False
     _CAP_TSUNAMI_AVAILABLE = False
     _CAP_MATRIGNA_AVAILABLE = False
+    _CAP_REGIME_EDGE_AVAILABLE = False
     log.warning("[CE] capsule_executor.py non trovato")
 
 try:
@@ -7166,6 +7179,20 @@ class OvertopBassanoV16Production:
                 log.warning(f"[CAP_MATRIGNA] init fallita (silenziato): {_e_mat}")
                 self.matrigna = None
 
+        # ═══════════════════════════════════════════════════════════════
+        # CAPSULA REGIME-EDGE (31mag2026) — osservatrice (L3) di default.
+        # ═══════════════════════════════════════════════════════════════
+        self.cap_regime_edge = None
+        if _CAP_REGIME_EDGE_AVAILABLE:
+            try:
+                self.cap_regime_edge = CapsulaRegimeEdge(db_path=DB_PATH)
+                _st_re = self.cap_regime_edge.stato()
+                log.info(f"[CAP_REGIME_EDGE] 🧭 attiva — "
+                         f"L4_decide={_st_re.get('l4_decide')} (default osservatrice)")
+            except Exception as _e_re:
+                log.warning(f"[CAP_REGIME_EDGE] init fallita (silenziato): {_e_re}")
+                self.cap_regime_edge = None
+
         self.log_analyzer    = LogAnalyzer()
         self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
         self.calibratore     = AutoCalibratore()
@@ -10306,6 +10333,25 @@ class OvertopBassanoV16Production:
             "blocked_by":           None,
         }
 
+        # ════════════════════════════════════════════════════════════════
+        # CAPSULA REGIME-EDGE (31mag) — consulta. In L3 (default) OSSERVA e
+        # registra, ritorna None → non tocca nulla. In L4 (armata) può
+        # bloccare il SIDEWAYS-merda. Fail-open: se assente o crasha, prosegue.
+        # ════════════════════════════════════════════════════════════════
+        if getattr(self, 'cap_regime_edge', None):
+            try:
+                _re_verdetto = self.cap_regime_edge.consulta(
+                    regime=self._regime_current,
+                    momentum=momentum,
+                    trend=trend,
+                    direction=self.campo._direction,
+                )
+                if _re_verdetto and _re_verdetto[0] == "BLOCCA":
+                    self._log_m2("🧭", f"REGIME_EDGE BLOCCA: {_re_verdetto[1]}")
+                    return
+            except Exception as _e_re_consulta:
+                pass  # fail-open: la capsula non deve mai fermare il bot per un errore
+
         try:
             # ════════════════════════════════════════════════════════════════
             # ZONA 1 — FILTRO FISICO ALL'INGRESSO
@@ -13327,6 +13373,21 @@ class OvertopBassanoV16Production:
                     )
             except Exception as _mat_oe:
                 log.debug(f"[CAP_MATRIGNA_HOOK_EXIT_ERR] {_mat_oe}")
+
+            # ═══════════════════════════════════════════════════════════
+            # CAPSULA REGIME-EDGE (31mag) — observe: verifica se i suoi
+            # verdetti erano giusti. Serve a raccogliere le prove REALI
+            # (oggi UP è simulato) per poter armare L4 con dati veri.
+            # ═══════════════════════════════════════════════════════════
+            try:
+                if getattr(self, "cap_regime_edge", None) is not None:
+                    self.cap_regime_edge.observe_outcome(
+                        momentum=self._shadow_entry_momentum or '?',
+                        trend=self._shadow_entry_trend or '?',
+                        pnl_reale=float(pnl),
+                    )
+            except Exception as _re_oe:
+                log.debug(f"[CAP_REGIME_EDGE_HOOK_EXIT_ERR] {_re_oe}")
 
         except Exception as e:
             import traceback
