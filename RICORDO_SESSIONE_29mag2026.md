@@ -8,12 +8,34 @@
 ---
 
 ## IL FILE CHE GIRA / DA DEPLOYARE
-- **MD5 NUOVO da deployare: `c50b806f5c59b807a96f7d949f40c752`** — 14.688 righe — riga 1 `#!/usr/bin/env python3`
+- **MD5 NUOVO da deployare: `40d40b5a77c9bdb6c452a9103a36f8df`** — 14.695 righe — riga 1 `#!/usr/bin/env python3`
 - Nome: `OVERTOP_BASSANO_V16_PRODUCTION.py` — Procfile `web: python app.py` — live tecnaria-v2.onrender.com
 - DB: `/var/data/trading_data.db` (227 MB) — PAPER — capitale 10.000$ — env `DB_PATH=/var/data/...`
-- Catena MD5: `527a63df` (30mag, fix uscita, GIRAVA fino a oggi) → **`c50b806f` (31mag, +porta SHORT in TRENDING_BEAR)**
-- Verifica fatta: 527a63df era IDENTICO su container e repo. Contiene matrigna+tsunami+fase+fix uscita (tutto coerente).
+- Catena MD5: `527a63df` (30mag, fix uscita, girava) → `c50b806f` (31mag, +porta SHORT in TRENDING_BEAR,
+  DEPLOYATO=verde) → **`40d40b5a` (31mag, +fix tracciatura direction/regime nel verbale, DA DEPLOYARE)**
+- Verifica fatta: 527a63df era IDENTICO su container e repo. Contiene matrigna+tsunami+fase+fix uscita.
 - NB: il file export "20606175" (27mag, 14.341 righe) è uno stato VECCHIO. Non è riferimento. Ignorarlo.
+- ⚠️ AL DEPLOY: verificare md5sum container = `40d40b5a77c9bdb6c452a9103a36f8df` + head -1.
+  Poi verificare il fix tracciatura: `sqlite3 /var/data/trading_data.db "SELECT datetime(ts,'unixepoch'),
+  fingerprint FROM canvas_snapshots ORDER BY ts DESC LIMIT 5;"` → la fingerprint deve mostrare la DIREZIONE
+  (es. DEBOLE|BASSA|SIDEWAYS|LONG), non più "?". Se compare la direzione → fix vivo.
+
+## IL FIX TRACCIATURA (31mag, 2° intervento) — dentro 40d40b5a
+**FIRMA COMPLETA NELLA SCATOLA NERA** (`_verbale` ~riga 10251 + 10295).
+- Bug trovato sui dati: `canvas_snapshots.fingerprint` usciva `DEBOLE|BASSA|SIDEWAYS|?` — mancavano DIRECTION
+  e REGIME. Causa: il dict `_verbale` passato a `canvas.observe_entry` NON aveva la chiave `direction` (mai
+  inserita), e `regime` partiva None e veniva popolato DOPO la chiamata a observe_entry (righe 10762/11151).
+- Fix: alla nascita del `_verbale` aggiunto `"direction": self.campo._direction` e `"regime":
+  self._regime_current` (stato sempre disponibile, non variabili locali non ancora calcolate). Copre P1 e P2.
+- IMPORTANTE: il bot ha SEMPRE saputo la direzione e ci ha SEMPRE operato giusto. Il buco era SOLO nel
+  registro canvas (la documentazione, non la decisione). Ma è grave lo stesso: le capsule imparano dai dati
+  registrati; una firma senza direzione è mezza firma → avvelenerebbe ogni capsula costruita sopra.
+- I dati canvas VECCHI restano monchi (persi). Da 40d40b5a in poi la firma è intera.
+- Test: AST + py_compile + import-runtime OK.
+- 2° BUCO TRACCIATURA ANCORA APERTO (passo futuro): manca la CURVA DI NASCITA del trade (PnL nei primi
+  N secondi di vita). canvas registra solo entry-snapshot + exit. La maturazione precoce (l'intuizione di
+  Roberto "quanta forza matura nei primi millisecondi per pagare la fee") NON è tracciata. Va aggiunta come
+  evento ENTRY_NASCITA con criterio (attenzione frequenza scrittura DB — c'è già stato un disco pieno: bug N²).
 
 ## LA MODIFICA DI OGGI (31mag) — dentro c50b806f — UNA SOLA
 **PORTA FISICA ALLO SHORT IN TRENDING_BEAR** (`_auto_detect_direction`, ~riga 9402-9426).
