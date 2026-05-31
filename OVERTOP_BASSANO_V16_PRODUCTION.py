@@ -12526,6 +12526,41 @@ class OvertopBassanoV16Production:
                 _fee_rt = float(getattr(self, "FEE_TRADE", 2.00))
                 pnl_netto_stimato = current_pnl - _fee_rt
 
+                # ════════════════════════════════════════════════════════
+                # KILLER E40 (31mag, Roberto) — "tutti nascono femmina, il
+                # maschio si manifesta entro un tempo preciso."
+                # ════════════════════════════════════════════════════════
+                # PROVA SUI DATI (204 trade reali):
+                #   energia >= 40  → 88% WIN (71 win / 10 loss) = il MASCHIO
+                #   energia <  40  → 28% WIN (34 win / 89 loss)  = la FEMMINA
+                # Frontiera NETTA a 40 (non graduale: 30-40 e <30 hanno stesso
+                # 28% — o sei sopra 40 o sei femmina).
+                #
+                # Regola: do al trade un TEMPO per manifestarsi maschio
+                # (raggiungere energia 40). Se passato quel tempo è ancora
+                # sotto 40 ED è in perdita → è femmina che non si manifesta,
+                # la MOLLO subito invece di tenerla aperta a bruciare la fee.
+                # Questo CORREGGE il "timeframe lungo" che teneva aperte le
+                # femmine sperando respirassero (dati: peggiorava i loss).
+                #
+                # KILLER_E_SOGLIA=40 (la frontiera dei dati).
+                # KILLER_TEMPO=35s  (i win medi vivono ~100s, i loss ~35s:
+                #   dopo 35s un maschio vero ha già preso energia).
+                # Disarmabile: env KILLER_E40_OFF=true
+                _killer_off = os.environ.get("KILLER_E40_OFF", "false").lower() == "true"
+                _killer_e_soglia = float(os.environ.get("KILLER_E_SOGLIA", "40"))
+                _killer_tempo    = float(os.environ.get("KILLER_TEMPO", "35"))
+                if (not _killer_off
+                        and exit_energy < _killer_e_soglia
+                        and duration >= _killer_tempo
+                        and current_pnl < 0):
+                    self._close_shadow_trade(price,
+                        f"KILLER_E40_FEMMINA_E{exit_energy}_dur{duration:.0f}s_{current_pnl:+.1f}")
+                    self._log_m2("⚰️",
+                        f"KILLER_E40: femmina non manifestata "
+                        f"(E{exit_energy}<{_killer_e_soglia:.0f} dur{duration:.0f}s) → mollata")
+                    return
+
                 if pnl_netto_stimato > 0:
                     # WIN vero: lordo > fee
                     self._close_shadow_trade(price,
