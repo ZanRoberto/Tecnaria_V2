@@ -12193,6 +12193,42 @@ class OvertopBassanoV16Production:
                 self._close_shadow_trade(price, f"HARD_STOP_${abs(current_pnl_real):.1f}_max${HARD_STOP_USD:.0f}")
                 return
 
+            # ════════════════════════════════════════════════════════════════
+            # FRENO-COLATA (1giu, Roberto) — "poche e tante sberle in faccia".
+            # ════════════════════════════════════════════════════════════════
+            # CASO DIMOSTRATO (trade 14:00, curva_nascita): femmina conclamata
+            # (energia/peak 0.64 FISSO, mai manifestata) colata LENTA da +0.64
+            # a -7.99 a gradini: -3 a 52s, -4 a 57s, -5 a 65s, HARD_STOP a 88s.
+            # Il KILLER E40 NON l'ha presa: vive dentro `if exit_energy<exit_soglia`
+            # (cancello del decadimento-energia) che tra 52-88s non si è aperto.
+            # Così la femmina è scivolata indisturbata fino all'HARD_STOP -9.
+            #
+            # Questo freno sta FUORI da quel cancello (valutato a OGNI tick come
+            # l'HARD_STOP) e taglia la femmina conclamata PRIMA che arrivi a -7:
+            #   - peak basso (mai manifestata maschio: peak < FRENO_PEAK)
+            #   - durata oltre il respiro (> KILLER_TEMPO: il maschio ha già preso E)
+            #   - perdita oltre metà strada verso l'HARD_STOP (< -FRENO_PNL)
+            # Il MASCHIO (peak alto) NON rientra → il suo respiro è intatto.
+            # NON tocca i primi 35s (respiro). Regolabile da env, disarmabile.
+            # ⚠️ TARATO SU 1 TRADE: -3.5 è metà strada verso HARD_STOP -7; peak
+            # 1.5 è la soglia maschio/femmina già vista nel microscopio. Da
+            # riverificare su più femmine-colata coi dati nuovi.
+            _freno_off   = os.environ.get("FRENO_COLATA_OFF", "false").lower() == "true"
+            _freno_pnl   = float(os.environ.get("FRENO_COLATA_PNL", "3.5"))
+            _freno_peak  = float(os.environ.get("FRENO_COLATA_PEAK", "1.5"))
+            _freno_tempo = float(os.environ.get("KILLER_TEMPO", "35"))
+            if (not _freno_off
+                    and current_pnl_real < -_freno_pnl
+                    and self._trade_peak_pnl < _freno_peak
+                    and duration >= _freno_tempo):
+                self._close_shadow_trade(price,
+                    f"FRENO_COLATA_peak{self._trade_peak_pnl:.1f}_dur{duration:.0f}s_{current_pnl_real:+.1f}")
+                self._log_m2("🩸",
+                    f"FRENO_COLATA: femmina conclamata in colata "
+                    f"(peak{self._trade_peak_pnl:.1f}<{_freno_peak} dur{duration:.0f}s "
+                    f"pnl{current_pnl_real:+.1f}) → tagliata prima dell'HARD_STOP")
+                return
+
             # -- MINIMUM HOLD TIME ---------------------------------------------
             # FIX: MIN_HOLD_SECONDS era dichiarato ma mai applicato.
             # Nessun divorzio nei primi 10 secondi — il trade deve respirare.
