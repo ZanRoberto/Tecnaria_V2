@@ -345,7 +345,41 @@ Stesso filone della 2ª Tavola, cercato negli stessi dati phantom_forensic (is_w
   quando ci sono dati.
 - Il MEDIO NON scappa: i 93 trade e la frontiera 2.04 restano scritti nel DB. Aspettare non costa nulla.
 
-## PROSSIMO PASSO (1giu — UNO per volta)
+## TRE FILONI SCAVATI NEI DATI ESISTENTI (1giu, senza aspettare il mercato)
+Tutti su phantom_forensic. Risultato comune: ALL'INGRESSO su BTC non si prevede quasi nulla — lingotti,
+mostri e femmine nascono troppo simili. La separazione vera è SOLO dopo (mfe, movimento = dato del futuro).
+→ CONFERMA la strada di oggi: si gestisce all'USCITA (killer + floor), dove l'informazione c'è. L'ingresso
+è cieco su BTC. NON esiste un filtro d'ingresso magico che risparmi di osservare il trade.
+
+### FILONE 1 — a che secondo tagliare la femmina (killer)
+- Solo 5 femmine tagliate finora → DATO INSUFFICIENTE. Indizio: il danno NON cresce con la durata (la
+  tagliata a 124s costava -2.03, quella a 50s -5.97). Cresce con l'ENERGIA BASSA (E20 → -5.97, E33 → -2.03).
+- IPOTESI (da verificare con più tagli): la leva del killer è l'ENERGIA, non il TEMPO. Più femmina (E basso)
+  = taglia più aggressivo; quasi-maschio (E~33) = più paziente. NIENTE DA FARE ORA (5 trade non fanno legge).
+
+### FILONE 2 — sbloccare i maschi che il guardiano FP_TOSSICO blocca all'ingresso
+- 26.541 bloccati. All'ingresso maschi/femmine sono GEMELLI su score, seed, oi, rsi (rsi=50 fisso=cadavere).
+- UNICO segnale che separa: **ts_30s_strength** (forza tsunami a 30s) + **ts_30s_coerenza**.
+  Femmine str 0.337 / maschi grossi 0.549. Coerenza: femmine 0.506 / maschi grossi 0.695.
+- Tenaglia (str>0.50 E coe>0.60): femmine 1107, maschi grossi 206, piccoli 287 → rapporto 2.2 femmine/maschio.
+  BILANCIO NETTO STIMATO: ~+150$ su settimane. RISICATO. NON vale toccare un guardiano che protegge 80k$ per 150$.
+- VALORE VERO: il segnale **forza+coerenza tsunami 30s predice il maschio ALL'INGRESSO** (leggibile prima,
+  non dato del futuro). Su BTC margine marginale (poche onde grosse). → CHIAVE DA PORTARE SUL MARE NERVOSO
+  (Tappa 1), dove i lingotti grossi sono più frequenti e questa tenaglia può rendere molto di più.
+
+### FILONE 3 — la firma dei loss mostro
+- 1037 mostri (pnl≤-5). All'ingresso NON si annunciano sui segnali continui (ts30/coe/oi/seed del mostro
+  stanno IN MEZZO tra loss piccolo e win — non spiccano).
+- MA c'è una firma CATEGORIALE pericolosa: **DEBOLE|BASSA|SIDEWAYS|RANGING = 3.5% di mostri** (926/26723),
+  contro 0.4-0.9% di tutte le altre firme. 6× più pericolosa. DATO ROBUSTO (26k trade). I mostri nascono
+  nella volatilità BASSA (mare MORTO), non ALTA → conferma numerica del "scalping nel piatto = il mostro".
+- MA dentro DEBOLE|BASSA, mostro e LINGOTTO NON si separano con soglia netta: sopra str>0.50 E coe>0.50 ci
+  sono 262 mostri e 205 lingotti (più mostri che lingotti). La media separa (lingotto coe 0.558 vs mostro
+  0.380) ma le distribuzioni si sovrappongono → niente filtro pulito. La difesa resta il KILLER all'uscita.
+- VALORE: DEBOLE|BASSA è intrinsecamente la firma più pericolosa. Su mare nervoso, evitare il "mare morto
+  assoluto" (DEBOLE|BASSA) ha senso — conferma del "non scalpare il piatto".
+
+
 1. DEPLOY `1f5af1af`. Verificare `md5sum ~/project/src/OVERTOP_BASSANO_V16_PRODUCTION.py` = `1f5af1af4c87e7f5c818800221af916b`.
    (Il verde Render NON è prova — il 31mag 2 deploy su 3 non erano arrivati. Solo md5sum sul container lo dimostra.)
 2. CONSOLIDARE LA MINIERA guardando i trade NUOVI col microscopio acceso:
