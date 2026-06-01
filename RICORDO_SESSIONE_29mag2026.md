@@ -327,6 +327,24 @@ Roberto NON è programmatore: mette analisi+intuito. Claude FA il lavoro tecnico
 di mestiere (non rimbalzare scelte tecniche su Roberto), spiega in italiano comportamento (mai sintassi), dice
 la verità a ogni passo. Portare il progetto alla "parola fine" guidando l'ordine giusto, una cosa per volta.
 
+## SCAVO MEDIO/FORTE (1giu, dopo i DEBOLE) — il prossimo lingotto
+Stesso filone della 2ª Tavola, cercato negli stessi dati phantom_forensic (is_win=1):
+- **MEDIO:** mfe_min **2.04** (frontiera quasi identica ai DEBOLE 2.01), 93 trade. Fasce: sotto3$=30,
+  3-4=18, 4-5=11, 5-7=4, >7$=30 (media 12.72 → lingotti grossi). Floor MEDIO attuale = **3.50** → TAGLIA
+  i maschi sotto 3$ (30) e parte dei 3-4. STESSO SPRECO DEI DEBOLE, su numeri più piccoli (93 vs 1221).
+  → CURA PROPOSTA: floor MEDIO LOW 3.50 → **2.50** (più alto del DEBOLE 2.20 perché meno dati = più margine).
+- **FORTE:** SOLO **3 trade** (mfe_min 2.5). DATO INSUFFICIENTE → NON TOCCARE. Tararlo = inventare. CONGELATO
+  finché non accumula abbastanza maschi FORTE per una frontiera vera.
+
+### DECISIONE CAPOPROGETTO (1giu): NON fare il MEDIO adesso
+- Il floor DEBOLE 2.20 è appena deployato e NON ancora verificato sui trade nuovi (zero trade dal deploy).
+- Mettere ORA anche il MEDIO = due modifiche non verificate insieme → se qualcosa va storto, diagnosi
+  impossibile (quale delle due?). Viola "una cosa per volta, verificata prima della successiva. Mai bundle."
+- SEQUENZA: 1) verificare DEBOLE 2.20 sui trade nuovi (i 3 segnali sotto). 2) SE confermato → applicare la
+  STESSA cura al MEDIO (floor 2.50), modifica già validata su categoria gemella, rischio basso. 3) FORTE: dopo,
+  quando ci sono dati.
+- Il MEDIO NON scappa: i 93 trade e la frontiera 2.04 restano scritti nel DB. Aspettare non costa nulla.
+
 ## PROSSIMO PASSO (1giu — UNO per volta)
 1. DEPLOY `1f5af1af`. Verificare `md5sum ~/project/src/OVERTOP_BASSANO_V16_PRODUCTION.py` = `1f5af1af4c87e7f5c818800221af916b`.
    (Il verde Render NON è prova — il 31mag 2 deploy su 3 non erano arrivati. Solo md5sum sul container lo dimostra.)
@@ -336,6 +354,8 @@ la verità a ogni passo. Portare il progetto alla "parola fine" guidando l'ordin
    - Curva_nascita ora ha la vita INTERA del trade (non più solo 10s): verificare che cattura oltre i 10s.
    - Se 2.20 risulta troppo alto/basso sui dati nuovi → spostare da env FLOOR_LOW_DEBOLE, NON toccare codice.
 3. SE i lingotti arrivano davvero → miniera consolidata. Allora (e solo allora) ha senso Tappa 1 (mare nervoso).
+   3-bis. SE il DEBOLE 2.20 è confermato → applicare la STESSA cura al MEDIO (floor 3.50→2.50, frontiera 2.04,
+   93 trade). FORTE resta congelato (3 trade). Vedi sezione "SCAVO MEDIO/FORTE" sopra.
 4. PASSO PARALLELO (quando ci sono dati nuovi): verificare se la curva di nascita distingue maschio da femmina
    GIA' nei primi 3-5 secondi (non solo nell'mfe a posteriori). Se sì → dare "occhi" al guardiano FP_TOSSICO
    perché lasci passare i maschi (lascia nascere il trade qualche secondo prima di bloccare). Recupera l'oro
