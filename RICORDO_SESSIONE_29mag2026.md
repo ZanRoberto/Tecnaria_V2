@@ -1,4 +1,4 @@
-# STATO OVERTOP V16 — 31 maggio 2026
+# STATO OVERTOP V16 — 1 giugno 2026
 
 ```
 ╔══════════════════════════════════════════════════════════════════════╗
@@ -38,7 +38,58 @@
 ╚══════════════════════════════════════════════════════════════════════╝
 ```
 
-## Da caricare all'inizio della prossima chat. Sostituisce il RICORDO_30mag per la parte trading.
+```
+╔══════════════════════════════════════════════════════════════════════╗
+║                                                                        ║
+║   💰 LA SECONDA TAVOLA — I LINGOTTI DEBOLE (1giu2026, da Roberto)      ║
+║                                                                        ║
+║   "OTTIMI IN DIFESA, MA NON PROFITTEVOLI IN ATTACCO. SE NON GUARDI    ║
+║    BENE SEMBRANO TUTTI UGUALI E BUTTI TUTTO DAL LAVANDINO."           ║
+║                                                                        ║
+║   Roberto ha letto il monitor ("$24.525 salvati / $1.493 mancati")    ║
+║   e ha fiutato che i "mancati" erano oro buttato, non difesa giusta.  ║
+║   I dati gli hanno dato ragione, OLTRE le aspettative.                ║
+║                                                                        ║
+║   SCOPERTA (phantom_forensic, is_win=1, momentum=DEBOLE):             ║
+║   ┌──────────────────────────────────────────────────────────────┐   ║
+║   │  mfe 2-3$:  344 trade   (media 2.44)                          │   ║
+║   │  mfe 3-4$:  176 trade   (media 3.51)                          │   ║
+║   │  mfe 4-6$:  219 trade   (media 4.73)                          │   ║
+║   │  mfe >6$:   482 trade   (media 10.36)  ← LINGOTTI, non monetine│   ║
+║   └──────────────────────────────────────────────────────────────┘   ║
+║                                                                        ║
+║   FRONTIERA NETTA (come il 40): mfe_min maschi DEBOLE = 2.01.         ║
+║   NESSUN maschio DEBOLE fa picco sotto 2$. Sotto 2 = femmina piatta.  ║
+║   (femmine bloccate: mfe medio 0.31 — non si muovono mai).            ║
+║                                                                        ║
+║   IL BUG: il floor di armamento SMORZ_TAKE per DEBOLE era 3.00$ →     ║
+║   tagliava fuori i 344 maschi della fascia 2-3 (non armavano MAI la   ║
+║   presa sul picco) e ritardava su tutti gli altri. Il grasso          ║
+║   evaporava: maschi da mfe 4-10$ incassati a ~2$ perché si usciva     ║
+║   DOPO che la forza era decaduta (LOCK_EVAP / EXIT_E tardivi).        ║
+║                                                                        ║
+║   LA CURA (1giu): floor DEBOLE 3.00 → 2.20 (appena sopra la frontiera ║
+║   2.01). Ora SMORZ_TAKE si arma appena il maschio si manifesta e      ║
+║   prende sul rallentamento mentre il prezzo è ALTO. Le femmine        ║
+║   (<2) restano fuori → protezione anti-uscita-precoce mantenuta.      ║
+║                                                                        ║
+║   Codice: dentro MD5 1f5af1af — env FLOOR_LOW_DEBOLE=2.20.            ║
+║   SMORZ_TAKE scatta solo CON decelerometro → non taglia il maschio    ║
+║   che ancora corre, solo quello che già rallenta.                     ║
+║                                                                        ║
+║   ⚠️ DA CONSOLIDARE: i 4.820$ di spreco sono dati VECCHI (bot di      ║
+║   settimane fa). La frontiera 2.01 è solida. Ma che il bot di OGGI    ║
+║   raccolga i lingotti vicino al picco VA VISTO sui trade NUOVI col    ║
+║   microscopio esteso acceso. È miniera POTENZIALE finché non si vede  ║
+║   il primo lingotto cadere nel sacco. MEDIO/FORTE non misurati: floor ║
+║   NON toccato lì (solo DEBOLE ha la frontiera dimostrata).            ║
+║                                                                        ║
+║   "STAVO PER CAMBIARE VESTITO CON LE STESSE MUTANDE SPORCHE" — lo      ║
+║   sprecone trovato PRIMA di cambiare mercato. Pulite le mutande,      ║
+║   poi si cambia vestito. Non si porta lo spreco su un mare ricco.     ║
+║                                                                        ║
+╚══════════════════════════════════════════════════════════════════════╝
+```
 
 > Claude: leggi questo PRIMA di toccare codice. È lo stato reale e VERIFICATO sui dati al 31 maggio.
 > REGOLA #0: leggere i dati reali (DB/log/endpoint) prima di proporre. File sempre come download, mai da incollare.
@@ -47,7 +98,30 @@
 ---
 
 ## IL FILE CHE GIRA / DA DEPLOYARE
-- **MD5 ULTIMO (col KILLER E40): `551ac1a30642eb645d6215c44b9a21de`** — 14.863 righe.
+- **MD5 ULTIMISSIMO (1giu, microscopio esteso + floor DEBOLE 2.20): `1f5af1af4c87e7f5c818800221af916b`** — 14.920 righe. ← DEPLOYARE QUESTO.
+- Catena 1giu: `551ac1a3` (KILLER E40, 31mag notte) → `a0f0806a` (microscopio VISIBILITA' ESTESA opzione B) →
+  **`1f5af1af` (floor DEBOLE 3.00→2.20, presa lingotti)** ← ULTIMO.
+- AL DEPLOY: `md5sum ~/project/src/OVERTOP_BASSANO_V16_PRODUCTION.py` deve dare `1f5af1af4c87e7f5c818800221af916b`.
+- Env regolabili senza redeploy: `FLOOR_LOW_DEBOLE=2.20` | `MICRO_PASSO_S=3` | `MICRO_MAX_PUNTI=200` |
+  `KILLER_E40_OFF` | `KILLER_E_SOGLIA=40` | `KILLER_TEMPO=35` | `CAPSULA_REGIME_EDGE_L4=true` (per armare la capsula).
+- File compagno: `capsula_regime_edge.py` (MD5 968b7960) deve stare nel repo accanto al bot.
+
+### LE 3 MODIFICHE DI OGGI (1giu) — tutte dentro 1f5af1af, tutte testate (AST+py_compile+IMPORT RUNTIME)
+1. **MICROSCOPIO ESTESO (opzione B):** prima filmava solo 0-10.5s poi STOP (buco cieco fino all'uscita →
+   causava diagnosi alla cieca). Ora: 0-10.5s ogni tick (nascita densa) + ogni 3s fino alla chiusura
+   (evoluzione). Flush UNICO alla chiusura (in `_close_shadow_trade`, ~riga 12700 — verificato: 1 sola
+   chiamata, niente doppio salvataggio). Tetto duro `MICRO_MAX_PUNTI=200` → niente disco pieno (lezione N²).
+   DB curva_nascita: aggiunta colonna `pnl_finale`; `pnl_a_10s` resta il punto più vicino a 10s (confrontabile).
+2. **FLOOR DEBOLE 3.00 → 2.20:** vedi 2ª Tavola sopra. Recupera i 344 maschi fascia 2-3$. Solo DEBOLE.
+3. (Il KILLER E40 di 551ac1a3 è INTATTO — non toccato. Verificato grep=1.)
+
+### COSA E' PRONTO / COSA E' VISIONE (chiarito 1giu)
+- PRONTO E GIRA: killer E40, microscopio esteso, fix tracciatura direction/regime, floor DEBOLE 2.20.
+- PRONTO MA OSSERVATRICE (non armata): capsula regime_edge (L3, serve CAPSULA_REGIME_EDGE_L4=true per armarla).
+- SOLO VISIONE (zero codice): mercato nervoso/altcoin, metro del vento, capsule-coppie 3 cerchi, cassa circolante.
+
+## (STORICO 31mag) IL FILE CHE GIRAVA
+- MD5 col KILLER E40: `551ac1a30642eb645d6215c44b9a21de` — 14.863 righe.
 - Catena 31mag completa: `527a63df` (fix uscita 30mag) → `c50b806f` (porta SHORT bear) →
   `40d40b5a` (fix tracciatura direction/regime) → `587070ea` (microscopio curva_nascita) →
   `289f104c` (capsula regime_edge agganciata, 4 hook) → **`551ac1a3` (KILLER E40)** ← DEPLOYARE QUESTO.
@@ -187,12 +261,87 @@ Esistono DUE antiaeree e NON sono la stessa cosa:
 - SHORT: la porta TRENDING_BEAR è deployata e attiva, ma il mercato è RANGING → nessun flip short, CORRETTO.
   Aspetta un trend ribassista vero. Niente da fare se non attendere.
 
+## ═══ VISIONE STRATEGICA — NOTTE 31mag→1giu + analisi 1giu (NON perdere) ═══
+
+### LA CATENA DEL RAGIONAMENTO (ogni passo nasce dal precedente, sui dati)
+1. Il bot perde → NON è la direzione → è il CAMPO (SIDEWAYS). 450+ trade SIDEWAYS = -822$.
+2. SIDEWAYS = merda MA i win nascono lì → il filtro non è il campo, è DURATA/ENERGIA (il killer E40).
+3. E40 separa 88%/28% (1ª Tavola). Microscopio (9 nascite): maschio si manifesta entro ~8s (peak>1.5),
+   femmina resta a peak 0.0. CONFERMA VISIVA della regola di Roberto.
+4. MA a 8s nel piatto è sempre fermo → vero mostro = SCALPING NEL MARE MORTO (460 biglietti×2$=920$ fee
+   per 62 win = 1 win ogni 7.4 biglietti). Lo scalping nel piatto non paga.
+5. BTC = PACHIDERMA: enorme, liquidissimo, solido per INVESTIRE ma senza onde brevi → MARE SBAGLIATO
+   per SCALPING. È stato la PALESTRA GIUSTA (l'aridità ha costretto a costruire intelligenza vera).
+6. Serve barca da CORSA su mare con VENTO, non transatlantico in bonaccia. ("Luna Rossa a remi non va.")
+
+### ANALISI DIFESA/ATTACCO (1giu, sui dati phantom_forensic)
+- Difesa ECCELLENTE, NON troppo zelante: 38.048 loss bloccati (-80.491$ risparmiati) vs 1.300 win
+  bloccati (+2.035$). Rapporto 29:1. Allentare la difesa = riaprire spazzatura, pessimo affare.
+- I guardiani che contano: `SC_BLOCCA_FP_TOSSICO_wr=18%` (20.638 blocchi, 805 maschi, blocca contesti
+  al 18% WR — giusto) e `TSUNAMI_NO_ENTRY` (17.179 blocchi, 372 maschi). Bloccano su SCORE/CONTESTO,
+  dove maschi e femmine sono GEMELLI (score 28.2 vs 27.7, identici). Per questo bloccano in blocco.
+- MA nell'mfe sono OPPOSTI: maschi mfe 4.24, femmine 0.31. Il maschio si tradisce nel MOVIMENTO,
+  non nel contesto. Il guardiano è cieco proprio sulla dimensione dove la differenza esiste.
+- LEZIONE: il guardiano grezzo NON era "presuntuoso" — era GIOVANE (difesa d'emergenza giusta nel suo
+  momento). La mossa non è demolirlo (riapre 80k di loss), è DARGLI OCCHI MIGLIORI: distinguere maschio
+  da femmina guardando la curva di nascita (movimento primi secondi), non solo lo score.
+- ATTENZIONE mfe è dato "del futuro" (lo sai solo a trade finito) → NON usabile come filtro d'ingresso.
+  MA dice DOVE guardare: il movimento dei primi secondi (= curva di nascita del microscopio), che invece
+  è leggibile in tempo reale. Il microscopio esteso serve a raccogliere quella prova sui trade nuovi.
+
+### ARCHITETTURA OBIETTIVO — "CAPSULE-COPPIE" a 3 cerchi (VISIONE, zero codice)
+- 3 coppie TITOLARI che tradano. Se girano bene RESTANO. 1 in PANCHINA = "osservata speciale" (la più
+  nervosa, monitorata da vicino, pronta a subentrare, resta prediletta anche dopo uscita). Le OSSERVABILI
+  = resto del mercato, scansionato da lontano. L'OSSERVATORE decide chi entra/esce, NON Roberto.
+- ROTAZIONE: UNA coppia alla volta. La più fiacca esce → panchina → entra un'altra. Mai stravolgere tutto.
+- È la MATRIGNA applicata alle coppie (nascita/CONGELATA/morte). Osservatore a 2 velocità: veloce
+  (titolari+quarta→rotazione), lenta (osservabili→promozione a osservata speciale).
+- DNA PER COPPIA: ogni capsula-coppia NASCE OSSERVATRICE, impara le soglie della SUA coppia dai dati di
+  QUELLA coppia, si arma solo quando le conosce. MAI numeri "in prestito" (il 40 è di BTC, su ETH è altro).
+
+### REGOLE CASSA (ferree, Roberto 1giu) — sistema CHIUSO
+- TETTO MASSIMO ESPOSTO: 1500$ INVALICABILE. Max 2 posizioni aperte PER COPPIA (3×2×250$=1500$).
+- CAPITALE CIRCOLANTE non additivo: "si vende si compra", MAI "si compra si compra" (= cassa esaurita).
+  Coppia che esce → VENDE → reinserisce il residuo sulla nuova coppia. Stesso 1500 che gira tra gli slot.
+- A TETTO PIENO SI ASPETTA. Mai aggiungere capitale per inseguire un'occasione. (scelta Roberto: opzione A)
+- DA CHIARIRE: 250$ è SIZE o ESPOSIZIONE (cambia il calcolo fee — la fee si paga sulla SIZE).
+
+### REGOLA DI SICUREZZA ASSOLUTA (sopra tutto)
+**PAPER SEMPRE finché il sistema non è rodato sui dati. "I soldi si usano con auto rodata, non con
+prototipo." L'apprendimento del DNA di ogni coppia avviene GRATIS in paper — sbagliare lì non costa nulla.**
+
+### ROTTA A TAPPE (NON tutto insieme)
+- Tappa 0 (FATTA 1giu): smettere di buttare i lingotti DEBOLE su BTC (floor 2.20) + microscopio esteso.
+- Tappa 0-bis (ADESSO): deploy 1f5af1af, microscopio acceso, GUARDARE se i lingotti arrivano davvero
+  (SMORZ_TAKE scatta di più? maschi DEBOLE escono vicino al mfe?). Consolidare la miniera GUARDANDOLA.
+- Tappa 1: portare il bot su UNA coppia nervosa (ETH/SOL, liquide; NO micro-cap illiquide). Paper.
+  RIMISURARE la frontiera lì (energia, floor, killer — tutti numeri di BTC, vanno ributtati e rimisurati).
+- Tappa 2: METRO DEL VENTO (oscilloscopio a scala AMPIA, NON 8s — a scala stretta tutto sembra fermo).
+  Solo osservatore prima, non comanda.
+- Tappa 3: DIRETTORE D'ORCHESTRA (le capsule-coppie a 3 cerchi). Solo dopo che 1 e 2 hanno dato prova.
+- REGOLA D'ORO trasversale: il COMPORTAMENTO si adatta, il RIGHELLO (regola di osservazione) resta FISSO.
+  (Verificato 1giu: dopo 4-6 win il righello del bot NON si è mosso — niente "testa montata". Telemetry pulita.)
+
 ## RUOLO OPERATIVO (chiarito da Roberto 31mag)
 Roberto NON è programmatore: mette analisi+intuito. Claude FA il lavoro tecnico fino in fondo, decide le cose
 di mestiere (non rimbalzare scelte tecniche su Roberto), spiega in italiano comportamento (mai sintassi), dice
 la verità a ogni passo. Portare il progetto alla "parola fine" guidando l'ordine giusto, una cosa per volta.
 
-## PROSSIMO PASSO (dopo deploy c50b806f — UNO per volta)
+## PROSSIMO PASSO (1giu — UNO per volta)
+1. DEPLOY `1f5af1af`. Verificare `md5sum ~/project/src/OVERTOP_BASSANO_V16_PRODUCTION.py` = `1f5af1af4c87e7f5c818800221af916b`.
+   (Il verde Render NON è prova — il 31mag 2 deploy su 3 non erano arrivati. Solo md5sum sul container lo dimostra.)
+2. CONSOLIDARE LA MINIERA guardando i trade NUOVI col microscopio acceso:
+   - SMORZ_TAKE scatta di più? (prima 1 su 83 win). Query: trades, reason LIKE 'SMORZ_TAKE%'.
+   - I maschi DEBOLE escono vicino al loro mfe invece che a metà? (confronto pnl_a_10s/pnl_finale vs incasso).
+   - Curva_nascita ora ha la vita INTERA del trade (non più solo 10s): verificare che cattura oltre i 10s.
+   - Se 2.20 risulta troppo alto/basso sui dati nuovi → spostare da env FLOOR_LOW_DEBOLE, NON toccare codice.
+3. SE i lingotti arrivano davvero → miniera consolidata. Allora (e solo allora) ha senso Tappa 1 (mare nervoso).
+4. PASSO PARALLELO (quando ci sono dati nuovi): verificare se la curva di nascita distingue maschio da femmina
+   GIA' nei primi 3-5 secondi (non solo nell'mfe a posteriori). Se sì → dare "occhi" al guardiano FP_TOSSICO
+   perché lasci passare i maschi (lascia nascere il trade qualche secondo prima di bloccare). Recupera l'oro
+   bloccato SENZA riaprire la spazzatura. NON ora: serve la prova sui dati freschi.
+
+## (STORICO 31mag) PROSSIMO PASSO SHORT — UNO per volta
 1. Deploy c50b806f. Verificare MD5 sul container = `c50b806f5c59b807a96f7d949f40c752` e `head -1`.
 2. Attendere il primo `🔄 FLIP → SHORT in TRENDING_BEAR` nel log. **Comparirà SOLO quando regime=TRENDING_BEAR.**
    Ora il mercato è RANGING piatto → finché resta laterale NON si vedrà nessun flip short (è CORRETTO, non bug).
@@ -221,6 +370,12 @@ la verità a ogni passo. Portare il progetto alla "parola fine" guidando l'ordin
 - RSI=50.0 e MACD=0.0 fissi (disarmati 23mag). pred mai qualificata (BOOT_MUTED). ZONA_MORTA disattivata.
 
 ## ERRORI DI METODO DA NON RIPETERE
+- (1giu) NON dedurre una traiettoria da due punti: Claude ha detto "il -3.36 a 10s è diventato -5.97 nei 40s
+  di attesa" SENZA avere il dato di cosa succedeva in mezzo (microscopio filmava solo 10s). Era inventato.
+  Roberto: "ERRORE TUO". → mai colmare un buco di dati con una storia plausibile. Se il dato manca, si dice.
+- (1giu) NON sottovalutare quello che Roberto vede: Claude ha detto "monetine" DUE volte, i dati l'hanno
+  smentito DUE volte (mfe 4.24, poi fascia >6$ media 10.36 = lingotti). Quando Roberto dice "guarda meglio",
+  guardare meglio NEI DATI, non difendere la conclusione comoda.
 - File SEMPRE come download. Roberto NON incolla mai (i deploy falliti 29-30mag erano file sporcati da shell).
   Verificare `head -1` + `md5sum` sul container prima del deploy.
 - Test SEMPRE: ast.parse + py_compile + IMPORT RUNTIME reale (non solo compile). Lezione 22mag.
