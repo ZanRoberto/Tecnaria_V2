@@ -7035,6 +7035,14 @@ class OvertopBassanoV16Production:
         self.FEE_PCT        = 0.0002
         self.FEE_TRADE      = self.EXPOSURE * self.FEE_PCT * 2     # $2.00 fissi
         self.STOP_LIVE      = 7.0  # lordo live — $7 lordi = ~$5 netti dopo fee
+
+        # ── MICROSCOPIO VISIBILITA' ESTESA (1giu, opzione B) ──────────────
+        # Nascita densa (0-10.5s ogni tick) + evoluzione campionata fino alla
+        # chiusura. Regolabili da env senza redeploy.
+        #   MICRO_PASSO_S   = ogni quanti secondi campionare DOPO i 10s (def 3)
+        #   MICRO_MAX_PUNTI = tetto duro punti/curva → la lista non esplode mai
+        self.MICRO_PASSO_S   = float(os.environ.get('MICRO_PASSO_S', '3.0'))
+        self.MICRO_MAX_PUNTI = int(os.environ.get('MICRO_MAX_PUNTI', '200'))
         self.wins    = 0
         self.losses  = 0
 
@@ -11945,16 +11953,21 @@ class OvertopBassanoV16Production:
     def _save_curva_nascita(self, trade_ts, firma, curva):
         """
         CURVA DI NASCITA — MICROSCOPIO (31mag, Roberto).
-        Salva l'INTERA curva dei primi ~10s di vita del trade: lista di
-        (secondi_da_nascita, pnl_live, peak_so_far) a OGNI tick. Una riga per
-        trade. Da qui si vede lo schizzo iniziale e il punto esatto di
-        maturazione/morte — il dato per smascherare il bastardo. Solo osserva.
+        Salva la curva di vita del trade: lista di (secondi_da_nascita,
+        pnl_live, peak_so_far). VISIBILITA' ESTESA (1giu, opzione B):
+        nascita densa 0-10.5s (ogni tick) + evoluzione ogni 3s fino alla
+        chiusura. Una riga per trade, flush alla chiusura. Solo osserva.
+          - pnl_a_10s   = PnL al punto piu' vicino a 10s (confrontabile con lo storico)
+          - pnl_finale  = PnL all'ultimo punto della curva (alla chiusura)
         """
         try:
             if not curva:
                 return
             n_punti = len(curva)
-            pnl_finale_nascita = curva[-1][1]
+            # pnl_a_10s: il punto piu' vicino a 10s (non l'ultimo: la curva va oltre)
+            _p10 = min(curva, key=lambda p: abs(p[0] - 10.0))
+            pnl_a_10s = _p10[1]
+            pnl_finale = curva[-1][1]
             peak_nascita = max((p[2] for p in curva), default=0.0)
             t_peak = next((p[0] for p in curva if p[2] >= peak_nascita), None)
             conn = sqlite3.connect(DB_PATH)
@@ -11971,12 +11984,19 @@ class OvertopBassanoV16Production:
                     created_ts   REAL DEFAULT (strftime('%s','now'))
                 )
             """)
+            # Migrazione dolce: aggiunge pnl_finale se la tabella e' vecchia
+            try:
+                _cols = [r[1] for r in conn.execute("PRAGMA table_info(curva_nascita)").fetchall()]
+                if 'pnl_finale' not in _cols:
+                    conn.execute("ALTER TABLE curva_nascita ADD COLUMN pnl_finale REAL")
+            except Exception as _ae:
+                log.debug(f"[CURVA_NASCITA_MIGRATE] {_ae}")
             conn.execute("""
                 INSERT INTO curva_nascita
-                    (trade_ts, firma, n_punti, peak_nascita, t_peak_s, pnl_a_10s, curva_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (trade_ts, firma, n_punti, peak_nascita, t_peak_s, pnl_a_10s, curva_json, pnl_finale)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (trade_ts, firma, n_punti, round(peak_nascita, 4),
-                  t_peak, round(pnl_finale_nascita, 4), json.dumps(curva)))
+                  t_peak, round(pnl_a_10s, 4), json.dumps(curva), round(pnl_finale, 4)))
             conn.commit()
             conn.close()
         except Exception as _e:
@@ -12015,26 +12035,28 @@ class OvertopBassanoV16Production:
             # (microscopio). Cattura lo SCHIZZO iniziale e il momento esatto
             # in cui il trade matura o muore, che tra due checkpoint fissi si
             # perdeva. Su stream @aggTrade arrivano più tick/sec → curva densa.
-            # Dopo 10s STOP (la nascita è finita, non serve più). Solo osserva.
-            # In memoria durante la vita del trade; flush unico nel DB alla fine
-            # dei 10s → niente scrittura a raffica, niente disco pieno.
+            #
+            # VISIBILITA' ESTESA (1giu, Roberto, opzione B):
+            #   - 0-10.5s: OGNI TICK (nascita densa — qui si decide il sesso).
+            #   - dopo 10.5s: UN CAMPIONE ogni 3s fino alla chiusura (evoluzione).
+            #     Niente piu' buco cieco tra i 10s e l'uscita.
+            #   - flush UNICO alla chiusura (in _close_shadow_trade), NON a 10.5s.
+            #     Una scrittura per trade → niente raffica, niente disco pieno.
+            #   - tetto duro MICRO_MAX_PUNTI: la lista non esplode mai.
+            # Solo osserva: zero impatto sulle decisioni del bot.
             try:
-                if duration <= 10.5:
-                    _micro = self._shadow.setdefault('_micro_nascita', [])
-                    _micro.append((round(duration, 3), round(_pnl_live, 4),
-                                   round(self._trade_peak_pnl, 4)))
-                elif not self._shadow.get('_micro_flushed'):
-                    self._shadow['_micro_flushed'] = True
-                    _firma_n = (f"{self._shadow.get('momentum_entry','?')}|"
-                                f"{self._shadow.get('volatility_entry','?')}|"
-                                f"{self._shadow.get('trend_entry','?')}|"
-                                f"{self._shadow.get('regime_entry', self._regime_current)}|"
-                                f"{entry_direction}")
-                    self._save_curva_nascita(
-                        trade_ts=self._shadow_entry_time,
-                        firma=_firma_n,
-                        curva=self._shadow.get('_micro_nascita', []),
-                    )
+                _micro = self._shadow.setdefault('_micro_nascita', [])
+                if len(_micro) < self.MICRO_MAX_PUNTI:
+                    if duration <= 10.5:
+                        # Nascita: ogni tick
+                        _micro.append((round(duration, 3), round(_pnl_live, 4),
+                                       round(self._trade_peak_pnl, 4)))
+                    else:
+                        # Evoluzione: un campione ogni MICRO_PASSO_S secondi
+                        _last_t = _micro[-1][0] if _micro else 0.0
+                        if (duration - _last_t) >= self.MICRO_PASSO_S:
+                            _micro.append((round(duration, 3), round(_pnl_live, 4),
+                                           round(self._trade_peak_pnl, 4)))
             except Exception as _ne:
                 log.debug(f"[CURVA_NASCITA_ERR] {_ne}")
 
@@ -12441,8 +12463,22 @@ class OvertopBassanoV16Production:
                 BREATH_MEDIA_RANGE   = (PROFIT_FLOOR_LOW * 0.5, PROFIT_FLOOR_HIGH * 0.7)
             else:  # DEBOLE
                 # DEBOLE = trade fragile. Soglie basse, prendi quello che dà.
+                # ════════════════════════════════════════════════════════════
+                # FRONTIERA MASCHI DEBOLE (1giu, Roberto — dai dati reali):
+                # phantom_forensic, is_win=1, DEBOLE|BASSA: mfe_min=2.01.
+                # NESSUN maschio DEBOLE fa picco sotto 2$ → sotto 2 = femmina.
+                # Fasce: 2-3$ (344), 3-4$ (176), 4-6$ (219), >6$ (482, media 10.36).
+                # Il floor LOW era 3.00 → tagliava fuori i 344 maschi della
+                # fascia 2-3: SMORZ_TAKE non si armava mai su di loro e il grasso
+                # evaporava. Portato a 2.20 (appena sopra la frontiera 2.01) così
+                # la presa sul picco si arma appena il maschio si manifesta.
+                # SMORZ_TAKE scatta solo CON decelerometro → non taglia il maschio
+                # che ancora corre, solo quello che sta gia' rallentando.
+                # Regolabile da env senza redeploy.
+                # ════════════════════════════════════════════════════════════
                 _margine_pct = 0.0004   # 0.04% di $5k = $2 netto target
-                PROFIT_FLOOR_LOW     = _fee_rt + (_exp_usd * _margine_pct * 0.5)   # ~$3.00 lordo
+                _floor_low_deb = float(os.environ.get('FLOOR_LOW_DEBOLE', '2.20'))
+                PROFIT_FLOOR_LOW     = _floor_low_deb                              # ~$2.20 lordo (era 3.00)
                 PROFIT_FLOOR_HIGH    = _fee_rt + (_exp_usd * _margine_pct * 1.0)   # ~$4.00 lordo
                 PROFIT_BIG_THRESHOLD = _fee_rt + (_exp_usd * _margine_pct * 1.6)   # ~$5.20 lordo
                 LOCK_LOW_RETREAT     = 0.18   # retreat aggressivo (chiudi presto)
@@ -12652,6 +12688,27 @@ class OvertopBassanoV16Production:
             if not self._shadow:
                 self._shadow_closing = False
                 return
+
+            # ── MICROSCOPIO: FLUSH CURVA ALLA CHIUSURA (1giu, opzione B) ──────
+            # La curva (nascita densa + evoluzione ogni 3s) si salva QUI, alla
+            # chiusura reale, NON piu' a 10.5s. Una scrittura per trade.
+            # Isolato: se fallisce non deve mai impedire la chiusura del trade.
+            try:
+                if not self._shadow.get('_micro_flushed'):
+                    self._shadow['_micro_flushed'] = True
+                    _firma_n = (f"{self._shadow.get('momentum_entry','?')}|"
+                                f"{self._shadow.get('volatility_entry','?')}|"
+                                f"{self._shadow.get('trend_entry','?')}|"
+                                f"{self._shadow.get('regime_entry', self._regime_current)}|"
+                                f"{self._shadow.get('direction','LONG')}")
+                    self._save_curva_nascita(
+                        trade_ts=self._shadow_entry_time,
+                        firma=_firma_n,
+                        curva=self._shadow.get('_micro_nascita', []),
+                    )
+            except Exception as _mfe:
+                log.debug(f"[MICRO_FLUSH_CLOSE_ERR] {_mfe}")
+
             # PnL REALE FUTURES = delta_prezzo × quantita BTC nella posizione
             # CRITICO: usa la direzione al momento dell'ENTRY, non quella attuale
             # Se il campo ha flippato durante il trade, la direzione attuale è sbagliata
