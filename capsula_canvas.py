@@ -108,6 +108,13 @@ class CapsulaCanvas:
                 "volatility":      v.get("volatility"),
                 "trend":           v.get("trend"),
                 "direction":       v.get("direction"),
+                # PRIMA DEL SEME — vita dell'energia (2giu, intuizione Roberto):
+                # range_pos = dove sta il prezzo nel range (alto=sul picco?)
+                # drift_slope = l'energia accelera (>0 viva) o decade (<0 morta)?
+                # seed_score = forza totale dell'impulso alla nascita
+                "range_pos":       v.get("range_pos"),
+                "drift_slope":     v.get("drift_slope"),
+                "seed_score":      v.get("seed_score"),
             }
 
             capsule_voto = v.get("capsule_voto")
