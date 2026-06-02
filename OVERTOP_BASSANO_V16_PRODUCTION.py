@@ -7093,7 +7093,13 @@ class OvertopBassanoV16Production:
         self.canvas = None
         if _CANVAS_AVAILABLE:
             try:
-                self.canvas = CapsulaCanvas(bot_ref=self, db_path=DB_PATH)
+                # FIX 2giu (Roberto — "l'occhio cieco dal 31mag, la radice"):
+                # l'__init__ reale di CapsulaCanvas (capsula_canvas.py riga 205) è
+                # `def __init__(self, db_path)` — NON accetta bot_ref. La chiamata
+                # con bot_ref=self lanciava TypeError → except → self.canvas=None →
+                # canvas mai creato → 1569 valutazioni, 0 scritture dal 31mag.
+                # Tolto bot_ref: ora la firma combacia, il canvas nasce, l'occhio vede.
+                self.canvas = CapsulaCanvas(db_path=DB_PATH)
                 log.info(f"[CANVAS] ✅ skill caricata — stato={self.canvas.status()}")
             except Exception as _e_cv:
                 log.warning(f"[CANVAS] init fallita (silenziato): {_e_cv}")
