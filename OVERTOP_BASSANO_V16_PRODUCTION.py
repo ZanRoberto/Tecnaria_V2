@@ -10320,17 +10320,26 @@ class OvertopBassanoV16Production:
             "capsule_size_delta":   1.0,
             "capsule_reasons":      [],
             "capsule_oracolo_override": False,
-            # BREATH
-            "breath_fase":          None,
-            "breath_energia":       None,
+            # BREATH — popolato subito (era None → null nel canvas, vedi fix sensori sopra)
+            "breath_fase":          (self._breath._fase    if getattr(self, '_breath', None) else None),
+            "breath_energia":       (self._breath._energia if getattr(self, '_breath', None) else None),
             # CONTESTO BASE
             # FIX TRACCIATURA (31mag): era None alla nascita e veniva riempito
             # DOPO la chiamata a observe_entry → la snapshot registrava regime
             # mancante. Popolato subito col regime corrente.
             "regime":               self._regime_current,
-            "oi_carica":            None,
-            "oi_stato":             None,
-            "oi_carica_short":      None,
+            # FIX TRACCIATURA SENSORI (2giu, Roberto — "l'indizio prima del seme"):
+            # PRIMA: oi_carica/breath/fp_wr nascevano None e venivano riempiti DOPO
+            # la chiamata a observe_entry (righe ~10823) → il canvas registrava i
+            # sensori del campo TUTTI null. L'indizio pre-nascita (carica, respiro,
+            # energia del campo nell'istante della valutazione) veniva BUTTATO.
+            # ADESSO: popolati SUBITO coi valori che il bot già ha in mano, così la
+            # scatola nera (canvas_snapshots.sensori_json) registra lo stato del campo
+            # PRIMA che il trade nasca. È il dato da cui cercare il segnale subdolo:
+            # ciò che distingue chi nascerà femmina-e-resta da chi diventerà maschio.
+            "oi_carica":            getattr(self, '_oi_carica', None),
+            "oi_stato":             getattr(self, '_oi_stato', None),
+            "oi_carica_short":      getattr(self, '_oi_carica_short', None),
             "score":                None,
             "soglia":               None,
             # CAMPO GRAVITAZIONALE (Passo 5a-bis — 5° testimone)
