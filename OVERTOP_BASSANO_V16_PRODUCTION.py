@@ -12259,6 +12259,29 @@ class OvertopBassanoV16Production:
                     f"pnl{current_pnl_real:+.1f}) → tagliata prima dell'HARD_STOP")
                 return
 
+            # ════════════════════════════════════════════════════════════════
+            # SPIA DIAGNOSTICA FRENO (2giu, Roberto — "perché i loss non sono
+            # castrati al minimo"). Una femmina è arrivata a -9 (HARD_STOP) il
+            # 14:26 nonostante peak 0.0 e 10min di colata: il freno NON è
+            # scattato e non sappiamo perché. Questa spia NON cambia il
+            # comportamento: scrive solo PERCHÉ il freno non scatta quando il
+            # PnL è già oltre la soglia. Al prossimo loss-colata il log dirà
+            # quale condizione manca (peak troppo alto? durata? off?), così
+            # diagnostichiamo dai dati invece di indovinare.
+            # ════════════════════════════════════════════════════════════════
+            if (current_pnl_real < -_freno_pnl and not _freno_off):
+                # il PnL è già oltre soglia ma il freno sopra NON ha tagliato:
+                # quindi è fallita peak<soglia oppure durata>=tempo. Lo dico.
+                _why = []
+                if not (self._trade_peak_pnl < _freno_peak):
+                    _why.append(f"peak={self._trade_peak_pnl:.2f}>={_freno_peak}(NON-femmina?)")
+                if not (duration >= _freno_tempo):
+                    _why.append(f"dur={duration:.0f}s<{_freno_tempo}(troppo-giovane)")
+                if _why:
+                    self._log_m2("🔍",
+                        f"FRENO_SPIA: pnl{current_pnl_real:+.1f} oltre soglia ma NON taglio → "
+                        f"{' '.join(_why)}")
+
             # -- MINIMUM HOLD TIME ---------------------------------------------
             # FIX: MIN_HOLD_SECONDS era dichiarato ma mai applicato.
             # Nessun divorzio nei primi 10 secondi — il trade deve respirare.
