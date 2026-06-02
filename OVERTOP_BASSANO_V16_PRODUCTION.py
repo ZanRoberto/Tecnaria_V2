@@ -10374,6 +10374,18 @@ class OvertopBassanoV16Production:
         # ════════════════════════════════════════════════════════════════
         try:
             if getattr(self, "canvas", None) is not None:
+                # PRIMA DEL SEME (2giu, Roberto): l'hook canvas è anticipato,
+                # ma range_pos/drift_slope (vita dell'energia) si calcolano più
+                # in basso. Li anticipo qui così l'occhio li registra alla
+                # nascita. Calcolo leggero e già usato altrove, nessun effetto
+                # sulle decisioni: solo per riempire il verbale dell'occhio.
+                try:
+                    _seed_early = self.seed_scorer.score()
+                    _verbale["range_pos"]   = _seed_early.get("range_pos")
+                    _verbale["drift_slope"] = _seed_early.get("drift_slope")
+                    _verbale["seed_score"]  = _seed_early.get("score")
+                except Exception:
+                    pass
                 _canvas_tid = f"t_{int(time.time()*1000)}"
                 _verbale["_canvas_tid"] = _canvas_tid
                 self.canvas.observe_entry(_verbale, trade_id=_canvas_tid)
@@ -10462,6 +10474,19 @@ class OvertopBassanoV16Production:
                 _verbale["blocked_by"] = "ZONA1_SEED_INSUFFICIENT"
                 self._log_constitutional(_verbale, "PRE_SC_VETO_SEED_INSUFFICIENT")
                 return
+
+            # ── PRIMA DEL SEME: vita dell'energia (2giu, Roberto) ───────────
+            # Intuizione: il bot misura QUANTA energia c'è (livello) ma non se
+            # quell'energia è VIVA (sale) o MORTA (picco che cola). range_pos
+            # alto + drift_slope negativo = comprato sul picco morto = femmina.
+            # Registriamo questi due nel verbale così il canvas (l'occhio) li
+            # salva alla nascita. Domani confrontiamo: le femmine nascono con
+            # slope<0 (energia morta) e i maschi con slope>0 (energia viva)?
+            # NON cambia nessuna decisione: aggiunge solo l'elemento oggettivo
+            # che mancava per provare/smentire l'intuizione sui dati.
+            _verbale["range_pos"]   = seed.get("range_pos")
+            _verbale["drift_slope"] = seed.get("drift_slope")
+            _verbale["seed_score"]  = seed.get("score")
 
             # ════════════════════════════════════════════════════════════════
             # PATCH 9 BUG 16 — Disable Operational BYPASS_ORACOLO
@@ -11120,6 +11145,14 @@ class OvertopBassanoV16Production:
                 # Hook 1/2: canvas observe_entry per Percorso 1
                 try:
                     if getattr(self, "canvas", None) is not None:
+                        # PRIMA DEL SEME (2giu): vita dell'energia anche su P1
+                        try:
+                            _seed_p1 = self.seed_scorer.score()
+                            _verbale["range_pos"]   = _seed_p1.get("range_pos")
+                            _verbale["drift_slope"] = _seed_p1.get("drift_slope")
+                            _verbale["seed_score"]  = _seed_p1.get("score")
+                        except Exception:
+                            pass
                         _canvas_tid_p1 = f"t_{int(time.time()*1000)}_P1"
                         _verbale["_canvas_tid"] = _canvas_tid_p1
                         _verbale["_path"] = "P1_EXPLOSIVE"
