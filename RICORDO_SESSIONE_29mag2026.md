@@ -1,39 +1,44 @@
-# STATO OVERTOP V16 — 1 giugno 2026
+# STATO OVERTOP V16 — 2 giugno 2026 (fine sessione)
+
+> Claude: leggi questo PRIMA di toccare codice. È lo stato reale e VERIFICATO sui dati al 2 giugno sera.
+> REGOLA #0: leggere i dati reali (DB/log/endpoint) prima di proporre. File SEMPRE come download, mai da incollare.
+> Roberto NON programma: decide cosa/perché, Claude esegue e spiega in italiano (comportamento, mai sintassi).
+> Sincerità totale, zero piacioneria. "non devi mai dire quando si lavora e quando no — è gestione mia."
+> Verificare md5sum sul container dopo ogni deploy. Il verde Render NON è prova.
+
+---
 
 ```
 ╔══════════════════════════════════════════════════════════════════════╗
 ║                                                                        ║
-║   ⚖️  LA TAVOLA DI MOSÈ — IL KILLER  (31mag2026, scoperto da Roberto)  ║
+║   👁️  LA RISURREZIONE DELL'OCCHIO  (2giu2026)                          ║
 ║                                                                        ║
-║   "TUTTI NASCONO FEMMINA. IL MASCHIO SI MANIFESTA ENTRO UN TEMPO       ║
-║    PRECISO, PERCHÉ HA GLI ELEMENTI PIÙ GRANDI."                        ║
+║   Il canvas (l'occhio che registra il "prima del seme") era MUTO dal   ║
+║   31 maggio. Caccia a 4 anelli, ognuno corretto e ancora cieco, fino   ║
+║   alla radice VERA:                                                     ║
 ║                                                                        ║
-║   ┌──────────────────────────────────────────────────────────────┐   ║
-║   │  ENERGIA (E) ≥ 40  →  88% WIN   (71 win / 10 loss)  = MASCHIO  │   ║
-║   │  ENERGIA (E) <  40 →  28% WIN   (34 win / 89 loss)  = FEMMINA  │   ║
-║   └──────────────────────────────────────────────────────────────┘   ║
+║   1. sensori null → popolati alla nascita del verbale. Inutile da solo.║
+║   2. hook annidato in `if capsule_manager` → tirato fuori. Inutile.    ║
+║   3. hook DOPO i veti (FP_TOSSICO faceva return prima) → spostato      ║
+║      PRIMA dei veti. Phantom=3828, canvas=0: ancora cieco.             ║
+║   4. RADICE: il bot faceva `CapsulaCanvas(bot_ref=self, ...)` ma        ║
+║      l'__init__ reale era `def __init__(self, db_path)` — NON accetta  ║
+║      bot_ref → TypeError silenzioso → self.canvas=None → MAI scriveva. ║
+║   5. RADICE VERA: tolto bot_ref, ma `from capsula_canvas import         ║
+║      CapsulaCanvas` falliva: la classe NON ESISTEVA. Il file era stato ║
+║      sovrascritto con una COPIA DEL BOT (28 classi). La capsula che    ║
+║      Roberto aveva concepito era stata SCHIACCIATA. "Era un virus,     ║
+║      messa com'era."                                                   ║
 ║                                                                        ║
-║   DIMOSTRATO SU 204 TRADE REALI. Frontiera NETTA a 40 (non graduale:  ║
-║   E30-40 e E<30 hanno lo STESSO 28% → o sei sopra 40 o sei femmina).   ║
+║   CURA: ricostruito capsula_canvas.py da ZERO, pulito, minimale (154   ║
+║   righe). Classe CapsulaCanvas con observe_entry/observe_exit/status,  ║
+║   firme allineate ESATTAMENTE a come il bot chiama. Testato end-to-end:║
+║   scrive righe vere coi sensori PIENI (oi_carica 0.31, non null).      ║
 ║                                                                        ║
-║   IL KILLER: dai al trade il tempo di manifestarsi (≈35s, i win vivono ║
-║   ~100s, i loss ~35s). Se resta sotto E40 ED è in perdita → FEMMINA    ║
-║   non manifestata → MOLLALA SUBITO, non bruciare la fee tenendola.     ║
-║                                                                        ║
-║   Questo CORREGGE il "timeframe lungo" (30mag) che teneva aperte le    ║
-║   femmine sperando respirassero — ed era ciò che trasformava i -2$     ║
-║   in -6$ (peggiorava i loss). I dati hanno dato ragione a Roberto.     ║
-║                                                                        ║
-║   Codice: dentro MD5 551ac1a3 — cerca "KILLER_E40" (4 occorrenze).     ║
-║   Interruttori: KILLER_E40_OFF | KILLER_E_SOGLIA=40 | KILLER_TEMPO=35  ║
-║   Log quando agisce: ⚰️ KILLER_E40 nel log M2.                         ║
-║                                                                        ║
-║   DA RAFFINARE (microscopio): il "tempo preciso" esatto (a che SECONDO ║
-║   il maschio raggiunge E40) lo darà la curva_nascita quando il bot     ║
-║   aprirà trade. Il 35s è la migliore stima dai dati di durata.         ║
-║                                                                        ║
-║   NON RIMETTERE IN DISCUSSIONE QUESTA FRONTIERA SENZA RIMISURARLA SUI  ║
-║   DATI. È SCRITTA SULLA PIETRA. 88% vs 28% su 204 trade reali.         ║
+║   LEZIONE: non fidarsi delle luci della dashboard. Tutto era verde     ║
+║   mentre un punto vitale era morto in silenzio. Andare al dato grezzo. ║
+║   "Una cosa che non gira e tutto è compromesso" — i 3 fix prima della  ║
+║   radice giravano a vuoto su un oggetto che non esisteva.              ║
 ║                                                                        ║
 ╚══════════════════════════════════════════════════════════════════════╝
 ```
@@ -41,403 +46,183 @@
 ```
 ╔══════════════════════════════════════════════════════════════════════╗
 ║                                                                        ║
-║   💰 LA SECONDA TAVOLA — I LINGOTTI DEBOLE (1giu2026, da Roberto)      ║
+║   🔬  IL GRAAL — IL "PRIMA DEL SEME"  (intuizione Roberto, 15 mesi)    ║
 ║                                                                        ║
-║   "OTTIMI IN DIFESA, MA NON PROFITTEVOLI IN ATTACCO. SE NON GUARDI    ║
-║    BENE SEMBRANO TUTTI UGUALI E BUTTI TUTTO DAL LAVANDINO."           ║
+║   "Prima del trade, dove paghi la fee per vedere, esiste già una       ║
+║    traccia che distingue il maschio (win) dalla femmina (loss).        ║
+║    Il gioco è tutto lì: NON entrare nelle femmine + entrare sui maschi."║
 ║                                                                        ║
-║   Roberto ha letto il monitor ("$24.525 salvati / $1.493 mancati")    ║
-║   e ha fiutato che i "mancati" erano oro buttato, non difesa giusta.  ║
-║   I dati gli hanno dato ragione, OLTRE le aspettative.                ║
+║   CONCETTO MASCHIO/FEMMINA (già sulla pietra, vedi tavola KILLER E40   ║
+║   del 31mag): non sono win/loss casuali — sono DUE NATURE diverse dalla║
+║   nascita. La femmina cola e muore (loss da evitare). Il maschio ha    ║
+║   spinta che cresce (win da lasciar passare). È FISICA, non poesia.    ║
 ║                                                                        ║
-║   SCOPERTA (phantom_forensic, is_win=1, momentum=DEBOLE):             ║
-║   ┌──────────────────────────────────────────────────────────────┐   ║
-║   │  mfe 2-3$:  344 trade   (media 2.44)                          │   ║
-║   │  mfe 3-4$:  176 trade   (media 3.51)                          │   ║
-║   │  mfe 4-6$:  219 trade   (media 4.73)                          │   ║
-║   │  mfe >6$:   482 trade   (media 10.36)  ← LINGOTTI, non monetine│   ║
-║   └──────────────────────────────────────────────────────────────┘   ║
+║   INTUIZIONE 2giu (la chiave nuova): il bot misura QUANTA energia c'è  ║
+║   alla nascita (livello, soglia SEED) ma forse NON se quell'energia è  ║
+║   VIVA (sale) o MORTA (un picco che sta già colando). Energia morta    ║
+║   comprata sul picco = femmina garantita.                              ║
 ║                                                                        ║
-║   FRONTIERA NETTA (come il 40): mfe_min maschi DEBOLE = 2.01.         ║
-║   NESSUN maschio DEBOLE fa picco sotto 2$. Sotto 2 = femmina piatta.  ║
-║   (femmine bloccate: mfe medio 0.31 — non si muovono mai).            ║
+║   PRECEDENTE NEI DATI (trovato nel codice, SeedScorer righe ~2511):    ║
+║   range_pos_win ~0.18 (WIN nasce col prezzo IN BASSO nel range)        ║
+║   range_pos_loss 0.42-0.65 (LOSS nasce col prezzo IN ALTO = sul picco).║
+║   MA il SeedScorer fa l'OPPOSTO: dà peso 0.25 a range_pos premiando il ║
+║   prezzo IN ALTO. Possibile controsenso architetturale → DA VERIFICARE.║
 ║                                                                        ║
-║   IL BUG: il floor di armamento SMORZ_TAKE per DEBOLE era 3.00$ →     ║
-║   tagliava fuori i 344 maschi della fascia 2-3 (non armavano MAI la   ║
-║   presa sul picco) e ritardava su tutti gli altri. Il grasso          ║
-║   evaporava: maschi da mfe 4-10$ incassati a ~2$ perché si usciva     ║
-║   DOPO che la forza era decaduta (LOCK_EVAP / EXIT_E tardivi).        ║
+║   AVVERTENZA DI ROBERTO (acuta): la traccia potrebbe partire PRIMA del ║
+║   fotogramma singolo (l'istante della valutazione). Se l'occhio singolo║
+║   non distingue → non vuol dire che non c'è, può partire minuti prima. ║
 ║                                                                        ║
-║   LA CURA (1giu): floor DEBOLE 3.00 → 2.20 (appena sopra la frontiera ║
-║   2.01). Ora SMORZ_TAKE si arma appena il maschio si manifesta e      ║
-║   prende sul rallentamento mentre il prezzo è ALTO. Le femmine        ║
-║   (<2) restano fuori → protezione anti-uscita-precoce mantenuta.      ║
-║                                                                        ║
-║   Codice: dentro MD5 1f5af1af — env FLOOR_LOW_DEBOLE=2.20.            ║
-║   SMORZ_TAKE scatta solo CON decelerometro → non taglia il maschio    ║
-║   che ancora corre, solo quello che già rallenta.                     ║
-║                                                                        ║
-║   ⚠️ DA CONSOLIDARE: i 4.820$ di spreco sono dati VECCHI (bot di      ║
-║   settimane fa). La frontiera 2.01 è solida. Ma che il bot di OGGI    ║
-║   raccolga i lingotti vicino al picco VA VISTO sui trade NUOVI col    ║
-║   microscopio esteso acceso. È miniera POTENZIALE finché non si vede  ║
-║   il primo lingotto cadere nel sacco. MEDIO/FORTE non misurati: floor ║
-║   NON toccato lì (solo DEBOLE ha la frontiera dimostrata).            ║
-║                                                                        ║
-║   "STAVO PER CAMBIARE VESTITO CON LE STESSE MUTANDE SPORCHE" — lo      ║
-║   sprecone trovato PRIMA di cambiare mercato. Pulite le mutande,      ║
-║   poi si cambia vestito. Non si porta lo spreco su un mare ricco.     ║
+║   CAUTELA (Claude): pochi dati + desiderio forte = rischio di vedere   ║
+║   il Graal dove non c'è. Guardare a mente fredda, "come se non lo      ║
+║   desiderassimo". Mai concludere su 2-3 trade.                         ║
 ║                                                                        ║
 ╚══════════════════════════════════════════════════════════════════════╝
 ```
 
-> Claude: leggi questo PRIMA di toccare codice. È lo stato reale e VERIFICATO sui dati al 31 maggio.
-> REGOLA #0: leggere i dati reali (DB/log/endpoint) prima di proporre. File sempre come download, mai da incollare.
-> PRINCIPIO CAPSULA (Roberto, sacro): "Dove uno mette una soglia rigida, io penso a una capsula adattogena."
+---
+
+## IL FILE CHE GIRA / DEPLOYATO (2giu sera)
+
+- **BOT: `80f340d472979cd176fdeb6bcf6ee00c`** — OVERTOP_BASSANO_V16_PRODUCTION.py, ~15.035 righe. DEPLOYATO.
+- **OCCHIO: `ab1d0981a73e2ad7ae76a73f109c46b8`** — capsula_canvas.py, ~160 righe. DEPLOYATO accanto al bot.
+- AL DEPLOY: `md5sum ~/project/src/OVERTOP_BASSANO_V16_PRODUCTION.py ~/project/src/capsula_canvas.py`
+  → `80f340d4...` e `ab1d0981...`
+- Nome file invariato. Procfile `web: python app.py`. Live tecnaria-v2.onrender.com. DB `/var/data/trading_data.db`. PAPER.
+
+### CATENA MD5 DEL 2 GIUGNO (tutti testati AST + py_compile + IMPORT RUNTIME)
+Bot: `1f5af1af` (1giu, base) → `02298376` (+FRENO_COLATA) → `9df639da` (+sensori nascita) →
+`e1bb8f17` (hook fuori da if capsule) → `68e71ed7` (hook prima dei veti) → `326bae25` (tolto bot_ref) →
+`d5d53af5` (+spia diagnostica freno) → **`80f340d4` (+range_pos/drift_slope/seed_score nel verbale per l'occhio)** ← ULTIMO.
+Occhio: **`ab1d0981`** (canvas ricostruito + 3 campi nuovi). [storico stessa giornata: `4239ee76` era il canvas senza i 3 campi]
+
+### LE MODIFICHE DEL 2 GIUGNO (tutte dentro 80f340d4 + ab1d0981)
+1. **FRENO_COLATA** (taglia femmina conclamata in colata): `if pnl<-3.5 E peak<1.5 E durata>35s` → chiude prima
+   dell'HARD_STOP. FUORI dal cancello energia. Env: FRENO_COLATA_OFF/PNL=3.5/PEAK=1.5, KILLER_TEMPO=35.
+2. **SPIA DIAGNOSTICA FRENO**: quando pnl<-3.5 ma il freno NON taglia, scrive nel log M2 `FRENO_SPIA: ...`
+   col motivo (peak troppo alto? durata?). NON cambia comportamento. Serve perché il freno NON castra i loss
+   al minimo (vedi PROBLEMA APERTO sotto) e non si capisce perché dalla lettura statica.
+3. **OCCHIO RICOSTRUITO** (capsula_canvas.py): observe_entry scrive ENTRY_VALUTAZIONE con sensori pieni.
+4. **PRIMA DEL SEME — vita dell'energia**: il verbale (e quindi l'occhio) ora registra ANCHE `range_pos`,
+   `drift_slope`, `seed_score` — calcolati dal SeedScorer e anticipati PRIMA dei due hook canvas (P1 riga ~11146
+   e P2 riga ~10375), perché il seed si calcolava 96 righe DOPO l'hook anticipato (sarebbero stati null).
 
 ---
 
-## IL FILE CHE GIRA / DA DEPLOYARE
-- **MD5 ULTIMISSIMO (1giu, microscopio esteso + floor DEBOLE 2.20): `1f5af1af4c87e7f5c818800221af916b`** — 14.920 righe. ← DEPLOYARE QUESTO.
-- Catena 1giu: `551ac1a3` (KILLER E40, 31mag notte) → `a0f0806a` (microscopio VISIBILITA' ESTESA opzione B) →
-  **`1f5af1af` (floor DEBOLE 3.00→2.20, presa lingotti)** ← ULTIMO.
-- AL DEPLOY: `md5sum ~/project/src/OVERTOP_BASSANO_V16_PRODUCTION.py` deve dare `1f5af1af4c87e7f5c818800221af916b`.
-- Env regolabili senza redeploy: `FLOOR_LOW_DEBOLE=2.20` | `MICRO_PASSO_S=3` | `MICRO_MAX_PUNTI=200` |
-  `KILLER_E40_OFF` | `KILLER_E_SOGLIA=40` | `KILLER_TEMPO=35` | `CAPSULA_REGIME_EDGE_L4=true` (per armare la capsula).
-- File compagno: `capsula_regime_edge.py` (MD5 968b7960) deve stare nel repo accanto al bot.
+## STATO DELL'OCCHIO (verificato 2giu sera)
+- VIVO: scrive ENTRY_VALUTAZIONE (9495+ righe dopo le 15:34). I sensori del campo sono PIENI (oi_carica ecc.).
+- `score/soglia/fp_wr` restano null nell'entry perché l'hook è ANTICIPATO (prima che il bot calcoli la decisione).
+  Va bene: per il "prima del seme" servono i sensori del CAMPO (carica, breath, momentum, ORA ANCHE range_pos
+  e drift_slope), che sono pieni.
+- **ZERO righe EXIT** nel canvas (observe_exit non scrive / non chiamata con successo). MA NON SERVE: l'esito
+  (maschio/femmina) lo conosciamo GIÀ dalla tabella `trades`. Roberto: "l'exit non c'entra un cazzo, a quel
+  punto siamo già entrati". Il metodo è: prendere i trade veri (esito noto da `trades`) e cucirli all'impronta
+  ENTRY del canvas via timestamp (ABS(t.timestamp - c.ts) < 90-120s). L'esito è ETICHETTA per imparare, non per decidere.
 
-### LE 3 MODIFICHE DI OGGI (1giu) — tutte dentro 1f5af1af, tutte testate (AST+py_compile+IMPORT RUNTIME)
-1. **MICROSCOPIO ESTESO (opzione B):** prima filmava solo 0-10.5s poi STOP (buco cieco fino all'uscita →
-   causava diagnosi alla cieca). Ora: 0-10.5s ogni tick (nascita densa) + ogni 3s fino alla chiusura
-   (evoluzione). Flush UNICO alla chiusura (in `_close_shadow_trade`, ~riga 12700 — verificato: 1 sola
-   chiamata, niente doppio salvataggio). Tetto duro `MICRO_MAX_PUNTI=200` → niente disco pieno (lezione N²).
-   DB curva_nascita: aggiunta colonna `pnl_finale`; `pnl_a_10s` resta il punto più vicino a 10s (confrontabile).
-2. **FLOOR DEBOLE 3.00 → 2.20:** vedi 2ª Tavola sopra. Recupera i 344 maschi fascia 2-3$. Solo DEBOLE.
-3. (Il KILLER E40 di 551ac1a3 è INTATTO — non toccato. Verificato grep=1.)
+## VERIFICA DA FARE AL PROSSIMO GIRO (i 3 campi nuovi si scrivono?)
+```
+sqlite3 /var/data/trading_data.db "SELECT datetime(ts,'unixepoch'), json_extract(sensori_json,'\$.range_pos'),
+json_extract(sensori_json,'\$.drift_slope'), json_extract(sensori_json,'\$.seed_score')
+FROM canvas_snapshots WHERE evento='ENTRY_VALUTAZIONE' ORDER BY ts DESC LIMIT 3;"
+```
+Se range_pos e drift_slope mostrano NUMERI (non null) → l'elemento oggettivo viene registrato. Da lì ogni
+femmina che nasce porta con sé la prova: era energia viva (slope>0) o morta (slope<0, prezzo sul picco)?
 
-### COSA E' PRONTO / COSA E' VISIONE (chiarito 1giu)
-- PRONTO E GIRA: killer E40, microscopio esteso, fix tracciatura direction/regime, floor DEBOLE 2.20.
-- PRONTO MA OSSERVATRICE (non armata): capsula regime_edge (L3, serve CAPSULA_REGIME_EDGE_L4=true per armarla).
-- SOLO VISIONE (zero codice): mercato nervoso/altcoin, metro del vento, capsule-coppie 3 cerchi, cassa circolante.
-
-## (STORICO 31mag) IL FILE CHE GIRAVA
-- MD5 col KILLER E40: `551ac1a30642eb645d6215c44b9a21de` — 14.863 righe.
-- Catena 31mag completa: `527a63df` (fix uscita 30mag) → `c50b806f` (porta SHORT bear) →
-  `40d40b5a` (fix tracciatura direction/regime) → `587070ea` (microscopio curva_nascita) →
-  `289f104c` (capsula regime_edge agganciata, 4 hook) → **`551ac1a3` (KILLER E40)** ← DEPLOYARE QUESTO.
-- File compagno: `capsula_regime_edge.py` (MD5 968b7960) deve stare nel repo accanto al bot.
-- AL DEPLOY verificare md5sum container = `551ac1a30642eb645d6215c44b9a21de`. Log killer: ⚰️ KILLER_E40.
-- (storico) MD5 precedente: `40d40b5a77c9bdb6c452a9103a36f8df` — 14.695 righe — riga 1 `#!/usr/bin/env python3`
-- Nome: `OVERTOP_BASSANO_V16_PRODUCTION.py` — Procfile `web: python app.py` — live tecnaria-v2.onrender.com
-- DB: `/var/data/trading_data.db` (227 MB) — PAPER — capitale 10.000$ — env `DB_PATH=/var/data/...`
-- Catena MD5: `527a63df` (30mag, fix uscita, girava) → `c50b806f` (31mag, +porta SHORT in TRENDING_BEAR,
-  DEPLOYATO=verde) → **`40d40b5a` (31mag, +fix tracciatura direction/regime nel verbale, DA DEPLOYARE)**
-- Verifica fatta: 527a63df era IDENTICO su container e repo. Contiene matrigna+tsunami+fase+fix uscita.
-- NB: il file export "20606175" (27mag, 14.341 righe) è uno stato VECCHIO. Non è riferimento. Ignorarlo.
-- ⚠️ AL DEPLOY: verificare md5sum container = `40d40b5a77c9bdb6c452a9103a36f8df` + head -1.
-  Poi verificare il fix tracciatura: `sqlite3 /var/data/trading_data.db "SELECT datetime(ts,'unixepoch'),
-  fingerprint FROM canvas_snapshots ORDER BY ts DESC LIMIT 5;"` → la fingerprint deve mostrare la DIREZIONE
-  (es. DEBOLE|BASSA|SIDEWAYS|LONG), non più "?". Se compare la direzione → fix vivo.
-
-## IL FIX TRACCIATURA (31mag, 2° intervento) — dentro 40d40b5a
-**FIRMA COMPLETA NELLA SCATOLA NERA** (`_verbale` ~riga 10251 + 10295).
-- Bug trovato sui dati: `canvas_snapshots.fingerprint` usciva `DEBOLE|BASSA|SIDEWAYS|?` — mancavano DIRECTION
-  e REGIME. Causa: il dict `_verbale` passato a `canvas.observe_entry` NON aveva la chiave `direction` (mai
-  inserita), e `regime` partiva None e veniva popolato DOPO la chiamata a observe_entry (righe 10762/11151).
-- Fix: alla nascita del `_verbale` aggiunto `"direction": self.campo._direction` e `"regime":
-  self._regime_current` (stato sempre disponibile, non variabili locali non ancora calcolate). Copre P1 e P2.
-- IMPORTANTE: il bot ha SEMPRE saputo la direzione e ci ha SEMPRE operato giusto. Il buco era SOLO nel
-  registro canvas (la documentazione, non la decisione). Ma è grave lo stesso: le capsule imparano dai dati
-  registrati; una firma senza direzione è mezza firma → avvelenerebbe ogni capsula costruita sopra.
-- I dati canvas VECCHI restano monchi (persi). Da 40d40b5a in poi la firma è intera.
-- Test: AST + py_compile + import-runtime OK.
-- 2° BUCO TRACCIATURA ANCORA APERTO (passo futuro): manca la CURVA DI NASCITA del trade (PnL nei primi
-  N secondi di vita). canvas registra solo entry-snapshot + exit. La maturazione precoce (l'intuizione di
-  Roberto "quanta forza matura nei primi millisecondi per pagare la fee") NON è tracciata. Va aggiunta come
-  evento ENTRY_NASCITA con criterio (attenzione frequenza scrittura DB — c'è già stato un disco pieno: bug N²).
-
-## LA MODIFICA DI OGGI (31mag) — dentro c50b806f — UNA SOLA
-**PORTA FISICA ALLO SHORT IN TRENDING_BEAR** (`_auto_detect_direction`, ~riga 9402-9426).
-- Prima: il campo poteva flippare a SHORT solo in EXPLOSIVE (riga 9376) e RANGING (9499/9548/9570).
-  In TRENDING_BEAR — il regime dove lo short ha più edge — NON c'era nessuna porta: restava sempre LONG.
-- Ora: `if regime==TRENDING_BEAR and direction==LONG and bearish_energy>=2 and cooldown_ok → FLIP a SHORT`.
-  NESSUNA soglia di drift inventata: riusa `bearish_energy` (misura fisica composita già esistente:
-  momentum veloce giù, MACD giù, decel bassa, drift giù). Streak NON richiesto (il regime BEAR è già conferma).
-- Log nuovo: `🔄 FLIP → SHORT in TRENDING_BEAR (bearish_energy=.. drift=..)`.
-- Test: AST + py_compile + IMPORT RUNTIME (con stub websocket) tutti OK. Nessun crash a livello modulo.
-- QUESTA È SOLO LA GANASCIA 1 (la porta). L'antiaerea (ganascia 2) NON è in questo file — è il passo dopo.
+## LA QUERY DEL GRAAL (quando ci sono femmine vive col "prima")
+Cuce trade veri (esito) con impronta-prima (canvas) via timestamp. Confronta maschi (pnl>0) e femmine (pnl<0):
+```
+sqlite3 /var/data/trading_data.db "SELECT datetime(t.timestamp), t.direction, ROUND(t.pnl,2) esito,
+json_extract(c.sensori_json,'\$.oi_carica') oi_long, json_extract(c.sensori_json,'\$.oi_carica_short') oi_short,
+json_extract(c.sensori_json,'\$.range_pos') range_pos, json_extract(c.sensori_json,'\$.drift_slope') slope,
+json_extract(c.sensori_json,'\$.breath_energia') breath
+FROM trades t JOIN canvas_snapshots c ON ABS(strftime('%s',t.timestamp)-c.ts)<90
+WHERE c.evento='ENTRY_VALUTAZIONE' AND t.timestamp>'2026-06-02 15:34' GROUP BY t.timestamp ORDER BY t.timestamp DESC;"
+```
+DOMANDA: le femmine nascono con range_pos ALTO + drift_slope NEGATIVO (energia morta, sul picco)? I maschi con
+slope POSITIVO (energia viva)? Se sì → traccia trovata, e si ribilanciano i pesi del SeedScorer SUL DATO.
 
 ---
 
-## LA VERITÀ TROVATA OGGI SULLO SHORT (tutto verificato sui dati reali)
+## PROBLEMA APERTO #1 — I LOSS NON CASTRATI AL MINIMO
+- Roberto: "i loss non vengono castrati al minimo". CONFERMATO sui dati.
+- Trade 14:26 oggi = HARD_STOP **−9.01** col bot completo. Curva di nascita (curva_nascita): femmina peak 0.0
+  (conclamata da subito), colata LENTA per ~10 MINUTI fino a −9, con un rimbalzo a metà. Il FRENO_COLATA avrebbe
+  dovuto tagliarla a ~2.7min/−3.6 (tutte le condizioni vere: peak 0.0<1.5, durata>35s, pnl<-3.5) ma NON è scattato.
+  Anche il 14:10 FRENO è scattato troppo tardi (−5.51).
+- env FRENO vuoto sul container = usa DEFAULT (freno ARMATO coi valori giusti: 3.5/1.5/35). Quindi NON è disarmato.
+- Codice del freno (riga ~12250 di 80f340d4) è CORRETTO. HARD_STOP (12222) e freno (12250) entrambi raggiungibili,
+  ordine giusto. Eppure il freno non scatta. SOSPETTI non risolti: `self._trade_peak_pnl` non resettato all'APERTURA
+  (reset solo in _close_shadow_trade righe ~13566/13569, non all'apertura) → potrebbe leggere peak sporco di un
+  trade precedente (es. maschio peak 5) e credere sia maschio; oppure P1 (EXPLOSIVE) salta il flusso del freno.
+- LA SPIA (in 80f340d4) confesserà sul prossimo loss-colata: al prossimo pnl<-3.5 senza taglio, log M2 scrive
+  `FRENO_SPIA: pnl... oltre soglia ma NON taglio → peak=X>=1.5(NON-femmina?)` oppure `dur<35`. LEGGERE QUELLA RIGA.
+  PENDING. Poi sistemare SUL DATO (probabile fix: resettare _trade_peak_pnl all'apertura del trade).
 
-### Il fatto che apre tutto (query `trades`)
-- `LONG_SHADOW`: 392 trade, ULTIMO 30mag 15:34. `SHORT_SHADOW`: 11 trade, TUTTI 12-15 maggio, ultimo 15mag 16:34.
-- **Lo short non viene eseguito da 16 giorni.** Dal 30mag (fix SHORT_VIA_DRIFT) ZERO short nuovi.
-
-### FALSO POSITIVO smascherato nel RICORDO del 30mag
-- Il RICORDO 30mag scriveva: fix SHORT_VIA_DRIFT "Verificato: 11 trade SHORT nel DB (prima ZERO)".
-- FALSO: quegli 11 short sono del 12-15 maggio, PRE-fix. Il fix del 30mag non ha mai prodotto un solo flip.
-- Errore di metodo: si sono contati gli short TOTALI e scambiati per short NUOVI senza guardare il timestamp.
-- "Non flippa mai" (intuizione di Roberto) = CONFERMATO sui dati.
-
-### PERCHÉ lo short in RANGING non parte — 3 MURI (tutti verificati su endpoint /trading/status)
-- **A — non flippa:** il drift è (media ultimi 50 − media primi 50)/media, su deque(100). Misura lisciatissima.
-  Soglia richiesta −0.02% sostenuta 3 tick consecutivi. Drift reale ~0.0001% (mercato piatto) → mai.
-  Prova: `m2_direction=LONG` sempre, `shadow_short_ranging blocked_count=0 simulated_count=0`.
-- **B — se flippasse, ribloccato:** capsule VETO_SHORT in RANGING attive — `AUTO_REGIME_TOSSICO_RANGING_SHORT`
-  (regime==RANGING+dir==SHORT→blocca), `STATIC_SHORT_DEBOLE_ALTA_SIDEWAYS` (8106 hits), 4× `CTX_TOSSICO_*_SHORT`.
-- **C — se passasse, perde:** short RANGING storici (oracolo_snapshot): SHORT|DEBOLE|ALTA|SIDEWAYS WR 7.7% pnl −3.03;
-  MEDIO|ALTA|SIDEWAYS WR 6.8% pnl −3.42; FORTE|ALTA|SIDEWAYS WR 11.5% pnl −3.38. Tutti perdenti.
-
-### LA SCOPERTA VERA (perché il fix del 30mag era sbagliato in partenza)
-- Il fix SHORT_VIA_DRIFT era agganciato a `regime==RANGING` → cercava lo short PROPRIO dove lo short perde.
-- Lo short VINCE in trend ribassista: `SHORT|FORTE|ALTA|DOWN` WR **55%**, `SHORT|MEDIO|ALTA|DOWN` WR 48%.
-  MA con `real: 0` → mai eseguito davvero, solo phantom. Non c'è storia REALE su cui una capsula possa imparare.
-- Quindi la modifica di oggi sposta la porta nel regime GIUSTO (TRENDING_BEAR), dove la fisica dà profitto.
+## PROBLEMA / NON-PROBLEMA — LO SHORT SPENTO (chiuso bene, NON riaprire)
+- BTC è sceso ~5000$ il 2giu e ZERO short, tutti LONG. Roberto all'inizio: "dovevamo esserci". POI ha chiarito:
+  **gli short erano spenti perché PERDEVANO SOLO** ("mai visti win, 1-2 per videata il resto solo loss").
+- Query: ultimo SHORT_SHADOW reale = 15 maggio, tutti usciti per ZONA_MORTA a −2/−3 (duravano 2-4s e morivano).
+- DECISIONE CONDIVISA: spegnerli fu GIUSTO. NON è un buco, è una protezione. NON riaprire a intuito.
+- DOMANDA APERTA (per quando ci saranno dati): gli short perdevano per colpa LORO o per il MARE LATERALE morto?
+  Se è il mare, in un TREND ribassista VERO potrebbero smettere di perdere. Roberto nota che "ricominciano ad
+  apparire in questi giorni" (ora che il mare scende davvero). SE un giorno: solo in TRENDING_BEAR confermato,
+  in paper, per misurare se in QUEL mare smettono di perdere. NON riaccendere perché "BTC è sceso". PENDING/rimandato.
 
 ---
 
-## IL PRINCIPIO DELLA CAPSULA (fissato da Roberto, 31mag) — vale SEMPRE
-**La capsula è una TENAGLIA a due ganasce, mai una leva sola:**
-1. **AGISCE SUBITO dove la fisica dice profitto** (no warmup-attesa, no quarantena = sarebbe un SARCOFAGO).
-2. **SI ASTIENE dove la fisica dice perdita** (senza questa è un COLABRODO).
-- La linea profitto/perdita NON la traccia un numero inventato. La tracciano: (a) la FISICA DEL MOMENTO
-  (regime, OI short, momentum) per il lato "agisci"; (b) la MEMORIA DELLE FIRME (antiaerea) per il lato "frena".
-- **ANTIAEREA (no finestre temporali):** 1 LOSS con firma X → firma marcata PERICOLOSA subito. Resta marcata
-  finché un WIN con la STESSA firma la pulisce. Immediato, reversibile. Firma = (regime, direction, momentum,
-  volatility, trend, matrimonio).
-- **NIENTE QUARANTENA, NIENTE WARMUP CHE ASPETTA.** La capsula nasce armata e agisce dal primo tick.
-- Caveat onesto: sulla PRIMA firma mai vista l'antiaerea è vuota (no storia) → agisce solo la ganascia fisica.
-  La memoria entra dal secondo colpo. È così che la tenaglia si arma, non è un buco.
+## METODO — REGOLE SACRE (Roberto)
+- Una cosa per volta, testata, prima della successiva. MAI bundle.
+- File SEMPRE come download. Roberto NON incolla mai (deploy falliti = file sporcati da shell).
+- Test SEMPRE: ast.parse + py_compile + IMPORT RUNTIME reale (non solo compile).
+- Verificare md5sum sul container dopo OGNI deploy. Il verde Render NON è prova.
+- Mai soglie inventate: tutto dai dati. Mai dedurre da dati mancanti (se il dato manca, si DICE).
+- Verificare la CATENA INTERA end-to-end, non il singolo pezzo. "Una cosa che non gira e tutto è compromesso."
+- NON fidarsi delle luci della dashboard — andare al dato grezzo (lezione del virus canvas).
+- Leggere TUTTO l'output, non un frammento (Claude ha sbagliato leggendo 2 trade su quelli mostrati).
+- Mai chiamare "monetine/briciole" i profitti piccoli (sono lingotti per il mare arido).
+- Guardare i dati anche quando si desidera conferma (rischio Graal-dove-non-c'è).
 
-## MODELLO TECNICO PER SCRIVERE LA CAPSULA (già studiato)
-- `capsula_tsunami_discorde.py` (595 righe) = lo stampo adattogeno. Schema: chiave=firma → accumula WR+PnL reali
-  → verdetto su soglie di SENSO COMUNE sul WR (WR_SOGLIA_FORTE=0.33, WR_SOGLIA_DEBOLE=0.20), MAI su valori mercato.
-  Metodi: `_refresh_mappa`, `consulta`→(passa,motivo), `observe_outcome`. HA quarantena — da NON replicare (Roberto).
-- `capsula_matrigna.py` (850 righe, MD5 58be8c2b) = SuperRisponditrice, genera capsule figlie per firme nuove,
-  budget esplorazione (Opzione C). Può essere la via per far nascere le firme short-bear come figlie.
-- Le capsule possono ABBASSARE_SOGLIA / favorire (es. `CI_RANGING_EDGE` azione ABBASSA_SOGLIA), non solo bloccare.
-  → la capsula short dev'essere PROMOTRICE (abilita dove edge), non l'ennesimo veto.
+## ERRORI DI METODO DEL 2 GIUGNO DA NON RIPETERE
+- Ho spostato l'hook canvas 3 volte (sensori, fuori-da-if, prima-dei-veti) PRIMA di verificare che il canvas
+  ESISTESSE come oggetto. Erano fix su `self.canvas=None`. Lezione: verificare che l'OGGETTO nasca prima di
+  riparare le CHIAMATE all'oggetto. (Verifica diretta in shell: `python3 -c "from capsula_canvas import CapsulaCanvas; ..."`.)
+- Ho letto 2 trade su quelli mostrati e concluso "sono tutti uguali". Roberto: "ne sono nati di più, te ne sei
+  dimenticata". Leggere TUTTO. Poi ho capito che erano davvero pochi (occhio giovane di 3h) → conclusione onesta.
+- Stavo per mandare a caccia dell'hook EXIT del canvas — inutile (l'esito è in `trades`). Roberto mi ha corretto.
+- Ho rischiato di far credere che "vinciamo" (3 win recenti). VERITÀ: l'occhio si è acceso quando il mare si era
+  calmato → ha catturato per caso 3 win. NON vinciamo. Le femmine grosse di oggi erano PRE-15:34 (occhio cieco).
 
----
+## STATO DATI / TIMING CRITICO
+- L'occhio è VIVO dalle ~15:34 del 2giu. TUTTO ciò che è successo prima è cieco (femmine grosse incluse: −9, −5.51).
+- Servono FEMMINE NUOVE nate DOPO le 15:34 (meglio dopo il deploy 80f340d4) per avere il loro "prima" CON range_pos
+  e drift_slope. Finora (2giu sera) l'occhio ha catturato pochi trade, quasi tutti win → manca la femmina viva.
+- PROSSIMO GIRO: lasciar accumulare. Poi query del Graal sopra. CAUTELA: pochi dati, mente fredda.
 
-## ANTIAEREA — STATO REALE (verificato nel codice 31mag) — IMPORTANTE
-Esistono DUE antiaeree e NON sono la stessa cosa:
-- **JSON `capsula_ANTIAEREA_PATTERN_PERSISTENTE_v1` (22mag):** è una SPECIFICA concettuale ("1 loss marca,
-  1 win pulisce, niente finestre"). `memoria_eventi.voci=[]` (ZERO attivazioni) e nota "serve un 2° hook
-  prima dell'entry". → NON è la versione che lavora. È il progetto da cui è nata quella nel codice.
-- **Antiaerea NEL CODICE (29mag, quella VIVA):** classe a ~riga 14557, metodo `_pulisci_blocco_se_win`.
-  Fa SOLO la PULIZIA: cancella un blocco dopo `SOGLIA_WIN_PULIZIA = 2` WIN CONSECUTIVI stessa firma
-  (NON 1 win come nel JSON — la nota dice "in RANGING 1 win può essere rumore, 2 di fila no"). La firma è
-  generica (`mom|vol|tr|reg|dir`), quindi la PULIZIA copre anche short/bear.
+## PROSSIMI PASSI (in ordine)
+1. Verificare che i 3 campi nuovi (range_pos, drift_slope, seed_score) si SCRIVANO nel canvas (query sopra).
+2. Accumulare trade (maschi E femmine) col "prima" completo. Poi query del Graal: il prima distingue M da F?
+   In particolare: femmine = range_pos alto + slope negativo (picco morto)? Maschi = slope positivo (viva)?
+3. SPIA FRENO: al prossimo loss-colata leggere log M2 riga FRENO_SPIA → perché il freno non castra. Fix sul dato
+   (probabile: reset _trade_peak_pnl all'apertura del trade).
+4. SE la traccia del "prima del seme" è confermata sui dati → ribilanciare i pesi del SeedScorer (oggi range_pos
+   pesa 0.25 premiando il picco; slope solo 0.10). MAI a intuito, sul dato, e di quanto lo dicono i dati.
+5. LASCIAR GIRARE STABILE tra un'analisi e l'altra. Niente deploy a raffica (ogni riavvio azzera il warmup/dati).
 
-### IL BUCO (da chiudere quando ci saranno short reali in bear)
-- L'antiaerea viva fa solo METÀ lavoro: sa TOGLIERE un blocco (pulizia), NON sa METTERLO per lo short in bear.
-- Chi MARCA dopo il 1° loss? Solo le capsule `CTX_TOSSICO_*` esistenti, tutte su SIDEWAYS/RANGING. Per
-  TRENDING_BEAR/SHORT NON c'è nessun marcatore. → se il 1° short in bear perde, NESSUNO marca la firma,
-  il 2° short identico riparte senza freno. È il "colabrodo" sullo short.
-- DA FARE (passo futuro, NON ora): aggiungere il MARCATORE antiaerea per la firma short-bear (crea il blocco
-  dopo il loss), riusando la pulizia già esistente. Decidere con Roberto la taratura: 1 loss/1 win (come JSON)
-  o tarature diverse per regime (in BEAR il trend è direzionale, forse 1 win basta vs i 2 del RANGING).
-- PERCHÉ NON ORA: il marcatore va costruito sui dati di short reali in bear, che oggi sono ZERO (real=0).
-  Scriverlo adesso = progettare sul vuoto = errore "prima i dati". Prima la porta produce short reali, poi si marca.
-
-## STATO FINALE SESSIONE 31mag (verificato sui log live 10:14)
-- DEPLOY RIUSCITO: container gira `40d40b5a77c9bdb6c452a9103a36f8df` (verificato md5sum + grep =1 e =1).
-  ATTENZIONE: i primi 2 "deploy verdi" di oggi (c50b806f, primo 40d40b5a) NON erano arrivati sul container
-  — girava ancora 527a63df. Problema di catena git/Render mai diagnosticato (git log/status non lanciati).
-  Il 3° deploy è arrivato davvero. LEZIONE: il "verde" Render NON è prova; solo md5sum sul container lo è.
-- BOT VIVO E FUNZIONANTE: log 10:14 mostrano tick processati, EVENT_FUOCO, CAPSULE dep, SC_BLOCCA in tempo
-  reale. (Nota: l'endpoint /trading/status mostrava last_tick 04:23 = stato VECCHIO IN CACHE, non bot morto.
-  Claude aveva dato un FALSO ALLARME "WebSocket morto" leggendo la cache — poi corretto sui log live.)
-- PERCHÉ canvas count=0 negli ultimi minuti: in RANGING il bot BLOCCA prima di arrivare a observe_entry
-  (REGIME_TOSSICO_RANGING_LONG, CTX_TOSSICO). Quindi il canvas registra solo i trade che PASSANO il blocco,
-  non quelli bloccati. Il fix tracciatura (direction/regime) è probabilmente OK ma non verificabile finché
-  il bot blocca tutto in RANGING — non raggiunge il punto di scrittura. Si verificherà quando un trade passa.
-- SCELTA APERTA (da decidere a mente fresca): far registrare al canvas ANCHE le valutazioni BLOCCATE, non
-  solo quelle passate. Serve se si vuole che le capsule imparino dai blocchi (blocco giusto vs win tagliato).
-  Oggi la scatola nera vede metà storia.
-- SHORT: la porta TRENDING_BEAR è deployata e attiva, ma il mercato è RANGING → nessun flip short, CORRETTO.
-  Aspetta un trend ribassista vero. Niente da fare se non attendere.
-
-## ═══ VISIONE STRATEGICA — NOTTE 31mag→1giu + analisi 1giu (NON perdere) ═══
-
-### LA CATENA DEL RAGIONAMENTO (ogni passo nasce dal precedente, sui dati)
-1. Il bot perde → NON è la direzione → è il CAMPO (SIDEWAYS). 450+ trade SIDEWAYS = -822$.
-2. SIDEWAYS = merda MA i win nascono lì → il filtro non è il campo, è DURATA/ENERGIA (il killer E40).
-3. E40 separa 88%/28% (1ª Tavola). Microscopio (9 nascite): maschio si manifesta entro ~8s (peak>1.5),
-   femmina resta a peak 0.0. CONFERMA VISIVA della regola di Roberto.
-4. MA a 8s nel piatto è sempre fermo → vero mostro = SCALPING NEL MARE MORTO (460 biglietti×2$=920$ fee
-   per 62 win = 1 win ogni 7.4 biglietti). Lo scalping nel piatto non paga.
-5. BTC = PACHIDERMA: enorme, liquidissimo, solido per INVESTIRE ma senza onde brevi → MARE SBAGLIATO
-   per SCALPING. È stato la PALESTRA GIUSTA (l'aridità ha costretto a costruire intelligenza vera).
-6. Serve barca da CORSA su mare con VENTO, non transatlantico in bonaccia. ("Luna Rossa a remi non va.")
-
-### ANALISI DIFESA/ATTACCO (1giu, sui dati phantom_forensic)
-- Difesa ECCELLENTE, NON troppo zelante: 38.048 loss bloccati (-80.491$ risparmiati) vs 1.300 win
-  bloccati (+2.035$). Rapporto 29:1. Allentare la difesa = riaprire spazzatura, pessimo affare.
-- I guardiani che contano: `SC_BLOCCA_FP_TOSSICO_wr=18%` (20.638 blocchi, 805 maschi, blocca contesti
-  al 18% WR — giusto) e `TSUNAMI_NO_ENTRY` (17.179 blocchi, 372 maschi). Bloccano su SCORE/CONTESTO,
-  dove maschi e femmine sono GEMELLI (score 28.2 vs 27.7, identici). Per questo bloccano in blocco.
-- MA nell'mfe sono OPPOSTI: maschi mfe 4.24, femmine 0.31. Il maschio si tradisce nel MOVIMENTO,
-  non nel contesto. Il guardiano è cieco proprio sulla dimensione dove la differenza esiste.
-- LEZIONE: il guardiano grezzo NON era "presuntuoso" — era GIOVANE (difesa d'emergenza giusta nel suo
-  momento). La mossa non è demolirlo (riapre 80k di loss), è DARGLI OCCHI MIGLIORI: distinguere maschio
-  da femmina guardando la curva di nascita (movimento primi secondi), non solo lo score.
-- ATTENZIONE mfe è dato "del futuro" (lo sai solo a trade finito) → NON usabile come filtro d'ingresso.
-  MA dice DOVE guardare: il movimento dei primi secondi (= curva di nascita del microscopio), che invece
-  è leggibile in tempo reale. Il microscopio esteso serve a raccogliere quella prova sui trade nuovi.
-
-### ARCHITETTURA OBIETTIVO — "CAPSULE-COPPIE" a 3 cerchi (VISIONE, zero codice)
-- 3 coppie TITOLARI che tradano. Se girano bene RESTANO. 1 in PANCHINA = "osservata speciale" (la più
-  nervosa, monitorata da vicino, pronta a subentrare, resta prediletta anche dopo uscita). Le OSSERVABILI
-  = resto del mercato, scansionato da lontano. L'OSSERVATORE decide chi entra/esce, NON Roberto.
-- ROTAZIONE: UNA coppia alla volta. La più fiacca esce → panchina → entra un'altra. Mai stravolgere tutto.
-- È la MATRIGNA applicata alle coppie (nascita/CONGELATA/morte). Osservatore a 2 velocità: veloce
-  (titolari+quarta→rotazione), lenta (osservabili→promozione a osservata speciale).
-- DNA PER COPPIA: ogni capsula-coppia NASCE OSSERVATRICE, impara le soglie della SUA coppia dai dati di
-  QUELLA coppia, si arma solo quando le conosce. MAI numeri "in prestito" (il 40 è di BTC, su ETH è altro).
-
-### REGOLE CASSA (ferree, Roberto 1giu) — sistema CHIUSO
-- TETTO MASSIMO ESPOSTO: 1500$ INVALICABILE. Max 2 posizioni aperte PER COPPIA (3×2×250$=1500$).
-- CAPITALE CIRCOLANTE non additivo: "si vende si compra", MAI "si compra si compra" (= cassa esaurita).
-  Coppia che esce → VENDE → reinserisce il residuo sulla nuova coppia. Stesso 1500 che gira tra gli slot.
-- A TETTO PIENO SI ASPETTA. Mai aggiungere capitale per inseguire un'occasione. (scelta Roberto: opzione A)
-- DA CHIARIRE: 250$ è SIZE o ESPOSIZIONE (cambia il calcolo fee — la fee si paga sulla SIZE).
-
-### REGOLA DI SICUREZZA ASSOLUTA (sopra tutto)
-**PAPER SEMPRE finché il sistema non è rodato sui dati. "I soldi si usano con auto rodata, non con
-prototipo." L'apprendimento del DNA di ogni coppia avviene GRATIS in paper — sbagliare lì non costa nulla.**
-
-### ROTTA A TAPPE (NON tutto insieme)
-- Tappa 0 (FATTA 1giu): smettere di buttare i lingotti DEBOLE su BTC (floor 2.20) + microscopio esteso.
-- Tappa 0-bis (ADESSO): deploy 1f5af1af, microscopio acceso, GUARDARE se i lingotti arrivano davvero
-  (SMORZ_TAKE scatta di più? maschi DEBOLE escono vicino al mfe?). Consolidare la miniera GUARDANDOLA.
-- Tappa 1: portare il bot su UNA coppia nervosa (ETH/SOL, liquide; NO micro-cap illiquide). Paper.
-  RIMISURARE la frontiera lì (energia, floor, killer — tutti numeri di BTC, vanno ributtati e rimisurati).
-- Tappa 2: METRO DEL VENTO (oscilloscopio a scala AMPIA, NON 8s — a scala stretta tutto sembra fermo).
-  Solo osservatore prima, non comanda.
-- Tappa 3: DIRETTORE D'ORCHESTRA (le capsule-coppie a 3 cerchi). Solo dopo che 1 e 2 hanno dato prova.
-- REGOLA D'ORO trasversale: il COMPORTAMENTO si adatta, il RIGHELLO (regola di osservazione) resta FISSO.
-  (Verificato 1giu: dopo 4-6 win il righello del bot NON si è mosso — niente "testa montata". Telemetry pulita.)
-
-## RUOLO OPERATIVO (chiarito da Roberto 31mag)
-Roberto NON è programmatore: mette analisi+intuito. Claude FA il lavoro tecnico fino in fondo, decide le cose
-di mestiere (non rimbalzare scelte tecniche su Roberto), spiega in italiano comportamento (mai sintassi), dice
-la verità a ogni passo. Portare il progetto alla "parola fine" guidando l'ordine giusto, una cosa per volta.
-
-## SCAVO MEDIO/FORTE (1giu, dopo i DEBOLE) — il prossimo lingotto
-Stesso filone della 2ª Tavola, cercato negli stessi dati phantom_forensic (is_win=1):
-- **MEDIO:** mfe_min **2.04** (frontiera quasi identica ai DEBOLE 2.01), 93 trade. Fasce: sotto3$=30,
-  3-4=18, 4-5=11, 5-7=4, >7$=30 (media 12.72 → lingotti grossi). Floor MEDIO attuale = **3.50** → TAGLIA
-  i maschi sotto 3$ (30) e parte dei 3-4. STESSO SPRECO DEI DEBOLE, su numeri più piccoli (93 vs 1221).
-  → CURA PROPOSTA: floor MEDIO LOW 3.50 → **2.50** (più alto del DEBOLE 2.20 perché meno dati = più margine).
-- **FORTE:** SOLO **3 trade** (mfe_min 2.5). DATO INSUFFICIENTE → NON TOCCARE. Tararlo = inventare. CONGELATO
-  finché non accumula abbastanza maschi FORTE per una frontiera vera.
-
-### DECISIONE CAPOPROGETTO (1giu): NON fare il MEDIO adesso
-- Il floor DEBOLE 2.20 è appena deployato e NON ancora verificato sui trade nuovi (zero trade dal deploy).
-- Mettere ORA anche il MEDIO = due modifiche non verificate insieme → se qualcosa va storto, diagnosi
-  impossibile (quale delle due?). Viola "una cosa per volta, verificata prima della successiva. Mai bundle."
-- SEQUENZA: 1) verificare DEBOLE 2.20 sui trade nuovi (i 3 segnali sotto). 2) SE confermato → applicare la
-  STESSA cura al MEDIO (floor 2.50), modifica già validata su categoria gemella, rischio basso. 3) FORTE: dopo,
-  quando ci sono dati.
-- Il MEDIO NON scappa: i 93 trade e la frontiera 2.04 restano scritti nel DB. Aspettare non costa nulla.
-
-## TRE FILONI SCAVATI NEI DATI ESISTENTI (1giu, senza aspettare il mercato)
-Tutti su phantom_forensic. Risultato comune: ALL'INGRESSO su BTC non si prevede quasi nulla — lingotti,
-mostri e femmine nascono troppo simili. La separazione vera è SOLO dopo (mfe, movimento = dato del futuro).
-→ CONFERMA la strada di oggi: si gestisce all'USCITA (killer + floor), dove l'informazione c'è. L'ingresso
-è cieco su BTC. NON esiste un filtro d'ingresso magico che risparmi di osservare il trade.
-
-### FILONE 1 — a che secondo tagliare la femmina (killer)
-- Solo 5 femmine tagliate finora → DATO INSUFFICIENTE. Indizio: il danno NON cresce con la durata (la
-  tagliata a 124s costava -2.03, quella a 50s -5.97). Cresce con l'ENERGIA BASSA (E20 → -5.97, E33 → -2.03).
-- IPOTESI (da verificare con più tagli): la leva del killer è l'ENERGIA, non il TEMPO. Più femmina (E basso)
-  = taglia più aggressivo; quasi-maschio (E~33) = più paziente. NIENTE DA FARE ORA (5 trade non fanno legge).
-
-### FILONE 2 — sbloccare i maschi che il guardiano FP_TOSSICO blocca all'ingresso
-- 26.541 bloccati. All'ingresso maschi/femmine sono GEMELLI su score, seed, oi, rsi (rsi=50 fisso=cadavere).
-- UNICO segnale che separa: **ts_30s_strength** (forza tsunami a 30s) + **ts_30s_coerenza**.
-  Femmine str 0.337 / maschi grossi 0.549. Coerenza: femmine 0.506 / maschi grossi 0.695.
-- Tenaglia (str>0.50 E coe>0.60): femmine 1107, maschi grossi 206, piccoli 287 → rapporto 2.2 femmine/maschio.
-  BILANCIO NETTO STIMATO: ~+150$ su settimane. RISICATO. NON vale toccare un guardiano che protegge 80k$ per 150$.
-- VALORE VERO: il segnale **forza+coerenza tsunami 30s predice il maschio ALL'INGRESSO** (leggibile prima,
-  non dato del futuro). Su BTC margine marginale (poche onde grosse). → CHIAVE DA PORTARE SUL MARE NERVOSO
-  (Tappa 1), dove i lingotti grossi sono più frequenti e questa tenaglia può rendere molto di più.
-
-### FILONE 3 — la firma dei loss mostro
-- 1037 mostri (pnl≤-5). All'ingresso NON si annunciano sui segnali continui (ts30/coe/oi/seed del mostro
-  stanno IN MEZZO tra loss piccolo e win — non spiccano).
-- MA c'è una firma CATEGORIALE pericolosa: **DEBOLE|BASSA|SIDEWAYS|RANGING = 3.5% di mostri** (926/26723),
-  contro 0.4-0.9% di tutte le altre firme. 6× più pericolosa. DATO ROBUSTO (26k trade). I mostri nascono
-  nella volatilità BASSA (mare MORTO), non ALTA → conferma numerica del "scalping nel piatto = il mostro".
-- MA dentro DEBOLE|BASSA, mostro e LINGOTTO NON si separano con soglia netta: sopra str>0.50 E coe>0.50 ci
-  sono 262 mostri e 205 lingotti (più mostri che lingotti). La media separa (lingotto coe 0.558 vs mostro
-  0.380) ma le distribuzioni si sovrappongono → niente filtro pulito. La difesa resta il KILLER all'uscita.
-- VALORE: DEBOLE|BASSA è intrinsecamente la firma più pericolosa. Su mare nervoso, evitare il "mare morto
-  assoluto" (DEBOLE|BASSA) ha senso — conferma del "non scalpare il piatto".
-
-
-1. DEPLOY `1f5af1af`. Verificare `md5sum ~/project/src/OVERTOP_BASSANO_V16_PRODUCTION.py` = `1f5af1af4c87e7f5c818800221af916b`.
-   (Il verde Render NON è prova — il 31mag 2 deploy su 3 non erano arrivati. Solo md5sum sul container lo dimostra.)
-2. CONSOLIDARE LA MINIERA guardando i trade NUOVI col microscopio acceso:
-   - SMORZ_TAKE scatta di più? (prima 1 su 83 win). Query: trades, reason LIKE 'SMORZ_TAKE%'.
-   - I maschi DEBOLE escono vicino al loro mfe invece che a metà? (confronto pnl_a_10s/pnl_finale vs incasso).
-   - Curva_nascita ora ha la vita INTERA del trade (non più solo 10s): verificare che cattura oltre i 10s.
-   - Se 2.20 risulta troppo alto/basso sui dati nuovi → spostare da env FLOOR_LOW_DEBOLE, NON toccare codice.
-3. SE i lingotti arrivano davvero → miniera consolidata. Allora (e solo allora) ha senso Tappa 1 (mare nervoso).
-   3-bis. SE il DEBOLE 2.20 è confermato → applicare la STESSA cura al MEDIO (floor 3.50→2.50, frontiera 2.04,
-   93 trade). FORTE resta congelato (3 trade). Vedi sezione "SCAVO MEDIO/FORTE" sopra.
-4. PASSO PARALLELO (quando ci sono dati nuovi): verificare se la curva di nascita distingue maschio da femmina
-   GIA' nei primi 3-5 secondi (non solo nell'mfe a posteriori). Se sì → dare "occhi" al guardiano FP_TOSSICO
-   perché lasci passare i maschi (lascia nascere il trade qualche secondo prima di bloccare). Recupera l'oro
-   bloccato SENZA riaprire la spazzatura. NON ora: serve la prova sui dati freschi.
-
-## (STORICO 31mag) PROSSIMO PASSO SHORT — UNO per volta
-1. Deploy c50b806f. Verificare MD5 sul container = `c50b806f5c59b807a96f7d949f40c752` e `head -1`.
-2. Attendere il primo `🔄 FLIP → SHORT in TRENDING_BEAR` nel log. **Comparirà SOLO quando regime=TRENDING_BEAR.**
-   Ora il mercato è RANGING piatto → finché resta laterale NON si vedrà nessun flip short (è CORRETTO, non bug).
-3. Quando il flip parte: guardare se il trade SHORT NASCE o se muore a valle (SC/capsule). Query trades + log M2.
-   - Se nasce → abbiamo i PRIMI short reali in bear (i dati che oggi sono real=0). Carburante per la capsula.
-   - Se muore a valle → vedere QUALE gate lo strozza (caso B in bear) e decidere.
-4. SOLO su dati short reali → costruire la capsula PROMOTRICE + ANTIAEREA (la ganascia 2). Sul modello tsunami,
-   SENZA quarantena, con antiaerea per firma.
-
-## TRAPPOLE DI LETTURA CONFERMATE (non inseguirle)
-- Veritas `FUOCO_SHORT|BLOCCA = SBAGLIATO`: BUG DI LETTURA. Giudica con hit-rate, non PnL netto. pnl_avg −0.22
-  (negativo) → bloccare è GIUSTO. Non sbloccare FUOCO_SHORT per via di quel verdetto.
-- 3 metriche divergenti sullo stesso bot: `m2_pnl −697` (435t) / `metrics pnl −649` (403t) / veritas "salvato 11.4k"
-  in delta prezzo grezzo. Fidarsi SOLO del PnL NETTO post-fee. Unificare è lavoro futuro.
-- `canvas_snapshots.fingerprint` è MONCO: registra solo momentum|volatility|trend, MANCA direction e regime,
-  e `sc_decision="?"`. Per questo non si può leggere la direzione da canvas. Buco di tracciatura da sistemare.
-
-## PHANTOM "IRRIGIDISCE" — NON è un loop attivo (verificato nel codice)
-- Il log mostra `IRRIGIDISCE_SKIP_FIX30 (gate funziona, wr_blocco=..%)` ogni 60s. NON stringe niente.
-- Fix#30 (12mag) ha DISABILITATO il ramo IRRIGIDISCE: dopo `elif wr_blocco<0.25` c'è solo un append+`pass`.
-  È un contatore di "qui AVREI stretto ma non lo faccio". Soglia base ferma a 40 (se stringesse, salirebbe).
-- ATTENZIONE: il ramo gemello `AUTO_ALLENTA` (wr_blocco>0.45 → abbassa SOGLIA_BASE di 3) è VIVO e ha lo stesso
-  difetto concettuale (usa WR dei bloccati). Oggi non scatta. Candidato da rivedere, NON IRRIGIDISCE.
-
-## CADAVERI NOTI (NON riattivare) — invariati
-- RSI=50.0 e MACD=0.0 fissi (disarmati 23mag). pred mai qualificata (BOOT_MUTED). ZONA_MORTA disattivata.
-
-## ERRORI DI METODO DA NON RIPETERE
-- (1giu) NON dedurre una traiettoria da due punti: Claude ha detto "il -3.36 a 10s è diventato -5.97 nei 40s
-  di attesa" SENZA avere il dato di cosa succedeva in mezzo (microscopio filmava solo 10s). Era inventato.
-  Roberto: "ERRORE TUO". → mai colmare un buco di dati con una storia plausibile. Se il dato manca, si dice.
-- (1giu) NON sottovalutare quello che Roberto vede: Claude ha detto "monetine" DUE volte, i dati l'hanno
-  smentito DUE volte (mfe 4.24, poi fascia >6$ media 10.36 = lingotti). Quando Roberto dice "guarda meglio",
-  guardare meglio NEI DATI, non difendere la conclusione comoda.
-- File SEMPRE come download. Roberto NON incolla mai (i deploy falliti 29-30mag erano file sporcati da shell).
-  Verificare `head -1` + `md5sum` sul container prima del deploy.
-- Test SEMPRE: ast.parse + py_compile + IMPORT RUNTIME reale (non solo compile). Lezione 22mag.
-- Mai contare aggregati senza guardare i TIMESTAMP (errore "11 short prima ZERO" del 30mag).
-- Una modifica per volta, verificata, prima della successiva. Mai bundle.
+## DETTAGLI TECNICI UTILI
+- FEE: TRADE_SIZE_USD=1000, LEVERAGE=5, FEE=$2.00/trade. Mai citare numeri diversi senza leggerli dal codice.
+- SeedScorer (classe ~riga 2286): soglia SEED_ENTRY_THRESHOLD=0.45 (riga 75). 7 feature, pesi: range_pos 0.25,
+  comp 0.15, drift_persist 0.20, flip 0.15, vol 0.10, slope 0.10, dur 0.05. range_pos = prezzo nel range 20-tick.
+  drift_slope = dm5-dm15 (>0 accelera). Chiamato nel flusso entry a ~riga 10459.
+- canvas_snapshots: colonne id, ts, evento, trade_id, fingerprint, sensori_json, capsule_voto, sc_decision,
+  outcome, pnl_netto, durata_s, reason, note. fingerprint = momentum|volatility|trend|regime.
+- Hook canvas: P2 ~riga 10375, P1 ~riga 11146. Entrambi ANTICIPATI (prima dei veti). Entrambi ora calcolano
+  seed prima di observe_entry per avere range_pos/drift_slope nel verbale.
+- File doppione nel repo: `OVERTOP_BASSANO(1)_V16_PRODUCTION.py` — copia vagante, IGNORARE/eventualmente rimuovere.
 
 ## NOTA UMANA
-Roberto: analista non-programmatore, decide cosa/perché, Claude esegue e spiega in italiano (comportamento, mai
-sintassi). Sincerità totale, zero piacioneria. Oggi la sua intuizione "lo short non flippa" era GIUSTA e i dati
-l'hanno confermata; ma la cura NON era forzare lo short in RANGING (dove perde) — era spostarlo in TRENDING_BEAR.
-Il suo occhio fisico è forte. "non devi mai dire quando si lavora e quando no — è gestione mia."
+Roberto: occhio fisico fortissimo. Il 2giu ha guidato ogni passo: "magari vedi già qualcosa" (ha smascherato il
+canvas muto), "era un virus messa com'era" (la capsula schiacciata), "una cosa che non gira e tutto è compromesso",
+"il gioco è tutto lì" (vedere prima del trade se M o F), "ti manca un elemento oggettivo fondamentale, altrimenti
+domani sei allo stesso punto" (ha imposto di aggiungere range_pos/drift_slope PRIMA della notte). Pensa per RECUPERO
+non aggiunta (background compro oro): trova l'informazione sprecata che il sistema produce e non registra. NESSUN
+soldo vero finché non dimostrato (PAPER SEMPRE). Emozionato dopo 15 mesi sul Graal → Claude deve tenere la lucidità
+fredda, mai dargli ragione per piacere, sempre sui dati.
