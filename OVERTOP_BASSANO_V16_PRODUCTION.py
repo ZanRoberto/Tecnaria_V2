@@ -10351,6 +10351,30 @@ class OvertopBassanoV16Production:
         }
 
         # ════════════════════════════════════════════════════════════════
+        # HOOK CANVAS ANTICIPATO (2giu, Roberto — "la signora respira ma è cieca")
+        # ════════════════════════════════════════════════════════════════
+        # Il vecchio hook (più sotto, ~10810) era DOPO tutti i veti/return. Ma
+        # il guardiano FP_TOSSICO blocca col `return` PRIMA di arrivarci → il
+        # canvas vedeva SOLO i trade che passavano il guardiano (quasi nessuno).
+        # 54 valutazioni bloccate, canvas=0. La signora respira (phantom scrive)
+        # ma è cieca (canvas vuoto).
+        # FIX: registro QUI, subito dopo la nascita del verbale, PRIMA di ogni
+        # veto. Il verbale ha già i sensori del campo (oi_carica, breath, regime,
+        # momentum, volatility) = lo stato PRE-DECISIONE, che è esattamente il
+        # "prima del seme" che cerchiamo. Score/voti sono il "durante", non
+        # servono qui. Così il canvas vede OGNI valutazione — anche (soprattutto)
+        # quelle che il guardiano blocca, dove si nascondono i maschi-lingotti.
+        # Try/except totale: mai blocca il motore.
+        # ════════════════════════════════════════════════════════════════
+        try:
+            if getattr(self, "canvas", None) is not None:
+                _canvas_tid = f"t_{int(time.time()*1000)}"
+                _verbale["_canvas_tid"] = _canvas_tid
+                self.canvas.observe_entry(_verbale, trade_id=_canvas_tid)
+        except Exception as _ce_early:
+            log.debug(f"[CANVAS_HOOK_EARLY_ERR] {_ce_early}")
+
+        # ════════════════════════════════════════════════════════════════
         # CAPSULA REGIME-EDGE (31mag) — consulta. In L3 (default) OSSERVA e
         # registra, ritorna None → non tocca nulla. In L4 (armata) può
         # bloccare il SIDEWAYS-merda. Fail-open: se assente o crasha, prosegue.
@@ -10786,26 +10810,10 @@ class OvertopBassanoV16Production:
                 except Exception as _le:
                     log.debug(f"[CAPSULE_DEP_ERR] {_le}")
 
-            # ═══════════════════════════════════════════════════════
-            # PATCH 15 BUG 22 — Hook CapsulaCanvas (osservativo)
-            # Skill esterna che registra il fotogramma di entry.
-            # Try/except totale: mai blocca il motore.
-            # FIX 2giu (Roberto — "l'occhio muto dal 31mag"): questo hook era
-            # ANNIDATO dentro `if capsule_manager:` → quando il capsule_manager
-            # mancava/andava in fallback, il canvas NON scriveva. Risultato:
-            # canvas_snapshots muto dal 31mag (208k righe poi STOP). self.canvas
-            # è un oggetto SEPARATO (CapsulaCanvas, riga ~7096) e non ha nulla a
-            # che fare col capsule_manager: era ostaggio di un if sbagliato.
-            # Ora è FUORI dall'if → registra ogni valutazione che arriva qui.
-            # ═══════════════════════════════════════════════════════
-            try:
-                if getattr(self, "canvas", None) is not None:
-                    _canvas_tid = f"t_{int(time.time()*1000)}"
-                    # Salva trade_id nel _verbale per recupero a close
-                    _verbale["_canvas_tid"] = _canvas_tid
-                    self.canvas.observe_entry(_verbale, trade_id=_canvas_tid)
-            except Exception as _ce:
-                log.debug(f"[CANVAS_HOOK_ENTRY_ERR] {_ce}")
+            # NOTA (2giu): l'hook canvas observe_entry è stato SPOSTATO in alto,
+            # subito dopo la nascita del verbale (~riga 10355), PRIMA dei veti,
+            # così registra anche le valutazioni bloccate dal guardiano. Qui era
+            # ridondante e avrebbe causato doppia scrittura → rimosso.
 
             # ── CALCOLA EFFECTIVE REGIME ─────────────────────────────────────
             _now_eo    = time.time()
