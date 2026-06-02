@@ -10786,19 +10786,26 @@ class OvertopBassanoV16Production:
                 except Exception as _le:
                     log.debug(f"[CAPSULE_DEP_ERR] {_le}")
 
-                # ═══════════════════════════════════════════════════════
-                # PATCH 15 BUG 22 — Hook CapsulaCanvas (osservativo)
-                # Skill esterna che registra il fotogramma di entry.
-                # Try/except totale: mai blocca il motore.
-                # ═══════════════════════════════════════════════════════
-                try:
-                    if getattr(self, "canvas", None) is not None:
-                        _canvas_tid = f"t_{int(time.time()*1000)}"
-                        # Salva trade_id nel _verbale per recupero a close
-                        _verbale["_canvas_tid"] = _canvas_tid
-                        self.canvas.observe_entry(_verbale, trade_id=_canvas_tid)
-                except Exception as _ce:
-                    log.debug(f"[CANVAS_HOOK_ENTRY_ERR] {_ce}")
+            # ═══════════════════════════════════════════════════════
+            # PATCH 15 BUG 22 — Hook CapsulaCanvas (osservativo)
+            # Skill esterna che registra il fotogramma di entry.
+            # Try/except totale: mai blocca il motore.
+            # FIX 2giu (Roberto — "l'occhio muto dal 31mag"): questo hook era
+            # ANNIDATO dentro `if capsule_manager:` → quando il capsule_manager
+            # mancava/andava in fallback, il canvas NON scriveva. Risultato:
+            # canvas_snapshots muto dal 31mag (208k righe poi STOP). self.canvas
+            # è un oggetto SEPARATO (CapsulaCanvas, riga ~7096) e non ha nulla a
+            # che fare col capsule_manager: era ostaggio di un if sbagliato.
+            # Ora è FUORI dall'if → registra ogni valutazione che arriva qui.
+            # ═══════════════════════════════════════════════════════
+            try:
+                if getattr(self, "canvas", None) is not None:
+                    _canvas_tid = f"t_{int(time.time()*1000)}"
+                    # Salva trade_id nel _verbale per recupero a close
+                    _verbale["_canvas_tid"] = _canvas_tid
+                    self.canvas.observe_entry(_verbale, trade_id=_canvas_tid)
+            except Exception as _ce:
+                log.debug(f"[CANVAS_HOOK_ENTRY_ERR] {_ce}")
 
             # ── CALCOLA EFFECTIVE REGIME ─────────────────────────────────────
             _now_eo    = time.time()
