@@ -140,19 +140,28 @@ class CapsulaCanvas:
 
     # ──────────────────────────────────────────────────────────────────
     def observe_exit(self, trade_id=None, outcome=None, pnl_netto=None,
-                     durata_s=None, reason=None):
+                     durata_s=None, reason=None, nascita=None):
         """Registra l'esito alla chiusura del trade. Riga EXIT separata,
-        collegata all'entry tramite trade_id."""
+        collegata all'entry tramite trade_id.
+        `nascita` (3giu): i sensori del campo all'apertura del trade VERO,
+        passati dallo shadow. Salvati in sensori_json così OGNI riga EXIT
+        contiene nascita+esito insieme — analisi maschio/femmina senza
+        aggancio temporale fragile (lo shadow esiste solo per i trade reali)."""
         try:
+            sensori_nascita = None
+            if isinstance(nascita, dict):
+                sensori_nascita = json.dumps(nascita, default=str)
             conn = self._conn()
             conn.execute(
                 """INSERT INTO canvas_snapshots
-                   (ts, evento, trade_id, outcome, pnl_netto, durata_s, reason)
-                   VALUES (?, 'EXIT', ?, ?, ?, ?, ?)""",
+                   (ts, evento, trade_id, outcome, pnl_netto, durata_s, reason,
+                    sensori_json)
+                   VALUES (?, 'EXIT', ?, ?, ?, ?, ?, ?)""",
                 (time.time(), trade_id, outcome,
                  float(pnl_netto) if pnl_netto is not None else None,
                  float(durata_s) if durata_s is not None else None,
-                 str(reason) if reason is not None else None)
+                 str(reason) if reason is not None else None,
+                 sensori_nascita)
             )
             conn.commit()
             conn.close()
