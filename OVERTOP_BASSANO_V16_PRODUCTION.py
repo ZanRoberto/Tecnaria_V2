@@ -11678,6 +11678,35 @@ class OvertopBassanoV16Production:
         Registra tutti i dati necessari per l'exit e il tracking.
         """
         try:
+            # ════════════════════════════════════════════════════════════════
+            # SEME_GATE (3giu, Roberto) — EVITARE LE FEMMINE PRIMA DELLA NASCITA
+            # ════════════════════════════════════════════════════════════════
+            # Scoperta sui dati (44 trade reali, 1-2giu): il "sesso" del trade è
+            # già nel SEME prima che nasca. Maschi (WIN) nascono da seme medio
+            # ~0.62 e tengono; femmine (LOSS) da ~0.49 e si sgonfiano.
+            # I maschi fanno +42$; le femmine tolgono -105$ → netto -63$.
+            # Il bot SA guadagnare: sono le femmine che cancellano i maschi.
+            #
+            # Simulazione retrospettiva su quei 44 trade, filtro per soglia:
+            #   0.50 → -2.44 | 0.55 → +0.23 | 0.60 → +6.94 (PICCO, 15/15 maschi
+            #   tenuti) | 0.65 → +0.50 (qui inizia a uccidere maschi).
+            # → soglia 0.60 = ultimo gradino prima di perdere maschi. PARAMETRICA.
+            #
+            # seme medio = (primo + ultimo degli ultimi 5 seed_score), come la
+            # colonna seed_traj usata nella simulazione (campo._seed_history[-5:]).
+            # Sotto soglia → NON nasce (femmina evitata). Sopra → passa (maschio).
+            # NOTA: filtro probabilistico, non perfetto (una femmina con seme alto
+            # esiste). Logga ogni blocco → sui dati nuovi si verifica e si ritara.
+            SEME_GATE_SOGLIA = float(getattr(self, "SEME_GATE_SOGLIA", 0.60))
+            _sh = list(getattr(self.campo, "_seed_history", []))[-5:]
+            if len(_sh) >= 2:
+                _seme_medio = (_sh[0] + _sh[-1]) / 2.0
+                if _seme_medio < SEME_GATE_SOGLIA:
+                    self._log("🚫", f"SEME_GATE BLOCCO femmina: seme={_seme_medio:.3f} "
+                                    f"< {SEME_GATE_SOGLIA} | {momentum}/{volatility}/{trend} "
+                                    f"seed={seed.get('score', 0):.3f} @ ${price:.1f}")
+                    return
+
             matrimonio = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
             pb_signals = self.campo._pre_breakout_factor()[2] \
                          if len(self.campo._prices_short) >= 30 else 0
@@ -11699,6 +11728,22 @@ class OvertopBassanoV16Production:
                 "momentum_entry":   momentum,
                 "volatility_entry": volatility,
                 "trend_entry":      trend,
+                # ════════════════════════════════════════════════════════════
+                # SENSORI DI NASCITA — "il prima del seme" (3giu, Roberto)
+                # ════════════════════════════════════════════════════════════
+                # Salvo nello shadow la firma del campo ALLA NASCITA del trade
+                # VERO (lo shadow esiste solo per i trade reali, non per le 30k
+                # valutazioni abortite). Alla chiusura observe_exit li scrive nel
+                # canvas insieme all'esito → ogni riga = un trade completo
+                # (nascita+morte) SENZA aggancio temporale fragile.
+                # Questi vengono dal seed, l'unico calcolo non saturo verificato.
+                "nascita_range_pos":   seed.get('range_pos'),
+                "nascita_drift_slope": seed.get('drift_slope'),
+                "nascita_seed_score":  seed.get('score'),
+                "nascita_compression": seed.get('compression'),
+                "nascita_drift_persist": seed.get('drift_persist'),
+                "nascita_vol_pressure": seed.get('vol_pressure'),
+                "nascita_comp_duration": seed.get('comp_duration'),
             }
             self._shadow_entry_time        = time.time()
             self._shadow_max_price         = price
@@ -13474,7 +13519,22 @@ class OvertopBassanoV16Production:
                         outcome=_canvas_outcome,
                         pnl_netto=float(pnl),
                         durata_s=float(trade_duration) if trade_duration else 0.0,
-                        reason=str(reason)
+                        reason=str(reason),
+                        nascita={
+                            "range_pos":     self._shadow.get("nascita_range_pos") if self._shadow else None,
+                            "drift_slope":   self._shadow.get("nascita_drift_slope") if self._shadow else None,
+                            "seed_score":    self._shadow.get("nascita_seed_score") if self._shadow else None,
+                            "compression":   self._shadow.get("nascita_compression") if self._shadow else None,
+                            "drift_persist": self._shadow.get("nascita_drift_persist") if self._shadow else None,
+                            "vol_pressure":  self._shadow.get("nascita_vol_pressure") if self._shadow else None,
+                            "comp_duration": self._shadow.get("nascita_comp_duration") if self._shadow else None,
+                            "regime_entry":  self._shadow.get("regime_entry") if self._shadow else None,
+                            "momentum":      self._shadow.get("momentum_entry") if self._shadow else None,
+                            "volatility":    self._shadow.get("volatility_entry") if self._shadow else None,
+                            "trend":         self._shadow.get("trend_entry") if self._shadow else None,
+                            "direction":     self._shadow.get("direction") if self._shadow else None,
+                            "score":         self._shadow.get("score") if self._shadow else None,
+                        }
                     )
             except Exception as _cxe:
                 log.debug(f"[CANVAS_HOOK_EXIT_ERR] {_cxe}")
