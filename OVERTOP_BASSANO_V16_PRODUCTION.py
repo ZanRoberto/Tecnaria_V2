@@ -11724,6 +11724,34 @@ class OvertopBassanoV16Production:
             pb_signals = self.campo._pre_breakout_factor()[2] \
                          if len(self.campo._prices_short) >= 30 else 0
 
+            # ════════════════════════════════════════════════════════════════
+            # GATE CROMOSOMA v1 — SPERIMENTALE (4giu, Roberto)
+            # ════════════════════════════════════════════════════════════════
+            # Scoperta su 12 trade sobri + griglia cartesiana (singoli + coppie):
+            # il seme NON separa M/F. Separa la COPPIA di nascita
+            #   vol_pressure ALTO  E  compression PRESENTE.
+            # Femmina (loss) = le manca almeno una delle due. La travestita
+            # perfetta (seme alto + vol_pressure alto) viene presa dalla
+            # compression. Sui 12: regola -> 0 femmine, 5/6 maschi, +35 vs +4.
+            #
+            # ⚠ SPERIMENTALE: base 12 trade / 6 femmine. E' un SOSPETTO FORTE,
+            # non una legge. Va validato su 40-50 trade nati SOTTO la regola.
+            # Parametrico e reversibile: per spegnerlo -> CROMO_GATE_ON=False
+            # (o alza/abbassa le due soglie). Logga ogni blocco per ritararlo.
+            CROMO_GATE_ON   = bool(getattr(self, "CROMO_GATE_ON", True))
+            CROMO_VPRESS_MIN = float(getattr(self, "CROMO_VPRESS_MIN", 0.50))
+            CROMO_COMP_MIN   = float(getattr(self, "CROMO_COMP_MIN", 0.18))
+            if CROMO_GATE_ON:
+                _vp = seed.get('vol_pressure')
+                _cp = seed.get('compression')
+                if _vp is not None and _cp is not None:
+                    if _vp < CROMO_VPRESS_MIN or _cp < CROMO_COMP_MIN:
+                        self._log("🚫", f"CROMO_GATE BLOCCO femmina: "
+                                        f"vpress={_vp:.3f}(<{CROMO_VPRESS_MIN}) "
+                                        f"comp={_cp:.3f}(<{CROMO_COMP_MIN}) | "
+                                        f"seed={seed.get('score', 0):.3f} @ ${price:.1f}")
+                        return
+
             self._shadow = {
                 "price_entry":   price,
                 "direction":     self.campo._direction,
