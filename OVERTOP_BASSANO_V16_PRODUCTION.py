@@ -11767,6 +11767,7 @@ class OvertopBassanoV16Production:
                 "nascita_drift_persist": seed.get('drift_persist'),
                 "nascita_vol_pressure": seed.get('vol_pressure'),
                 "nascita_comp_duration": seed.get('comp_duration'),
+                "nascita_sign_flips":   seed.get('sign_flips'),
             }
             self._shadow_entry_time        = time.time()
             self._shadow_max_price         = price
@@ -13268,6 +13269,7 @@ class OvertopBassanoV16Production:
                           "n_vol_pressure":  self._shadow.get("nascita_vol_pressure"),
                           "n_drift_slope":   self._shadow.get("nascita_drift_slope"),
                           "n_comp_duration": self._shadow.get("nascita_comp_duration"),
+                          "n_sign_flips":    self._shadow.get("nascita_sign_flips"),
                       })))
                 conn.commit()
                 conn.close()
