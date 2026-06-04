@@ -529,32 +529,35 @@ def seme_gate_view():
     (Il vecchio pannello leggeva `canvas_snapshots` → perdeva EXIT per il lock
     "database is locked". Da qui il contatore che "perdeva la bussola".)
 
-    Seme ricostruito dal `data_json.seed_traj` con la STESSA formula del gate nel
-    bot (riga 11714): (primo + ultimo degli ultimi 5 seed) / 2.
+    Seme: PRIORITA' al seme d'INGRESSO (data_json.seme_entry, scritto dal bot
+    dal 4giu) = il valore ESATTO su cui il gate ha deciso, PRIMA del trade.
+    Se assente (trade vecchi) ripiega su seed_traj dell'EXIT, marcato LEGACY
+    perche' contaminato dall'esito (causazione inversa: il vincente ha seme alto
+    anche PERCHE' ha vinto). I conteggi seme_puliti/seme_legacy dicono su quanti
+    trade il seme e' davvero "prima del trade".
+    Formula in entrambi i casi: (primo + ultimo degli ultimi 5 seed) / 2.
     MASCHIO se pnl>0, FEMMINA se pnl<=0. Verdetto gate: PASSA se seme>=soglia.
 
     NON nasconde i casi-limite (questo era il punto di Roberto): marca ERRORE le
-    femmine con seme alto (il gate le avrebbe PASSATE = oro per il 2° elemento) e
-    i maschi con seme basso (il gate li avrebbe BLOCCATI = maschi persi dal gate).
+    femmine con seme alto (IBRIDI: il gate le passa e perdono = oro per il 2°
+    elemento) e i maschi con seme basso (il gate li bloccherebbe ma vincono).
 
     Filtri opzionali:
-      ?da=YYYY-MM-DD HH:MM:SS  → conta SOLO i trade "sobri" dopo un deploy
+      ?da=YYYY-MM-DD HH:MM:SS  -> conta SOLO i trade "sobri" dopo un deploy
                                   (timestamp UTC, come lo scrive il bot).
-      ?soglia=0.60             → per ritarare il gate a occhio sul pannello.
-
-    ATTENZIONE onestà (vedi stato 4giu): seed_traj e' la finestra al MOMENTO
-    dell'EXIT, non al momento esatto in cui il gate ha deciso all'ENTRY. E' lo
-    STESSO campo usato nell'analisi dei 44 trade (coerente con la taratura 0.60),
-    ma il "verdetto" qui e' una RICOSTRUZIONE, non la decisione reale del gate.
+      ?soglia=0.60             -> per ritarare il gate a occhio sul pannello.
     SOLO LETTURA. Non tocca il bot."""
     try:
         soglia = float(request.args.get('soglia', 0.60))
         da = request.args.get('da')  # filtro timestamp (UTC) per i soli trade sobri
 
-        # NB: niente parola "COUNT" nella query → db_execute usa fetchall (non fetchone).
+        # NB: niente la parola COUNT nella query -> db_execute usa fetchall (non fetchone).
         sql = """
             SELECT timestamp, pnl,
-                   json_extract(data_json,'$.seed_traj') AS traj,
+                   json_extract(data_json,'$.seme_entry')      AS seme_entry,
+                   json_extract(data_json,'$.seed_traj_entry') AS traj_entry,
+                   json_extract(data_json,'$.sc_seed')          AS sc_seed,
+                   json_extract(data_json,'$.seed_traj')        AS traj_exit,
                    reason
             FROM trades
             WHERE event_type='M2_EXIT'
@@ -571,20 +574,59 @@ def seme_gate_view():
         worst_femmina = 0.0
         err_femmina_alta = err_maschio_basso = 0
         senza_seme = 0
-        dettaglio = []
+        n_entry = n_nascita = n_legacy = 0
 
-        for ts, pnl, traj_json, reason in righe:
+        def _seme_da_traj(tj):
+            if not tj:
+                return None
+            try:
+                t = json.loads(tj)
+                if isinstance(t, list) and len(t) >= 2:
+                    return (float(t[0]) + float(t[-1])) / 2.0
+            except Exception:
+                return None
+            return None
+
+        dettaglio = []
+        for ts, pnl, seme_entry, traj_entry, sc_seed, traj_exit, reason in righe:
             pnl = pnl or 0.0
+
+            # PRIORITA' del seme — tutto cio' che e' PRIMA del trade vince sull'exit:
+            #  1) seme_entry        = finestra ESATTA su cui il gate ha deciso  -> ENTRY  (nuovi trade)
+            #  2) seed_traj_entry   = stessa finestra ricostruita               -> ENTRY  (nuovi trade)
+            #  3) sc_seed -> seed di NASCITA (preso all'ingresso, mai toccato)  -> NASCITA (TUTTI i trade, anche i vecchi)
+            #               recupero: birth = 0.20 + (sc_seed/25)*0.60  (sc_seed e' clampato 0..25 alla scrittura,
+            #               ma intorno alla soglia 0.60 il recupero e' fedele).
+            #  4) seed_traj dell'exit = DROGATO dal trade stesso               -> EXIT_LEGACY (ultima spiaggia)
             seme = None
-            if traj_json:
+            fonte = None
+            if seme_entry is not None:
                 try:
-                    traj = json.loads(traj_json)
-                    if isinstance(traj, list) and len(traj) >= 2:
-                        seme = (float(traj[0]) + float(traj[-1])) / 2.0
+                    seme = float(seme_entry); fonte = "ENTRY"
                 except Exception:
                     seme = None
             if seme is None:
+                s = _seme_da_traj(traj_entry)
+                if s is not None:
+                    seme = s; fonte = "ENTRY"
+            if seme is None and sc_seed is not None:
+                try:
+                    seme = 0.20 + (float(sc_seed) / 25.0) * 0.60; fonte = "NASCITA"
+                except Exception:
+                    seme = None
+            if seme is None:
+                s = _seme_da_traj(traj_exit)
+                if s is not None:
+                    seme = s; fonte = "EXIT_LEGACY"
+
+            if seme is None:
                 senza_seme += 1
+            elif fonte == "ENTRY":
+                n_entry += 1
+            elif fonte == "NASCITA":
+                n_nascita += 1
+            else:
+                n_legacy += 1
 
             is_maschio = pnl > 0
             if is_maschio:
@@ -599,18 +641,18 @@ def seme_gate_view():
             if seme is not None:
                 passa = seme >= soglia
                 verdetto = "PASSA" if passa else "BLOCCA"
-                if (not is_maschio) and passa:        # femmina con seme alto
+                if (not is_maschio) and passa:        # femmina con seme alto = IBRIDO (drogata?)
                     errore = True; err_femmina_alta += 1
-                elif is_maschio and (not passa):      # maschio con seme basso
+                elif is_maschio and (not passa):      # maschio con seme basso = CASTRATO (gate lo ucciderebbe)
                     errore = True; err_maschio_basso += 1
 
-            # Aggregati su TUTTI i trade; dettaglio solo gli ultimi 60.
             if len(dettaglio) < 60:
                 dettaglio.append({
-                    "ora": ts or "–",
+                    "ora": ts or "-",
                     "sesso": "MASCHIO" if is_maschio else "FEMMINA",
                     "pnl": round(pnl, 2),
                     "seme": round(seme, 3) if seme is not None else None,
+                    "fonte_seme": fonte,   # ENTRY/NASCITA = prima del trade ; EXIT_LEGACY = drogato
                     "verdetto": verdetto,
                     "errore": errore,
                     "reason": reason
@@ -621,13 +663,17 @@ def seme_gate_view():
             "soglia": soglia,
             "da": da,
             "totale": maschi + femmine,
-            "senza_seme": senza_seme,    # trade senza seed_traj leggibile
+            "seme_puliti": n_entry + n_nascita,   # PRIMA del trade (entry gate + nascita)
+            "seme_entry": n_entry,                # finestra esatta del gate (nuovi trade)
+            "seme_nascita": n_nascita,            # seed di nascita da sc_seed (anche vecchi)
+            "seme_legacy": n_legacy,              # solo seme exit (drogato)
+            "senza_seme": senza_seme,
             "maschi": maschi, "femmine": femmine,
             "pnl_maschi": round(pnl_maschi, 2), "pnl_femmine": round(pnl_femmine, 2),
             "netto": round(pnl_maschi + pnl_femmine, 2),
             "peggior_femmina": round(worst_femmina, 2),
-            "errori_femmina_alta": err_femmina_alta,    # gate le avrebbe PASSATE (oro)
-            "errori_maschio_basso": err_maschio_basso,  # gate li avrebbe BLOCCATI
+            "errori_femmina_alta": err_femmina_alta,    # IBRIDI: gate li passa, perdono
+            "errori_maschio_basso": err_maschio_basso,  # gate li bloccherebbe, vincono
             "errori_totali": err_femmina_alta + err_maschio_basso,
             "trades": dettaglio
         }
@@ -2610,6 +2656,8 @@ canvas.spark { width:100%; height:40px; }
           <div style="font-size:10px; color:#ffaa00" id="sg-errori-det"></div>
         </div>
       </div>
+      <div id="sg-fonte" style="font-size:10px;color:var(--dim);margin-bottom:6px"></div>
+      <div style="font-size:9px;color:var(--dim);margin-bottom:6px">⚠ = ibrido (gate sbaglierebbe) · ɴ = seed di nascita (prima del trade) · ᴸ = seme dell'exit (drogato)</div>
       <table class="trade-tbl">
         <thead>
           <tr><th>ORA</th><th>SESSO</th><th>SEME</th><th>PnL $</th><th>MOTIVO</th></tr>
@@ -4000,11 +4048,20 @@ function updateSemeGate(){
       $('sg-errori-det').textContent =
         '♀alto '+(d.errori_femmina_alta||0)+' · ♂basso '+(d.errori_maschio_basso||0);
     }
+    if($('sg-fonte')){
+      const e = d.seme_entry||0, n = d.seme_nascita||0, l = d.seme_legacy||0;
+      $('sg-fonte').textContent =
+        'seme PRIMA del trade: '+(e+n)+'  (entry-gate '+e+' · nascita ɴ '+n+')  ·  exit/drogato ᴸ '+l;
+    }
     const rows = (d.trades||[]).map(t=>{
       const col = t.sesso==='MASCHIO' ? '#33ff66' : '#ff5555';
+      const legacy  = (t.fonte_seme==='EXIT_LEGACY');
+      const nascita = (t.fonte_seme==='NASCITA');
       let seme = (t.seme!==null && t.seme!==undefined) ? Number(t.seme).toFixed(3) : '–';
       if(t.errore){ seme = '⚠ ' + seme; }            // gate sbaglierebbe = caso-limite
-      const semeCol = t.errore ? '#ffaa00' : 'var(--text)';
+      if(legacy){ seme = seme + ' ᴸ'; }              // ᴸ = exit drogato, NON "prima del trade"
+      else if(nascita){ seme = seme + ' ɴ'; }        // ɴ = seed di nascita (prima del trade)
+      const semeCol = t.errore ? '#ffaa00' : (legacy ? 'var(--dim)' : 'var(--text)');
       const pnl  = (t.pnl>=0?'+':'') + t.pnl;
       const ora  = t.ora ? (t.ora.split(' ')[1]||t.ora) : '–';
       return '<tr><td>'+ora+'</td><td style="color:'+col+';font-weight:bold">'+t.sesso+
