@@ -523,29 +523,69 @@ def bridge_status():
 
 @app.route('/seme_gate')
 def seme_gate_view():
-    """Cruscotto SEME_GATE — femmine vs maschi in diretta, col seme di nascita.
-    SOLO LETTURA del canvas. Non tocca il bot. Mostra quanto COLA ogni femmina."""
+    """Cruscotto SEME_GATE — VERITA' COMPLETA dai trade veri.
+
+    Legge da `trades` (event_type='M2_EXIT'), che NON perde MAI un trade.
+    (Il vecchio pannello leggeva `canvas_snapshots` → perdeva EXIT per il lock
+    "database is locked". Da qui il contatore che "perdeva la bussola".)
+
+    Seme ricostruito dal `data_json.seed_traj` con la STESSA formula del gate nel
+    bot (riga 11714): (primo + ultimo degli ultimi 5 seed) / 2.
+    MASCHIO se pnl>0, FEMMINA se pnl<=0. Verdetto gate: PASSA se seme>=soglia.
+
+    NON nasconde i casi-limite (questo era il punto di Roberto): marca ERRORE le
+    femmine con seme alto (il gate le avrebbe PASSATE = oro per il 2° elemento) e
+    i maschi con seme basso (il gate li avrebbe BLOCCATI = maschi persi dal gate).
+
+    Filtri opzionali:
+      ?da=YYYY-MM-DD HH:MM:SS  → conta SOLO i trade "sobri" dopo un deploy
+                                  (timestamp UTC, come lo scrive il bot).
+      ?soglia=0.60             → per ritarare il gate a occhio sul pannello.
+
+    ATTENZIONE onestà (vedi stato 4giu): seed_traj e' la finestra al MOMENTO
+    dell'EXIT, non al momento esatto in cui il gate ha deciso all'ENTRY. E' lo
+    STESSO campo usato nell'analisi dei 44 trade (coerente con la taratura 0.60),
+    ma il "verdetto" qui e' una RICOSTRUZIONE, non la decisione reale del gate.
+    SOLO LETTURA. Non tocca il bot."""
     try:
-        righe = db_execute("""
-            SELECT datetime(ts,'unixepoch','localtime'), outcome, pnl_netto,
-                   reason, sensori_json
-            FROM canvas_snapshots
-            WHERE evento='EXIT' AND sensori_json IS NOT NULL
-            ORDER BY id DESC LIMIT 20
-        """, fetch=True)
-        trades = []
+        soglia = float(request.args.get('soglia', 0.60))
+        da = request.args.get('da')  # filtro timestamp (UTC) per i soli trade sobri
+
+        # NB: niente parola "COUNT" nella query → db_execute usa fetchall (non fetchone).
+        sql = """
+            SELECT timestamp, pnl,
+                   json_extract(data_json,'$.seed_traj') AS traj,
+                   reason
+            FROM trades
+            WHERE event_type='M2_EXIT'
+        """
+        params = []
+        if da:
+            sql += " AND timestamp > ?"
+            params.append(da)
+        sql += " ORDER BY id DESC"
+        righe = db_execute(sql, params, fetch=True) or []
+
         maschi = femmine = 0
         pnl_maschi = pnl_femmine = 0.0
         worst_femmina = 0.0
-        for r in (righe or []):
-            ora, outcome, pnl, reason, sj = r
+        err_femmina_alta = err_maschio_basso = 0
+        senza_seme = 0
+        dettaglio = []
+
+        for ts, pnl, traj_json, reason in righe:
             pnl = pnl or 0.0
             seme = None
-            try:
-                s = json.loads(sj) if sj else {}
-                seme = s.get('seed_score')
-            except Exception:
-                seme = None
+            if traj_json:
+                try:
+                    traj = json.loads(traj_json)
+                    if isinstance(traj, list) and len(traj) >= 2:
+                        seme = (float(traj[0]) + float(traj[-1])) / 2.0
+                except Exception:
+                    seme = None
+            if seme is None:
+                senza_seme += 1
+
             is_maschio = pnl > 0
             if is_maschio:
                 maschi += 1; pnl_maschi += pnl
@@ -553,18 +593,43 @@ def seme_gate_view():
                 femmine += 1; pnl_femmine += pnl
                 if pnl < worst_femmina:
                     worst_femmina = pnl
-            trades.append({
-                "ora": ora, "sesso": "MASCHIO" if is_maschio else "FEMMINA",
-                "pnl": round(pnl, 2),
-                "seme": round(seme, 3) if seme is not None else None,
-                "reason": reason
-            })
+
+            verdetto = None
+            errore = False
+            if seme is not None:
+                passa = seme >= soglia
+                verdetto = "PASSA" if passa else "BLOCCA"
+                if (not is_maschio) and passa:        # femmina con seme alto
+                    errore = True; err_femmina_alta += 1
+                elif is_maschio and (not passa):      # maschio con seme basso
+                    errore = True; err_maschio_basso += 1
+
+            # Aggregati su TUTTI i trade; dettaglio solo gli ultimi 60.
+            if len(dettaglio) < 60:
+                dettaglio.append({
+                    "ora": ts or "–",
+                    "sesso": "MASCHIO" if is_maschio else "FEMMINA",
+                    "pnl": round(pnl, 2),
+                    "seme": round(seme, 3) if seme is not None else None,
+                    "verdetto": verdetto,
+                    "errore": errore,
+                    "reason": reason
+                })
+
         out = {
+            "fonte": "trades.M2_EXIT",   # verita': nessun trade perso
+            "soglia": soglia,
+            "da": da,
+            "totale": maschi + femmine,
+            "senza_seme": senza_seme,    # trade senza seed_traj leggibile
             "maschi": maschi, "femmine": femmine,
             "pnl_maschi": round(pnl_maschi, 2), "pnl_femmine": round(pnl_femmine, 2),
             "netto": round(pnl_maschi + pnl_femmine, 2),
             "peggior_femmina": round(worst_femmina, 2),
-            "trades": trades
+            "errori_femmina_alta": err_femmina_alta,    # gate le avrebbe PASSATE (oro)
+            "errori_maschio_basso": err_maschio_basso,  # gate li avrebbe BLOCCATI
+            "errori_totali": err_femmina_alta + err_maschio_basso,
+            "trades": dettaglio
         }
         return json.dumps(out, indent=2), 200, {'Content-Type': 'application/json'}
     except Exception as e:
@@ -2520,7 +2585,7 @@ canvas.spark { width:100%; height:40px; }
   <!-- SEME GATE LIVE -->
   <div class="panel" style="margin-bottom:10px; border-color:#ffaa00; border-width:2px;">
     <div class="panel-head green">🧬 SEME GATE — Maschi e Femmine in diretta
-      <span style="font-size:9px;color:var(--dim)">solo lettura · quanto cola ogni femmina</span>
+      <span style="font-size:9px;color:var(--dim)">verità da <b>trades</b> (nessun trade perso) · ⚠ = il gate sbaglierebbe</span>
     </div>
     <div class="panel-body">
       <div style="display:flex; gap:12px; margin-bottom:10px; flex-wrap:wrap">
@@ -2538,6 +2603,11 @@ canvas.spark { width:100%; height:40px; }
           <div style="font-size:22px; font-weight:bold" id="sg-netto">–</div>
           <div style="font-size:10px; color:var(--dim)">NETTO $</div>
           <div style="font-size:11px; color:#ff8888" id="sg-worst"></div>
+        </div>
+        <div style="flex:1; min-width:90px; text-align:center; padding:8px; background:#2a1a00; border-radius:6px">
+          <div style="font-size:22px; font-weight:bold; color:#ffaa00" id="sg-errori">–</div>
+          <div style="font-size:10px; color:var(--dim)">⚠ ERRORI GATE</div>
+          <div style="font-size:10px; color:#ffaa00" id="sg-errori-det"></div>
         </div>
       </div>
       <table class="trade-tbl">
@@ -3925,13 +3995,20 @@ function updateSemeGate(){
     if($('sg-worst') && d.peggior_femmina!==undefined){
       $('sg-worst').textContent = d.peggior_femmina<0 ? ('peggio '+d.peggior_femmina+'$') : '';
     }
+    if($('sg-errori') && d.errori_totali!==undefined){
+      $('sg-errori').textContent = d.errori_totali;
+      $('sg-errori-det').textContent =
+        '♀alto '+(d.errori_femmina_alta||0)+' · ♂basso '+(d.errori_maschio_basso||0);
+    }
     const rows = (d.trades||[]).map(t=>{
       const col = t.sesso==='MASCHIO' ? '#33ff66' : '#ff5555';
-      const seme = (t.seme!==null && t.seme!==undefined) ? Number(t.seme).toFixed(3) : '–';
+      let seme = (t.seme!==null && t.seme!==undefined) ? Number(t.seme).toFixed(3) : '–';
+      if(t.errore){ seme = '⚠ ' + seme; }            // gate sbaglierebbe = caso-limite
+      const semeCol = t.errore ? '#ffaa00' : 'var(--text)';
       const pnl  = (t.pnl>=0?'+':'') + t.pnl;
       const ora  = t.ora ? (t.ora.split(' ')[1]||t.ora) : '–';
       return '<tr><td>'+ora+'</td><td style="color:'+col+';font-weight:bold">'+t.sesso+
-             '</td><td>'+seme+'</td><td style="color:'+col+'">'+pnl+
+             '</td><td style="color:'+semeCol+';font-weight:bold">'+seme+'</td><td style="color:'+col+'">'+pnl+
              '</td><td style="font-size:9px;color:var(--dim)">'+((t.reason||'').slice(0,22))+'</td></tr>';
     }).join('');
     $('seme-gate-body').innerHTML = rows ||
