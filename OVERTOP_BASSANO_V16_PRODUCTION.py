@@ -11736,6 +11736,16 @@ class OvertopBassanoV16Production:
                 "matrimonio":    matrimonio_name,
                 "fingerprint_wr": round(fingerprint_wr, 3),
                 "seed":          round(seed.get('score', 0), 3),
+                # ════════════════════════════════════════════════════════════
+                # SEME D'INGRESSO (4giu, Roberto: "tutto questo PRIMA del trade")
+                # ════════════════════════════════════════════════════════════
+                # Il valore ESATTO su cui il gate ha deciso all'ENTRY — stessa
+                # finestra e formula della riga ~11714/11716. _seed_history non
+                # e' cambiata tra il gate e qui (stessa chiamata sincrona), quindi
+                # seme_entry == _seme_medio del gate. NON contaminato dall'exit.
+                # Da qui si misura il cromosoma per quello che e': un PRE-segnale.
+                "seme_entry":      (lambda s: round((s[0] + s[-1]) / 2.0, 4) if len(s) >= 2 else None)(list(getattr(self.campo, "_seed_history", []))[-5:]),
+                "seed_traj_entry": list(getattr(self.campo, "_seed_history", []))[-5:],
                 "ts_entry":      time.time(),
                 # L1.5: contesto entry per VERITAS GATE
                 "momentum_entry":   momentum,
@@ -13235,6 +13245,29 @@ class OvertopBassanoV16Production:
                           # Da qui si dimostra: il vincente ha la carica viva prima.
                           "seed_traj": list(getattr(self.campo, "_seed_history", []))[-5:],
                           "seed_dir":  round((lambda s: (s[-1]-s[0])/max(len(s)-1,1) if len(s)>=2 else 0.0)(list(getattr(self.campo,"_seed_history",[]))[-5:]), 4),
+                          # SEME D'INGRESSO (4giu): il valore PRIMA del trade su cui
+                          # il gate ha deciso. Stipato nello shadow alla nascita.
+                          # Il pannello legge QUESTO, non il seed_traj dell'exit.
+                          "seme_entry":      self._shadow.get("seme_entry"),
+                          "seed_traj_entry": self._shadow.get("seed_traj_entry"),
+                          # ════════════════════════════════════════════════════
+                          # CARTA D'IDENTITA' DI NASCITA (4giu, Roberto: la
+                          # "femmina travestita da maschio"). Questi sensori sono
+                          # gia' calcolati dal seed alla nascita e gia' nello
+                          # shadow; finora finivano SOLO nel canvas (che perde
+                          # righe). Qui entrano nel trade vero: ogni femmina nasce
+                          # con la firma completa, per smascherare chi ha seme da
+                          # maschio ma un carattere di nascita da femmina.
+                          # NB onesta': nascita_range_pos e' ROTTO (saturo 0/1);
+                          # drift_slope/seed_dir e' lead debole. I non testati
+                          # (compression, drift_persist, vol_pressure,
+                          # comp_duration) sono i veri candidati. Decide il dato.
+                          "n_range_pos":     self._shadow.get("nascita_range_pos"),
+                          "n_compression":   self._shadow.get("nascita_compression"),
+                          "n_drift_persist": self._shadow.get("nascita_drift_persist"),
+                          "n_vol_pressure":  self._shadow.get("nascita_vol_pressure"),
+                          "n_drift_slope":   self._shadow.get("nascita_drift_slope"),
+                          "n_comp_duration": self._shadow.get("nascita_comp_duration"),
                       })))
                 conn.commit()
                 conn.close()
