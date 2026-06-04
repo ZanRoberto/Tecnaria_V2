@@ -5981,7 +5981,16 @@ class SuperCervello:
         #  - capsule_block_score, veritas_ctx_wr → valori osservati nei log live
         #  - MARGINE_OVERRIDE → unico parametro nuovo. Parte CONSERVATIVO.
         # ════════════════════════════════════════════════════════════════════
-        if loss_streak >= 4:
+        # ════════════════════════════════════════════════════════════════════
+        # DISATTIVATO (4giu, Roberto): streak >= 4 era ZAVORRA, non salvagente.
+        # Nello stato attuale (caccia al cromosoma-seme) bloccare dopo 4 loss
+        # IMPEDISCE di raccogliere i trade che servono a misurare se il seme
+        # separa femmine/maschi. I loss NON sono pericolo da cui nascondersi:
+        # sono DATI che alimentano le capsule e raffinano il cromosoma.
+        # Soglia alzata 4 → 999 = di fatto mai. Meccanismo INTATTO sotto: se
+        # un domani serve un freno vero (es. >= 20), basta cambiare il numero.
+        # ════════════════════════════════════════════════════════════════════
+        if loss_streak >= 999:
             # Retro-compat: se il verbale non è arrivato (chiamata vecchia,
             # tutti i param costituzionali None) → comportamento di prima.
             _verbale_presente = (tsunami_vote is not None
