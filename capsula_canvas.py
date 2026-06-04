@@ -43,8 +43,17 @@ class CapsulaCanvas:
 
     # ──────────────────────────────────────────────────────────────────
     def _conn(self):
-        # timeout generoso: il bot scrive spesso, evito 'database is locked'
-        return sqlite3.connect(self.db_path, timeout=10.0)
+        # FIX 4giu (Roberto): "database is locked" — il canvas scriveva 316k
+        # valutazioni e le EXIT fallivano in silenzio per contesa sul DB.
+        # WAL = letture e scritture concorrenti senza lock reciproco.
+        # busy_timeout 30s = se trova il DB occupato, ASPETTA invece di fallire.
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+        except Exception:
+            pass
+        return conn
 
     def _ensure_table(self):
         """Crea la tabella se non esiste (idempotente). Non tocca i dati
@@ -143,10 +152,7 @@ class CapsulaCanvas:
                      durata_s=None, reason=None, nascita=None):
         """Registra l'esito alla chiusura del trade. Riga EXIT separata,
         collegata all'entry tramite trade_id.
-        `nascita` (3giu): i sensori del campo all'apertura del trade VERO,
-        passati dallo shadow. Salvati in sensori_json così OGNI riga EXIT
-        contiene nascita+esito insieme — analisi maschio/femmina senza
-        aggancio temporale fragile (lo shadow esiste solo per i trade reali)."""
+        nascita (3giu): i sensori del campo all'apertura del trade VERO."""
         try:
             sensori_nascita = None
             if isinstance(nascita, dict):
@@ -166,5 +172,6 @@ class CapsulaCanvas:
             conn.commit()
             conn.close()
             self._writes += 1
-        except Exception:
+        except Exception as e:
             self._errors += 1
+            self._last_error = f"observe_exit: {e}"
