@@ -521,6 +521,55 @@ def bridge_status():
         return json.dumps(bridge.get_status(), indent=2), 200, {'Content-Type': 'application/json'}
     return json.dumps({"active": False, "reason": "bridge not initialized"}), 200, {'Content-Type': 'application/json'}
 
+@app.route('/seme_gate')
+def seme_gate_view():
+    """Cruscotto SEME_GATE — femmine vs maschi in diretta, col seme di nascita.
+    SOLO LETTURA del canvas. Non tocca il bot. Mostra quanto COLA ogni femmina."""
+    try:
+        righe = db_execute("""
+            SELECT datetime(ts,'unixepoch','localtime'), outcome, pnl_netto,
+                   reason, sensori_json
+            FROM canvas_snapshots
+            WHERE evento='EXIT' AND sensori_json IS NOT NULL
+            ORDER BY id DESC LIMIT 20
+        """, fetch=True)
+        trades = []
+        maschi = femmine = 0
+        pnl_maschi = pnl_femmine = 0.0
+        worst_femmina = 0.0
+        for r in (righe or []):
+            ora, outcome, pnl, reason, sj = r
+            pnl = pnl or 0.0
+            seme = None
+            try:
+                s = json.loads(sj) if sj else {}
+                seme = s.get('seed_score')
+            except Exception:
+                seme = None
+            is_maschio = pnl > 0
+            if is_maschio:
+                maschi += 1; pnl_maschi += pnl
+            else:
+                femmine += 1; pnl_femmine += pnl
+                if pnl < worst_femmina:
+                    worst_femmina = pnl
+            trades.append({
+                "ora": ora, "sesso": "MASCHIO" if is_maschio else "FEMMINA",
+                "pnl": round(pnl, 2),
+                "seme": round(seme, 3) if seme is not None else None,
+                "reason": reason
+            })
+        out = {
+            "maschi": maschi, "femmine": femmine,
+            "pnl_maschi": round(pnl_maschi, 2), "pnl_femmine": round(pnl_femmine, 2),
+            "netto": round(pnl_maschi + pnl_femmine, 2),
+            "peggior_femmina": round(worst_femmina, 2),
+            "trades": trades
+        }
+        return json.dumps(out, indent=2), 200, {'Content-Type': 'application/json'}
+    except Exception as e:
+        return json.dumps({"error": str(e), "trades": []}), 200, {'Content-Type': 'application/json'}
+
 # ═══════════════════════════════════════════════════════════════════════════
 # BRAIN THREAD — analisi periodica ogni 60s
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2468,6 +2517,40 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
+  <!-- SEME GATE LIVE -->
+  <div class="panel" style="margin-bottom:10px; border-color:#ffaa00; border-width:2px;">
+    <div class="panel-head green">🧬 SEME GATE — Maschi e Femmine in diretta
+      <span style="font-size:9px;color:var(--dim)">solo lettura · quanto cola ogni femmina</span>
+    </div>
+    <div class="panel-body">
+      <div style="display:flex; gap:12px; margin-bottom:10px; flex-wrap:wrap">
+        <div style="flex:1; min-width:90px; text-align:center; padding:8px; background:#0a2a0a; border-radius:6px">
+          <div style="font-size:22px; font-weight:bold; color:#33ff66" id="sg-maschi">–</div>
+          <div style="font-size:10px; color:var(--dim)">MASCHI</div>
+          <div style="font-size:12px; color:#33ff66" id="sg-pnl-maschi"></div>
+        </div>
+        <div style="flex:1; min-width:90px; text-align:center; padding:8px; background:#2a0a0a; border-radius:6px">
+          <div style="font-size:22px; font-weight:bold; color:#ff5555" id="sg-femmine">–</div>
+          <div style="font-size:10px; color:var(--dim)">FEMMINE</div>
+          <div style="font-size:12px; color:#ff5555" id="sg-pnl-femmine"></div>
+        </div>
+        <div style="flex:1; min-width:90px; text-align:center; padding:8px; background:#0a0a2a; border-radius:6px">
+          <div style="font-size:22px; font-weight:bold" id="sg-netto">–</div>
+          <div style="font-size:10px; color:var(--dim)">NETTO $</div>
+          <div style="font-size:11px; color:#ff8888" id="sg-worst"></div>
+        </div>
+      </div>
+      <table class="trade-tbl">
+        <thead>
+          <tr><th>ORA</th><th>SESSO</th><th>SEME</th><th>PnL $</th><th>MOTIVO</th></tr>
+        </thead>
+        <tbody id="seme-gate-body">
+          <tr><td colspan="5" style="color:var(--dim); text-align:center; padding:16px">In attesa di trade col seme...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- ANALISI TRADE — Perché abbiamo vinto o perso -->
   <div class="panel" style="margin-bottom:10px; border-color:#00aaff; border-width:2px;">
     <div class="panel-head blue">🔬 ANALISI TRADE — Perché abbiamo vinto o perso?
@@ -3829,8 +3912,37 @@ function sendCmd(cmd){
   .then(r=>r.json()).then(()=>{ const ab=$('alert-bar'); ab.style.display='block'; ab.innerHTML='✅ Comando inviato: '+cmd; setTimeout(()=>{ab.style.display='none'},3000); });
 }
 
+function updateSemeGate(){
+  fetch('/seme_gate').then(r=>r.json()).then(d=>{
+    if(d.error){ return; }
+    $('sg-maschi').textContent  = d.maschi;
+    $('sg-femmine').textContent = d.femmine;
+    $('sg-pnl-maschi').textContent  = (d.pnl_maschi>=0?'+':'') + d.pnl_maschi + '$';
+    $('sg-pnl-femmine').textContent = d.pnl_femmine + '$';
+    const netto = $('sg-netto');
+    netto.textContent = (d.netto>=0?'+':'') + d.netto;
+    netto.style.color = d.netto>=0 ? '#33ff66' : '#ff5555';
+    if($('sg-worst') && d.peggior_femmina!==undefined){
+      $('sg-worst').textContent = d.peggior_femmina<0 ? ('peggio '+d.peggior_femmina+'$') : '';
+    }
+    const rows = (d.trades||[]).map(t=>{
+      const col = t.sesso==='MASCHIO' ? '#33ff66' : '#ff5555';
+      const seme = (t.seme!==null && t.seme!==undefined) ? Number(t.seme).toFixed(3) : '–';
+      const pnl  = (t.pnl>=0?'+':'') + t.pnl;
+      const ora  = t.ora ? (t.ora.split(' ')[1]||t.ora) : '–';
+      return '<tr><td>'+ora+'</td><td style="color:'+col+';font-weight:bold">'+t.sesso+
+             '</td><td>'+seme+'</td><td style="color:'+col+'">'+pnl+
+             '</td><td style="font-size:9px;color:var(--dim)">'+((t.reason||'').slice(0,22))+'</td></tr>';
+    }).join('');
+    $('seme-gate-body').innerHTML = rows ||
+      '<tr><td colspan="5" style="color:var(--dim);text-align:center;padding:16px">In attesa di trade col seme...</td></tr>';
+  }).catch(()=>{});
+}
+
 update();
 setInterval(update, 2000);
+updateSemeGate();
+setInterval(updateSemeGate, 2000);
 </script>
 </body>
 </html>
