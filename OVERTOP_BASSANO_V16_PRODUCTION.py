@@ -10397,7 +10397,10 @@ class OvertopBassanoV16Production:
                     pass
                 _canvas_tid = f"t_{int(time.time()*1000)}"
                 _verbale["_canvas_tid"] = _canvas_tid
-                self.canvas.observe_entry(_verbale, trade_id=_canvas_tid)
+                # DISATTIVATO 4giu (Roberto): observe_entry scriveva ~60k
+                # valutazioni/giorno → lock DB → EXIT perse (contatore che
+                # perdeva trade). _canvas_tid resta per agganciare nascita→esito.
+                # self.canvas.observe_entry(_verbale, trade_id=_canvas_tid)
         except Exception as _ce_early:
             log.debug(f"[CANVAS_HOOK_EARLY_ERR] {_ce_early}")
 
@@ -11167,7 +11170,8 @@ class OvertopBassanoV16Production:
                         _verbale["_path"] = "P1_EXPLOSIVE"
                         # Salvo per transfer in _open_shadow_position
                         self._pending_canvas_tid_p1 = _canvas_tid_p1
-                        self.canvas.observe_entry(_verbale, trade_id=_canvas_tid_p1)
+                        # DISATTIVATO 4giu (Roberto): vedi nota punto 1.
+                        # self.canvas.observe_entry(_verbale, trade_id=_canvas_tid_p1)
                 except Exception as _ce_p1:
                     log.debug(f"[CANVAS_HOOK_ENTRY_P1_ERR] {_ce_p1}")
 
