@@ -12430,9 +12430,14 @@ class OvertopBassanoV16Production:
             # ⚠️ TARATO SU 1 TRADE: -3.5 è metà strada verso HARD_STOP -7; peak
             # 1.5 è la soglia maschio/femmina già vista nel microscopio. Da
             # riverificare su più femmine-colata coi dati nuovi.
+            # ⚠️ RITARATO 5giu su 20 trade (non più 1): le femmine che passano il
+            # gate v4 hanno peak MAX 2.74; i maschi (tranne 2 piccoli) peak >= 3.6.
+            # Soglia peak 1.5 -> 3.0: prende TUTTE le 9 femmine (0 sfuggite), costa
+            # solo 2 maschietti (peak 1.84/+1.65 e 1.24/+1.10). Baratto: blocca 9
+            # femmine (2 da -9) per 2 maschi da +1. Il +22 (peak 22) non e' toccato.
             _freno_off   = os.environ.get("FRENO_COLATA_OFF", "false").lower() == "true"
             _freno_pnl   = float(os.environ.get("FRENO_COLATA_PNL", "3.5"))
-            _freno_peak  = float(os.environ.get("FRENO_COLATA_PEAK", "1.5"))
+            _freno_peak  = float(os.environ.get("FRENO_COLATA_PEAK", "3.0"))
             _freno_tempo = float(os.environ.get("KILLER_TEMPO", "35"))
             if (not _freno_off
                     and current_pnl_real < -_freno_pnl
@@ -14621,6 +14626,7 @@ class OvertopBassanoV16Production:
                 _hb_set("losses",              lambda: self.losses)
                 _hb_set("wr",                  lambda: round(self.wins / tot, 4) if tot > 0 else 0)
                 _hb_set("last_seen",           lambda: datetime.utcnow().isoformat())
+                _hb_set("cromo_blocchi",       lambda: dict(getattr(self, "_cromo_blocchi", {"vol_basso":0,"vol_isterico":0,"comp_alta":0,"cdur_breve":0,"totale":0})))
                 _hb_set("matrimoni_divorzio",  lambda: list(self.memoria.divorzio))
                 _hb_set("oracolo_snapshot",    lambda: self.oracolo.dump())
                 _hb_set("posizione_aperta",    lambda: self.trade_open is not None)
