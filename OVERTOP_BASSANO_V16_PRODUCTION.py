@@ -11738,34 +11738,41 @@ class OvertopBassanoV16Production:
             # ⚠ SPERIMENTALE: base 24 trade. Sospetto solido, non legge. Parametrico
             # e reversibile. Logga ogni blocco. Resta 1 maschio "gemello" non preso
             # (stesso profilo di una femmina) -> baratto accettato (10/11 vs 10/13).
+            # ════════════════════════════════════════════════════════════════
+            # GATE CROMOSOMA v4 — linea ritarata su 28 trade nati-sotto-gate (5giu)
+            # ════════════════════════════════════════════════════════════════
+            # Griglia su 28 trade (13 maschi peak>0, 15 trans peak=0/perdono):
+            # miglior separazione M/T = finestra vp + tetto comp:
+            #   MASCHIO se  0.46 <= vp <= 1.13  E  comp <= 0.64
+            #   -> tiene 10/13 maschi, blocca 13/15 trans (ne passano 2 "gemelli").
+            # Differenze dal v3: comp 0.70->0.64 (stretta), aggiunto tetto vp 1.13
+            #   (i trans isterici stavano sopra), cdur DISATTIVATO di default
+            #   (era tarato su 2 casi, non confermato sui dati nuovi -> CDUR_MIN=0).
+            # ⚠ I 2 trans che restano (vp~0.95/cp~0.58, vp~0.72/cp~0.46) hanno firma
+            #   da maschio PURO: il gate NON puo' vederli. Si prendono solo col
+            #   "primo respiro" (peak nei primi tick), 2o cancello DA COSTRUIRE.
+            # ⚠ Costa 2 maschi grossi tagliati (vp1.48/+7.74, cp0.74/+6.48). Baratto
+            #   accettato da Roberto: blocca ~90$ di trans, sacrifica ~14$ di maschi.
+            # ⚠ TUTTO tarato su 28 trade. Validare alla prossima raccolta sui NUOVI.
             CROMO_GATE_ON   = bool(getattr(self, "CROMO_GATE_ON", True))
-            CROMO_VPRESS_MIN = float(getattr(self, "CROMO_VPRESS_MIN", 0.50))
-            CROMO_COMP_MAX   = float(getattr(self, "CROMO_COMP_MAX", 0.70))
-            CROMO_CDUR_MIN   = float(getattr(self, "CROMO_CDUR_MIN", 6))
+            CROMO_VPRESS_MIN = float(getattr(self, "CROMO_VPRESS_MIN", 0.46))
+            CROMO_VPRESS_MAX = float(getattr(self, "CROMO_VPRESS_MAX", 1.13))
+            CROMO_COMP_MAX   = float(getattr(self, "CROMO_COMP_MAX", 0.64))
+            CROMO_CDUR_MIN   = float(getattr(self, "CROMO_CDUR_MIN", 0))
             if CROMO_GATE_ON:
                 _vp = seed.get('vol_pressure')
                 _cp = seed.get('compression')
                 _cd = seed.get('comp_duration')
                 if _vp is not None and _cp is not None:
-                    # FEMMINA se: poca pressione (vp basso) OPPURE compressione ALTA
-                    # OPPURE comp_duration breve (3o gene, 5giu).
-                    # Compressione alta = molla satura, scoppia contro = perde.
-                    # comp_duration breve = i due gemelli -9.02 del 5giu (cdur 4-5)
-                    #   avevano firma da maschio su vp+comp ma morivano. Quasi tutti i
-                    #   maschi hanno cdur 19; le femmine-gemelle cdur basso.
-                    # ⚠⚠ TERZO GENE TARATO SU 2 SOLI CASI (i due -9 del 5giu mattina).
-                    # E' un TAPPO per arrivare alla prossima stazione, NON una legge.
-                    # Forte rischio overfitting. comp_duration sembra saturare a 19.
-                    # Da VALIDARE: se nascono altre femmine-gemelle con cdur basso ->
-                    # confermato; se nascono con cdur 19 -> rimuovere (CROMO_CDUR_MIN=0).
-                    _cd_breve = (_cd is not None and _cd < CROMO_CDUR_MIN)
-                    if _vp < CROMO_VPRESS_MIN or _cp > CROMO_COMP_MAX or _cd_breve:
+                    _cd_breve = (_cd is not None and CROMO_CDUR_MIN > 0 and _cd < CROMO_CDUR_MIN)
+                    if (_vp < CROMO_VPRESS_MIN or _vp > CROMO_VPRESS_MAX
+                            or _cp > CROMO_COMP_MAX or _cd_breve):
                         _causa = ("vol_basso" if _vp < CROMO_VPRESS_MIN else
+                                  "vol_isterico" if _vp > CROMO_VPRESS_MAX else
                                   "comp_alta" if _cp > CROMO_COMP_MAX else "cdur_breve")
-                        self._log("🚫", f"CROMO_GATE v3 BLOCCO femmina ({_causa}): "
-                                        f"vpress={_vp:.3f}(>={CROMO_VPRESS_MIN}) "
-                                        f"comp={_cp:.3f}(<={CROMO_COMP_MAX}) "
-                                        f"cdur={_cd}(>={CROMO_CDUR_MIN}) | "
+                        self._log("🚫", f"CROMO_GATE v4 BLOCCO femmina ({_causa}): "
+                                        f"vpress={_vp:.3f}[{CROMO_VPRESS_MIN}-{CROMO_VPRESS_MAX}] "
+                                        f"comp={_cp:.3f}(<={CROMO_COMP_MAX}) | "
                                         f"seed={seed.get('score', 0):.3f} @ ${price:.1f}")
                         return
 
