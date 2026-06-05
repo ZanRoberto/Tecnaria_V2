@@ -107,6 +107,7 @@ heartbeat_data = {
     "matrimoni_divorzio": [],
     "oracolo_snapshot":   {},
     "m2_direction":       "LONG",
+    "cromo_blocchi":      {"vol_basso":0,"vol_isterico":0,"comp_alta":0,"cdur_breve":0,"totale":0},
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -558,6 +559,9 @@ def seme_gate_view():
                    json_extract(data_json,'$.seed_traj_entry') AS traj_entry,
                    json_extract(data_json,'$.sc_seed')          AS sc_seed,
                    json_extract(data_json,'$.seed_traj')        AS traj_exit,
+                   json_extract(data_json,'$.pnl_10s')          AS pnl_10s,
+                   json_extract(data_json,'$.pnl_20s')          AS pnl_20s,
+                   json_extract(data_json,'$.peak_pnl')         AS peak_pnl,
                    reason
             FROM trades
             WHERE event_type='M2_EXIT'
@@ -588,7 +592,7 @@ def seme_gate_view():
             return None
 
         dettaglio = []
-        for ts, pnl, seme_entry, traj_entry, sc_seed, traj_exit, reason in righe:
+        for ts, pnl, seme_entry, traj_entry, sc_seed, traj_exit, pnl_10s, pnl_20s, peak_pnl, reason in righe:
             pnl = pnl or 0.0
 
             # PRIORITA' del seme — tutto cio' che e' PRIMA del trade vince sull'exit:
@@ -655,6 +659,9 @@ def seme_gate_view():
                     "fonte_seme": fonte,   # ENTRY/NASCITA = prima del trade ; EXIT_LEGACY = drogato
                     "verdetto": verdetto,
                     "errore": errore,
+                    "pnl_10s": round(float(pnl_10s), 2) if pnl_10s is not None else None,
+                    "pnl_20s": round(float(pnl_20s), 2) if pnl_20s is not None else None,
+                    "peak_pnl": round(float(peak_pnl), 2) if peak_pnl is not None else None,
                     "reason": reason
                 })
 
@@ -675,6 +682,7 @@ def seme_gate_view():
             "errori_femmina_alta": err_femmina_alta,    # IBRIDI: gate li passa, perdono
             "errori_maschio_basso": err_maschio_basso,  # gate li bloccherebbe, vincono
             "errori_totali": err_femmina_alta + err_maschio_basso,
+            "cromo_blocchi": dict(heartbeat_data.get("cromo_blocchi", {"totale":0})),
             "trades": dettaglio
         }
         return json.dumps(out, indent=2), 200, {'Content-Type': 'application/json'}
@@ -2655,12 +2663,17 @@ canvas.spark { width:100%; height:40px; }
           <div style="font-size:10px; color:var(--dim)">⚠ ERRORI GATE</div>
           <div style="font-size:10px; color:#ffaa00" id="sg-errori-det"></div>
         </div>
+        <div style="flex:1; min-width:90px; text-align:center; padding:8px; background:#0a2a1a; border-radius:6px; border:1px solid #00cc66">
+          <div style="font-size:22px; font-weight:bold; color:#00ff99" id="sg-trans-bloccati">–</div>
+          <div style="font-size:10px; color:var(--dim)">🚫 TRANS BLOCCATI</div>
+          <div style="font-size:10px; color:#00ff99" id="sg-trans-det"></div>
+        </div>
       </div>
       <div id="sg-fonte" style="font-size:10px;color:var(--dim);margin-bottom:6px"></div>
       <div style="font-size:9px;color:var(--dim);margin-bottom:6px">⚠ = ibrido (gate sbaglierebbe) · ɴ = seed di nascita (prima del trade) · ᴸ = seme dell'exit (drogato)</div>
       <table class="trade-tbl">
         <thead>
-          <tr><th>ORA</th><th>SESSO</th><th>SEME</th><th>PnL $</th><th>MOTIVO</th></tr>
+          <tr><th>ORA</th><th>SESSO</th><th>SEME</th><th>PnL $</th><th>10s</th><th>20s</th><th>PEAK</th><th>MOTIVO</th></tr>
         </thead>
         <tbody id="seme-gate-body">
           <tr><td colspan="5" style="color:var(--dim); text-align:center; padding:16px">In attesa di trade col seme...</td></tr>
@@ -4035,6 +4048,16 @@ function updateSemeGate(){
     if(d.error){ return; }
     $('sg-maschi').textContent  = d.maschi;
     $('sg-femmine').textContent = d.femmine;
+    if($('sg-trans-bloccati') && d.cromo_blocchi){
+      const cb = d.cromo_blocchi;
+      $('sg-trans-bloccati').textContent = cb.totale || 0;
+      const parti = [];
+      if(cb.comp_alta)    parti.push('comp '+cb.comp_alta);
+      if(cb.vol_basso)    parti.push('vol↓ '+cb.vol_basso);
+      if(cb.vol_isterico) parti.push('vol↑ '+cb.vol_isterico);
+      if(cb.cdur_breve)   parti.push('cdur '+cb.cdur_breve);
+      $('sg-trans-det').textContent = parti.join(' · ');
+    }
     $('sg-pnl-maschi').textContent  = (d.pnl_maschi>=0?'+':'') + d.pnl_maschi + '$';
     $('sg-pnl-femmine').textContent = d.pnl_femmine + '$';
     const netto = $('sg-netto');
@@ -4064,12 +4087,29 @@ function updateSemeGate(){
       const semeCol = t.errore ? '#ffaa00' : (legacy ? 'var(--dim)' : 'var(--text)');
       const pnl  = (t.pnl>=0?'+':'') + t.pnl;
       const ora  = t.ora ? (t.ora.split(' ')[1]||t.ora) : '–';
+      // FILMATO primo respiro: 10s -> 20s. Maschio CRESCE, trans EVAPORA.
+      const f10 = (t.pnl_10s!==null && t.pnl_10s!==undefined) ? t.pnl_10s : null;
+      const f20 = (t.pnl_20s!==null && t.pnl_20s!==undefined) ? t.pnl_20s : null;
+      const pk  = (t.peak_pnl!==null && t.peak_pnl!==undefined) ? t.peak_pnl : null;
+      const c10 = f10===null ? 'var(--dim)' : (f10>=0?'#33ff66':'#ff5555');
+      // 20s verde se CRESCE rispetto a 10s (maschio), rosso se SCENDE (trans)
+      let c20 = 'var(--dim)';
+      if(f20!==null && f10!==null){ c20 = (f20>=f10)?'#33ff66':'#ff8800'; }
+      else if(f20!==null){ c20 = (f20>=0?'#33ff66':'#ff5555'); }
+      // peak: verde se >=3 (maschio vero), arancio se <3 (sospetto trans)
+      const cpk = pk===null ? 'var(--dim)' : (pk>=3.0?'#33ff66':'#ff8800');
+      const cell10 = f10===null ? '–' : ((f10>=0?'+':'')+f10);
+      const cell20 = f20===null ? '–' : ((f20>=0?'+':'')+f20);
+      const cellpk = pk===null ? '–' : pk;
       return '<tr><td>'+ora+'</td><td style="color:'+col+';font-weight:bold">'+t.sesso+
              '</td><td style="color:'+semeCol+';font-weight:bold">'+seme+'</td><td style="color:'+col+'">'+pnl+
+             '</td><td style="color:'+c10+'">'+cell10+
+             '</td><td style="color:'+c20+'">'+cell20+
+             '</td><td style="color:'+cpk+';font-weight:bold">'+cellpk+
              '</td><td style="font-size:9px;color:var(--dim)">'+((t.reason||'').slice(0,22))+'</td></tr>';
     }).join('');
     $('seme-gate-body').innerHTML = rows ||
-      '<tr><td colspan="5" style="color:var(--dim);text-align:center;padding:16px">In attesa di trade col seme...</td></tr>';
+      '<tr><td colspan="8" style="color:var(--dim);text-align:center;padding:16px">In attesa di trade col seme...</td></tr>';
   }).catch(()=>{});
 }
 
