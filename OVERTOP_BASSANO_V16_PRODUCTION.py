@@ -11725,30 +11725,33 @@ class OvertopBassanoV16Production:
                          if len(self.campo._prices_short) >= 30 else 0
 
             # ════════════════════════════════════════════════════════════════
-            # GATE CROMOSOMA v1 — SPERIMENTALE (4giu, Roberto)
+            # GATE CROMOSOMA v2 — CORRETTO 5giu (Roberto: "lavoravi in modo inverso")
             # ════════════════════════════════════════════════════════════════
-            # Scoperta su 12 trade sobri + griglia cartesiana (singoli + coppie):
-            # il seme NON separa M/F. Separa la COPPIA di nascita
-            #   vol_pressure ALTO  E  compression PRESENTE.
-            # Femmina (loss) = le manca almeno una delle due. La travestita
-            # perfetta (seme alto + vol_pressure alto) viene presa dalla
-            # compression. Sui 12: regola -> 0 femmine, 5/6 maschi, +35 vs +4.
-            #
-            # ⚠ SPERIMENTALE: base 12 trade / 6 femmine. E' un SOSPETTO FORTE,
-            # non una legge. Va validato su 40-50 trade nati SOTTO la regola.
-            # Parametrico e reversibile: per spegnerlo -> CROMO_GATE_ON=False
-            # (o alza/abbassa le due soglie). Logga ogni blocco per ritararlo.
+            # ERRORE v1 (4giu): avevo messo compression >= 0.18 ("manca la carica
+            # = femmina"). SBAGLIATO, segno invertito. Su 24 trade sobri reali:
+            # le FEMMINE hanno compression ALTA (0.92/0.95/0.99/1.0), i MASCHI bassa.
+            # Cartesiana 2 geni (la piu' robusta, no overfitting):
+            #   MASCHIO = vol_pressure >= 0.50  E  compression <= 0.70
+            #   -> tiene 10 maschi su 11, blocca 10 femmine su 13.
+            # Le regole a 3-4 geni (cdur, flips) davano 1-2 femmine in meno ma erano
+            # cucite su 1-2 casi (overfitting su 24 trade) -> NON usate.
+            # ⚠ SPERIMENTALE: base 24 trade. Sospetto solido, non legge. Parametrico
+            # e reversibile. Logga ogni blocco. Resta 1 maschio "gemello" non preso
+            # (stesso profilo di una femmina) -> baratto accettato (10/11 vs 10/13).
             CROMO_GATE_ON   = bool(getattr(self, "CROMO_GATE_ON", True))
             CROMO_VPRESS_MIN = float(getattr(self, "CROMO_VPRESS_MIN", 0.50))
-            CROMO_COMP_MIN   = float(getattr(self, "CROMO_COMP_MIN", 0.18))
+            CROMO_COMP_MAX   = float(getattr(self, "CROMO_COMP_MAX", 0.70))
             if CROMO_GATE_ON:
                 _vp = seed.get('vol_pressure')
                 _cp = seed.get('compression')
                 if _vp is not None and _cp is not None:
-                    if _vp < CROMO_VPRESS_MIN or _cp < CROMO_COMP_MIN:
-                        self._log("🚫", f"CROMO_GATE BLOCCO femmina: "
-                                        f"vpress={_vp:.3f}(<{CROMO_VPRESS_MIN}) "
-                                        f"comp={_cp:.3f}(<{CROMO_COMP_MIN}) | "
+                    # FEMMINA se: poca pressione (vp basso) OPPURE compressione ALTA.
+                    # Compressione alta = molla troppo carica/satura -> scoppia contro = perde.
+                    if _vp < CROMO_VPRESS_MIN or _cp > CROMO_COMP_MAX:
+                        _causa = ("vol_basso" if _vp < CROMO_VPRESS_MIN else "comp_alta")
+                        self._log("🚫", f"CROMO_GATE v2 BLOCCO femmina ({_causa}): "
+                                        f"vpress={_vp:.3f}(>={CROMO_VPRESS_MIN}) "
+                                        f"comp={_cp:.3f}(<={CROMO_COMP_MAX}) | "
                                         f"seed={seed.get('score', 0):.3f} @ ${price:.1f}")
                         return
 
