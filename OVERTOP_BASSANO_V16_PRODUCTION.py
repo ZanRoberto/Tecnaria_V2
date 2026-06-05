@@ -11770,7 +11770,14 @@ class OvertopBassanoV16Production:
                         _causa = ("vol_basso" if _vp < CROMO_VPRESS_MIN else
                                   "vol_isterico" if _vp > CROMO_VPRESS_MAX else
                                   "comp_alta" if _cp > CROMO_COMP_MAX else "cdur_breve")
-                        self._log("🚫", f"CROMO_GATE v4 BLOCCO femmina ({_causa}): "
+                        # CONTATORE TRANS BLOCCATI (in memoria, si azzera al riavvio)
+                        if not hasattr(self, "_cromo_blocchi"):
+                            self._cromo_blocchi = {"vol_basso": 0, "vol_isterico": 0,
+                                                   "comp_alta": 0, "cdur_breve": 0, "totale": 0}
+                        self._cromo_blocchi[_causa] = self._cromo_blocchi.get(_causa, 0) + 1
+                        self._cromo_blocchi["totale"] = self._cromo_blocchi.get("totale", 0) + 1
+                        self._log("🚫", f"CROMO_GATE v4 BLOCCO femmina ({_causa}) "
+                                        f"[tot: {self._cromo_blocchi['totale']}]: "
                                         f"vpress={_vp:.3f}[{CROMO_VPRESS_MIN}-{CROMO_VPRESS_MAX}] "
                                         f"comp={_cp:.3f}(<={CROMO_COMP_MAX}) | "
                                         f"seed={seed.get('score', 0):.3f} @ ${price:.1f}")
@@ -11778,6 +11785,9 @@ class OvertopBassanoV16Production:
 
             self._shadow = {
                 "price_entry":   price,
+                "nato_ts":       time.time(),   # istante di nascita, per filmato 10s/20s
+                "pnl_10s":       None,           # fotografia PnL a 10 secondi (riempita dopo)
+                "pnl_20s":       None,           # fotografia PnL a 20 secondi (riempita dopo)
                 "direction":     self.campo._direction,
                 "duration_avg":  matrimonio.get("duration_avg", 20),
                 "score":         round(score, 2),
@@ -12497,6 +12507,22 @@ class OvertopBassanoV16Production:
                 max_profit = (self._shadow["price_entry"] - self._shadow_min_price) * (5000.0 / self._shadow["price_entry"])
                 retreat    = price - self._shadow_min_price
             current_pnl = _sdelta * (5000.0 / self._shadow["price_entry"])  # lordo — fee al close
+
+            # ════════════════════════════════════════════════════════════════
+            # FILMATO PRIMI TICK (5giu) — fotografia PnL a 10s e 20s di vita.
+            # Serve PER DOPO: costruire il "primo respiro" (2o cancello).
+            # NON tocca il trading, solo registra. Il maschio respira (verde subito),
+            # il trans resta a zero. Confronteremo pnl_10s/pnl_20s alla raccolta.
+            try:
+                _nato = self._shadow.get("nato_ts")
+                if _nato is not None:
+                    _eta = time.time() - _nato
+                    if _eta >= 10 and self._shadow.get("pnl_10s") is None:
+                        self._shadow["pnl_10s"] = round(current_pnl, 3)
+                    if _eta >= 20 and self._shadow.get("pnl_20s") is None:
+                        self._shadow["pnl_20s"] = round(current_pnl, 3)
+            except Exception:
+                pass
 
             # -- COMPONENTE 1: MOMENTUM (peso 30) ---------------------
             # FORTE=30, MEDIO=20, DEBOLE=5
@@ -13322,6 +13348,8 @@ class OvertopBassanoV16Production:
                           "n_drift_slope":   self._shadow.get("nascita_drift_slope"),
                           "n_comp_duration": self._shadow.get("nascita_comp_duration"),
                           "n_sign_flips":    self._shadow.get("nascita_sign_flips"),
+                          "pnl_10s":         self._shadow.get("pnl_10s"),
+                          "pnl_20s":         self._shadow.get("pnl_20s"),
                       })))
                 conn.commit()
                 conn.close()
