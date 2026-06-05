@@ -210,7 +210,7 @@ class WinningSignatureLogger:
         """Crea la tabella se non esiste. Idempotente."""
         try:
             import sqlite3
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS winning_signatures (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -240,7 +240,7 @@ class WinningSignatureLogger:
             import sqlite3
             import json
             import time
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("""
                 INSERT INTO winning_signatures (ts, trade_outcome, pnl_netto, pnl_lordo, signature_json, match_at_entry)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -262,7 +262,7 @@ class WinningSignatureLogger:
             import sqlite3
             import json
             import time
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             conn.row_factory = sqlite3.Row
             cutoff = time.time() - max_age_sec
             if outcome_filter:
@@ -667,7 +667,8 @@ class StabilityTelemetry:
             events_to_save = list(self._events)
             self._events.clear()
 
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(db_path, timeout=15)
+            conn.execute("PRAGMA busy_timeout=15000;")
             conn.execute("""CREATE TABLE IF NOT EXISTS telemetry (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -2248,7 +2249,7 @@ class AIExplainer:
 
     def _init_db(self):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS narrative_log (
                     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2265,7 +2266,7 @@ class AIExplainer:
 
     def log_decision(self, event_type: str, narrative: str, trade_data: dict = None):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("""
                 INSERT INTO narrative_log (timestamp, event_type, narrative, trade_data)
                 VALUES (?, ?, ?, ?)
@@ -3540,7 +3541,7 @@ class PersistenzaStato:
 
     def _init_db(self):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS bot_state (
                     key   TEXT PRIMARY KEY,
@@ -3633,7 +3634,7 @@ class PersistenzaStato:
     def load(self) -> tuple:
         """Ritorna (capital, total_trades)."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             rows = dict(conn.execute("SELECT key, value FROM bot_state").fetchall())
             conn.close()
             capital      = float(rows.get('capital',      self.DEFAULT_CAPITAL))
@@ -3652,7 +3653,7 @@ class PersistenzaStato:
         """
         try:
             import json
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
 
             # -- OracoloDinamico 2.0 --------------------------------------
             # Serializza _memory con deque → list per JSON
@@ -3769,7 +3770,7 @@ class PersistenzaStato:
                 # ════════════════════════════════════════════════════════════
                 'tsunami_state': bot.tsunami.to_persist() if (hasattr(bot, 'tsunami') and bot.tsunami is not None) else None,
             }
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('runtime_state', ?)",
                         (json.dumps(data, default=str),))
             conn.commit()
@@ -3780,7 +3781,7 @@ class PersistenzaStato:
     def load_runtime_state(self, bot):
         """Ripristina lo stato runtime dal DB."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             rows = dict(conn.execute(
                 "SELECT key, value FROM bot_state WHERE key='runtime_state'"
             ).fetchall())
@@ -3937,7 +3938,7 @@ class PersistenzaStato:
                     'hit_120':  list(s.get('hit_120',  [])),
                     'pnl_sim':  list(s.get('pnl_sim',  [])),
                 }
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('signal_tracker', ?)",
                         (json.dumps({
                             'stats':        stats_data,
@@ -3952,7 +3953,7 @@ class PersistenzaStato:
         """Ripristina le stats del PreTradeSignalTracker dal DB."""
         try:
             import json
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             rows = dict(conn.execute("SELECT key, value FROM bot_state WHERE key='signal_tracker'").fetchall())
             conn.close()
             if 'signal_tracker' not in rows:
@@ -3983,7 +3984,7 @@ class PersistenzaStato:
         """
         try:
             import json
-            conn  = sqlite3.connect(self.db_path)
+            conn  = sqlite3.connect(self.db_path, timeout=30)
             rows  = dict(conn.execute("SELECT key, value FROM bot_state").fetchall())
             conn.close()
 
@@ -4046,7 +4047,7 @@ class PersistenzaStato:
     def save(self, capital: float, total_trades: int):
         """Persiste capital e total_trades su SQLite."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('capital', ?)",      (str(capital),))
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('total_trades', ?)", (str(total_trades),))
             conn.commit()
@@ -5629,7 +5630,8 @@ class VeritatisTracker:
         """Persiste _stats e _closed su SQLite — sopravvive al restart."""
         try:
             import sqlite3, json
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(db_path, timeout=15)
+            conn.execute("PRAGMA busy_timeout=15000;")
             c = conn.cursor()
             c.execute("""CREATE TABLE IF NOT EXISTS veritas_stats
                          (chiave TEXT PRIMARY KEY, data TEXT)""")
@@ -5653,7 +5655,7 @@ class VeritatisTracker:
         try:
             import sqlite3, json, os
             if not os.path.exists(db_path): return
-            conn = sqlite3.connect(db_path)
+            conn = sqlite3.connect(db_path, timeout=30)
             c = conn.cursor()
             # Stats
             try:
@@ -6566,7 +6568,7 @@ class LibroPesca:
 
     def _init_db(self):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             cur = conn.cursor()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS libro_pesca (
@@ -6622,7 +6624,7 @@ class LibroPesca:
 
     def _reload_next_id(self):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             cur = conn.cursor()
             cur.execute("SELECT MAX(id) FROM libro_pesca")
             row = cur.fetchone()
@@ -6637,7 +6639,7 @@ class LibroPesca:
         if not self.enabled:
             return
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             cur = conn.cursor()
             cur.execute("""
                 INSERT OR REPLACE INTO libro_pesca
@@ -6889,7 +6891,7 @@ class LibroPesca:
             'lp_orizzonti': {}, 'lp_active': [],
         }
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             cur = conn.cursor()
             cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15j'")
             out['lp_vere'] = cur.fetchone()[0] or 0
@@ -6976,7 +6978,7 @@ class LibroPesca:
             return []
         out = []
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30)
             cur = conn.cursor()
             cur.execute("""
                 SELECT id, ts_piantata, prezzo_lenza, direzione, orizzonte_s,
@@ -7395,7 +7397,7 @@ class OvertopBassanoV16Production:
         # Senza questo, dopo restart il gate Veritas riparte da 0.
         # Con questo, il gate è subito operativo basandosi su tutto lo storico.
         try:
-            _conn_v = sqlite3.connect(DB_PATH)
+            _conn_v = sqlite3.connect(DB_PATH, timeout=30)
             _ctx_rows = _conn_v.execute("""
                 SELECT json_extract(data_json,'$.momentum') as m,
                        json_extract(data_json,'$.volatility') as v,
@@ -7438,7 +7440,7 @@ class OvertopBassanoV16Production:
         self._m2_pnl     = 0.0
         self._m2_trades  = 0
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30)
             rows = dict(conn.execute("SELECT key, value FROM bot_state WHERE key LIKE 'm2_%'").fetchall())
             conn.close()
             if rows:
@@ -12185,7 +12187,7 @@ class OvertopBassanoV16Production:
             pnl_finale = curva[-1][1]
             peak_nascita = max((p[2] for p in curva), default=0.0)
             t_peak = next((p[0] for p in curva if p[2] >= peak_nascita), None)
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS curva_nascita (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -13309,7 +13311,7 @@ class OvertopBassanoV16Production:
 
             # -- SCRIVI NEL DATABASE - sopravvive ai restart -------------------
             try:
-                conn = sqlite3.connect(DB_PATH)
+                conn = sqlite3.connect(DB_PATH, timeout=30)
                 conn.execute("""
                     INSERT INTO trades (event_type, asset, price, size, pnl, direction, reason, data_json)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -13468,7 +13470,7 @@ class OvertopBassanoV16Production:
 
             # -- PERSISTI STATS M2 - sopravvivono ai restart ------------------
             try:
-                conn = sqlite3.connect(DB_PATH)
+                conn = sqlite3.connect(DB_PATH, timeout=30)
                 conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_wins', ?)", (str(self._m2_wins),))
                 conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_losses', ?)", (str(self._m2_losses),))
                 conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_pnl', ?)", (str(self._m2_pnl),))
@@ -13883,7 +13885,7 @@ class OvertopBassanoV16Production:
         try:
             import sqlite3, json
             db_path = getattr(self, '_db_path', '/var/data/trading_data.db')
-            with sqlite3.connect(db_path) as conn:
+            with sqlite3.connect(db_path, timeout=30) as conn:
                 rows = conn.execute("""
                     SELECT pnl, data_json FROM trades
                     WHERE event_type='EXIT' AND pnl > 0
@@ -14363,7 +14365,7 @@ class OvertopBassanoV16Production:
             commands = []
             # -- PROTOCOLLO NUOVO: legge da DB (bridge predittivo V48+) ----
             try:
-                conn = sqlite3.connect(DB_PATH)
+                conn = sqlite3.connect(DB_PATH, timeout=30)
                 rows = conn.execute(
                     "SELECT value FROM bot_state WHERE key='bridge_cmd'"
                 ).fetchall()
@@ -15055,7 +15057,7 @@ class OvertopBassanoV16Production:
     def _carica_capsule_permanenti(self):
         """Al boot carica le capsule permanenti dal DB."""
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30)
             rows = conn.execute("""
                 SELECT id, azione, params_json, motivo, forza, creata_ts,
                        analisi_causale, prompt_contestuale
@@ -15092,7 +15094,7 @@ class OvertopBassanoV16Production:
         """Salva una capsula nel DB come permanente."""
         try:
             import json as _j
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30)
             conn.execute("""
                 INSERT OR REPLACE INTO capsule_permanenti
                 (id, azione, params_json, motivo, forza, contesto, creata_ts,
@@ -15151,7 +15153,7 @@ class OvertopBassanoV16Production:
         try:
             import json as _j
             _mom, _vol, _tr, _reg, _dir = (firma.split('|') + ['', '', '', '', ''])[:5]
-            conn = sqlite3.connect(DB_PATH)
+            conn = sqlite3.connect(DB_PATH, timeout=30)
             conn.row_factory = sqlite3.Row
             _rows = conn.execute("""
                 SELECT id, azione, params_json, contesto FROM capsule_permanenti
