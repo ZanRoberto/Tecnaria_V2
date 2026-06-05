@@ -11741,17 +11741,31 @@ class OvertopBassanoV16Production:
             CROMO_GATE_ON   = bool(getattr(self, "CROMO_GATE_ON", True))
             CROMO_VPRESS_MIN = float(getattr(self, "CROMO_VPRESS_MIN", 0.50))
             CROMO_COMP_MAX   = float(getattr(self, "CROMO_COMP_MAX", 0.70))
+            CROMO_CDUR_MIN   = float(getattr(self, "CROMO_CDUR_MIN", 6))
             if CROMO_GATE_ON:
                 _vp = seed.get('vol_pressure')
                 _cp = seed.get('compression')
+                _cd = seed.get('comp_duration')
                 if _vp is not None and _cp is not None:
-                    # FEMMINA se: poca pressione (vp basso) OPPURE compressione ALTA.
-                    # Compressione alta = molla troppo carica/satura -> scoppia contro = perde.
-                    if _vp < CROMO_VPRESS_MIN or _cp > CROMO_COMP_MAX:
-                        _causa = ("vol_basso" if _vp < CROMO_VPRESS_MIN else "comp_alta")
-                        self._log("🚫", f"CROMO_GATE v2 BLOCCO femmina ({_causa}): "
+                    # FEMMINA se: poca pressione (vp basso) OPPURE compressione ALTA
+                    # OPPURE comp_duration breve (3o gene, 5giu).
+                    # Compressione alta = molla satura, scoppia contro = perde.
+                    # comp_duration breve = i due gemelli -9.02 del 5giu (cdur 4-5)
+                    #   avevano firma da maschio su vp+comp ma morivano. Quasi tutti i
+                    #   maschi hanno cdur 19; le femmine-gemelle cdur basso.
+                    # ⚠⚠ TERZO GENE TARATO SU 2 SOLI CASI (i due -9 del 5giu mattina).
+                    # E' un TAPPO per arrivare alla prossima stazione, NON una legge.
+                    # Forte rischio overfitting. comp_duration sembra saturare a 19.
+                    # Da VALIDARE: se nascono altre femmine-gemelle con cdur basso ->
+                    # confermato; se nascono con cdur 19 -> rimuovere (CROMO_CDUR_MIN=0).
+                    _cd_breve = (_cd is not None and _cd < CROMO_CDUR_MIN)
+                    if _vp < CROMO_VPRESS_MIN or _cp > CROMO_COMP_MAX or _cd_breve:
+                        _causa = ("vol_basso" if _vp < CROMO_VPRESS_MIN else
+                                  "comp_alta" if _cp > CROMO_COMP_MAX else "cdur_breve")
+                        self._log("🚫", f"CROMO_GATE v3 BLOCCO femmina ({_causa}): "
                                         f"vpress={_vp:.3f}(>={CROMO_VPRESS_MIN}) "
-                                        f"comp={_cp:.3f}(<={CROMO_COMP_MAX}) | "
+                                        f"comp={_cp:.3f}(<={CROMO_COMP_MAX}) "
+                                        f"cdur={_cd}(>={CROMO_CDUR_MIN}) | "
                                         f"seed={seed.get('score', 0):.3f} @ ${price:.1f}")
                         return
 
