@@ -7018,6 +7018,27 @@ class OvertopBassanoV16Production:
     """
 
     def __init__(self, heartbeat_data=None, db_execute=None, heartbeat_lock=None):
+        # ════════════════════════════════════════════════════════════════
+        # FIX DATABASE LOCKED (5giu) — WAL + busy_timeout all'avvio.
+        # Prima: sqlite3.connect nudo -> "database is locked" appena una query
+        # diagnostica o la telemetry toccava il DB mentre il bot scriveva ->
+        # il bot moriva (es. 11:27 del 5giu). WAL = letture e scritture non si
+        # bloccano piu' a vicenda. busy_timeout = aspetta invece di mollare.
+        # WAL e' una proprieta' del FILE: impostato una volta, vale per tutte
+        # le connessioni successive del bot.
+        try:
+            import sqlite3 as _sq
+            _c = _sq.connect(DB_PATH, timeout=10)
+            _c.execute("PRAGMA journal_mode=WAL;")
+            _c.execute("PRAGMA busy_timeout=5000;")
+            _c.commit()
+            _c.close()
+        except Exception as _e:
+            try:
+                print(f"[DB] setup WAL fallito (non bloccante): {_e}")
+            except Exception:
+                pass
+
         self.symbol         = SYMBOL
         self.ws_url         = BINANCE_WS_URL
         self.paper_trade    = PAPER_TRADE
