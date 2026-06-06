@@ -660,7 +660,16 @@ class StabilityTelemetry:
         FIX V16:
         - Drena self._events dopo il commit (era N²: riscriveva tutto ad ogni chiamata)
         - Auto-pruning a 50.000 righe (era unbounded: 6.4M righe = 3.8 GB)
+
+        INTERRUTTORE 6giu: TELEMETRY_OFF=true spegne questa scrittura ad alta
+        frequenza (martellava il DB ogni tick -> lock). Reversibile via env var.
         """
+        if os.environ.get("TELEMETRY_OFF", "false").lower() == "true":
+            try:
+                self._events.clear()
+            except Exception:
+                pass
+            return
         try:
             # Drena eventi accumulati: copia + svuota subito,
             # cosi' le append concorrenti non perdono dati.
@@ -5627,7 +5636,13 @@ class VeritatisTracker:
         }
 
     def save(self, db_path: str):
-        """Persiste _stats e _closed su SQLite — sopravvive al restart."""
+        """Persiste _stats e _closed su SQLite — sopravvive al restart.
+
+        INTERRUTTORE 6giu: VERITAS_OFF=true spegne questa scrittura frequente
+        (DELETE+INSERT a raffica) che contribuiva al lock. Reversibile.
+        """
+        if os.environ.get("VERITAS_OFF", "false").lower() == "true":
+            return
         try:
             import sqlite3, json
             conn = sqlite3.connect(db_path, timeout=15)
