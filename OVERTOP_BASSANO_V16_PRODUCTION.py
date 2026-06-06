@@ -7060,6 +7060,24 @@ class OvertopBassanoV16Production:
         self.ws_url         = BINANCE_WS_URL
         self.paper_trade    = PAPER_TRADE
 
+        # CONTATORE TRANS: carico il totale REALE dal DB (non riparte da zero al restart)
+        try:
+            import sqlite3 as _sqc
+            _cc = _sqc.connect(DB_PATH, timeout=10)
+            _cc.execute("""CREATE TABLE IF NOT EXISTS trans_bloccati (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                causa TEXT, vpress REAL, comp REAL, prezzo REAL)""")
+            _rows = _cc.execute("SELECT causa, COUNT(*) FROM trans_bloccati GROUP BY causa").fetchall()
+            _cc.close()
+            self._cromo_blocchi = {"vol_basso":0,"vol_isterico":0,"comp_alta":0,"cdur_breve":0,"totale":0}
+            for _ca, _n in _rows:
+                if _ca in self._cromo_blocchi:
+                    self._cromo_blocchi[_ca] = _n
+                self._cromo_blocchi["totale"] += _n
+        except Exception:
+            self._cromo_blocchi = {"vol_basso":0,"vol_isterico":0,"comp_alta":0,"cdur_breve":0,"totale":0}
+
         self.heartbeat_data = heartbeat_data if heartbeat_data is not None else {}
         self.heartbeat_lock = heartbeat_lock
         self.db_execute     = db_execute
@@ -11814,6 +11832,22 @@ class OvertopBassanoV16Production:
                                                    "comp_alta": 0, "cdur_breve": 0, "totale": 0}
                         self._cromo_blocchi[_causa] = self._cromo_blocchi.get(_causa, 0) + 1
                         self._cromo_blocchi["totale"] = self._cromo_blocchi.get("totale", 0) + 1
+                        # PERSISTENZA 6giu: scrivo il blocco nel DB (non solo in RAM).
+                        # Cosi' NON si azzera al restart e si fanno i conti veri:
+                        # quando e' stato bloccato, con che firma, a che prezzo.
+                        try:
+                            import sqlite3 as _sq3, json as _js, time as _tm
+                            _cn = _sq3.connect(self.db_path, timeout=15)
+                            _cn.execute("PRAGMA busy_timeout=15000;")
+                            _cn.execute("""CREATE TABLE IF NOT EXISTS trans_bloccati (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                                causa TEXT, vpress REAL, comp REAL, prezzo REAL)""")
+                            _cn.execute("INSERT INTO trans_bloccati (causa,vpress,comp,prezzo) VALUES (?,?,?,?)",
+                                        (_causa, float(_vp), float(_cp), float(price)))
+                            _cn.commit(); _cn.close()
+                        except Exception:
+                            pass
                         self._log("🚫", f"CROMO_GATE v4 BLOCCO femmina ({_causa}) "
                                         f"[tot: {self._cromo_blocchi['totale']}]: "
                                         f"vpress={_vp:.3f}[{CROMO_VPRESS_MIN}-{CROMO_VPRESS_MAX}] "
