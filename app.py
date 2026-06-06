@@ -4077,7 +4077,17 @@ function updateSemeGate(){
         'seme PRIMA del trade: '+(e+n)+'  (entry-gate '+e+' · nascita ɴ '+n+')  ·  exit/drogato ᴸ '+l;
     }
     const rows = (d.trades||[]).map(t=>{
-      const col = t.sesso==='MASCHIO' ? '#33ff66' : '#ff5555';
+      // COLORE RIGA per CHI ha deciso il destino del trade (idea Roberto 6giu):
+      //   VERDE  = maschio entrato e tenuto
+      //   BIANCO = trans intercettato dai cancelli (anti-precipizio / tranello)
+      //            -> "l'ho beccato io, non e' scappato"
+      //   ROSSO  = femmina/perdita sfuggita ai cancelli (chiusa da exit normale)
+      const _rs = (t.reason||'').toUpperCase();
+      const _intercettato = _rs.indexOf('ANTIPRECIPIZIO')>=0 || _rs.indexOf('TRANELLO')>=0;
+      let col;
+      if(t.sesso==='MASCHIO'){ col = '#33ff66'; }          // maschio = verde
+      else if(_intercettato){ col = '#ffffff'; }            // trans beccato = BIANCO
+      else { col = '#ff5555'; }                             // femmina sfuggita = rosso
       const legacy  = (t.fonte_seme==='EXIT_LEGACY');
       const nascita = (t.fonte_seme==='NASCITA');
       let seme = (t.seme!==null && t.seme!==undefined) ? Number(t.seme).toFixed(3) : '–';
@@ -4087,6 +4097,11 @@ function updateSemeGate(){
       const semeCol = t.errore ? '#ffaa00' : (legacy ? 'var(--dim)' : 'var(--text)');
       const pnl  = (t.pnl>=0?'+':'') + t.pnl;
       const ora  = t.ora ? (t.ora.split(' ')[1]||t.ora) : '–';
+      // etichetta sesso: per gli intercettati mostro chi li ha beccati
+      let _label = t.sesso;
+      if(_intercettato && t.sesso!=='MASCHIO'){
+        _label = _rs.indexOf('ANTIPRECIPIZIO')>=0 ? 'TRANS✂' : 'TRANS🎯';
+      }
       // FILMATO primo respiro: 10s -> 20s. Maschio CRESCE, trans EVAPORA.
       const f10 = (t.pnl_10s!==null && t.pnl_10s!==undefined) ? t.pnl_10s : null;
       const f20 = (t.pnl_20s!==null && t.pnl_20s!==undefined) ? t.pnl_20s : null;
@@ -4101,7 +4116,7 @@ function updateSemeGate(){
       const cell10 = f10===null ? '–' : ((f10>=0?'+':'')+f10);
       const cell20 = f20===null ? '–' : ((f20>=0?'+':'')+f20);
       const cellpk = pk===null ? '–' : pk;
-      return '<tr><td>'+ora+'</td><td style="color:'+col+';font-weight:bold">'+t.sesso+
+      return '<tr><td>'+ora+'</td><td style="color:'+col+';font-weight:bold">'+_label+
              '</td><td style="color:'+semeCol+';font-weight:bold">'+seme+'</td><td style="color:'+col+'">'+pnl+
              '</td><td style="color:'+c10+'">'+cell10+
              '</td><td style="color:'+c20+'">'+cell20+
