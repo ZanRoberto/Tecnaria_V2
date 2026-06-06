@@ -8060,6 +8060,50 @@ class OvertopBassanoV16Production:
             self.telemetry.persist_to_db(DB_PATH)
             self.last_persist = now
 
+        # ════════════════════════════════════════════════════════════════
+        # AUTO-PULITORE DB (6giu) — il DB si era gonfiato a 442MB da tabelle
+        # di log esplose (canvas_snapshots, regime_edge_log, capsule_log,
+        # capsula_fase_osservazioni, phantom_forensic = 1.5M righe) -> lock.
+        # Questo, ogni 10 min, tiene solo le ultime N righe di ciascuna log.
+        # Cosi' il DB NON puo' piu' rigonfiarsi, chiunque le scriva.
+        # Le tabelle VERE (trades, signatures) NON sono toccate.
+        # Interruttore: AUTOPULITORE_OFF=true lo spegne.
+        # ════════════════════════════════════════════════════════════════
+        if (os.environ.get("AUTOPULITORE_OFF", "false").lower() != "true"
+                and now - getattr(self, "_last_dbclean", 0) > 600):
+            self._last_dbclean = now
+            _tabelle_log = {
+                "canvas_snapshots": 2000, "regime_edge_log": 2000,
+                "capsule_log": 2000, "capsula_fase_osservazioni": 2000,
+                "phantom_forensic": 2000, "regime_edge_esiti": 2000,
+                "capsula_fase_verdetti": 2000, "capsula_tsunami_verdetti": 2000,
+                "canvas_shadow_log": 2000, "libro_pesca": 2000,
+            }
+            _cl = None
+            try:
+                import sqlite3 as _scl
+                _cl = _scl.connect(DB_PATH, timeout=10)
+                _cl.execute("PRAGMA busy_timeout=10000;")
+                for _tname, _keep in _tabelle_log.items():
+                    try:
+                        _n = _cl.execute(f"SELECT COUNT(*) FROM {_tname}").fetchone()[0]
+                        if _n > _keep * 1.5:  # pulisco solo se ben oltre la soglia
+                            _cl.execute(
+                                f"DELETE FROM {_tname} WHERE id NOT IN "
+                                f"(SELECT id FROM {_tname} ORDER BY id DESC LIMIT {_keep})")
+                            _cl.commit()
+                            self._log("🧹", f"AUTOPULITORE: {_tname} {_n}->{_keep} righe")
+                    except Exception:
+                        pass  # tabella inesistente o senza id: salto
+            except Exception:
+                pass
+            finally:
+                if _cl is not None:
+                    try:
+                        _cl.close()
+                    except Exception:
+                        pass
+
         # AUTO-TUNE soglia — DISABILITATO in V15+V16
         # L'AutoCalibratore alzava la soglia fino a 83 — il CompartoEngine gestisce le soglie
         # self._auto_tune_soglia()
