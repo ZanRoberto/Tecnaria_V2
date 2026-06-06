@@ -11835,8 +11835,9 @@ class OvertopBassanoV16Production:
                         # PERSISTENZA 6giu: scrivo il blocco nel DB (non solo in RAM).
                         # Cosi' NON si azzera al restart e si fanno i conti veri:
                         # quando e' stato bloccato, con che firma, a che prezzo.
+                        _cn = None
                         try:
-                            import sqlite3 as _sq3, json as _js, time as _tm
+                            import sqlite3 as _sq3
                             _cn = _sq3.connect(self.db_path, timeout=15)
                             _cn.execute("PRAGMA busy_timeout=15000;")
                             _cn.execute("""CREATE TABLE IF NOT EXISTS trans_bloccati (
@@ -11845,9 +11846,15 @@ class OvertopBassanoV16Production:
                                 causa TEXT, vpress REAL, comp REAL, prezzo REAL)""")
                             _cn.execute("INSERT INTO trans_bloccati (causa,vpress,comp,prezzo) VALUES (?,?,?,?)",
                                         (_causa, float(_vp), float(_cp), float(price)))
-                            _cn.commit(); _cn.close()
+                            _cn.commit()
                         except Exception:
                             pass
+                        finally:
+                            if _cn is not None:
+                                try:
+                                    _cn.close()
+                                except Exception:
+                                    pass
                         self._log("🚫", f"CROMO_GATE v4 BLOCCO femmina ({_causa}) "
                                         f"[tot: {self._cromo_blocchi['totale']}]: "
                                         f"vpress={_vp:.3f}[{CROMO_VPRESS_MIN}-{CROMO_VPRESS_MAX}] "
@@ -12628,6 +12635,7 @@ class OvertopBassanoV16Production:
                                     if not hasattr(self, "_tranello_tagli"):
                                         self._tranello_tagli = 0
                                     self._tranello_tagli += 1
+                                    _ct = None
                                     try:
                                         import sqlite3 as _sqt
                                         _ct = _sqt.connect(self.db_path, timeout=15)
@@ -12638,9 +12646,15 @@ class OvertopBassanoV16Production:
                                             pnl_10s REAL, pnl_20s REAL, prezzo REAL)""")
                                         _ct.execute("INSERT INTO tranello_tagli (pnl_10s,pnl_20s,prezzo) VALUES (?,?,?)",
                                                     (float(_p10), float(_p20), float(price)))
-                                        _ct.commit(); _ct.close()
+                                        _ct.commit()
                                     except Exception:
                                         pass
+                                    finally:
+                                        if _ct is not None:
+                                            try:
+                                                _ct.close()
+                                            except Exception:
+                                                pass
                                     return self._close_shadow_trade(price, "TRANELLO_TRANS")
             except Exception:
                 pass
