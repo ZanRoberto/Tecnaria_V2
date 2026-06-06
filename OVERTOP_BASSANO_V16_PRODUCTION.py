@@ -12598,6 +12598,50 @@ class OvertopBassanoV16Production:
                         self._shadow["pnl_10s"] = round(current_pnl, 3)
                     if _eta >= 20 and self._shadow.get("pnl_20s") is None:
                         self._shadow["pnl_20s"] = round(current_pnl, 3)
+                        # ════════════════════════════════════════════════════════
+                        # TRANELLO (6giu) — 2o cancello sul PRIMO RESPIRO.
+                        # A 20s confronto col 10s. Regola tarata su 6 trade:
+                        #   MASCHIO: cresce 10s->20s ED e' in verde -> LASCIO CORRERE
+                        #   TRANS:   evapora (20s<10s) o resta rosso -> CHIUDO SUBITO
+                        # Cosi' il trans muore a ~zero invece di -4/-9. I maschi
+                        # sani che scendono POCO ma restano forti (>= soglia) li
+                        # salvo, per non ammazzare i grassi lenti (es. 06:09).
+                        # Interruttore: TRANELLO_OFF=true lo spegne. Reversibile.
+                        # ⚠ TARATO SU 6 TRADE. Da validare sui nuovi.
+                        # ════════════════════════════════════════════════════════
+                        if os.environ.get("TRANELLO_OFF", "false").lower() != "true":
+                            _p10 = self._shadow.get("pnl_10s")
+                            _p20 = self._shadow.get("pnl_20s")
+                            # soglia "ancora forte": se a 20s e' sopra questo, e' un
+                            # maschio sano anche se sceso un po' (salva i 06:09).
+                            _tr_forte = float(os.environ.get("TRANELLO_FORTE", "2.0"))
+                            if _p10 is not None and _p20 is not None:
+                                _cresce   = _p20 > _p10
+                                _in_verde = _p20 > 0
+                                _forte    = _p20 >= _tr_forte
+                                # MASCHIO se: cresce ED in verde, OPPURE ancora forte
+                                _e_maschio = (_cresce and _in_verde) or _forte
+                                if not _e_maschio:
+                                    self._log("🎯", f"TRANELLO chiude TRANS: "
+                                                    f"10s={_p10:+.2f} 20s={_p20:+.2f} "
+                                                    f"(non cresce/non forte) @ ${price:.1f}")
+                                    if not hasattr(self, "_tranello_tagli"):
+                                        self._tranello_tagli = 0
+                                    self._tranello_tagli += 1
+                                    try:
+                                        import sqlite3 as _sqt
+                                        _ct = _sqt.connect(self.db_path, timeout=15)
+                                        _ct.execute("PRAGMA busy_timeout=15000;")
+                                        _ct.execute("""CREATE TABLE IF NOT EXISTS tranello_tagli (
+                                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                                            pnl_10s REAL, pnl_20s REAL, prezzo REAL)""")
+                                        _ct.execute("INSERT INTO tranello_tagli (pnl_10s,pnl_20s,prezzo) VALUES (?,?,?)",
+                                                    (float(_p10), float(_p20), float(price)))
+                                        _ct.commit(); _ct.close()
+                                    except Exception:
+                                        pass
+                                    return self._close_shadow_trade(price, "TRANELLO_TRANS")
             except Exception:
                 pass
 
