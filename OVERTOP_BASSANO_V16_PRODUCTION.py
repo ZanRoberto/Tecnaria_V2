@@ -7766,16 +7766,14 @@ class OvertopBassanoV16Production:
         # FIX 6giu — IL BUCO + riconnessione robusta.
         # 1) ping_interval: senza, run_forever non manda keepalive, Binance
         #    chiude in silenzio, tick congelati (il "fermo a 689").
-        # 2) loop nello STESSO thread: run_forever esce (per ping_timeout o
-        #    chiusura) -> aspetta 5s -> ricrea il WS e ripialla run_forever.
-        #    Niente thread annidati che si accumulano. Riparte SEMPRE.
+        # 2) loop nello STESSO thread: run_forever esce -> aspetta 5s ->
+        #    ricrea il WS e ripialla. Niente thread annidati. Riparte SEMPRE.
         def _ws_loop():
             while True:
                 try:
                     self.ws.run_forever(ping_interval=20, ping_timeout=10)
                 except Exception as _wre:
                     log.error(f"[WS_LOOP_ERR] {_wre}")
-                # se arriviamo qui, il WS e' caduto -> riconnetto
                 self._ws_reconnect_count = getattr(self, '_ws_reconnect_count', 0) + 1
                 log.warning(f"[WS_RECONNECT] WS caduto, riconnessione #{self._ws_reconnect_count} tra 5s "
                             f"(tick ricevuti finora={self._ws_tick_count})")
@@ -7793,6 +7791,7 @@ class OvertopBassanoV16Production:
                     time.sleep(5)
         threading.Thread(target=_ws_loop, daemon=True, name="ws_thread").start()
         log.info(f"[WS_THREAD] Thread WS avviato (con ping keepalive + auto-reconnect)")
+        log.info(f"[WS_THREAD] Thread WS avviato")
 
     # ========================================================================
     # PROCESS TICK - orchestratore principale
@@ -12711,6 +12710,71 @@ class OvertopBassanoV16Production:
                 max_profit = (self._shadow["price_entry"] - self._shadow_min_price) * (5000.0 / self._shadow["price_entry"])
                 retreat    = price - self._shadow_min_price
             current_pnl = _sdelta * (5000.0 / self._shadow["price_entry"])  # lordo — fee al close
+
+            # ════════════════════════════════════════════════════════════════
+            # TRANELLO ANTI-PRECIPIZIO (6giu, Roberto) — taglio AL MINIMO.
+            # ════════════════════════════════════════════════════════════════
+            # I dati (103 curve_nascita) hanno mostrato:
+            #  - TRANS che precipitano: scendono e basta, peak quasi zero,
+            #    a 10s gia' a -0.46/-2.66 e poi giu' fino a -7.75 (peggiorano
+            #    di 4-7$ DOPO i 10s). Il tranello a 20s li prende troppo tardi.
+            #  - MASCHI LENTI: a 10s sono in perdita (-1.0/-1.4) MA fanno un
+            #    peak verde e poi risalgono a +4/+5 (t_peak 20-40s).
+            # DISTINZIONE: non il tempo (a 10s si assomigliano), ma il PEAK.
+            #   Il trans non vede MAI verde. Il maschio lento SI'.
+            # REGOLA: dopo 8s, se in perdita E non ha MAI fatto un peak verde
+            #   (max_profit < soglia) E sta scendendo -> taglio AL MINIMO ora,
+            #   senza aspettare che precipiti. Chi ha visto verde -> lo salvo
+            #   (e' un possibile maschio lento), lo gestisce il tranello 20s.
+            # Interruttore: ANTIPREC_OFF=true lo spegne. Reversibile.
+            # ⚠ Tarato su 103 curve storiche. Da validare sui nuovi trade.
+            # ════════════════════════════════════════════════════════════════
+            try:
+                if os.environ.get("ANTIPREC_OFF", "false").lower() != "true":
+                    _nato_ap = self._shadow.get("nato_ts")
+                    if _nato_ap is not None:
+                        _eta_ap = time.time() - _nato_ap
+                        _ap_min_eta  = float(os.environ.get("ANTIPREC_MIN_ETA", "8.0"))
+                        _ap_peak_min = float(os.environ.get("ANTIPREC_PEAK_MIN", "0.5"))
+                        # registro il PnL precedente per capire se sta scendendo
+                        _pnl_prec = self._shadow.get("_ap_pnl_prec")
+                        self._shadow["_ap_pnl_prec"] = round(current_pnl, 3)
+                        _sta_scendendo = (_pnl_prec is not None and current_pnl < _pnl_prec)
+                        _mai_verde     = (max_profit < _ap_peak_min)
+                        _in_perdita    = (current_pnl < 0)
+                        if (_eta_ap >= _ap_min_eta and _in_perdita
+                                and _mai_verde and _sta_scendendo
+                                and not self._shadow.get("_ap_gia_tagliato")):
+                            self._shadow["_ap_gia_tagliato"] = True
+                            self._log("✂️", f"ANTIPRECIPIZIO taglia TRANS @ {_eta_ap:.0f}s: "
+                                            f"pnl={current_pnl:+.2f} peak_max={max_profit:+.2f} "
+                                            f"(mai verde, sta scendendo) @ ${price:.1f}")
+                            if not hasattr(self, "_antiprec_tagli"):
+                                self._antiprec_tagli = 0
+                            self._antiprec_tagli += 1
+                            _ca = None
+                            try:
+                                import sqlite3 as _sqa
+                                _ca = _sqa.connect(self.db_path, timeout=15)
+                                _ca.execute("PRAGMA busy_timeout=15000;")
+                                _ca.execute("""CREATE TABLE IF NOT EXISTS antiprec_tagli (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                                    eta_s REAL, pnl_taglio REAL, peak_max REAL, prezzo REAL)""")
+                                _ca.execute("INSERT INTO antiprec_tagli (eta_s,pnl_taglio,peak_max,prezzo) VALUES (?,?,?,?)",
+                                            (float(_eta_ap), float(current_pnl), float(max_profit), float(price)))
+                                _ca.commit()
+                            except Exception:
+                                pass
+                            finally:
+                                if _ca is not None:
+                                    try:
+                                        _ca.close()
+                                    except Exception:
+                                        pass
+                            return self._close_shadow_trade(price, "ANTIPRECIPIZIO")
+            except Exception:
+                pass
 
             # ════════════════════════════════════════════════════════════════
             # FILMATO PRIMI TICK (5giu) — fotografia PnL a 10s e 20s di vita.
