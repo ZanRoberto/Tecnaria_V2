@@ -7750,10 +7750,7 @@ class OvertopBassanoV16Production:
             log.error(f"[WS_ERROR] type={type(error).__name__} err={error}")
 
         def on_close(ws, code, msg):
-            log.warning(f"[WS_CLOSE] code={code} msg={msg} tick_ricevuti={self._ws_tick_count} reconn={self._ws_reconnect_count} - riconnessione in 5s...")
-            time.sleep(5)
-            self._ws_reconnect_count += 1
-            self.connect_binance()
+            log.warning(f"[WS_CLOSE] code={code} msg={msg} tick_ricevuti={self._ws_tick_count} reconn={self._ws_reconnect_count}")
 
         def on_open(ws):
             log.info(f"[WS_OPEN] ✓ Connesso a {self.ws_url} (reconn={self._ws_reconnect_count})")
@@ -7766,8 +7763,36 @@ class OvertopBassanoV16Production:
             on_close=on_close,
             on_open=on_open,
         )
-        threading.Thread(target=self.ws.run_forever, daemon=True, name="ws_thread").start()
-        log.info(f"[WS_THREAD] Thread WS avviato")
+        # FIX 6giu — IL BUCO + riconnessione robusta.
+        # 1) ping_interval: senza, run_forever non manda keepalive, Binance
+        #    chiude in silenzio, tick congelati (il "fermo a 689").
+        # 2) loop nello STESSO thread: run_forever esce (per ping_timeout o
+        #    chiusura) -> aspetta 5s -> ricrea il WS e ripialla run_forever.
+        #    Niente thread annidati che si accumulano. Riparte SEMPRE.
+        def _ws_loop():
+            while True:
+                try:
+                    self.ws.run_forever(ping_interval=20, ping_timeout=10)
+                except Exception as _wre:
+                    log.error(f"[WS_LOOP_ERR] {_wre}")
+                # se arriviamo qui, il WS e' caduto -> riconnetto
+                self._ws_reconnect_count = getattr(self, '_ws_reconnect_count', 0) + 1
+                log.warning(f"[WS_RECONNECT] WS caduto, riconnessione #{self._ws_reconnect_count} tra 5s "
+                            f"(tick ricevuti finora={self._ws_tick_count})")
+                time.sleep(5)
+                try:
+                    self.ws = websocket.WebSocketApp(
+                        self.ws_url,
+                        on_message=on_message,
+                        on_error=on_error,
+                        on_close=on_close,
+                        on_open=on_open,
+                    )
+                except Exception as _rce:
+                    log.error(f"[WS_RECREATE_ERR] {_rce}")
+                    time.sleep(5)
+        threading.Thread(target=_ws_loop, daemon=True, name="ws_thread").start()
+        log.info(f"[WS_THREAD] Thread WS avviato (con ping keepalive + auto-reconnect)")
 
     # ========================================================================
     # PROCESS TICK - orchestratore principale
