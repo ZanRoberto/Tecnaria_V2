@@ -12001,10 +12001,14 @@ class OvertopBassanoV16Production:
                 _rit_gap      = float(os.environ.get("RITARDO_RESET_GAP", "3.0"))
                 _rit_aggancio = getattr(self, "_rit_aggancio_ts", None)
                 _rit_last     = getattr(self, "_rit_last_call", 0.0)
+                if not hasattr(self, "_ritardo_stats"):
+                    self._ritardo_stats = {"sec": _rit_sec, "agganciati": 0, "entrati": 0}
+                self._ritardo_stats["sec"] = _rit_sec
                 # primo aggancio o segnale interrotto (pausa > gap) -> riparte il conteggio
                 if _rit_aggancio is None or (_rit_now - _rit_last) > _rit_gap:
                     _rit_aggancio = _rit_now
                     self._rit_aggancio_ts = _rit_now
+                    self._ritardo_stats["agganciati"] = self._ritardo_stats.get("agganciati", 0) + 1
                 self._rit_last_call = _rit_now
                 _rit_atteso = _rit_now - _rit_aggancio
                 if _rit_atteso < _rit_sec:
@@ -12013,6 +12017,7 @@ class OvertopBassanoV16Production:
                     return
                 # il segnale ha retto N secondi -> entro ORA al prezzo corrente, azzero
                 self._rit_aggancio_ts = None
+                self._ritardo_stats["entrati"] = self._ritardo_stats.get("entrati", 0) + 1
                 self._log("⏱️", f"RITARDO ingresso: confermato dopo "
                                 f"{_rit_atteso:.1f}s, entro @ ${price:.1f}")
 
@@ -14953,6 +14958,7 @@ class OvertopBassanoV16Production:
                 _hb_set("wr",                  lambda: round(self.wins / tot, 4) if tot > 0 else 0)
                 _hb_set("last_seen",           lambda: datetime.utcnow().isoformat())
                 _hb_set("cromo_blocchi",       lambda: dict(getattr(self, "_cromo_blocchi", {"vol_basso":0,"vol_isterico":0,"comp_alta":0,"cdur_breve":0,"totale":0})))
+                _hb_set("ritardo_stats",       lambda: dict(getattr(self, "_ritardo_stats", {"sec":0,"agganciati":0,"entrati":0})))
                 _hb_set("matrimoni_divorzio",  lambda: list(self.memoria.divorzio))
                 _hb_set("oracolo_snapshot",    lambda: self.oracolo.dump())
                 _hb_set("posizione_aperta",    lambda: self.trade_open is not None)
