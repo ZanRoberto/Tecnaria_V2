@@ -6156,8 +6156,20 @@ class SuperCervello:
                               and oi_stato_short == "FUOCO"
                               and (oi_carica_short or 0) >= 0.75)
         _pred_attiva = _pred_attiva_long or _pred_attiva_short
+        _fp_tossico_off = os.environ.get("SC_FP_TOSSICO_OFF", "false").lower() == "true"
         if fp_samples >= 20 and fp_wr < 0.45 and not _pred_attiva:
-            return self._out("BLOCCA", 0.5, 0, f"FP_TOSSICO_wr={fp_wr:.0%}_n={fp_samples}", 0.95)
+            if _fp_tossico_off:
+                # INTERRUTTORE (7giu, Roberto): veto firma-tossica DISATTIVATO da ENV.
+                # Lascio passare al voto SC + CROMO + ritardo (le reti nuove filtrano a valle).
+                # Reversibile in un colpo: SC_FP_TOSSICO_OFF=false (o tolto) -> veto di nuovo attivo.
+                # Log con freno a 30s per non intasare i log.
+                _now_fpoff = time.time()
+                if _now_fpoff - getattr(self, "_fp_off_last_log", 0.0) > 30:
+                    self._fp_off_last_log = _now_fpoff
+                    print(f"[SC] 🔓 FP_TOSSICO_OFF attivo: lascio passare firma tossica "
+                          f"wr={fp_wr:.0%}_n={fp_samples} (veto spento da ENV)")
+            else:
+                return self._out("BLOCCA", 0.5, 0, f"FP_TOSSICO_wr={fp_wr:.0%}_n={fp_samples}", 0.95)
 
         # ════════════════════════════════════════════════════════════════
         # PASSO 11 — BOOST PREDIZIONE BILATERALE (15mag2026)
