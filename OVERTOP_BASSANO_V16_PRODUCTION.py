@@ -11981,6 +11981,41 @@ class OvertopBassanoV16Production:
                                         f"seed={seed.get('score', 0):.3f} @ ${price:.1f}")
                         return
 
+            # ════════════════════════════════════════════════════════════════
+            # RITARDO INGRESSO (prova 7giu, Roberto) — non entrare di getto.
+            # ════════════════════════════════════════════════════════════════
+            # Quando il sistema vuole entrare NON apre subito: aspetta N secondi
+            # che il segnale REGGA. Il maschio (anche lento) continua a chiamare
+            # l'ingresso tick dopo tick -> dopo N secondi entra. Il trans si
+            # sgonfia: smette di chiamare l'ingresso -> il conteggio si azzera e
+            # non entra mai. Si entra SOLO sui segnali che durano N secondi, al
+            # prezzo CORRENTE (di adesso, non di N secondi fa).
+            # Interruttore: RITARDO_INGRESSO_SEC (0 = spento, default 4).
+            #   RITARDO_RESET_GAP = pausa oltre cui il segnale e' "interrotto".
+            # ⚠ PROVA: guardare dal vivo se i maschi lenti salgono e i trans
+            #   calano. Reversibile in un colpo: RITARDO_INGRESSO_SEC=0.
+            # ════════════════════════════════════════════════════════════════
+            _rit_sec = float(os.environ.get("RITARDO_INGRESSO_SEC", "4"))
+            if _rit_sec > 0:
+                _rit_now      = time.time()
+                _rit_gap      = float(os.environ.get("RITARDO_RESET_GAP", "3.0"))
+                _rit_aggancio = getattr(self, "_rit_aggancio_ts", None)
+                _rit_last     = getattr(self, "_rit_last_call", 0.0)
+                # primo aggancio o segnale interrotto (pausa > gap) -> riparte il conteggio
+                if _rit_aggancio is None or (_rit_now - _rit_last) > _rit_gap:
+                    _rit_aggancio = _rit_now
+                    self._rit_aggancio_ts = _rit_now
+                self._rit_last_call = _rit_now
+                _rit_atteso = _rit_now - _rit_aggancio
+                if _rit_atteso < _rit_sec:
+                    self._log("⏳", f"RITARDO ingresso: segnale agganciato, "
+                                    f"atteso {_rit_atteso:.1f}/{_rit_sec:.0f}s @ ${price:.1f}")
+                    return
+                # il segnale ha retto N secondi -> entro ORA al prezzo corrente, azzero
+                self._rit_aggancio_ts = None
+                self._log("⏱️", f"RITARDO ingresso: confermato dopo "
+                                f"{_rit_atteso:.1f}s, entro @ ${price:.1f}")
+
             self._shadow = {
                 "price_entry":   price,
                 "nato_ts":       time.time(),   # istante di nascita, per filmato 10s/20s
