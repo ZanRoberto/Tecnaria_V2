@@ -4095,9 +4095,9 @@ function updateSemeGate(){
       if($('rit-entrati'))    $('rit-entrati').textContent = ent;
       if($('rit-nota')){
         if(sec==0){
-          $('rit-nota').textContent = 'Ritardo SPENTO (0s): il bot entra subito, come prima. Metti RITARDO_INGRESSO_SEC=4 nell\'ENV per accenderlo.';
+          $('rit-nota').textContent = 'Ritardo SPENTO (0s): il bot entra subito, come prima. Metti RITARDO_INGRESSO_SEC=4 nella ENV per accenderlo.';
         } else {
-          $('rit-nota').textContent = 'Con '+sec+'s di attesa: '+scans+' segnali si sono sgonfiati prima di entrare = trans scansati. Cambia i secondi nell\'ENV e guarda questo numero muoversi.';
+          $('rit-nota').textContent = 'Con '+sec+'s di attesa: '+scans+' segnali si sono sgonfiati prima di entrare = trans scansati. Cambia i secondi nella ENV e guarda questo numero muoversi.';
         }
       }
     }
