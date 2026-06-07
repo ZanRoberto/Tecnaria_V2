@@ -108,6 +108,7 @@ heartbeat_data = {
     "oracolo_snapshot":   {},
     "m2_direction":       "LONG",
     "cromo_blocchi":      {"vol_basso":0,"vol_isterico":0,"comp_alta":0,"cdur_breve":0,"totale":0},
+    "ritardo_stats":      {"sec":0,"agganciati":0,"entrati":0},
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -683,6 +684,7 @@ def seme_gate_view():
             "errori_maschio_basso": err_maschio_basso,  # gate li bloccherebbe, vincono
             "errori_totali": err_femmina_alta + err_maschio_basso,
             "cromo_blocchi": dict(heartbeat_data.get("cromo_blocchi", {"totale":0})),
+            "ritardo_stats": dict(heartbeat_data.get("ritardo_stats", {"sec":0,"agganciati":0,"entrati":0})),
             "trades": dettaglio
         }
         return json.dumps(out, indent=2), 200, {'Content-Type': 'application/json'}
@@ -2636,6 +2638,30 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
+  <!-- RITARDO INGRESSO — TRANS SCANSATI -->
+  <div class="panel" style="margin-bottom:10px; border-color:#00ccff; border-width:2px;">
+    <div class="panel-head green">⏱️ RITARDO INGRESSO — <span id="rit-sec">–</span>s · TRANS SCANSATI in diretta
+      <span style="font-size:9px;color:var(--dim)">aspetta N secondi: i segnali che si sgonfiano (trans) NON entrano</span>
+    </div>
+    <div class="panel-body">
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:stretch">
+        <div style="flex:2; min-width:170px; text-align:center; padding:14px; background:#001a2a; border-radius:8px; border:1px solid #00ccff">
+          <div style="font-size:44px; font-weight:bold; color:#00ddff; line-height:1" id="rit-scansati">–</div>
+          <div style="font-size:12px; color:var(--dim); margin-top:4px">🚫 TRANS SCANSATI (non entrati)</div>
+        </div>
+        <div style="flex:1; min-width:90px; text-align:center; padding:8px; background:#1a1a1a; border-radius:6px">
+          <div style="font-size:22px; font-weight:bold; color:#aaaaaa" id="rit-agganciati">–</div>
+          <div style="font-size:10px; color:var(--dim)">AGGANCIATI</div>
+        </div>
+        <div style="flex:1; min-width:90px; text-align:center; padding:8px; background:#0a2a0a; border-radius:6px">
+          <div style="font-size:22px; font-weight:bold; color:#33ff66" id="rit-entrati">–</div>
+          <div style="font-size:10px; color:var(--dim)">ENTRATI</div>
+        </div>
+      </div>
+      <div id="rit-nota" style="font-size:10px;color:var(--dim);margin-top:8px"></div>
+    </div>
+  </div>
+
   <!-- SEME GATE LIVE -->
   <div class="panel" style="margin-bottom:10px; border-color:#ffaa00; border-width:2px;">
     <div class="panel-head green">🧬 SEME GATE — Maschi e Femmine in diretta
@@ -4057,6 +4083,23 @@ function updateSemeGate(){
       if(cb.vol_isterico) parti.push('vol↑ '+cb.vol_isterico);
       if(cb.cdur_breve)   parti.push('cdur '+cb.cdur_breve);
       $('sg-trans-det').textContent = parti.join(' · ');
+    }
+    if(d.ritardo_stats){
+      const r = d.ritardo_stats;
+      const agg = r.agganciati||0, ent = r.entrati||0;
+      const scans = Math.max(0, agg - ent);
+      const sec = r.sec||0;
+      if($('rit-sec'))        $('rit-sec').textContent = sec;
+      if($('rit-scansati'))   $('rit-scansati').textContent = scans;
+      if($('rit-agganciati')) $('rit-agganciati').textContent = agg;
+      if($('rit-entrati'))    $('rit-entrati').textContent = ent;
+      if($('rit-nota')){
+        if(sec==0){
+          $('rit-nota').textContent = 'Ritardo SPENTO (0s): il bot entra subito, come prima. Metti RITARDO_INGRESSO_SEC=4 nell\'ENV per accenderlo.';
+        } else {
+          $('rit-nota').textContent = 'Con '+sec+'s di attesa: '+scans+' segnali si sono sgonfiati prima di entrare = trans scansati. Cambia i secondi nell\'ENV e guarda questo numero muoversi.';
+        }
+      }
     }
     $('sg-pnl-maschi').textContent  = (d.pnl_maschi>=0?'+':'') + d.pnl_maschi + '$';
     $('sg-pnl-femmine').textContent = d.pnl_femmine + '$';
