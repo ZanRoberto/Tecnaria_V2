@@ -12021,6 +12021,48 @@ class OvertopBassanoV16Production:
                     _rit_aggancio = _rit_now
                     self._rit_aggancio_ts = _rit_now
                     self._ritardo_stats["agganciati"] = self._ritardo_stats.get("agganciati", 0) + 1
+                    # ════════════════════════════════════════════════════════════
+                    # VEDERE DENTRO CHI VIENE SCANSATO (8giu, Roberto)
+                    # Ad OGNI aggancio scrivo nel DB i numeri del segnale in QUESTO
+                    # istante. Poi, quando/se entra, aggiorno entrato=1 (sotto).
+                    # Cosi' dopo si vede: gli agganci NON entrati (entrato=0) che
+                    # numeri avevano? vp/comp/peak da maschio (deglutito = male) o
+                    # da trans (giusto)? Risponde a "i maschi vengono scansati?".
+                    # Solo scrittura: NON tocca la logica di entrata/blocco.
+                    # ════════════════════════════════════════════════════════════
+                    _ag = None
+                    try:
+                        import sqlite3 as _sq3ag
+                        _ag = _sq3ag.connect(self.db_path, timeout=15)
+                        _ag.execute("PRAGMA busy_timeout=15000;")
+                        _ag.execute("""CREATE TABLE IF NOT EXISTS ritardo_agganci (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                            aggancio_ts REAL, direction TEXT,
+                            vpress REAL, comp REAL, seed REAL,
+                            momentum TEXT, volatility TEXT, trend TEXT,
+                            prezzo REAL, peak_pnl REAL, entrato INTEGER DEFAULT 0)""")
+                        _cur_ag = _ag.execute(
+                            """INSERT INTO ritardo_agganci
+                               (aggancio_ts, direction, vpress, comp, seed,
+                                momentum, volatility, trend, prezzo, peak_pnl, entrato)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,0)""",
+                            (_rit_now,
+                             getattr(self.campo, "_direction", "LONG"),
+                             (float(seed.get("vol_pressure")) if seed.get("vol_pressure") is not None else None),
+                             (float(seed.get("compression")) if seed.get("compression") is not None else None),
+                             float(seed.get("score", 0) or 0),
+                             str(momentum), str(volatility), str(trend),
+                             float(price),
+                             float(getattr(self, "_shadow", {}).get("peak_pnl", 0) or 0) if hasattr(self, "_shadow") else 0.0))
+                        self._rit_aggancio_rowid = _cur_ag.lastrowid
+                        _ag.commit()
+                    except Exception:
+                        self._rit_aggancio_rowid = None
+                    finally:
+                        if _ag is not None:
+                            try: _ag.close()
+                            except Exception: pass
                 self._rit_last_call = _rit_now
                 _rit_atteso = _rit_now - _rit_aggancio
                 if _rit_atteso < _rit_sec:
@@ -12030,6 +12072,24 @@ class OvertopBassanoV16Production:
                 # il segnale ha retto N secondi -> entro ORA al prezzo corrente, azzero
                 self._rit_aggancio_ts = None
                 self._ritardo_stats["entrati"] = self._ritardo_stats.get("entrati", 0) + 1
+                # VEDERE DENTRO (8giu): marco entrato=1 sulla riga di questo aggancio.
+                # Cosi' nel DB: entrato=0 = scansato, entrato=1 = passato. Solo update.
+                _rid = getattr(self, "_rit_aggancio_rowid", None)
+                if _rid is not None:
+                    _up = None
+                    try:
+                        import sqlite3 as _sq3up
+                        _up = _sq3up.connect(self.db_path, timeout=15)
+                        _up.execute("PRAGMA busy_timeout=15000;")
+                        _up.execute("UPDATE ritardo_agganci SET entrato=1 WHERE id=?", (_rid,))
+                        _up.commit()
+                    except Exception:
+                        pass
+                    finally:
+                        if _up is not None:
+                            try: _up.close()
+                            except Exception: pass
+                    self._rit_aggancio_rowid = None
                 self._log("⏱️", f"RITARDO ingresso: confermato dopo "
                                 f"{_rit_atteso:.1f}s, entro @ ${price:.1f}")
 
