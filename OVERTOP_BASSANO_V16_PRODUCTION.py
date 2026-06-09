@@ -12080,6 +12080,25 @@ class OvertopBassanoV16Production:
                                         f"vpress={_vp:.3f}[{CROMO_VPRESS_MIN}-{CROMO_VPRESS_MAX}] "
                                         f"comp={_cp:.3f}(<={CROMO_COMP_MAX}) | "
                                         f"seed={seed.get('score', 0):.3f} @ ${price:.1f}")
+                        # ════════════════════════════════════════════════════════
+                        # OSSERVA IL TAGLIATO (9giu, Roberto): invece di buttarlo
+                        # via, lo registro come PHANTOM così il sistema esistente
+                        # lo segue (max_price/peak, is_win a 30s/2min) e dopo
+                        # sappiamo: era un MASCHIO ucciso per sbaglio (sarebbe
+                        # salito) o una dopata (giusto tagliarla)? Misura, non naso.
+                        # NON entra in trade: solo osservazione in ombra.
+                        # ENV CROMO_OSSERVA_SEC>0 = attivo (default 30); 0 = spento.
+                        # block_reason marcato CROMO_ così si filtra in query.
+                        # ════════════════════════════════════════════════════════
+                        try:
+                            if float(os.environ.get("CROMO_OSSERVA_SEC", "30")) > 0:
+                                self._record_phantom(
+                                    price,
+                                    f"CROMO_{_causa}_vp{_vp:.2f}_cp{_cp:.2f}",
+                                    float(seed.get("score", 0) or 0),
+                                    str(momentum), str(volatility), str(trend))
+                        except Exception:
+                            pass
                         return
 
             # ════════════════════════════════════════════════════════════════
