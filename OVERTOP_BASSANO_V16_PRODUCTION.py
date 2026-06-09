@@ -12058,7 +12058,7 @@ class OvertopBassanoV16Production:
                         _cn = None
                         try:
                             import sqlite3 as _sq3
-                            _cn = _sq3.connect(self.db_path, timeout=15)
+                            _cn = _sq3.connect(DB_PATH, timeout=15)
                             _cn.execute("PRAGMA busy_timeout=15000;")
                             _cn.execute("""CREATE TABLE IF NOT EXISTS trans_bloccati (
                                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -12122,7 +12122,7 @@ class OvertopBassanoV16Production:
                     _ag = None
                     try:
                         import sqlite3 as _sq3ag
-                        _ag = _sq3ag.connect(self.db_path, timeout=15)
+                        _ag = _sq3ag.connect(DB_PATH, timeout=15)
                         _ag.execute("PRAGMA busy_timeout=15000;")
                         _ag.execute("""CREATE TABLE IF NOT EXISTS ritardo_agganci (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -12168,7 +12168,7 @@ class OvertopBassanoV16Production:
                     _up = None
                     try:
                         import sqlite3 as _sq3up
-                        _up = _sq3up.connect(self.db_path, timeout=15)
+                        _up = _sq3up.connect(DB_PATH, timeout=15)
                         _up.execute("PRAGMA busy_timeout=15000;")
                         _up.execute("UPDATE ritardo_agganci SET entrato=1 WHERE id=?", (_rid,))
                         _up.commit()
