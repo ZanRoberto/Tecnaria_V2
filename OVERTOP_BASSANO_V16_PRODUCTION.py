@@ -12172,6 +12172,41 @@ class OvertopBassanoV16Production:
                             try: _ag.close()
                             except Exception: pass
                 self._rit_last_call = _rit_now
+                # ════════════════════════════════════════════════════════════
+                # FILTRO MAE (9giu, Roberto) — IL MASCHIO NON SCENDE, LA DOPATA SI'
+                # Scoperto sui dati (1077 segnali firma-maschio): i 138 maschi
+                # hanno mae medio -0.08 (non scendono), le 939 dopate -1.06
+                # (crollano). Separazione 13x. Durante l'attesa del ritardo
+                # traccio quanto scende il prezzo dall'aggancio: se scende oltre
+                # soglia -> e' una dopata che si sta sgonfiando -> NON entra,
+                # azzero. Se tiene -> maschio -> prosegue verso l'ingresso.
+                # ENV: MAE_FILTRO_USD (default 0.50; 0 = spento). E' in $ sul
+                # movimento prezzo proporzionale a size/exposure. Reversibile.
+                # ════════════════════════════════════════════════════════════
+                _mae_soglia = float(os.environ.get("MAE_FILTRO_USD", "0.50"))
+                if _mae_soglia > 0:
+                    _prezzo_aggancio = getattr(self, "_rit_prezzo_aggancio", None)
+                    if _prezzo_aggancio is None or self._rit_aggancio_ts == _rit_now:
+                        # appena agganciato: memorizzo il prezzo di partenza
+                        self._rit_prezzo_aggancio = price
+                        _prezzo_aggancio = price
+                    # quanto e' sceso (in $ di PnL) dal prezzo d'aggancio:
+                    # LONG -> perdo se price < aggancio. Converto in $ con exposure.
+                    _exposure = float(os.environ.get("EXPOSURE_USD", "5000"))
+                    _discesa_usd = ((price - _prezzo_aggancio) / _prezzo_aggancio) * _exposure
+                    if _discesa_usd < -_mae_soglia:
+                        # sta scendendo come una dopata -> fuori, azzero l'aggancio
+                        self._log("📉", f"MAE FILTRO: dopata scartata "
+                                        f"(scesa {_discesa_usd:+.2f}$ < -{_mae_soglia}$ "
+                                        f"dall'aggancio @ ${_prezzo_aggancio:.1f}) — NON entra")
+                        self._rit_aggancio_ts = None
+                        self._rit_prezzo_aggancio = None
+                        try:
+                            self._ritardo_stats["mae_scartati"] = self._ritardo_stats.get("mae_scartati", 0) + 1
+                        except Exception:
+                            pass
+                        return
+
                 _rit_atteso = _rit_now - _rit_aggancio
                 if _rit_atteso < _rit_sec:
                     self._log("⏳", f"RITARDO ingresso: segnale agganciato, "
@@ -12179,6 +12214,7 @@ class OvertopBassanoV16Production:
                     return
                 # il segnale ha retto N secondi -> entro ORA al prezzo corrente, azzero
                 self._rit_aggancio_ts = None
+                self._rit_prezzo_aggancio = None
                 self._ritardo_stats["entrati"] = self._ritardo_stats.get("entrati", 0) + 1
                 # VEDERE DENTRO (8giu): marco entrato=1 sulla riga di questo aggancio.
                 # Cosi' nel DB: entrato=0 = scansato, entrato=1 = passato. Solo update.
