@@ -109,6 +109,11 @@ heartbeat_data = {
     "m2_direction":       "LONG",
     "cromo_blocchi":      {"vol_basso":0,"vol_isterico":0,"comp_alta":0,"cdur_breve":0,"totale":0},
     "ritardo_stats":      {"sec":0,"agganciati":0,"entrati":0},
+    "gf_stato":           "—",      # GRANDE FRATELLO direzione: LIBERO | FUORI_SHORT | —
+    "gf_drift":           0.0,      # drift % all'ultima valutazione GF
+    "gf_soglia":          -0.05,    # soglia GF attiva
+    "gf_ts":              None,     # timestamp ultima valutazione GF
+    "gf_fuori_count":     0,        # quante volte il GF ha tenuto fuori (LONG bloccato perché short)
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -685,6 +690,10 @@ def seme_gate_view():
             "errori_totali": err_femmina_alta + err_maschio_basso,
             "cromo_blocchi": dict(heartbeat_data.get("cromo_blocchi", {"totale":0})),
             "ritardo_stats": dict(heartbeat_data.get("ritardo_stats", {"sec":0,"agganciati":0,"entrati":0})),
+            "gf_stato": heartbeat_data.get("gf_stato", "—"),
+            "gf_drift": heartbeat_data.get("gf_drift", 0.0),
+            "gf_soglia": heartbeat_data.get("gf_soglia", -0.05),
+            "gf_fuori_count": heartbeat_data.get("gf_fuori_count", 0),
             "trades": dettaglio
         }
         return json.dumps(out, indent=2), 200, {'Content-Type': 'application/json'}
@@ -2638,6 +2647,32 @@ canvas.spark { width:100%; height:40px; }
     </div>
   </div>
 
+  <!-- GRANDE FRATELLO DIREZIONE -->
+  <div class="panel" id="gf-panel" style="margin-bottom:10px; border-color:#666; border-width:2px;">
+    <div class="panel-head green">&#128737;&#65039; GRANDE FRATELLO — Direzione del mercato
+      <span style="font-size:9px;color:var(--dim)">quando la spinta e ribassista (short) il bot resta FUORI: ne LONG ne SHORT</span>
+    </div>
+    <div class="panel-body">
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:stretch">
+        <div id="gf-stato-box" style="flex:2; min-width:200px; text-align:center; padding:18px; background:#1a1a1a; border-radius:8px; border:2px solid #666">
+          <div style="font-size:30px; font-weight:bold; line-height:1.1" id="gf-stato">–</div>
+          <div style="font-size:12px; color:var(--dim); margin-top:6px" id="gf-stato-sub">in attesa dati</div>
+        </div>
+        <div style="flex:1; min-width:90px; text-align:center; padding:8px; background:#1a1a1a; border-radius:6px">
+          <div style="font-size:22px; font-weight:bold; color:#aaaaaa" id="gf-drift">–</div>
+          <div style="font-size:10px; color:var(--dim)">DRIFT %</div>
+        </div>
+        <div style="flex:1; min-width:90px; text-align:center; padding:8px; background:#2a1010; border-radius:6px">
+          <div style="font-size:22px; font-weight:bold; color:#ff6666" id="gf-fuori">–</div>
+          <div style="font-size:10px; color:var(--dim)">VOLTE FUORI</div>
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--dim);margin-top:8px">
+        &#128308; FUORI = mercato in short, il bot aspetta (scritta LONG e solo come lo chiama il campo) &middot; &#128994; LIBERO = direzione ok, CROMO e ritardo filtrano
+      </div>
+    </div>
+  </div>
+
   <!-- RITARDO INGRESSO — TRANS SCANSATI -->
   <div class="panel" style="margin-bottom:10px; border-color:#00ccff; border-width:2px;">
     <div class="panel-head green">⏱️ RITARDO INGRESSO — <span id="rit-sec">–</span>s · TRANS SCANSATI in diretta
@@ -4074,6 +4109,29 @@ function updateSemeGate(){
     if(d.error){ return; }
     $('sg-maschi').textContent  = d.maschi;
     $('sg-femmine').textContent = d.femmine;
+    // GRANDE FRATELLO direzione
+    if($('gf-stato')){
+      const st = d.gf_stato || '—';
+      const box = $('gf-stato-box');
+      if(st === 'FUORI_SHORT'){
+        $('gf-stato').textContent = 'FUORI';
+        $('gf-stato').style.color = '#ff5252';
+        $('gf-stato-sub').textContent = 'mercato in SHORT — il bot aspetta';
+        if(box){ box.style.borderColor = '#ff5252'; box.style.background = '#2a0d0d'; }
+      } else if(st === 'LIBERO'){
+        $('gf-stato').textContent = 'LIBERO';
+        $('gf-stato').style.color = '#33ff66';
+        $('gf-stato-sub').textContent = 'direzione ok — CROMO e ritardo filtrano';
+        if(box){ box.style.borderColor = '#33ff66'; box.style.background = '#0a2a0a'; }
+      } else {
+        $('gf-stato').textContent = '—';
+        $('gf-stato').style.color = '#aaaaaa';
+        $('gf-stato-sub').textContent = 'in attesa di un segnale da valutare';
+        if(box){ box.style.borderColor = '#666'; box.style.background = '#1a1a1a'; }
+      }
+      if($('gf-drift')) $('gf-drift').textContent = (d.gf_drift!=null? d.gf_drift.toFixed(3) : '–');
+      if($('gf-fuori')) $('gf-fuori').textContent = d.gf_fuori_count || 0;
+    }
     if($('sg-trans-bloccati') && d.cromo_blocchi){
       const cb = d.cromo_blocchi;
       $('sg-trans-bloccati').textContent = cb.totale || 0;
