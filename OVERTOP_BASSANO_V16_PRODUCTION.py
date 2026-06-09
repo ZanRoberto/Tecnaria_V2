@@ -6252,7 +6252,19 @@ class SuperCervello:
         # CAPSULE — il voto pesato degli anticorpi.
         # block_score alto = voto contro ; boost_score alto = voto a favore.
         # block_score reale osservato nei log: 180 sul contesto tossico.
-        if capsule_block_score is None and capsule_boost_score is None:
+        # ────────────────────────────────────────────────────────────────
+        # INTERRUTTORE (8giu, Roberto): SC_CAPSULE_VOTO_OFF=true → il voto
+        # capsule diventa NEUTRO (0.5): non pesa né contro né a favore, come
+        # se le capsule tacessero nel voto. Serve a far scendere i segnali
+        # oltre la porta 2 (voto) verso CROMO/ritardo, per riempire la
+        # telemetria. NON tocca Veritas né gli altri organi. NON tocca il
+        # veto FP_TOSSICO (porta 1, suo interruttore separato). NON tocca il
+        # block delle capsule altrove (CROMO ecc.). Solo il VOTO.
+        # Reversibile: SC_CAPSULE_VOTO_OFF=false (o tolto) → voto com'era.
+        # ────────────────────────────────────────────────────────────────
+        if os.environ.get("SC_CAPSULE_VOTO_OFF", "false").lower() == "true":
+            v['capsule'] = 0.5          # capsule neutralizzate nel voto (da ENV)
+        elif capsule_block_score is None and capsule_boost_score is None:
             v['capsule'] = 0.5          # nessun input → neutro
         else:
             _block = capsule_block_score if capsule_block_score is not None else 0.0
@@ -6320,6 +6332,28 @@ class SuperCervello:
 
         # Score pesato con pesi effettivi (dinamici o default)
         st = sum(v[k] * pesi_eff[k] for k in v)
+
+        # ════════════════════════════════════════════════════════════════
+        # INTERRUTTORE B (8giu, Roberto): SC_VOTO_BYPASS=true
+        # Salta il VOTO di SC: forza ENTRA così il segnale scende a
+        # SEME/CROMO/ritardo, che diventano gli unici filtri. Serve a far
+        # lavorare CROMO+ritardo (firma + tempo) senza il vecchio coprifuoco.
+        # LOGGA ogni bypass: così nei dati i trade entrati col bypass si
+        # distinguono da quelli entrati di diritto (esito misurabile a parte).
+        # NON tocca il veto FP_TOSSICO (porta 1, suo interruttore) né i gate
+        # a valle. Reversibile: SC_VOTO_BYPASS=false (o tolto) → voto com'era.
+        # ⚠ In paper. Da esperimento, non da produzione: salta gli organi
+        #   che riconoscono i pattern. Riaccendere il voto dopo la raccolta.
+        # ════════════════════════════════════════════════════════════════
+        _voto_bypass = os.environ.get("SC_VOTO_BYPASS", "false").lower() == "true"
+        if _voto_bypass:
+            _st_reale = st
+            st = 0.70   # sopra 0.68 → ENTRA (giusto sopra soglia, non forzato al max)
+            _now_byp = time.time()
+            if _now_byp - getattr(self, "_voto_bypass_last_log", 0.0) > 30:
+                self._voto_bypass_last_log = _now_byp
+                print(f"[SC] 🔓 SC_VOTO_BYPASS attivo: salto il voto "
+                      f"(score reale={_st_reale:.2f}) → ENTRA, decidono CROMO+ritardo")
 
         if st >= 0.68:
             azione = "ENTRA"
@@ -11878,6 +11912,61 @@ class OvertopBassanoV16Production:
         Registra tutti i dati necessari per l'exit e il tracking.
         """
         try:
+            # ════════════════════════════════════════════════════════════════
+            # 🛡️ GRANDE FRATELLO DIREZIONE (GF) — 8giu, Roberto
+            # ════════════════════════════════════════════════════════════════
+            # Regola UNICA, sopra a tutto: se la spinta del mercato è giù
+            # (drift < soglia) e il campo vuole entrare LONG → NON SI ENTRA.
+            # Punto. Non importa maschio/femmina/trans: se la direzione è
+            # sbagliata, si sta fuori. Filtro di DIREZIONE, non di qualità.
+            # È PRIMA di tutto (SEME/CROMO/ritardo) e NON viene deposto.
+            # Drift calcolato sul momento da _prices_long (stessa formula del
+            # campo, riga ~4975) per non dipendere da _last_drift (che a volte
+            # non esiste). Reversibile e tarabile da ENV:
+            #   GF_DIREZIONE_OFF=true  → guardiano spento (default false=attivo)
+            #   GF_DRIFT_SOGLIA=-0.05  → soglia % (più vicino a 0 = più severo)
+            # ════════════════════════════════════════════════════════════════
+            if os.environ.get("GF_DIREZIONE_OFF", "false").lower() != "true":
+                _gf_dir = getattr(self.campo, "_direction", "LONG")
+                if _gf_dir == "LONG":
+                    _gf_soglia = float(os.environ.get("GF_DRIFT_SOGLIA", "-0.05"))
+                    _gf_prices = list(getattr(self.campo, "_prices_long", []))
+                    if len(_gf_prices) >= 100:
+                        _gf_old = sum(_gf_prices[:50]) / 50
+                        _gf_new = sum(_gf_prices[-50:]) / 50
+                        _gf_drift = (_gf_new - _gf_old) / _gf_old * 100 if _gf_old else 0.0
+                        if _gf_drift < _gf_soglia:
+                            _now_gf = time.time()
+                            if _now_gf - getattr(self, "_gf_last_log", 0.0) > 30:
+                                self._gf_last_log = _now_gf
+                                print(f"[GF] 🛡️ FUORI: spinta ribassista "
+                                      f"drift={_gf_drift:+.3f}% < {_gf_soglia}% "
+                                      f"(LONG bloccato — direzione sbagliata)")
+                            try:
+                                self._ritardo_stats["gf_fuori"] = self._ritardo_stats.get("gf_fuori", 0) + 1
+                            except Exception:
+                                pass
+                            # espone lo stato alla dashboard: "fuori perché SHORT"
+                            try:
+                                if self.heartbeat_data is not None:
+                                    self.heartbeat_data["gf_stato"] = "FUORI_SHORT"
+                                    self.heartbeat_data["gf_drift"] = round(_gf_drift, 3)
+                                    self.heartbeat_data["gf_soglia"] = _gf_soglia
+                                    self.heartbeat_data["gf_ts"] = datetime.utcnow().isoformat()
+                                    self.heartbeat_data["gf_fuori_count"] = self._ritardo_stats.get("gf_fuori", 0)
+                            except Exception:
+                                pass
+                            return  # NON ENTRA — direzione giù
+                        else:
+                            # direzione OK in questo aggancio: segnala "campo libero"
+                            try:
+                                if self.heartbeat_data is not None:
+                                    self.heartbeat_data["gf_stato"] = "LIBERO"
+                                    self.heartbeat_data["gf_drift"] = round(_gf_drift, 3)
+                                    self.heartbeat_data["gf_ts"] = datetime.utcnow().isoformat()
+                            except Exception:
+                                pass
+
             # ════════════════════════════════════════════════════════════════
             # SEME_GATE (3giu, Roberto) — EVITARE LE FEMMINE PRIMA DELLA NASCITA
             # ════════════════════════════════════════════════════════════════
