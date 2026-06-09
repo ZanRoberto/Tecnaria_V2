@@ -12030,11 +12030,11 @@ class OvertopBassanoV16Production:
             # ⚠ Costa 2 maschi grossi tagliati (vp1.48/+7.74, cp0.74/+6.48). Baratto
             #   accettato da Roberto: blocca ~90$ di trans, sacrifica ~14$ di maschi.
             # ⚠ TUTTO tarato su 28 trade. Validare alla prossima raccolta sui NUOVI.
-            CROMO_GATE_ON   = bool(getattr(self, "CROMO_GATE_ON", True))
-            CROMO_VPRESS_MIN = float(getattr(self, "CROMO_VPRESS_MIN", 0.46))
-            CROMO_VPRESS_MAX = float(getattr(self, "CROMO_VPRESS_MAX", 1.13))
-            CROMO_COMP_MAX   = float(getattr(self, "CROMO_COMP_MAX", 0.64))
-            CROMO_CDUR_MIN   = float(getattr(self, "CROMO_CDUR_MIN", 0))
+            CROMO_GATE_ON   = os.environ.get("CROMO_GATE_ON", "true").lower() == "true"
+            CROMO_VPRESS_MIN = float(os.environ.get("CROMO_VPRESS_MIN", "0.46"))
+            CROMO_VPRESS_MAX = float(os.environ.get("CROMO_VPRESS_MAX", "1.13"))
+            CROMO_COMP_MAX   = float(os.environ.get("CROMO_COMP_MAX", "0.64"))
+            CROMO_CDUR_MIN   = float(os.environ.get("CROMO_CDUR_MIN", "0"))
             if CROMO_GATE_ON:
                 _vp = seed.get('vol_pressure')
                 _cp = seed.get('compression')
