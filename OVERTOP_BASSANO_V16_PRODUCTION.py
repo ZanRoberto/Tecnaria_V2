@@ -7965,6 +7965,75 @@ class OvertopBassanoV16Production:
         self._last_price = price
 
         # ════════════════════════════════════════════════════════════════
+        # TRACKER PRIMI SECONDI (9giu, Roberto) — LA LUCE NEI PRIMI 3s
+        # Il bot era cieco sotto i 10s. Qui campiono ogni segnale agganciato
+        # a 1s/2s/3s dalla nascita: prezzo e variazione $ rispetto all'aggancio.
+        # Cosi' si VEDE la curva nei primi secondi dove maschio e dopata si
+        # separano (maschio tiene/sale, dopata gia' molla). Solo osservazione,
+        # NON decide niente. Scrive in tabella primi_secondi.
+        # ENV TRACK_PRIMI_SEC_OFF=true per spegnerlo. try/except: mai rompe il tick.
+        # ════════════════════════════════════════════════════════════════
+        try:
+            if os.environ.get("TRACK_PRIMI_SEC_OFF", "false").lower() != "true":
+                _ag_ts = getattr(self, "_rit_aggancio_ts", None)
+                # timestamp AUTONOMO del tracker: parte al nuovo aggancio e dura
+                # 10s anche dopo che il ritardo ha deciso (entra/scarta a ~4s).
+                _ps_nascita = getattr(self, "_ps_nascita_ts", None)
+                _ps_prezzo0 = getattr(self, "_ps_prezzo0", None)
+                if _ag_ts is not None and _ag_ts != getattr(self, "_ps_last_ag_ts", None):
+                    # nuovo aggancio rilevato: faccio nascere una nuova traccia
+                    _ps_nascita = now
+                    _ps_prezzo0 = price
+                    self._ps_nascita_ts = now
+                    self._ps_prezzo0 = price
+                    self._ps_last_ag_ts = _ag_ts
+                if _ps_nascita is not None:
+                    _eta = now - _ps_nascita   # secondi di vita (autonomi, fino a 10s+)
+                    if _eta > 12:
+                        # traccia esaurita: chiudo, aspetto il prossimo aggancio
+                        self._ps_nascita_ts = None
+                    else:
+                        _ag_prezzo = _ps_prezzo0 if _ps_prezzo0 is not None else price
+                        if not hasattr(self, "_ps_campionati"):
+                            self._ps_campionati = {}
+                        _gia = self._ps_campionati.get(_ps_nascita, set())
+                        _exp = float(os.environ.get("EXPOSURE_USD", "5000"))
+                        for _sec in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
+                            # campiona al primo tick che supera _sec secondi di vita
+                            if _eta >= _sec and _sec not in _gia:
+                                _var_usd = ((price - _ag_prezzo) / _ag_prezzo) * _exp if _ag_prezzo else 0.0
+                                _ps = None
+                                try:
+                                    import sqlite3 as _sq3ps
+                                    _ps = _sq3ps.connect(DB_PATH, timeout=10)
+                                    _ps.execute("PRAGMA busy_timeout=10000;")
+                                    _ps.execute("""CREATE TABLE IF NOT EXISTS primi_secondi (
+                                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                        timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                                        aggancio_ts REAL, secondo INTEGER,
+                                        prezzo_aggancio REAL, prezzo_ora REAL, var_usd REAL)""")
+                                    _ps.execute(
+                                        """INSERT INTO primi_secondi
+                                           (aggancio_ts, secondo, prezzo_aggancio, prezzo_ora, var_usd)
+                                           VALUES (?,?,?,?,?)""",
+                                        (_ps_nascita, _sec, float(_ag_prezzo), float(price), float(_var_usd)))
+                                    _ps.commit()
+                                    _gia.add(_sec)
+                                    self._ps_campionati[_ps_nascita] = _gia
+                                except Exception:
+                                    pass
+                                finally:
+                                    if _ps is not None:
+                                        try: _ps.close()
+                                        except Exception: pass
+                        # pulizia: tengo solo gli ultimi 50 agganci tracciati
+                        if len(self._ps_campionati) > 50:
+                            for _k in list(self._ps_campionati.keys())[:-50]:
+                                self._ps_campionati.pop(_k, None)
+        except Exception:
+            pass
+
+        # ════════════════════════════════════════════════════════════════
         # PATCH 18 — CAPSULA FASE: alimentazione buffer prezzi (25mag2026)
         # ════════════════════════════════════════════════════════════════
         # try/except totale: mai bloccare il tick loop per la capsula.
@@ -12187,20 +12256,27 @@ class OvertopBassanoV16Production:
                 if _mae_soglia > 0:
                     _prezzo_aggancio = getattr(self, "_rit_prezzo_aggancio", None)
                     if _prezzo_aggancio is None or self._rit_aggancio_ts == _rit_now:
-                        # appena agganciato: memorizzo il prezzo di partenza
+                        # appena agganciato: memorizzo prezzo di partenza E massimo
                         self._rit_prezzo_aggancio = price
+                        self._rit_prezzo_max = price
                         _prezzo_aggancio = price
-                    # quanto e' sceso (in $ di PnL) dal prezzo d'aggancio:
-                    # LONG -> perdo se price < aggancio. Converto in $ con exposure.
+                    # traccio il punto PIU' ALTO visto durante l'attesa
+                    _pmax = getattr(self, "_rit_prezzo_max", price)
+                    if price > _pmax:
+                        self._rit_prezzo_max = price
+                        _pmax = price
                     _exposure = float(os.environ.get("EXPOSURE_USD", "5000"))
-                    _discesa_usd = ((price - _prezzo_aggancio) / _prezzo_aggancio) * _exposure
-                    if _discesa_usd < -_mae_soglia:
-                        # sta scendendo come una dopata -> fuori, azzero l'aggancio
+                    # caduta dal massimo: la dopata sale un po' e POI crolla.
+                    # misuro lo smottamento dal punto piu' alto, non dall'aggancio.
+                    _caduta_dal_max = ((price - _pmax) / _pmax) * _exposure
+                    if _caduta_dal_max < -_mae_soglia:
+                        # ha smottato dal suo massimo -> dopata -> fuori, azzero
                         self._log("📉", f"MAE FILTRO: dopata scartata "
-                                        f"(scesa {_discesa_usd:+.2f}$ < -{_mae_soglia}$ "
-                                        f"dall'aggancio @ ${_prezzo_aggancio:.1f}) — NON entra")
+                                        f"(smottata {_caduta_dal_max:+.2f}$ dal max ${_pmax:.1f} "
+                                        f"< -{_mae_soglia}$) — NON entra")
                         self._rit_aggancio_ts = None
                         self._rit_prezzo_aggancio = None
+                        self._rit_prezzo_max = None
                         try:
                             self._ritardo_stats["mae_scartati"] = self._ritardo_stats.get("mae_scartati", 0) + 1
                         except Exception:
@@ -12215,6 +12291,7 @@ class OvertopBassanoV16Production:
                 # il segnale ha retto N secondi -> entro ORA al prezzo corrente, azzero
                 self._rit_aggancio_ts = None
                 self._rit_prezzo_aggancio = None
+                self._rit_prezzo_max = None
                 self._ritardo_stats["entrati"] = self._ritardo_stats.get("entrati", 0) + 1
                 # VEDERE DENTRO (8giu): marco entrato=1 sulla riga di questo aggancio.
                 # Cosi' nel DB: entrato=0 = scansato, entrato=1 = passato. Solo update.
