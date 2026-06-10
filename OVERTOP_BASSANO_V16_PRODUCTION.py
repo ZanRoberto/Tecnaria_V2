@@ -12286,11 +12286,46 @@ class OvertopBassanoV16Production:
                                         f"vs aggancio ${_prezzo_aggancio:.1f}) — NON entra")
                         self._rit_aggancio_ts = None
                         self._rit_prezzo_aggancio = None
+                        self._rit_picco_pre = None
                         try:
                             self._ritardo_stats["mae_scartati"] = self._ritardo_stats.get("mae_scartati", 0) + 1
                         except Exception:
                             pass
                         return
+
+                    # ════════════════════════════════════════════════════════
+                    # RIPIEGAMENTO PRE-INGRESSO (10giu, Roberto) — il gioco vero:
+                    # i secondi del ritardo sono GRATIS (non siamo nel trade, no
+                    # fee). Lì la dopata si dichiara: SALE e poi SI GIRA. Il MAE
+                    # assoluto becca solo chi nasce sotto zero; questo becca la
+                    # dopata "lenta" che sale verde (+2, +2.8) e poi ripiega —
+                    # PRIMA di entrare. Il maschio sale e TIENE (non ripiega) ->
+                    # entra. Traccio il picco durante l'attesa: se il segnale
+                    # ripiega di RIPIEG_USD dal suo picco mentre aspetta, è una
+                    # dopata che si svuota -> NON entra, non paghiamo fee.
+                    # ENV: RIPIEG_PRE_USD (default 0.60; 0 = spento). Reversibile.
+                    # ════════════════════════════════════════════════════════
+                    _ripieg_soglia = float(os.environ.get("RIPIEG_PRE_USD", "0.60"))
+                    if _ripieg_soglia > 0:
+                        _picco_pre = getattr(self, "_rit_picco_pre", None)
+                        if _picco_pre is None or self._rit_aggancio_ts == _rit_now:
+                            _picco_pre = _pos_usd
+                        if _pos_usd > _picco_pre:
+                            _picco_pre = _pos_usd          # nuovo massimo durante attesa
+                        self._rit_picco_pre = _picco_pre
+                        # ripiega solo se era salito davvero (picco sopra soglia)
+                        if _picco_pre >= _ripieg_soglia and (_picco_pre - _pos_usd) >= _ripieg_soglia:
+                            self._log("🔄", f"RIPIEGAMENTO pre-ingresso: dopata si svuota "
+                                            f"(picco {_picco_pre:+.2f}$ -> ora {_pos_usd:+.2f}$, "
+                                            f"giù {_picco_pre - _pos_usd:.2f}$) — NON entra, no fee")
+                            self._rit_aggancio_ts = None
+                            self._rit_prezzo_aggancio = None
+                            self._rit_picco_pre = None
+                            try:
+                                self._ritardo_stats["ripieg_scartati"] = self._ritardo_stats.get("ripieg_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            return
 
                 _rit_atteso = _rit_now - _rit_aggancio
                 if _rit_atteso < _rit_sec:
@@ -12300,6 +12335,7 @@ class OvertopBassanoV16Production:
                 # il segnale ha retto N secondi -> entro ORA al prezzo corrente, azzero
                 self._rit_aggancio_ts = None
                 self._rit_prezzo_aggancio = None
+                self._rit_picco_pre = None
                 self._ritardo_stats["entrati"] = self._ritardo_stats.get("entrati", 0) + 1
                 # VEDERE DENTRO (8giu): marco entrato=1 sulla riga di questo aggancio.
                 # Cosi' nel DB: entrato=0 = scansato, entrato=1 = passato. Solo update.
@@ -13436,24 +13472,54 @@ class OvertopBassanoV16Production:
 
             if current_pnl > 0 and max_profit > 0:
                 # ═══════════════════════════════════════════════════════════
-                # SALVAGENTE PROFITTO (10giu, Roberto: "c'è profitto e si prende")
-                # Sopra ogni altro livello. Se il trade ha toccato un picco
-                # >= SALVAGENTE_PEAK_MIN, e ora è sceso sotto una % di quel
-                # picco, chiude e INCASSA. Evita evaporazioni tipo +4.7 -> -1.83.
-                # Il maschio può respirare (cala dal picco fino alla soglia),
-                # ma se molla davvero si incassa oltre metà del picco.
-                # Scatta SOLO se current ancora positivo: protegge profitto,
-                # non perdita. Spegnibile con SALVAGENTE_OFF=true. Reversibile.
+                # TRAILING SUL MASSIMO (10giu, Roberto) — la sintesi:
+                # "sono tutti ibridi all'ingresso. Se hanno grasso e lo tengono
+                #  (corrono) li lasciamo correre. Se si sgonfiano, strappiamo
+                #  il grasso che c'è prima che evapori."
+                # NON serve sapere se è maschio o femmina: seguo il MASSIMO.
+                #  - finché fa nuovi massimi (sale) -> TENGO, corre
+                #  - appena ripiega di TRAIL_GIU$ dal massimo -> STRAPPO e incasso
+                # Maschio +11 che torna +10 -> strappo +10 (jackpot preso).
+                # Dopata peak +1.71 che si gira -> strappo +0.9 (grasso preso,
+                #  invece di -0.62 evaporato).
+                # Attivo solo sopra TRAIL_MIN$ di profitto (lascia formare il
+                # grasso). Spegnibile con TRAIL_OFF=true. Reversibile.
                 # ═══════════════════════════════════════════════════════════
-                if os.environ.get("SALVAGENTE_OFF", "false").lower() != "true":
-                    _salv_peak_min = float(os.environ.get("SALVAGENTE_PEAK_MIN", "2.0"))
-                    _salv_keep_pct = float(os.environ.get("SALVAGENTE_KEEP_PCT", "0.55"))
-                    if max_profit >= _salv_peak_min and current_pnl > 0:
-                        _salv_floor = max_profit * _salv_keep_pct
-                        if current_pnl < _salv_floor:
-                            self._close_shadow_trade(price,
-                                f"SALVAGENTE_max{max_profit:+.1f}_keep{current_pnl:+.1f}_pct{_salv_keep_pct:.2f}")
-                            return
+                if os.environ.get("TRAIL_OFF", "false").lower() != "true":
+                    # ═══════════════════════════════════════════════════════
+                    # PRENDI SUBITO (10giu, Roberto): "se hanno grasso lo
+                    # portiamo via SUBITO, non aspettiamo che si svuotino."
+                    # Le dopate lente salgono lisce (10s +1.5 -> 20s +3) e poi
+                    # crollano (16:07 +2.85->-0.77, 19:32 +3.81->-1.54). Il
+                    # trailing aspetta il ripiegamento e le prende tardi. Questo
+                    # invece: profitto >= PRENDI_SUBITO$ -> CHIUDE e incassa,
+                    # senza aspettare. Tre perdite -> tre vincite.
+                    # Sopra il trailing: chi corre fortissimo lo prende cmq, ma
+                    # almeno il grasso solido è a casa. ENV PRENDI_SUBITO_USD
+                    # (default 2.5; 0 = spento, lascia fare al trailing).
+                    # ═══════════════════════════════════════════════════════
+                    _prendi = float(os.environ.get("PRENDI_SUBITO_USD", "2.5"))
+                    if _prendi > 0 and current_pnl >= _prendi:
+                        # Asterisco * = preso nell'INCERTEZZA (non sappiamo ancora
+                        # se maschio sano o dopata lenta). Marco se al momento
+                        # della presa era ancora vicino al picco (CRESC, sano?)
+                        # o già staccato dal picco (CEDE, dopata che si svuota?).
+                        # Cosi' poi si filtrano per reason LIKE 'PRENDI_SUBITO*'
+                        # e si raffina il riconoscimento sui dati reali.
+                        _scarto_picco = max_profit - current_pnl
+                        _stato = "CRESC" if _scarto_picco < 0.4 else "CEDE"
+                        self._close_shadow_trade(price,
+                            f"PRENDI_SUBITO*{current_pnl:+.1f}_max{max_profit:+.1f}_{_stato}")
+                        return
+
+                    _trail_min = float(os.environ.get("TRAIL_MIN_USD", "1.5"))
+                    _trail_giu = float(os.environ.get("TRAIL_GIU_USD", "1.0"))
+                    # max_profit è il picco toccato; current_pnl dov'è ora.
+                    # se ha superato la soglia-grasso E è ripiegato dal picco -> strappo
+                    if max_profit >= _trail_min and (max_profit - current_pnl) >= _trail_giu:
+                        self._close_shadow_trade(price,
+                            f"TRAIL_strappo{current_pnl:+.1f}_dapicco{max_profit:+.1f}")
+                        return
 
                 # ═══════════════════════════════════════════════════════════
                 # VOLPE — PROFIT_LOCK A 4 LIVELLI calibrati per momentum
