@@ -11431,7 +11431,9 @@ class OvertopBassanoV16Production:
                             f"reason=ZONA_MORTA_MERCATO")
                         _verbale["blocked_by"] = "PATCH12_FLAT_DRIFT"
                         self._log_constitutional(_verbale, "PRE_OPEN_VETO_FLAT_DRIFT_P1")
-                        return
+                        if os.environ.get("CANCELLI_OBSERVER", "false").lower() != "true":
+                            return
+                        self._log_m2("👁", "OBSERVER: FLAT_DRIFT avrebbe bloccato — LASCIO PASSARE")
                 except Exception as _e_p12_p1:
                     # Se errore nel calcolo drift, NON blocchiamo (conservativo)
                     pass
@@ -11534,7 +11536,9 @@ class OvertopBassanoV16Production:
                             self._log_m2("👵", f"MATRIGNA BLOCCA P1: {_mat_motivo}")
                             _verbale["blocked_by"] = f"MATRIGNA:{_mat_info.get('firma_key','?')}"
                             self._log_constitutional(_verbale, "PRE_OPEN_VETO_MATRIGNA_P1")
-                            return
+                            if os.environ.get("CANCELLI_OBSERVER", "false").lower() != "true":
+                                return
+                            self._log_m2("👁", "OBSERVER: MATRIGNA P1 avrebbe bloccato — LASCIO PASSARE")
                         elif "OBSERVER_WOULD_BLOCK" in _mat_motivo:
                             self._log_m2("👁", f"MATRIGNA suggerirebbe blocco (OBSERVER P1): {_mat_motivo}")
                     except Exception as _e_mat_p1:
@@ -11822,7 +11826,9 @@ class OvertopBassanoV16Production:
                 self._log_m2("🚫", f"SC_BLOCCA: {_sc_dec['motivo']}")
                 self._record_phantom(price, f"SC_BLOCCA_{_sc_dec['motivo'][:20]}",
                                      seed['score'], momentum, volatility, trend)
-                return
+                if os.environ.get("CANCELLI_OBSERVER", "false").lower() != "true":
+                    return
+                self._log_m2("👁", "OBSERVER: SC_BLOCCA avrebbe bloccato — LASCIO PASSARE")
 
             # ════════════════════════════════════════════════════════════════
             # FIX #32 (12mag2026 sera): FLIP_BY_SUPERCERVELLO
@@ -11952,7 +11958,9 @@ class OvertopBassanoV16Production:
                         self._log_m2("👵", f"MATRIGNA BLOCCA P2: {_mat_motivo}")
                         _verbale["blocked_by"] = f"MATRIGNA:{_mat_info.get('firma_key','?')}"
                         self._log_constitutional(_verbale, "PRE_OPEN_VETO_MATRIGNA_P2")
-                        return
+                        if os.environ.get("CANCELLI_OBSERVER", "false").lower() != "true":
+                            return
+                        self._log_m2("👁", "OBSERVER: MATRIGNA P2 avrebbe bloccato — LASCIO PASSARE")
                     elif "OBSERVER_WOULD_BLOCK" in _mat_motivo:
                         self._log_m2("👁", f"MATRIGNA suggerirebbe blocco (OBSERVER P2): {_mat_motivo}")
                 except Exception as _e_mat_p2:
