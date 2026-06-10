@@ -12239,7 +12239,7 @@ class OvertopBassanoV16Production:
                              float(seed.get("score", 0) or 0),
                              str(momentum), str(volatility), str(trend),
                              float(price),
-                             float(getattr(self, "_shadow", {}).get("peak_pnl", 0) or 0) if hasattr(self, "_shadow") else 0.0))
+                             float((self._shadow or {}).get("peak_pnl", 0) or 0)))
                         self._rit_aggancio_rowid = _cur_ag.lastrowid
                         _ag.commit()
                     except Exception:
