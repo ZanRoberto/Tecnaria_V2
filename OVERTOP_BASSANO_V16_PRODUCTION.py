@@ -12264,27 +12264,28 @@ class OvertopBassanoV16Production:
                 if _mae_soglia > 0:
                     _prezzo_aggancio = getattr(self, "_rit_prezzo_aggancio", None)
                     if _prezzo_aggancio is None or self._rit_aggancio_ts == _rit_now:
-                        # appena agganciato: memorizzo prezzo di partenza E massimo
+                        # appena agganciato: memorizzo il prezzo di partenza
                         self._rit_prezzo_aggancio = price
-                        self._rit_prezzo_max = price
                         _prezzo_aggancio = price
-                    # traccio il punto PIU' ALTO visto durante l'attesa
-                    _pmax = getattr(self, "_rit_prezzo_max", price)
-                    if price > _pmax:
-                        self._rit_prezzo_max = price
-                        _pmax = price
                     _exposure = float(os.environ.get("EXPOSURE_USD", "5000"))
-                    # caduta dal massimo: la dopata sale un po' e POI crolla.
-                    # misuro lo smottamento dal punto piu' alto, non dall'aggancio.
-                    _caduta_dal_max = ((price - _pmax) / _pmax) * _exposure
-                    if _caduta_dal_max < -_mae_soglia:
-                        # ha smottato dal suo massimo -> dopata -> fuori, azzero
+                    # POSIZIONE ASSOLUTA rispetto all'aggancio (10giu, logica corretta):
+                    # i dati di Roberto dicono maschi SEMPRE sopra zero (mae -0.08),
+                    # dopate SEMPRE sotto (mae -1.06). Quindi NON misuro la caduta dal
+                    # massimo (sbagliato: scartava maschi che respirano e lasciava
+                    # passare dopate che scendono dritte). Misuro DOVE SONO ORA
+                    # rispetto al prezzo di partenza. Sotto soglia negativa = dopata.
+                    _direction = getattr(self.campo, "_direction", "LONG")
+                    _delta = (price - _prezzo_aggancio) / _prezzo_aggancio
+                    if str(_direction).upper().startswith("SHORT"):
+                        _delta = -_delta   # per SHORT, scendere è guadagno
+                    _pos_usd = _delta * _exposure
+                    if _pos_usd < -_mae_soglia:
+                        # è SOTTO l'aggancio oltre soglia -> dopata -> fuori, azzero
                         self._log("📉", f"MAE FILTRO: dopata scartata "
-                                        f"(smottata {_caduta_dal_max:+.2f}$ dal max ${_pmax:.1f} "
-                                        f"< -{_mae_soglia}$) — NON entra")
+                                        f"(posizione {_pos_usd:+.2f}$ < -{_mae_soglia}$ "
+                                        f"vs aggancio ${_prezzo_aggancio:.1f}) — NON entra")
                         self._rit_aggancio_ts = None
                         self._rit_prezzo_aggancio = None
-                        self._rit_prezzo_max = None
                         try:
                             self._ritardo_stats["mae_scartati"] = self._ritardo_stats.get("mae_scartati", 0) + 1
                         except Exception:
@@ -12299,7 +12300,6 @@ class OvertopBassanoV16Production:
                 # il segnale ha retto N secondi -> entro ORA al prezzo corrente, azzero
                 self._rit_aggancio_ts = None
                 self._rit_prezzo_aggancio = None
-                self._rit_prezzo_max = None
                 self._ritardo_stats["entrati"] = self._ritardo_stats.get("entrati", 0) + 1
                 # VEDERE DENTRO (8giu): marco entrato=1 sulla riga di questo aggancio.
                 # Cosi' nel DB: entrato=0 = scansato, entrato=1 = passato. Solo update.
