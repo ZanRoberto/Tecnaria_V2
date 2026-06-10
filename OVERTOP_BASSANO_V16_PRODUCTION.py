@@ -13436,6 +13436,26 @@ class OvertopBassanoV16Production:
 
             if current_pnl > 0 and max_profit > 0:
                 # ═══════════════════════════════════════════════════════════
+                # SALVAGENTE PROFITTO (10giu, Roberto: "c'è profitto e si prende")
+                # Sopra ogni altro livello. Se il trade ha toccato un picco
+                # >= SALVAGENTE_PEAK_MIN, e ora è sceso sotto una % di quel
+                # picco, chiude e INCASSA. Evita evaporazioni tipo +4.7 -> -1.83.
+                # Il maschio può respirare (cala dal picco fino alla soglia),
+                # ma se molla davvero si incassa oltre metà del picco.
+                # Scatta SOLO se current ancora positivo: protegge profitto,
+                # non perdita. Spegnibile con SALVAGENTE_OFF=true. Reversibile.
+                # ═══════════════════════════════════════════════════════════
+                if os.environ.get("SALVAGENTE_OFF", "false").lower() != "true":
+                    _salv_peak_min = float(os.environ.get("SALVAGENTE_PEAK_MIN", "2.0"))
+                    _salv_keep_pct = float(os.environ.get("SALVAGENTE_KEEP_PCT", "0.55"))
+                    if max_profit >= _salv_peak_min and current_pnl > 0:
+                        _salv_floor = max_profit * _salv_keep_pct
+                        if current_pnl < _salv_floor:
+                            self._close_shadow_trade(price,
+                                f"SALVAGENTE_max{max_profit:+.1f}_keep{current_pnl:+.1f}_pct{_salv_keep_pct:.2f}")
+                            return
+
+                # ═══════════════════════════════════════════════════════════
                 # VOLPE — PROFIT_LOCK A 4 LIVELLI calibrati per momentum
                 # ═══════════════════════════════════════════════════════════
 
