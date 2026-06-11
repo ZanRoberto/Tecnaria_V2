@@ -12558,7 +12558,34 @@ class OvertopBassanoV16Production:
                     self._log("⏳", f"RITARDO ingresso: segnale agganciato, "
                                     f"atteso {_rit_atteso:.1f}/{_rit_sec:.0f}s @ ${price:.1f}")
                     return
-                # il segnale ha retto N secondi -> entro ORA al prezzo corrente, azzero
+                # il segnale ha retto N secondi -> CHECK FINALE prima di entrare
+                # (11giu, Roberto: "basta che fosse fermato al secondo 4"). I filtri
+                # sopra girano a ogni tick, ma qui — al momento esatto dell'ingresso —
+                # ricontrollo il valore ADESSO. Se al secondo 4 sta girato giù sotto
+                # l'aggancio, è una corda: NON entro. Ultima parola, secca.
+                if os.environ.get("ANTICORDA_OFF", "false").lower() != "true":
+                    _ac_sotto = float(os.environ.get("ANTICORDA_SOTTO", "-0.3"))
+                    _exp_fin = float(os.environ.get("EXPOSURE_USD", "5000"))
+                    _ep_fin = getattr(self, "_rit_prezzo_nascita", None) or price
+                    _dir_fin = getattr(self.campo, "_direction", "LONG")
+                    _delta_fin = (price - _ep_fin) / _ep_fin
+                    if str(_dir_fin).upper().startswith("SHORT"):
+                        _delta_fin = -_delta_fin
+                    _pos_fin = _delta_fin * _exp_fin
+                    if _pos_fin <= _ac_sotto:
+                        self._log("🪢", f"ANTI-CORDA (check finale s{_rit_atteso:.0f}): "
+                                        f"al momento di entrare sta a {_pos_fin:+.2f}$ "
+                                        f"<= {_ac_sotto} — corda, NON entra")
+                        self._rit_aggancio_ts = None
+                        self._rit_prezzo_nascita = None
+                        self._rit_picco_pre = None
+                        self._rit_crollo_min = None
+                        try:
+                            self._ritardo_stats["anticorda_scartati"] = self._ritardo_stats.get("anticorda_scartati", 0) + 1
+                        except Exception:
+                            pass
+                        return
+                # passato il check finale -> entro ORA al prezzo corrente, azzero
                 self._rit_aggancio_ts = None
                 self._rit_prezzo_nascita = None
                 self._rit_picco_pre = None
