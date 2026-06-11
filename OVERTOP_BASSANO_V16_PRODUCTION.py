@@ -12231,6 +12231,22 @@ class OvertopBassanoV16Production:
                     self._rit_aggancio_ts = _rit_now
                     self._rit_prezzo_nascita = price   # FISSO il prezzo di NASCITA (10giu fix radice)
                     self._rit_picco_pre = None
+                    self._rit_crollo_min = None   # reset minimo attesa (anti-falsa-ripartenza)
+                    # ANTI-MAGO — RI-AGGANCIO SOSPETTO (11giu, Roberto: "sono maghi").
+                    # Il mago crolla (aggancio scartato), poi si ri-aggancia sul
+                    # RIMBALZO con fedina pulita (17:30: crollo 17:30:06 scartato,
+                    # rimbalzo 17:30:16 entrato → -9). Se è crollato da poco e a
+                    # prezzo vicino, il nuovo aggancio NON parte pulito: eredita
+                    # il minimo del crollo, così l'anti-falsa-ripartenza lo becca.
+                    # ENV: RIAGGANCIO_MEMORIA_SEC (default 20; 0 = spento).
+                    _riag_sec = float(os.environ.get("RIAGGANCIO_MEMORIA_SEC", "20"))
+                    _ult_crollo_ts = getattr(self, "_rit_ultimo_crollo_ts", None)
+                    if _riag_sec > 0 and _ult_crollo_ts is not None and (_rit_now - _ult_crollo_ts) <= _riag_sec:
+                        # ri-aggancio dopo un crollo recente -> eredita il sospetto
+                        self._rit_crollo_min = -999.0   # marchio: parte già "crollato"
+                        self._log("🎭", f"RI-AGGANCIO SOSPETTO: nuovo aggancio "
+                                        f"{_rit_now - _ult_crollo_ts:.0f}s dopo un crollo — "
+                                        f"eredita il sospetto (mago travestito)")
                     self._ritardo_stats["agganciati"] = self._ritardo_stats.get("agganciati", 0) + 1
                     # ════════════════════════════════════════════════════════════
                     # VEDERE DENTRO CHI VIENE SCANSATO (8giu, Roberto)
@@ -12320,6 +12336,71 @@ class OvertopBassanoV16Production:
                         except Exception:
                             pass
                         return
+
+                    # ════════════════════════════════════════════════════════
+                    # ANTI-FALSA-RIPARTENZA (11giu, Roberto — il -9.19 del 17:30).
+                    # Il segnale crolla nei secondi gratis (-5.21 al s3), poi
+                    # RIMBALZA (+1.85 al s5). Il bot lo aggancia SUL RIMBALZO
+                    # (vede +1.85, sembra buono) ed entra. Poi ricrolla a -9.
+                    # Il MAE guarda solo l'ISTANTE del giudizio, non il MINIMO
+                    # toccato durante l'attesa. Fix: traccio il minimo; se ha
+                    # toccato sotto -CROLLO_MAX in qualsiasi momento dei secondi
+                    # gratis, è MARCIO -> non entra MAI, anche se rimbalza. Una
+                    # ripartenza vera non crolla a -5 prima di partire.
+                    # ENV: CROLLO_MAX_USD (default 2.0; 0 = spento).
+                    # ════════════════════════════════════════════════════════
+                    _crollo_min = getattr(self, "_rit_crollo_min", None)
+                    if _crollo_min is None or _pos_usd < _crollo_min:
+                        self._rit_crollo_min = _pos_usd
+                        _crollo_min = _pos_usd
+                    _crollo_max = float(os.environ.get("CROLLO_MAX_USD", "2.0"))
+                    if _crollo_max > 0 and _crollo_min is not None and _crollo_min <= -_crollo_max:
+                        # ha toccato il fondo (crollo) durante l'attesa -> marcio anche se rimbalza
+                        self._log("💀", f"FALSA RIPARTENZA scartata "
+                                        f"(ha toccato {_crollo_min:+.2f}$ nei secondi gratis "
+                                        f"< -{_crollo_max}$ — crolla e rimbalza, marcio) — NON entra")
+                        # MEMORIA DEL CROLLO (anti-mago): salvo quando e a che prezzo
+                        # è crollato, così il ri-aggancio sul rimbalzo (entro
+                        # RIAGGANCIO_MEMORIA_SEC) non parte con fedina pulita.
+                        self._rit_ultimo_crollo_ts = _rit_now
+                        self._rit_ultimo_crollo_prezzo = price
+                        self._rit_aggancio_ts = None
+                        self._rit_prezzo_nascita = None
+                        self._rit_picco_pre = None
+                        self._rit_crollo_min = None
+                        try:
+                            self._ritardo_stats["crollo_scartati"] = self._ritardo_stats.get("crollo_scartati", 0) + 1
+                        except Exception:
+                            pass
+                        return
+
+                    # ════════════════════════════════════════════════════════
+                    # ANTI-MAGO — VOL ISTERICO (11giu, Roberto: "sono maghi").
+                    # Il 17:30 aveva vol_pressure 1.1 + momentum DEBOLE: isteria
+                    # (sbatte su-giù con forza apparente) ma NESSUNA corsa vera
+                    # (momentum debole). Il mago crea isteria per sembrare vivo.
+                    # Se vol_pressure è alto MA momentum è DEBOLE → movimento
+                    # sbattuto senza forza → non entra. Il maschio vero ha vol E
+                    # momentum coerenti. ENV: VOL_ISTERICO_MAX (default 0 = spento,
+                    # accendere a ~1.0 per bloccare vp oltre soglia con mom DEBOLE).
+                    # ════════════════════════════════════════════════════════
+                    _vol_ist = float(os.environ.get("VOL_ISTERICO_MAX", "0"))
+                    if _vol_ist > 0:
+                        _vp_now = seed.get("vol_pressure")
+                        if (_vp_now is not None and float(_vp_now) >= _vol_ist
+                                and str(momentum).upper() == "DEBOLE"):
+                            self._log("🌀", f"VOL ISTERICO scartato "
+                                            f"(vol_pressure {float(_vp_now):.2f} >= {_vol_ist} "
+                                            f"ma momentum DEBOLE — isteria senza forza) — NON entra")
+                            self._rit_aggancio_ts = None
+                            self._rit_prezzo_nascita = None
+                            self._rit_picco_pre = None
+                            self._rit_crollo_min = None
+                            try:
+                                self._ritardo_stats["isterico_scartati"] = self._ritardo_stats.get("isterico_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            return
 
                     # ════════════════════════════════════════════════════════
                     # CONTROSCATTO (11giu, Roberto — "facciamo anche noi un
@@ -13053,7 +13134,7 @@ class OvertopBassanoV16Production:
             # ZONA_MORTA disattivata: non si taglia per tempo un trade in perdita.
             # (Lo stop loss 2% qui sotto resta il solo freno sulle perdite.)
 
-            HARD_STOP_USD = self.STOP_LIVE
+            HARD_STOP_USD = float(os.environ.get("HARD_STOP_USD", str(self.STOP_LIVE)))
             if current_pnl_real < -HARD_STOP_USD:
                 self._close_shadow_trade(price, f"HARD_STOP_${abs(current_pnl_real):.1f}_max${HARD_STOP_USD:.0f}")
                 return
