@@ -12205,6 +12205,8 @@ class OvertopBassanoV16Production:
                 if _rit_aggancio is None or (_rit_now - _rit_last) > _rit_gap:
                     _rit_aggancio = _rit_now
                     self._rit_aggancio_ts = _rit_now
+                    self._rit_prezzo_nascita = price   # FISSO il prezzo di NASCITA (10giu fix radice)
+                    self._rit_picco_pre = None
                     self._ritardo_stats["agganciati"] = self._ritardo_stats.get("agganciati", 0) + 1
                     # ════════════════════════════════════════════════════════════
                     # VEDERE DENTRO CHI VIENE SCANSATO (8giu, Roberto)
@@ -12262,10 +12264,12 @@ class OvertopBassanoV16Production:
                 # ════════════════════════════════════════════════════════════
                 _mae_soglia = float(os.environ.get("MAE_FILTRO_USD", "0.50"))
                 if _mae_soglia > 0:
-                    _prezzo_aggancio = getattr(self, "_rit_prezzo_aggancio", None)
-                    if _prezzo_aggancio is None or self._rit_aggancio_ts == _rit_now:
-                        # appena agganciato: memorizzo il prezzo di partenza
-                        self._rit_prezzo_aggancio = price
+                    # uso il prezzo di NASCITA fisso (10giu fix radice): non si
+                    # resetta a ogni ripartenza del conteggio. Prima il TRANS che
+                    # scendeva a gradini resettava il riferimento e fregava il MAE.
+                    _prezzo_aggancio = getattr(self, "_rit_prezzo_nascita", None)
+                    if _prezzo_aggancio is None:
+                        self._rit_prezzo_nascita = price
                         _prezzo_aggancio = price
                     _exposure = float(os.environ.get("EXPOSURE_USD", "5000"))
                     # POSIZIONE ASSOLUTA rispetto all'aggancio (10giu, logica corretta):
@@ -12285,7 +12289,7 @@ class OvertopBassanoV16Production:
                                         f"(posizione {_pos_usd:+.2f}$ < -{_mae_soglia}$ "
                                         f"vs aggancio ${_prezzo_aggancio:.1f}) — NON entra")
                         self._rit_aggancio_ts = None
-                        self._rit_prezzo_aggancio = None
+                        self._rit_prezzo_nascita = None
                         self._rit_picco_pre = None
                         try:
                             self._ritardo_stats["mae_scartati"] = self._ritardo_stats.get("mae_scartati", 0) + 1
@@ -12319,7 +12323,7 @@ class OvertopBassanoV16Production:
                                             f"(picco {_picco_pre:+.2f}$ -> ora {_pos_usd:+.2f}$, "
                                             f"giù {_picco_pre - _pos_usd:.2f}$) — NON entra, no fee")
                             self._rit_aggancio_ts = None
-                            self._rit_prezzo_aggancio = None
+                            self._rit_prezzo_nascita = None
                             self._rit_picco_pre = None
                             try:
                                 self._ritardo_stats["ripieg_scartati"] = self._ritardo_stats.get("ripieg_scartati", 0) + 1
@@ -12334,7 +12338,7 @@ class OvertopBassanoV16Production:
                     return
                 # il segnale ha retto N secondi -> entro ORA al prezzo corrente, azzero
                 self._rit_aggancio_ts = None
-                self._rit_prezzo_aggancio = None
+                self._rit_prezzo_nascita = None
                 self._rit_picco_pre = None
                 self._ritardo_stats["entrati"] = self._ritardo_stats.get("entrati", 0) + 1
                 # VEDERE DENTRO (8giu): marco entrato=1 sulla riga di questo aggancio.
