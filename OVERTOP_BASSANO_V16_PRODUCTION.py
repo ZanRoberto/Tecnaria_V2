@@ -12322,6 +12322,45 @@ class OvertopBassanoV16Production:
                         return
 
                     # ════════════════════════════════════════════════════════
+                    # CONTROSCATTO (11giu, Roberto — "facciamo anche noi un
+                    # controscatto :)"). I TRANS-forbice fanno un FALSO SCATTO
+                    # nei secondi gratis (15:47: picco +1.10 a s2-4) e poi si
+                    # SGONFIANO (+0.26 a s5), ingannando il filtro che li fa
+                    # entrare perché ancora positivi. Poi nascono morti (peak 0).
+                    # Il maschio vero invece SALE e TIENE/CRESCE (+0.19→+1.62
+                    # costante, non si sgonfia mai). Controscatto: traccio il
+                    # PICCO dell'attesa; se al giudizio il segnale si è sgonfiato
+                    # dal picco oltre SCATTO_SGONFIO_PCT, è una falsa partenza ->
+                    # SCHIVO (non entro). Il maschio (vicino al picco) entra.
+                    # ENV: SCATTO_SGONFIO_PCT (default 0.50 = sgonfiato >50% dal
+                    #      picco -> fuori). 0 = spento. Picco minimo per valutare:
+                    #      SCATTO_PICCO_MIN (default 0.6, sotto è rumore).
+                    # ════════════════════════════════════════════════════════
+                    # traccio il picco dell'attesa (sempre, costa nulla)
+                    _picco_pre = getattr(self, "_rit_picco_pre", None)
+                    if _picco_pre is None or _pos_usd > _picco_pre:
+                        self._rit_picco_pre = _pos_usd
+                        _picco_pre = _pos_usd
+                    _sgonfio_pct = float(os.environ.get("SCATTO_SGONFIO_PCT", "0.50"))
+                    _picco_min = float(os.environ.get("SCATTO_PICCO_MIN", "0.6"))
+                    if _sgonfio_pct > 0 and _picco_pre is not None and _picco_pre >= _picco_min:
+                        # quanto si è sgonfiato dal picco dell'attesa?
+                        _sgonfio = (_picco_pre - _pos_usd) / _picco_pre if _picco_pre > 0 else 0
+                        if _sgonfio >= _sgonfio_pct:
+                            # falso scatto: ha fatto picco e si è sgonfiato -> schivo
+                            self._log("🦊", f"CONTROSCATTO: falsa partenza schivata "
+                                            f"(picco +{_picco_pre:.2f}$ → ora {_pos_usd:+.2f}$, "
+                                            f"sgonfio {_sgonfio*100:.0f}%) — NON entra")
+                            self._rit_aggancio_ts = None
+                            self._rit_prezzo_nascita = None
+                            self._rit_picco_pre = None
+                            try:
+                                self._ritardo_stats["controscatto_scartati"] = self._ritardo_stats.get("controscatto_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            return
+
+                    # ════════════════════════════════════════════════════════
                     # TAGLIO TRANS PIATTI (11giu, Roberto: "vanno tagliati punto").
                     # Dai dati pre-ingresso: i TRANS piatti stanno a +0.2/0.0/-0.001
                     # nei secondi gratis, NON salgono. I maschi veri salgono sopra
@@ -13093,6 +13132,33 @@ class OvertopBassanoV16Production:
                 drawdown_pct = ((price - self._shadow_min_price) / self._shadow["price_entry"]) * 100
             else:
                 drawdown_pct = ((self._shadow_max_price - price) / self._shadow["price_entry"]) * 100
+
+            # ════════════════════════════════════════════════════════════════
+            # SALVA_VERDE ANTICIPATO (11giu, Roberto: "non lascio grasso a
+            # nessuno"). I TRANS-obiettivo fanno picco a 8-10s e crollano; il
+            # MIN_HOLD di 10s impediva al SALVA_VERDE (più sotto) di incassarli
+            # (15:38: picco +2.71 lordo a 10s → perso a -0.12). Qui il SALVA_VERDE
+            # agisce PRIMA di ogni cancello temporale: appena c'è grasso vero che
+            # cede dal picco, incassa — in qualsiasi secondo. Il maschio lento che
+            # sale e NON cede non scatta (resta protetto, corre). Stessa logica
+            # del SALVA_VERDE sotto, solo anticipata. Spegnibile TRAIL_OFF.
+            # ════════════════════════════════════════════════════════════════
+            if os.environ.get("TRAIL_OFF", "false").lower() != "true":
+                _ep_sv = self._shadow["price_entry"]
+                _sdelta_sv = (price - _ep_sv) if entry_direction != "SHORT" else (_ep_sv - price)
+                _cur_sv = _sdelta_sv * (5000.0 / _ep_sv)   # lordo
+                if entry_direction == "SHORT":
+                    _max_sv = (_ep_sv - self._shadow_min_price) * (5000.0 / _ep_sv)
+                else:
+                    _max_sv = (self._shadow_max_price - _ep_sv) * (5000.0 / _ep_sv)
+                _tg_sv = float(os.environ.get("TRAIL_GIU_USD", "0.5"))
+                _vm_sv = float(os.environ.get("VERDE_MIN_USD", "2.5"))
+                if _tg_sv > 0 and _cur_sv >= _vm_sv and (_max_sv - _cur_sv) >= _tg_sv:
+                    _sc_sv = _max_sv - _cur_sv
+                    _st_sv = "CRESC" if _sc_sv < 0.4 else "CEDE"
+                    self._close_shadow_trade(price,
+                        f"SALVA_VERDE*{_cur_sv:+.1f}_dapicco{_max_sv:+.1f}_{_st_sv}")
+                    return
 
             if duration >= MIN_HOLD_SECONDS:
                 # -- 4 DIVORCE TRIGGERS (attivi solo dopo MIN_HOLD) ---------------
