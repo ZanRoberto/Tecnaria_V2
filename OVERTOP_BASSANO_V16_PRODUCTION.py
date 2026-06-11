@@ -12298,6 +12298,35 @@ class OvertopBassanoV16Production:
                         return
 
                     # ════════════════════════════════════════════════════════
+                    # TAGLIO TRANS PIATTI (11giu, Roberto: "vanno tagliati punto").
+                    # Dai dati pre-ingresso: i TRANS piatti stanno a +0.2/0.0/-0.001
+                    # nei secondi gratis, NON salgono. I maschi veri salgono sopra
+                    # +0.5 e ci restano (es. +0.749 costante). Quindi: per entrare
+                    # NON basta "non scendere" — bisogna SALIRE da maschio. Se dopo
+                    # almeno SALITA_DOPO_SEC secondi di attesa il segnale non ha
+                    # superato +SALITA_MIN, è un trans piatto -> NON entra.
+                    # ENV: SALITA_MIN_USD (default 0.40; 0 = spento).
+                    #      SALITA_DOPO_SEC (default 3 = do 3s al maschio per salire).
+                    # ════════════════════════════════════════════════════════
+                    _salita_min = float(os.environ.get("SALITA_MIN_USD", "0.40"))
+                    _salita_dopo = float(os.environ.get("SALITA_DOPO_SEC", "3"))
+                    if _salita_min > 0:
+                        _eta_attesa = _rit_now - _rit_aggancio
+                        if _eta_attesa >= _salita_dopo and _pos_usd < _salita_min:
+                            # ha avuto il tempo di salire e NON è salito -> trans piatto -> fuori
+                            self._log("🟰", f"TRANS PIATTO scartato "
+                                            f"(dopo {_eta_attesa:.1f}s sta a {_pos_usd:+.2f}$ "
+                                            f"< +{_salita_min}$ — non sale da maschio) — NON entra")
+                            self._rit_aggancio_ts = None
+                            self._rit_prezzo_nascita = None
+                            self._rit_picco_pre = None
+                            try:
+                                self._ritardo_stats["piatti_scartati"] = self._ritardo_stats.get("piatti_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            return
+
+                    # ════════════════════════════════════════════════════════
                     # RIPIEGAMENTO PRE-INGRESSO (10giu, Roberto) — il gioco vero:
                     # i secondi del ritardo sono GRATIS (non siamo nel trade, no
                     # fee). Lì la dopata si dichiara: SALE e poi SI GIRA. Il MAE
