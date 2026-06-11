@@ -13491,39 +13491,31 @@ class OvertopBassanoV16Production:
                 # ═══════════════════════════════════════════════════════════
                 if os.environ.get("TRAIL_OFF", "false").lower() != "true":
                     # ═══════════════════════════════════════════════════════
-                    # PRENDI SUBITO (10giu, Roberto): "se hanno grasso lo
-                    # portiamo via SUBITO, non aspettiamo che si svuotino."
-                    # Le dopate lente salgono lisce (10s +1.5 -> 20s +3) e poi
-                    # crollano (16:07 +2.85->-0.77, 19:32 +3.81->-1.54). Il
-                    # trailing aspetta il ripiegamento e le prende tardi. Questo
-                    # invece: profitto >= PRENDI_SUBITO$ -> CHIUDE e incassa,
-                    # senza aspettare. Tre perdite -> tre vincite.
-                    # Sopra il trailing: chi corre fortissimo lo prende cmq, ma
-                    # almeno il grasso solido è a casa. ENV PRENDI_SUBITO_USD
-                    # (default 2.5; 0 = spento, lascia fare al trailing).
+                    # SALVA IL VERDE (11giu, Roberto) — niente soglie di profitto!
+                    # Errore precedente: PRENDI_SUBITO a +2.5 e TRAIL_MIN a 1.5
+                    # NON prendevano mai i TRANS-obiettivo, che fanno grasso a
+                    # +1.3/+2.3 e poi si svuotano (16:49 +2.29->-0.62, 03:56
+                    # +1.39->-5.06). Quel grasso, con le FEE GIA' PAGATE, è
+                    # denaro puro che buttavamo via.
+                    # Logica giusta: appena il trade è in VERDE (qualunque,
+                    # sopra il costo già speso) traccio il picco. Appena CEDE
+                    # dal picco di TRAIL_GIU$, STRAPPO il verde che c'è — non
+                    # aspetto nessuna soglia. Il maschio che sale e NON cede
+                    # resta dentro (corre). Il TRANS/dopata che si gira lo
+                    # incasso mentre è ancora verde.
+                    # ENV: TRAIL_GIU_USD (default 0.6 = cede 0.6$ dal picco).
+                    #      VERDE_MIN_USD (default 0.2 = sopra le fee). 0 = spento.
                     # ═══════════════════════════════════════════════════════
-                    _prendi = float(os.environ.get("PRENDI_SUBITO_USD", "2.5"))
-                    if _prendi > 0 and current_pnl >= _prendi:
-                        # Asterisco * = preso nell'INCERTEZZA (non sappiamo ancora
-                        # se maschio sano o dopata lenta). Marco se al momento
-                        # della presa era ancora vicino al picco (CRESC, sano?)
-                        # o già staccato dal picco (CEDE, dopata che si svuota?).
-                        # Cosi' poi si filtrano per reason LIKE 'PRENDI_SUBITO*'
-                        # e si raffina il riconoscimento sui dati reali.
-                        _scarto_picco = max_profit - current_pnl
-                        _stato = "CRESC" if _scarto_picco < 0.4 else "CEDE"
-                        self._close_shadow_trade(price,
-                            f"PRENDI_SUBITO*{current_pnl:+.1f}_max{max_profit:+.1f}_{_stato}")
-                        return
-
-                    _trail_min = float(os.environ.get("TRAIL_MIN_USD", "1.5"))
-                    _trail_giu = float(os.environ.get("TRAIL_GIU_USD", "1.0"))
-                    # max_profit è il picco toccato; current_pnl dov'è ora.
-                    # se ha superato la soglia-grasso E è ripiegato dal picco -> strappo
-                    if max_profit >= _trail_min and (max_profit - current_pnl) >= _trail_giu:
-                        self._close_shadow_trade(price,
-                            f"TRAIL_strappo{current_pnl:+.1f}_dapicco{max_profit:+.1f}")
-                        return
+                    _trail_giu  = float(os.environ.get("TRAIL_GIU_USD", "0.6"))
+                    _verde_min  = float(os.environ.get("VERDE_MIN_USD", "0.2"))
+                    if _trail_giu > 0 and max_profit >= _verde_min and current_pnl > 0:
+                        if (max_profit - current_pnl) >= _trail_giu:
+                            # ha ceduto dal picco mentre era verde -> salvo il verde
+                            _scarto = max_profit - current_pnl
+                            _stato = "CRESC" if _scarto < 0.4 else "CEDE"
+                            self._close_shadow_trade(price,
+                                f"SALVA_VERDE*{current_pnl:+.1f}_dapicco{max_profit:+.1f}_{_stato}")
+                            return
 
                 # ═══════════════════════════════════════════════════════════
                 # VOLPE — PROFIT_LOCK A 4 LIVELLI calibrati per momentum
