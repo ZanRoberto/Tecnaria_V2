@@ -11612,6 +11612,30 @@ class OvertopBassanoV16Production:
                     self._log_constitutional(_verbale, "PRE_SC_VETO_CAMPO_WARMUP")
                     return
 
+                # ════════════════════════════════════════════════════════════
+                # MERCATO MORTO — il campo dice la VERITA' (11giu, Roberto).
+                # Il campo riconosce il contesto tossico (CTX_TOSSICO_DEBOLE_BASSA)
+                # e predice WR ~13%. I dati lo confermano: 10 morti su 13 trade in
+                # mercato morto. Era stato declassato a deposizione scavalcabile
+                # dall'SC (col VOLPE_BOOST che entrava lo stesso). GLI RIDIAMO IL
+                # POTERE DI BLOCCARE: se il veto è tossico E il mercato è morto
+                # PURO (momentum DEBOLE + volatility BASSA), torna a essere return
+                # FISICO come il WARMUP. Nessuno lo scavalca. Se il campo dice
+                # morto, NON si opera. STRETTO: solo il morto puro (DEBOLE+BASSA),
+                # i borderline passano (non strangoliamo i maschi).
+                # ENV: MERCATO_MORTO_OFF=true per spegnere/tarare al volo.
+                # ════════════════════════════════════════════════════════════
+                if os.environ.get("MERCATO_MORTO_OFF", "false").lower() != "true":
+                    _mom = str(momentum).upper()
+                    _vol = str(volatility).upper()
+                    _tox = ("TOSSICO" in _campo_veto) or ("CTX_" in _campo_veto)
+                    if _tox and _mom == "DEBOLE" and _vol == "BASSA":
+                        self._log_m2("⚰️", f"MERCATO MORTO (campo dice verità): "
+                                            f"{_campo_veto} | {_mom}/{_vol} — NON si opera (BLOCCO)")
+                        _verbale["blocked_by"] = f"MERCATO_MORTO:{_campo_veto}"
+                        self._log_constitutional(_verbale, "PRE_SC_VETO_MERCATO_MORTO")
+                        return
+
                 # Tutto il resto (CM_TOSSICO, TOSSICO_, DIVORZIO, DRIFT_VETO)
                 # è giudizio di merito → DEPOSIZIONE, niente return.
                 # Il CampoGravitazionale depone il suo veto nel verbale.
@@ -13543,8 +13567,8 @@ class OvertopBassanoV16Production:
                     # VERDE_MIN_USD, cosi' il NETTO resta positivo. Mai fottuti.
                     # 0 = spento.
                     # ═══════════════════════════════════════════════════════
-                    _trail_giu  = float(os.environ.get("TRAIL_GIU_USD", "0.6"))
-                    _verde_min  = float(os.environ.get("VERDE_MIN_USD", "2.0"))
+                    _trail_giu  = float(os.environ.get("TRAIL_GIU_USD", "0.5"))
+                    _verde_min  = float(os.environ.get("VERDE_MIN_USD", "2.5"))
                     if _trail_giu > 0 and current_pnl >= _verde_min:
                         # lordo in mano copre le fee + margine E ho ceduto dal
                         # picco -> salvo il verde NETTO che ho, vicino al picco
@@ -13557,41 +13581,47 @@ class OvertopBassanoV16Production:
 
                 # ═══════════════════════════════════════════════════════════
                 # VOLPE — PROFIT_LOCK A 4 LIVELLI calibrati per momentum
+                # ───────────────────────────────────────────────────────────
+                # DISATTIVATO DI DEFAULT (11giu, Roberto). Questi 4 livelli
+                # lasciavano ritirare il 40-55% dal picco prima di agire. Prova
+                # sui dati: 16:07 picco +7.2 → SALVAGENTE a pct0.55 → chiuso
+                # -0.77. Il grasso evaporava. Ora l'uscita in profitto è UNA
+                # sola: il SALVA_VERDE sopra (strappa appena cedi TRAIL_GIU dal
+                # picco, vicino al massimo). Niente più ritirate percentuali.
+                # Riattivabile: env PROFIT_LOCK_VECCHIO_ON=true
                 # ═══════════════════════════════════════════════════════════
+                if os.environ.get("PROFIT_LOCK_VECCHIO_ON", "false").lower() == "true":
+                    # ─ Livello 4 PROTECT_HI: WIN grosso, lascia correre ─
+                    if max_profit >= PROFIT_BIG_THRESHOLD:
+                        retreat_pct_now = retreat / max_profit
+                        _big_retreat = 0.40 if _entry_mom != "DEBOLE" else 0.35
+                        if retreat_pct_now > _big_retreat:
+                            self._close_shadow_trade(price,
+                                f"PROTECT_HI_E{exit_energy}_{_entry_mom}_max{max_profit:+.1f}_keep{current_pnl:+.1f}")
+                            return
 
-                # ─ Livello 4 PROTECT_HI: WIN grosso, lascia correre ─
-                # FORTE: scatta a $4.50, retreat 40% (lascia correre fino a $6+)
-                # MEDIO: scatta a $4.00, retreat 40%
-                # DEBOLE: scatta a $3.50, retreat 35%
-                if max_profit >= PROFIT_BIG_THRESHOLD:
-                    retreat_pct_now = retreat / max_profit
-                    _big_retreat = 0.40 if _entry_mom != "DEBOLE" else 0.35
-                    if retreat_pct_now > _big_retreat:
+                    # ─ Livello 3 EVAPORATION: max stava sopra, ora torna sotto floor low ─
+                    elif max_profit >= (PROFIT_FLOOR_LOW + 0.10) and current_pnl < PROFIT_FLOOR_LOW:
                         self._close_shadow_trade(price,
-                            f"PROTECT_HI_E{exit_energy}_{_entry_mom}_max{max_profit:+.1f}_keep{current_pnl:+.1f}")
+                            f"LOCK_EVAP_E{exit_energy}_{_entry_mom}_max{max_profit:+.1f}_now{current_pnl:+.1f}")
                         return
 
-                # ─ Livello 3 EVAPORATION: max stava sopra, ora torna sotto floor low ─
-                elif max_profit >= (PROFIT_FLOOR_LOW + 0.10) and current_pnl < PROFIT_FLOOR_LOW:
-                    self._close_shadow_trade(price,
-                        f"LOCK_EVAP_E{exit_energy}_{_entry_mom}_max{max_profit:+.1f}_now{current_pnl:+.1f}")
-                    return
+                    # ─ Livello 2 LOCK_LOW: profit medio, retreat calibrato ─
+                    elif current_pnl >= PROFIT_FLOOR_LOW and current_pnl < PROFIT_FLOOR_HIGH:
+                        retreat_pct_now = retreat / max_profit
+                        if retreat_pct_now > LOCK_LOW_RETREAT:
+                            self._close_shadow_trade(price,
+                                f"LOCK_LOW_E{exit_energy}_{_entry_mom}_WIN_{current_pnl:+.1f}")
+                            return
 
-                # ─ Livello 2 LOCK_LOW: profit medio, retreat calibrato ─
-                elif current_pnl >= PROFIT_FLOOR_LOW and current_pnl < PROFIT_FLOOR_HIGH:
-                    retreat_pct_now = retreat / max_profit
-                    if retreat_pct_now > LOCK_LOW_RETREAT:
-                        self._close_shadow_trade(price,
-                            f"LOCK_LOW_E{exit_energy}_{_entry_mom}_WIN_{current_pnl:+.1f}")
-                        return
+                    # ─ Livello 1 PROTECT: profit alto, retreat normale ─
+                    elif current_pnl >= PROFIT_FLOOR_HIGH:
+                        retreat_pct_now = retreat / max_profit
+                        if retreat_pct_now > _cm_retreat:
+                            self._close_shadow_trade(price, 
+                                f"PROFIT_LOCK_E{exit_energy}_{_entry_mom}_WIN_{max_profit:+.0f}")
+                            return
 
-                # ─ Livello 1 PROTECT: profit alto, retreat normale ─
-                elif current_pnl >= PROFIT_FLOOR_HIGH:
-                    retreat_pct_now = retreat / max_profit
-                    if retreat_pct_now > _cm_retreat:
-                        self._close_shadow_trade(price, 
-                            f"PROFIT_LOCK_E{exit_energy}_{_entry_mom}_WIN_{max_profit:+.0f}")
-                        return
 
             # -- DECISIONE ---------------------------------------------
             # PATCH 3 BUG 8 — Honest WIN Classification
