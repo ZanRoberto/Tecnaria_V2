@@ -13504,13 +13504,22 @@ class OvertopBassanoV16Production:
                     # resta dentro (corre). Il TRANS/dopata che si gira lo
                     # incasso mentre è ancora verde.
                     # ENV: TRAIL_GIU_USD (default 0.6 = cede 0.6$ dal picco).
-                    #      VERDE_MIN_USD (default 0.2 = sopra le fee). 0 = spento.
+                    #      VERDE_MIN_USD = profitto LORDO minimo in mano per
+                    #      strappare. ATTENZIONE: current_pnl qui è LORDO (il
+                    #      trade respira). Fee = 0.75/lato = 1.50 a giro (Roberto).
+                    #      Quindi LORDO 2.0 = NETTO +0.50 dopo fee. Sotto 2.0
+                    #      lordo si chiude in PERDITA netta. Default prudente 2.0.
+                    # FIX (Roberto): NON strappo se il lordo in mano non copre le
+                    # fee + margine. Strappo solo se current_pnl (lordo) >=
+                    # VERDE_MIN_USD, cosi' il NETTO resta positivo. Mai fottuti.
+                    # 0 = spento.
                     # ═══════════════════════════════════════════════════════
                     _trail_giu  = float(os.environ.get("TRAIL_GIU_USD", "0.6"))
-                    _verde_min  = float(os.environ.get("VERDE_MIN_USD", "0.2"))
-                    if _trail_giu > 0 and max_profit >= _verde_min and current_pnl > 0:
+                    _verde_min  = float(os.environ.get("VERDE_MIN_USD", "2.0"))
+                    if _trail_giu > 0 and current_pnl >= _verde_min:
+                        # lordo in mano copre le fee + margine E ho ceduto dal
+                        # picco -> salvo il verde NETTO che ho, vicino al picco
                         if (max_profit - current_pnl) >= _trail_giu:
-                            # ha ceduto dal picco mentre era verde -> salvo il verde
                             _scarto = max_profit - current_pnl
                             _stato = "CRESC" if _scarto < 0.4 else "CEDE"
                             self._close_shadow_trade(price,
