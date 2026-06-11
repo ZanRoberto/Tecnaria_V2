@@ -12439,31 +12439,11 @@ class OvertopBassanoV16Production:
                     # Becca le morte piatte-calanti che né crollo né sgonfio né
                     # isteria coprono. ENV: ANTICORDA_OFF=true per spegnere.
                     # ════════════════════════════════════════════════════════
-                    if os.environ.get("ANTICORDA_OFF", "false").lower() != "true":
-                        _anticorda_sotto = float(os.environ.get("ANTICORDA_SOTTO", "-0.3"))
-                        # aggiorno il picco col tick corrente (serve anche al controscatto sotto)
-                        _pp = getattr(self, "_rit_picco_pre", None)
-                        if _pp is None or _pos_usd > _pp:
-                            self._rit_picco_pre = _pos_usd
-                        _picco_ac = self._rit_picco_pre
-                        # corda = è sceso sotto soglia AL GIUDIZIO ed è GIRATO dal
-                        # picco (era stato più su). Non un dip iniziale: un maschio
-                        # che parte a -0.25 e sale ha picco basso e non è "girato".
-                        if (_pos_usd <= _anticorda_sotto
-                                and _picco_ac is not None and _picco_ac > 0
-                                and _pos_usd < _picco_ac):
-                            self._log("🪢", f"ANTI-CORDA: girato giù dal picco "
-                                            f"(picco +{_picco_ac:.2f}$ → ora {_pos_usd:+.2f}$ "
-                                            f"<= {_anticorda_sotto} — corda che si stringe) — NON entra")
-                            self._rit_aggancio_ts = None
-                            self._rit_prezzo_nascita = None
-                            self._rit_picco_pre = None
-                            self._rit_crollo_min = None
-                            try:
-                                self._ritardo_stats["anticorda_scartati"] = self._ritardo_stats.get("anticorda_scartati", 0) + 1
-                            except Exception:
-                                pass
-                            return
+                    # aggiorno il picco col tick corrente (serve al controscatto sotto
+                    # e alla logica 4+2). L'anti-corda vera decide all'ingresso (4+2).
+                    _pp = getattr(self, "_rit_picco_pre", None)
+                    if _pp is None or _pos_usd > _pp:
+                        self._rit_picco_pre = _pos_usd
 
                     # ════════════════════════════════════════════════════════
                     # traccio il picco dell'attesa (sempre, costa nulla)
@@ -12558,13 +12538,20 @@ class OvertopBassanoV16Production:
                     self._log("⏳", f"RITARDO ingresso: segnale agganciato, "
                                     f"atteso {_rit_atteso:.1f}/{_rit_sec:.0f}s @ ${price:.1f}")
                     return
-                # il segnale ha retto N secondi -> CHECK FINALE prima di entrare
-                # (11giu, Roberto: "basta che fosse fermato al secondo 4"). I filtri
-                # sopra girano a ogni tick, ma qui — al momento esatto dell'ingresso —
-                # ricontrollo il valore ADESSO. Se al secondo 4 sta girato giù sotto
-                # l'aggancio, è una corda: NON entro. Ultima parola, secca.
+                # ════════════════════════════════════════════════════════
+                # STRATEGIA 4+2 (11giu, Roberto: "non 4 d'ufficio, ma 4+2 e
+                # vediamo chi crolla — i due solo per i resistenti"). A 4s:
+                #  - CHIARO positivo (sopra +zona) → maschio → entra subito
+                #  - CHIARO negativo (sotto -zona) → corda → fuori subito
+                #  - INCERTO (tra -zona e +zona, lì lì) → NON decido d'ufficio:
+                #      proroga di RITARDO_EXTRA_SEC e guardo chi crolla. Il
+                #      maschio tiene/corre, la dopata si smaschera crollando.
+                # Il tempo è il giudice. ENV: ANTICORDA_ZONA (default 1.0 = zona
+                #  incerta ±1$), RITARDO_EXTRA_SEC (default 2). ANTICORDA_OFF spegne.
+                # ════════════════════════════════════════════════════════
                 if os.environ.get("ANTICORDA_OFF", "false").lower() != "true":
-                    _ac_sotto = float(os.environ.get("ANTICORDA_SOTTO", "-0.3"))
+                    _zona = float(os.environ.get("ANTICORDA_ZONA", "1.0"))
+                    _extra = float(os.environ.get("RITARDO_EXTRA_SEC", "2"))
                     _exp_fin = float(os.environ.get("EXPOSURE_USD", "5000"))
                     _ep_fin = getattr(self, "_rit_prezzo_nascita", None) or price
                     _dir_fin = getattr(self.campo, "_direction", "LONG")
@@ -12572,10 +12559,11 @@ class OvertopBassanoV16Production:
                     if str(_dir_fin).upper().startswith("SHORT"):
                         _delta_fin = -_delta_fin
                     _pos_fin = _delta_fin * _exp_fin
-                    if _pos_fin <= _ac_sotto:
-                        self._log("🪢", f"ANTI-CORDA (check finale s{_rit_atteso:.0f}): "
-                                        f"al momento di entrare sta a {_pos_fin:+.2f}$ "
-                                        f"<= {_ac_sotto} — corda, NON entra")
+
+                    # CORDA CHIARA: sotto -zona → fuori subito (a 4s o a 6s)
+                    if _pos_fin <= -_zona:
+                        self._log("🪢", f"ANTI-CORDA (s{_rit_atteso:.0f}): "
+                                        f"{_pos_fin:+.2f}$ <= -{_zona} — crollato, NON entra")
                         self._rit_aggancio_ts = None
                         self._rit_prezzo_nascita = None
                         self._rit_picco_pre = None
@@ -12585,7 +12573,30 @@ class OvertopBassanoV16Production:
                         except Exception:
                             pass
                         return
-                # passato il check finale -> entro ORA al prezzo corrente, azzero
+
+                    # INCERTO: tra -zona e +zona → do 2 secondi extra (solo se non
+                    # li ho già dati). A 4+2=6s rivaluto: se ancora qui sotto/incerto
+                    # crollerà nel ramo sopra, se è salito sopra +zona entra sotto.
+                    if _pos_fin < _zona and _rit_atteso < (_rit_sec + _extra):
+                        self._log("⏳", f"INCERTO a s{_rit_atteso:.0f} ({_pos_fin:+.2f}$ "
+                                        f"dentro ±{_zona}) — +{_extra:.0f}s di prova: vediamo chi crolla")
+                        return
+                    # passati i 2 extra ed è ancora sotto +zona ma sopra -zona →
+                    # resta incerto/debole → non entra (non si è dichiarato maschio)
+                    if _pos_fin < _zona:
+                        self._log("🪢", f"ANTI-CORDA (s{_rit_atteso:.0f}, dopo +{_extra:.0f}s): "
+                                        f"{_pos_fin:+.2f}$ ancora incerto, non corre — NON entra")
+                        self._rit_aggancio_ts = None
+                        self._rit_prezzo_nascita = None
+                        self._rit_picco_pre = None
+                        self._rit_crollo_min = None
+                        try:
+                            self._ritardo_stats["anticorda_scartati"] = self._ritardo_stats.get("anticorda_scartati", 0) + 1
+                        except Exception:
+                            pass
+                        return
+                    # _pos_fin >= +zona → maschio chiaro/resistente → entra
+                # passato (maschio chiaro o resistente dopo i 2s) -> entro ORA, azzero
                 self._rit_aggancio_ts = None
                 self._rit_prezzo_nascita = None
                 self._rit_picco_pre = None
