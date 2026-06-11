@@ -41,6 +41,18 @@ import operator
 import sqlite3
 import os
 # ════════════════════════════════════════════════════════════════════
+# BUILD_MD5 (11giu, Roberto: "serve un segno sulla lista per sapere quale
+# codice ha prodotto il trade"). Calcolo l'md5 del file all'avvio, una
+# volta sola, e lo marchio su ogni trade. Così nel database si legge nero
+# su bianco quale assetto l'ha generato — niente più "è vecchio o nuovo?"
+# a vista. Si auto-aggiorna: cambi file, cambia il marchio.
+try:
+    with open(os.path.abspath(__file__), "rb") as _bf:
+        BUILD_MD5 = hashlib.md5(_bf.read()).hexdigest()[:12]
+except Exception:
+    BUILD_MD5 = "unknown"
+# ════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
 # FIX DEFINITIVO LOCK (6giu) — connessione serializzata da lock globale.
 # Tutte le connessioni passano da _safe_connect, che le mette in fila con
 # un unico lock. Due scritture non possono MAI sovrapporsi -> niente piu'
@@ -14273,6 +14285,7 @@ class OvertopBassanoV16Production:
                           "macd_val":  round(getattr(self.campo, "_last_macd_hist", 0), 4),
                           # V16: peak intra-trade
                           "peak_pnl":     round(self._trade_peak_pnl, 4),
+                          "build":        BUILD_MD5,   # marchio di versione (quale codice ha prodotto il trade)
                           "peak_delta_s": round(self._trade_peak_ts - self._shadow_entry_time, 1)
                                          if self._trade_peak_ts and self._shadow_entry_time else 0,
                           # CARICA VIVA (29mag, Roberto): traiettoria del seed
@@ -14380,6 +14393,7 @@ class OvertopBassanoV16Production:
                             "entry_price": self._shadow.get("price_entry", 0),
                             "duration": round(trade_duration, 1),
                             "peak_pnl": round(self._trade_peak_pnl, 4),
+                            "build": BUILD_MD5,
                             "fp_wr": round(self._shadow.get("fingerprint_wr", 0), 4),
                         }
                     }
