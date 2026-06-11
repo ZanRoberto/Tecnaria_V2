@@ -12429,6 +12429,43 @@ class OvertopBassanoV16Production:
                     #      picco -> fuori). 0 = spento. Picco minimo per valutare:
                     #      SCATTO_PICCO_MIN (default 0.6, sotto è rumore).
                     # ════════════════════════════════════════════════════════
+                    # ANTI-CORDA (11giu, Roberto: "non subire più il trade che si
+                    # mette la corda al collo piano piano"). Il 18:10: piatto
+                    # +0.74 (s1-3), poi GIRA sotto zero (-0.52 al s4 = giudizio),
+                    # cola a -4. Al momento del giudizio stava GIÀ scendendo sotto
+                    # l'aggancio. Una corda che inizia a stringersi. Regola secca:
+                    # se al giudizio _pos_usd < 0 (è sotto l'aggancio, sta girando
+                    # giù) → NON entra. Il maschio al giudizio è POSITIVO (sale).
+                    # Becca le morte piatte-calanti che né crollo né sgonfio né
+                    # isteria coprono. ENV: ANTICORDA_OFF=true per spegnere.
+                    # ════════════════════════════════════════════════════════
+                    if os.environ.get("ANTICORDA_OFF", "false").lower() != "true":
+                        _anticorda_sotto = float(os.environ.get("ANTICORDA_SOTTO", "-0.3"))
+                        # aggiorno il picco col tick corrente (serve anche al controscatto sotto)
+                        _pp = getattr(self, "_rit_picco_pre", None)
+                        if _pp is None or _pos_usd > _pp:
+                            self._rit_picco_pre = _pos_usd
+                        _picco_ac = self._rit_picco_pre
+                        # corda = è sceso sotto soglia AL GIUDIZIO ed è GIRATO dal
+                        # picco (era stato più su). Non un dip iniziale: un maschio
+                        # che parte a -0.25 e sale ha picco basso e non è "girato".
+                        if (_pos_usd <= _anticorda_sotto
+                                and _picco_ac is not None and _picco_ac > 0
+                                and _pos_usd < _picco_ac):
+                            self._log("🪢", f"ANTI-CORDA: girato giù dal picco "
+                                            f"(picco +{_picco_ac:.2f}$ → ora {_pos_usd:+.2f}$ "
+                                            f"<= {_anticorda_sotto} — corda che si stringe) — NON entra")
+                            self._rit_aggancio_ts = None
+                            self._rit_prezzo_nascita = None
+                            self._rit_picco_pre = None
+                            self._rit_crollo_min = None
+                            try:
+                                self._ritardo_stats["anticorda_scartati"] = self._ritardo_stats.get("anticorda_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            return
+
+                    # ════════════════════════════════════════════════════════
                     # traccio il picco dell'attesa (sempre, costa nulla)
                     _picco_pre = getattr(self, "_rit_picco_pre", None)
                     if _picco_pre is None or _pos_usd > _picco_pre:
