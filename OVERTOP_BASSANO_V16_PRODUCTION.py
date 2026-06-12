@@ -8194,13 +8194,13 @@ class OvertopBassanoV16Production:
                 if _bull:
                     self._regime_current = 'TRENDING_BULL'
                     self._regime_conf    = min(1.0, abs(_move200) / 0.5)
-                    self._log(f"🔄 AUTOCORRETTORE: RANGING→TRENDING_BULL "
-                             f"(m50={_move50:+.2f}% m200={_move200:+.2f}% dir={_dir200:.2f})")
+                    self._log("🔄", f"AUTOCORRETTORE: RANGING→TRENDING_BULL "
+                                    f"(m50={_move50:+.2f}% m200={_move200:+.2f}% dir={_dir200:.2f})")
                 elif _bear:
                     self._regime_current = 'TRENDING_BEAR'
                     self._regime_conf    = min(1.0, abs(_move200) / 0.5)
-                    self._log(f"🔄 AUTOCORRETTORE: RANGING→TRENDING_BEAR "
-                             f"(m50={_move50:+.2f}% m200={_move200:+.2f}% dir={_dir200:.2f})")
+                    self._log("🔄", f"AUTOCORRETTORE: RANGING→TRENDING_BEAR "
+                                    f"(m50={_move50:+.2f}% m200={_move200:+.2f}% dir={_dir200:.2f})")
 
         # Persistenza ogni 5 minuti
         if now - self.last_persist > 300:
