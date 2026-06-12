@@ -12347,6 +12347,13 @@ class OvertopBassanoV16Production:
                             self._ritardo_stats["mae_scartati"] = self._ritardo_stats.get("mae_scartati", 0) + 1
                         except Exception:
                             pass
+                        # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                        try:
+                            self._record_phantom(price, "MINA_MAE",
+                                                 float(seed.get("score", 0) or 0),
+                                                 str(momentum), str(volatility), str(trend))
+                        except Exception:
+                            pass
                         return
 
                     # ════════════════════════════════════════════════════════
@@ -12384,6 +12391,21 @@ class OvertopBassanoV16Production:
                             self._ritardo_stats["crollo_scartati"] = self._ritardo_stats.get("crollo_scartati", 0) + 1
                         except Exception:
                             pass
+                        # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic.
+                        # Distingue se il crollo era ORIGINALE (osservato in questi secondi gratis)
+                        # oppure EREDITATO dal RI-AGGANCIO (flag _crollo_min == -999.0, impostato
+                        # dal blocco RI-AGGANCIO SOSPETTO ~r.12258 quando il nuovo aggancio arriva
+                        # entro RIAGGANCIO_MEMORIA_SEC da un crollo precedente). Così il tribunale
+                        # può giudicare il RI-AGGANCIO separatamente.
+                        try:
+                            _etichetta_mina = ("MINA_RIAGGANCIO_EREDITATO"
+                                               if _crollo_min == -999.0
+                                               else "MINA_ANTIFALSA_RIPARTENZA")
+                            self._record_phantom(price, _etichetta_mina,
+                                                 float(seed.get("score", 0) or 0),
+                                                 str(momentum), str(volatility), str(trend))
+                        except Exception:
+                            pass
                         return
 
                     # ════════════════════════════════════════════════════════
@@ -12410,6 +12432,13 @@ class OvertopBassanoV16Production:
                             self._rit_crollo_min = None
                             try:
                                 self._ritardo_stats["isterico_scartati"] = self._ritardo_stats.get("isterico_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                            try:
+                                self._record_phantom(price, "MINA_ANTIISTERIA",
+                                                     float(seed.get("score", 0) or 0),
+                                                     str(momentum), str(volatility), str(trend))
                             except Exception:
                                 pass
                             return
@@ -12468,6 +12497,13 @@ class OvertopBassanoV16Production:
                                 self._ritardo_stats["controscatto_scartati"] = self._ritardo_stats.get("controscatto_scartati", 0) + 1
                             except Exception:
                                 pass
+                            # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                            try:
+                                self._record_phantom(price, "MINA_CONTROSCATTO",
+                                                     float(seed.get("score", 0) or 0),
+                                                     str(momentum), str(volatility), str(trend))
+                            except Exception:
+                                pass
                             return
 
                     # ════════════════════════════════════════════════════════
@@ -12495,6 +12531,13 @@ class OvertopBassanoV16Production:
                             self._rit_picco_pre = None
                             try:
                                 self._ritardo_stats["piatti_scartati"] = self._ritardo_stats.get("piatti_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                            try:
+                                self._record_phantom(price, "MINA_TRANS_PIATTI",
+                                                     float(seed.get("score", 0) or 0),
+                                                     str(momentum), str(volatility), str(trend))
                             except Exception:
                                 pass
                             return
@@ -12529,6 +12572,13 @@ class OvertopBassanoV16Production:
                             self._rit_picco_pre = None
                             try:
                                 self._ritardo_stats["ripieg_scartati"] = self._ritardo_stats.get("ripieg_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                            try:
+                                self._record_phantom(price, "MINA_RIPIEGAMENTO",
+                                                     float(seed.get("score", 0) or 0),
+                                                     str(momentum), str(volatility), str(trend))
                             except Exception:
                                 pass
                             return
@@ -12572,6 +12622,13 @@ class OvertopBassanoV16Production:
                             self._ritardo_stats["anticorda_scartati"] = self._ritardo_stats.get("anticorda_scartati", 0) + 1
                         except Exception:
                             pass
+                        # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                        try:
+                            self._record_phantom(price, "MINA_ANTICORDA_CROLLO",
+                                                 float(seed.get("score", 0) or 0),
+                                                 str(momentum), str(volatility), str(trend))
+                        except Exception:
+                            pass
                         return
 
                     # INCERTO: tra -zona e +zona → do 2 secondi extra (solo se non
@@ -12592,6 +12649,13 @@ class OvertopBassanoV16Production:
                         self._rit_crollo_min = None
                         try:
                             self._ritardo_stats["anticorda_scartati"] = self._ritardo_stats.get("anticorda_scartati", 0) + 1
+                        except Exception:
+                            pass
+                        # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                        try:
+                            self._record_phantom(price, "MINA_ANTICORDA_INCERTO",
+                                                 float(seed.get("score", 0) or 0),
+                                                 str(momentum), str(volatility), str(trend))
                         except Exception:
                             pass
                         return
