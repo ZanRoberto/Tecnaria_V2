@@ -12747,6 +12747,72 @@ class OvertopBassanoV16Production:
                             pass
                         return
                     # _pos_fin >= +zona → maschio chiaro/resistente → entra
+
+                # ════════════════════════════════════════════════════════════════
+                # GATE PEAK CONFERMATIVO (13giu2026, Roberto — IL KILLER)
+                # ════════════════════════════════════════════════════════════════
+                # SCOPERTA dimostrata su 154 trade (tabella curva_nascita):
+                # il distintivo maschi/fiacchi NON e' nella firma (ambigua) ne' nei
+                # primi 3s (indistinguibili). E' nel PICCO raggiunto entro una
+                # finestra LUNGA di osservazione. I maschi partono rossi e risalgono
+                # TARDI (t_peak medio WIN 33s vs LOSS 5s). Simulazione ONESTA
+                # (guadagno = pnl_finale - pnl_ingresso): gate "picco >= +1.0$ entro
+                # 15s" porta da -247$ (tutti entrano, WR 30%) a +60$ reali (WR 62%).
+                # Il picco dell'attesa e' gia' tracciato in _rit_picco_pre.
+                #
+                # MODALITA': GATE_PEAK_OBSERVER (default true = SOLO OSSERVA, logga
+                # ma NON blocca). Mettere false per farlo DECIDERE (bloccare chi non
+                # ha raggiunto il picco). ENV:
+                #   GATE_PEAK_USD (default 1.0)  = soglia picco minima per entrare
+                #   GATE_PEAK_FINESTRA_SEC (15)  = entro quanti secondi dall'aggancio
+                #   GATE_PEAK_OBSERVER (true)    = true osserva, false decide
+                #   GATE_PEAK_OFF (false)        = true spegne del tutto
+                # ════════════════════════════════════════════════════════════════
+                if os.environ.get("GATE_PEAK_OFF", "false").lower() != "true":
+                    try:
+                        _gp_soglia = float(os.environ.get("GATE_PEAK_USD", "1.0"))
+                        _gp_finestra = float(os.environ.get("GATE_PEAK_FINESTRA_SEC", "15"))
+                        _gp_observer = os.environ.get("GATE_PEAK_OBSERVER", "true").lower() == "true"
+                        _gp_picco = getattr(self, "_rit_picco_pre", None)
+                        _gp_picco = _gp_picco if _gp_picco is not None else -999.0
+                        # il picco e' valido solo se osservato entro la finestra
+                        _gp_entro_finestra = (_rit_atteso <= _gp_finestra)
+                        _gp_passa = (_gp_picco >= _gp_soglia) and _gp_entro_finestra
+                        if _gp_passa:
+                            self._log_m2("✅",
+                                f"GATE PEAK: picco attesa {_gp_picco:+.2f}$ >= {_gp_soglia}$ "
+                                f"entro {_rit_atteso:.1f}s (<= {_gp_finestra:.0f}s) — MASCHIO confermato")
+                        else:
+                            _gp_motivo = (f"picco {_gp_picco:+.2f}$ < {_gp_soglia}$" if _gp_picco < _gp_soglia
+                                          else f"fuori finestra ({_rit_atteso:.1f}s > {_gp_finestra:.0f}s)")
+                            if _gp_observer:
+                                # OSSERVATORE: logga cosa AVREBBE fatto, ma lascia entrare
+                                self._log_m2("👁️",
+                                    f"GATE PEAK [OSSERVA]: avrebbe SCARTATO ({_gp_motivo}) "
+                                    f"ma observer attivo — entra comunque")
+                            else:
+                                # DECISORE: blocca chi non ha confermato il picco
+                                self._log_m2("🚫",
+                                    f"GATE PEAK: SCARTATO ({_gp_motivo}) — non si e' "
+                                    f"dichiarato maschio nell'osservazione, NON entra")
+                                self._rit_aggancio_ts = None
+                                self._rit_prezzo_nascita = None
+                                self._rit_picco_pre = None
+                                self._rit_crollo_min = None
+                                try:
+                                    self._ritardo_stats["gate_peak_scartati"] = self._ritardo_stats.get("gate_peak_scartati", 0) + 1
+                                except Exception:
+                                    pass
+                                try:
+                                    self._record_phantom(price, "MINA_GATE_PEAK",
+                                                         float(seed.get("score", 0) or 0),
+                                                         str(momentum), str(volatility), str(trend))
+                                except Exception:
+                                    pass
+                                return
+                    except Exception as _e_gp:
+                        log.debug(f"[GATE_PEAK_ERR] {_e_gp}")
+
                 # passato (maschio chiaro o resistente dopo i 2s) -> entro ORA, azzero
                 self._rit_aggancio_ts = None
                 self._rit_prezzo_nascita = None
