@@ -12886,6 +12886,18 @@ class OvertopBassanoV16Production:
                 "nascita_vol_pressure": seed.get('vol_pressure'),
                 "nascita_comp_duration": seed.get('comp_duration'),
                 "nascita_sign_flips":   seed.get('sign_flips'),
+                # ════════════════════════════════════════════════════════════
+                # PICCO PRE-INGRESSO (15giu2026, Roberto) — TRACCIO IL BYPASS
+                # ════════════════════════════════════════════════════════════
+                # Salvo il picco massimo raggiunto durante il ritardo di
+                # osservazione (i secondi gratis PRIMA dell'apertura). Permette
+                # di vedere quale picco_pre aveva il trade quando GATE PEAK
+                # ha dato il via libera. Se trade morti hanno picco_pre>=1.0$
+                # è il fenomeno "maschio svuotato". Se picco_pre<1.0$ allora
+                # GATE PEAK ha un bypass: vanno trovati e chiusi.
+                # Letto da self._rit_picco_pre (popolato dal blocco
+                # CONTROSCATTO/RIPIEGAMENTO durante l'attesa).
+                "rit_picco_pre":    getattr(self, "_rit_picco_pre", None),
             }
             self._shadow_entry_time        = time.time()
             self._shadow_max_price         = price
