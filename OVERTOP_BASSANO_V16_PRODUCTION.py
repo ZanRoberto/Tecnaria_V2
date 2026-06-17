@@ -12561,63 +12561,12 @@ class OvertopBassanoV16Production:
                     if _pp is None or _pos_usd > _pp:
                         self._rit_picco_pre = _pos_usd
 
-                    # ════════════════════════════════════════════════════════
-                    # CORSIA PRIVATA DEL MASCHIO (17giu2026, Roberto)
-                    # ════════════════════════════════════════════════════════
-                    # "Il maschio deve avere il suo occhio, la sua telecamera
-                    #  privata, e scatta nel momento in cui ha le carte in regola.
-                    #  Gli altri vanno in purgatorio, ma non lui."
-                    # REGOLA: durante l'attesa, ad OGNI secondo, se il grasso NETTO
-                    # (lordo meno fee 2$) supera la soglia da maschio -> il trade
-                    # ENTRA SUBITO, in questo secondo, saltando il ritardo. Il
-                    # maschio veloce non muore in purgatorio aspettando. Gli incerti
-                    # restano nel ritardo normale; le capre che non si manifestano
-                    # non entrano mai. La presa secca poi lo spolpa.
-                    # ENV: MASCHIO_CORSIA_USD (default 1.0 = grasso netto che fa
-                    #      scattare l'ingresso immediato). MASCHIO_CORSIA_OFF spegne.
-                    # ════════════════════════════════════════════════════════
+                    # ── CORSIA MASCHIO RIMOSSA (17giu, Roberto). Era rotta:
+                    # azzerava lo stato del ritardo e poi cadeva nei cancelli a
+                    # valle (ANTICORDA, GATE PEAK) che lo rileggevano "piatto", e
+                    # scriveva entrato=1 falso senza mai aprire il trade. Tolta.
+                    # Niente ENV nuove. Comportamento = vivo: guardiani sempre attivi.
                     _maschio_entra_ora = False
-                    if os.environ.get("MASCHIO_CORSIA_OFF", "false").lower() != "true":
-                        _mc_soglia = float(os.environ.get("MASCHIO_CORSIA_USD", "1.0"))
-                        _mc_fee = self.TRADE_SIZE_USD * self.LEVERAGE * self.FEE_PCT * 2
-                        _mc_netto = _pos_usd - _mc_fee
-                        if _mc_netto >= _mc_soglia:
-                            self._log_m2("🐺",
-                                f"CORSIA MASCHIO: grasso netto +{_mc_netto:.2f}$ "
-                                f"(>= {_mc_soglia}$) — carte in regola, ENTRA SUBITO "
-                                f"@ ${price:.1f}")
-                            _maschio_entra_ora = True
-
-                    if _maschio_entra_ora:
-                        # SALTA il purgatorio: azzera aggancio ed entra adesso.
-                        self._rit_aggancio_ts = None
-                        self._rit_prezzo_nascita = None
-                        self._rit_picco_pre = None
-                        try:
-                            self._ritardo_stats["entrati"] = self._ritardo_stats.get("entrati", 0) + 1
-                            self._ritardo_stats["maschi_corsia"] = self._ritardo_stats.get("maschi_corsia", 0) + 1
-                        except Exception:
-                            pass
-                        _rid_mc = getattr(self, "_rit_aggancio_rowid", None)
-                        if _rid_mc is not None:
-                            _upmc = None
-                            try:
-                                import sqlite3 as _sqmc
-                                _upmc = _sqmc.connect(DB_PATH, timeout=15)
-                                _upmc.execute("PRAGMA busy_timeout=15000;")
-                                _upmc.execute("UPDATE ritardo_agganci SET entrato=1 WHERE id=?", (_rid_mc,))
-                                _upmc.commit()
-                            except Exception:
-                                pass
-                            finally:
-                                if _upmc is not None:
-                                    try: _upmc.close()
-                                    except Exception: pass
-                            self._rit_aggancio_rowid = None
-                        # ENTRA ORA: salto al blocco di apertura del trade.
-                        # (fall-through forzato: non eseguo i guardiani sotto)
-                    else:
-                        pass  # nessun maschio confermato: prosegui col purgatorio normale
 
 
                     # ════════════════════════════════════════════════════════
@@ -12839,6 +12788,37 @@ class OvertopBassanoV16Production:
                             # il picco e' valido solo se osservato entro la finestra
                             _gp_entro_finestra = (_rit_atteso <= _gp_finestra)
                             _gp_passa = (_gp_picco >= _gp_soglia) and _gp_entro_finestra
+                            # ════════════════════════════════════════════════
+                            # OSSERVA-GATE (17giu, Roberto: "vai").
+                            # Registra cosa VEDE GATE PEAK a ogni aggancio, senza
+                            # toccare la decisione. UNA riga per aggancio. Serve a
+                            # simulare la soglia sui dati veri: il picco pre-ingresso
+                            # non era salvato da nessuna parte -> senza questo non si
+                            # puo' simulare l'ingresso (il 97% del sangue). Solo INSERT,
+                            # try/except totale: non puo' mai fermare un trade.
+                            # Tabella usa-e-getta: DROP quando la taratura e' fatta.
+                            # ════════════════════════════════════════════════
+                            try:
+                                _go = _safe_connect(DB_PATH, timeout=5)
+                                _go.execute("PRAGMA busy_timeout=5000;")
+                                _go.execute("""CREATE TABLE IF NOT EXISTS gate_peak_osserva (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    ts REAL DEFAULT (strftime('%s','now')),
+                                    picco_pre REAL, soglia REAL, t_atteso REAL,
+                                    passa INTEGER, observer INTEGER,
+                                    regime TEXT, direction TEXT, prezzo REAL)""")
+                                _go.execute("""INSERT INTO gate_peak_osserva
+                                    (picco_pre, soglia, t_atteso, passa, observer, regime, direction, prezzo)
+                                    VALUES (?,?,?,?,?,?,?,?)""",
+                                    (float(_gp_picco), float(_gp_soglia), float(_rit_atteso),
+                                     1 if _gp_passa else 0, 1 if _gp_observer else 0,
+                                     str(getattr(self, "_regime_current", "") or ""),
+                                     str(getattr(getattr(self, "campo", None), "_direction", "") or ""),
+                                     float(price)))
+                                _go.commit()
+                                _go.close()
+                            except Exception:
+                                pass
                             if _gp_passa:
                                 self._log_m2("✅",
                                     f"GATE PEAK: picco attesa {_gp_picco:+.2f}$ >= {_gp_soglia}$ "
