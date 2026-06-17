@@ -13759,6 +13759,47 @@ class OvertopBassanoV16Production:
                 _nato = self._shadow.get("nato_ts")
                 if _nato is not None:
                     _eta = time.time() - _nato
+                    # ════════════════════════════════════════════════════════════════
+                    # PRESA SECCA (16giu2026, Roberto) — PORTA A CASA IL GRASSO.
+                    # ════════════════════════════════════════════════════════════════
+                    # REGOLA ASSOLUTA: appena il trade tocca la soglia di profitto,
+                    # CHIUDO SUBITO. Non importa se maschio, femmina o trans. Non
+                    # aspetto che ceda. Non aspetto i 10 secondi. Se hai +1$ in mano
+                    # a qualunque secondo, lo metto al sicuro e basta.
+                    # ENV: PRESA_SECCA_OFF (default false = attiva),
+                    #      PRESA_SECCA_USD (default 1.0 = chiudi appena tocchi +1$).
+                    # ════════════════════════════════════════════════════════════════
+                    if os.environ.get("PRESA_SECCA_OFF", "false").lower() != "true":
+                        _presa_usd = float(os.environ.get("PRESA_SECCA_USD", "1.0"))
+                        # current_pnl e' LORDO. Tolgo la fee (2$) per avere il NETTO.
+                        # Cosi' PRESA_SECCA_USD=1.0 significa "+1$ NETTO in tasca".
+                        _presa_netto = current_pnl - (self.TRADE_SIZE_USD * self.LEVERAGE * self.FEE_PCT * 2)
+                        if _presa_netto >= _presa_usd:
+                            self._log_m2("💰",
+                                f"PRESA SECCA: +{_presa_netto:.2f}$ NETTO a {_eta:.0f}s "
+                                f"(lordo +{current_pnl:.2f}$) — porto a casa SUBITO")
+                            _ps = None
+                            try:
+                                import sqlite3 as _sqps
+                                _ps = _sqps.connect(self.db_path, timeout=15)
+                                _ps.execute("PRAGMA busy_timeout=15000;")
+                                _ps.execute("""CREATE TABLE IF NOT EXISTS presa_secca_tagli (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                                    eta_s REAL, pnl_presa REAL, prezzo REAL)""")
+                                _ps.execute("""INSERT INTO presa_secca_tagli
+                                    (eta_s, pnl_presa, prezzo) VALUES (?, ?, ?)""",
+                                    (float(_eta), float(_presa_netto), float(price)))
+                                _ps.commit()
+                            except Exception:
+                                pass
+                            finally:
+                                if _ps is not None:
+                                    try:
+                                        _ps.close()
+                                    except Exception:
+                                        pass
+                            return self._close_shadow_trade(price, "PRESA_SECCA")
                     if _eta >= 10 and self._shadow.get("pnl_10s") is None:
                         self._shadow["pnl_10s"] = round(current_pnl, 3)
                     # ════════════════════════════════════════════════════════════════
