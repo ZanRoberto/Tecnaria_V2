@@ -12562,282 +12562,343 @@ class OvertopBassanoV16Production:
                         self._rit_picco_pre = _pos_usd
 
                     # ════════════════════════════════════════════════════════
-                    # traccio il picco dell'attesa (sempre, costa nulla)
-                    _picco_pre = getattr(self, "_rit_picco_pre", None)
-                    if _picco_pre is None or _pos_usd > _picco_pre:
-                        self._rit_picco_pre = _pos_usd
-                        _picco_pre = _pos_usd
-                    _sgonfio_pct = float(os.environ.get("SCATTO_SGONFIO_PCT", "0.50"))
-                    _picco_min = float(os.environ.get("SCATTO_PICCO_MIN", "0.6"))
-                    if _sgonfio_pct > 0 and _picco_pre is not None and _picco_pre >= _picco_min:
-                        # quanto si è sgonfiato dal picco dell'attesa?
-                        _sgonfio = (_picco_pre - _pos_usd) / _picco_pre if _picco_pre > 0 else 0
-                        if _sgonfio >= _sgonfio_pct:
-                            # falso scatto: ha fatto picco e si è sgonfiato -> schivo
-                            self._log("🦊", f"CONTROSCATTO: falsa partenza schivata "
-                                            f"(picco +{_picco_pre:.2f}$ → ora {_pos_usd:+.2f}$, "
-                                            f"sgonfio {_sgonfio*100:.0f}%) — NON entra")
-                            self._rit_aggancio_ts = None
-                            self._rit_prezzo_nascita = None
-                            self._rit_picco_pre = None
+                    # CORSIA PRIVATA DEL MASCHIO (17giu2026, Roberto)
+                    # ════════════════════════════════════════════════════════
+                    # "Il maschio deve avere il suo occhio, la sua telecamera
+                    #  privata, e scatta nel momento in cui ha le carte in regola.
+                    #  Gli altri vanno in purgatorio, ma non lui."
+                    # REGOLA: durante l'attesa, ad OGNI secondo, se il grasso NETTO
+                    # (lordo meno fee 2$) supera la soglia da maschio -> il trade
+                    # ENTRA SUBITO, in questo secondo, saltando il ritardo. Il
+                    # maschio veloce non muore in purgatorio aspettando. Gli incerti
+                    # restano nel ritardo normale; le capre che non si manifestano
+                    # non entrano mai. La presa secca poi lo spolpa.
+                    # ENV: MASCHIO_CORSIA_USD (default 1.0 = grasso netto che fa
+                    #      scattare l'ingresso immediato). MASCHIO_CORSIA_OFF spegne.
+                    # ════════════════════════════════════════════════════════
+                    _maschio_entra_ora = False
+                    if os.environ.get("MASCHIO_CORSIA_OFF", "false").lower() != "true":
+                        _mc_soglia = float(os.environ.get("MASCHIO_CORSIA_USD", "1.0"))
+                        _mc_fee = self.TRADE_SIZE_USD * self.LEVERAGE * self.FEE_PCT * 2
+                        _mc_netto = _pos_usd - _mc_fee
+                        if _mc_netto >= _mc_soglia:
+                            self._log_m2("🐺",
+                                f"CORSIA MASCHIO: grasso netto +{_mc_netto:.2f}$ "
+                                f"(>= {_mc_soglia}$) — carte in regola, ENTRA SUBITO "
+                                f"@ ${price:.1f}")
+                            _maschio_entra_ora = True
+
+                    if _maschio_entra_ora:
+                        # SALTA il purgatorio: azzera aggancio ed entra adesso.
+                        self._rit_aggancio_ts = None
+                        self._rit_prezzo_nascita = None
+                        self._rit_picco_pre = None
+                        try:
+                            self._ritardo_stats["entrati"] = self._ritardo_stats.get("entrati", 0) + 1
+                            self._ritardo_stats["maschi_corsia"] = self._ritardo_stats.get("maschi_corsia", 0) + 1
+                        except Exception:
+                            pass
+                        _rid_mc = getattr(self, "_rit_aggancio_rowid", None)
+                        if _rid_mc is not None:
+                            _upmc = None
                             try:
-                                self._ritardo_stats["controscatto_scartati"] = self._ritardo_stats.get("controscatto_scartati", 0) + 1
+                                import sqlite3 as _sqmc
+                                _upmc = _sqmc.connect(DB_PATH, timeout=15)
+                                _upmc.execute("PRAGMA busy_timeout=15000;")
+                                _upmc.execute("UPDATE ritardo_agganci SET entrato=1 WHERE id=?", (_rid_mc,))
+                                _upmc.commit()
                             except Exception:
                                 pass
-                            # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
-                            try:
-                                self._record_phantom(price, "MINA_CONTROSCATTO",
-                                                     float(seed.get("score", 0) or 0),
-                                                     str(momentum), str(volatility), str(trend))
-                            except Exception:
-                                pass
-                            return
+                            finally:
+                                if _upmc is not None:
+                                    try: _upmc.close()
+                                    except Exception: pass
+                            self._rit_aggancio_rowid = None
+                        # ENTRA ORA: salto al blocco di apertura del trade.
+                        # (fall-through forzato: non eseguo i guardiani sotto)
+                    else:
+                        pass  # nessun maschio confermato: prosegui col purgatorio normale
+
 
                     # ════════════════════════════════════════════════════════
-                    # TAGLIO TRANS PIATTI (11giu, Roberto: "vanno tagliati punto").
-                    # Dai dati pre-ingresso: i TRANS piatti stanno a +0.2/0.0/-0.001
-                    # nei secondi gratis, NON salgono. I maschi veri salgono sopra
-                    # +0.5 e ci restano (es. +0.749 costante). Quindi: per entrare
-                    # NON basta "non scendere" — bisogna SALIRE da maschio. Se dopo
-                    # almeno SALITA_DOPO_SEC secondi di attesa il segnale non ha
-                    # superato +SALITA_MIN, è un trans piatto -> NON entra.
-                    # ENV: SALITA_MIN_USD (default 0.40; 0 = spento).
-                    #      SALITA_DOPO_SEC (default 3 = do 3s al maschio per salire).
-                    # ════════════════════════════════════════════════════════
-                    _salita_min = float(os.environ.get("SALITA_MIN_USD", "0.40"))
-                    _salita_dopo = float(os.environ.get("SALITA_DOPO_SEC", "3"))
-                    if _salita_min > 0:
-                        _eta_attesa = _rit_now - _rit_aggancio
-                        if _eta_attesa >= _salita_dopo and _pos_usd < _salita_min:
-                            # ha avuto il tempo di salire e NON è salito -> trans piatto -> fuori
-                            self._log("🟰", f"TRANS PIATTO scartato "
-                                            f"(dopo {_eta_attesa:.1f}s sta a {_pos_usd:+.2f}$ "
-                                            f"< +{_salita_min}$ — non sale da maschio) — NON entra")
-                            self._rit_aggancio_ts = None
-                            self._rit_prezzo_nascita = None
-                            self._rit_picco_pre = None
-                            try:
-                                self._ritardo_stats["piatti_scartati"] = self._ritardo_stats.get("piatti_scartati", 0) + 1
-                            except Exception:
-                                pass
-                            # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
-                            try:
-                                self._record_phantom(price, "MINA_TRANS_PIATTI",
-                                                     float(seed.get("score", 0) or 0),
-                                                     str(momentum), str(volatility), str(trend))
-                            except Exception:
-                                pass
-                            return
-
-                    # ════════════════════════════════════════════════════════
-                    # RIPIEGAMENTO PRE-INGRESSO (10giu, Roberto) — il gioco vero:
-                    # i secondi del ritardo sono GRATIS (non siamo nel trade, no
-                    # fee). Lì la dopata si dichiara: SALE e poi SI GIRA. Il MAE
-                    # assoluto becca solo chi nasce sotto zero; questo becca la
-                    # dopata "lenta" che sale verde (+2, +2.8) e poi ripiega —
-                    # PRIMA di entrare. Il maschio sale e TIENE (non ripiega) ->
-                    # entra. Traccio il picco durante l'attesa: se il segnale
-                    # ripiega di RIPIEG_USD dal suo picco mentre aspetta, è una
-                    # dopata che si svuota -> NON entra, non paghiamo fee.
-                    # ENV: RIPIEG_PRE_USD (default 0.60; 0 = spento). Reversibile.
-                    # ════════════════════════════════════════════════════════
-                    _ripieg_soglia = float(os.environ.get("RIPIEG_PRE_USD", "0.60"))
-                    if _ripieg_soglia > 0:
+                    # ── guardiani del purgatorio: SOLO se NON e' un maschio confermato
+                    if not _maschio_entra_ora:
+                        # traccio il picco dell'attesa (sempre, costa nulla)
                         _picco_pre = getattr(self, "_rit_picco_pre", None)
-                        if _picco_pre is None or self._rit_aggancio_ts == _rit_now:
+                        if _picco_pre is None or _pos_usd > _picco_pre:
+                            self._rit_picco_pre = _pos_usd
                             _picco_pre = _pos_usd
-                        if _pos_usd > _picco_pre:
-                            _picco_pre = _pos_usd          # nuovo massimo durante attesa
-                        self._rit_picco_pre = _picco_pre
-                        # ripiega solo se era salito davvero (picco sopra soglia)
-                        if _picco_pre >= _ripieg_soglia and (_picco_pre - _pos_usd) >= _ripieg_soglia:
-                            self._log("🔄", f"RIPIEGAMENTO pre-ingresso: dopata si svuota "
-                                            f"(picco {_picco_pre:+.2f}$ -> ora {_pos_usd:+.2f}$, "
-                                            f"giù {_picco_pre - _pos_usd:.2f}$) — NON entra, no fee")
-                            self._rit_aggancio_ts = None
-                            self._rit_prezzo_nascita = None
-                            self._rit_picco_pre = None
-                            try:
-                                self._ritardo_stats["ripieg_scartati"] = self._ritardo_stats.get("ripieg_scartati", 0) + 1
-                            except Exception:
-                                pass
-                            # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
-                            try:
-                                self._record_phantom(price, "MINA_RIPIEGAMENTO",
-                                                     float(seed.get("score", 0) or 0),
-                                                     str(momentum), str(volatility), str(trend))
-                            except Exception:
-                                pass
-                            return
-
-                _rit_atteso = _rit_now - _rit_aggancio
-                if _rit_atteso < _rit_sec:
-                    self._log("⏳", f"RITARDO ingresso: segnale agganciato, "
-                                    f"atteso {_rit_atteso:.1f}/{_rit_sec:.0f}s @ ${price:.1f}")
-                    return
-                # ════════════════════════════════════════════════════════
-                # STRATEGIA 4+2 (11giu, Roberto: "non 4 d'ufficio, ma 4+2 e
-                # vediamo chi crolla — i due solo per i resistenti"). A 4s:
-                #  - CHIARO positivo (sopra +zona) → maschio → entra subito
-                #  - CHIARO negativo (sotto -zona) → corda → fuori subito
-                #  - INCERTO (tra -zona e +zona, lì lì) → NON decido d'ufficio:
-                #      proroga di RITARDO_EXTRA_SEC e guardo chi crolla. Il
-                #      maschio tiene/corre, la dopata si smaschera crollando.
-                # Il tempo è il giudice. ENV: ANTICORDA_ZONA (default 1.0 = zona
-                #  incerta ±1$), RITARDO_EXTRA_SEC (default 2). ANTICORDA_OFF spegne.
-                # ════════════════════════════════════════════════════════
-                if os.environ.get("ANTICORDA_OFF", "false").lower() != "true":
-                    _zona = float(os.environ.get("ANTICORDA_ZONA", "1.0"))
-                    _extra = float(os.environ.get("RITARDO_EXTRA_SEC", "2"))
-                    _exp_fin = float(os.environ.get("EXPOSURE_USD", "5000"))
-                    _ep_fin = getattr(self, "_rit_prezzo_nascita", None) or price
-                    _dir_fin = getattr(self.campo, "_direction", "LONG")
-                    _delta_fin = (price - _ep_fin) / _ep_fin
-                    if str(_dir_fin).upper().startswith("SHORT"):
-                        _delta_fin = -_delta_fin
-                    _pos_fin = _delta_fin * _exp_fin
-
-                    # CORDA CHIARA: sotto -zona → fuori subito (a 4s o a 6s)
-                    if _pos_fin <= -_zona:
-                        self._log("🪢", f"ANTI-CORDA (s{_rit_atteso:.0f}): "
-                                        f"{_pos_fin:+.2f}$ <= -{_zona} — crollato, NON entra")
-                        self._rit_aggancio_ts = None
-                        self._rit_prezzo_nascita = None
-                        self._rit_picco_pre = None
-                        self._rit_crollo_min = None
-                        try:
-                            self._ritardo_stats["anticorda_scartati"] = self._ritardo_stats.get("anticorda_scartati", 0) + 1
-                        except Exception:
-                            pass
-                        # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
-                        try:
-                            self._record_phantom(price, "MINA_ANTICORDA_CROLLO",
-                                                 float(seed.get("score", 0) or 0),
-                                                 str(momentum), str(volatility), str(trend))
-                        except Exception:
-                            pass
-                        return
-
-                    # INCERTO: tra -zona e +zona → do 2 secondi extra (solo se non
-                    # li ho già dati). A 4+2=6s rivaluto: se ancora qui sotto/incerto
-                    # crollerà nel ramo sopra, se è salito sopra +zona entra sotto.
-                    if _pos_fin < _zona and _rit_atteso < (_rit_sec + _extra):
-                        self._log("⏳", f"INCERTO a s{_rit_atteso:.0f} ({_pos_fin:+.2f}$ "
-                                        f"dentro ±{_zona}) — +{_extra:.0f}s di prova: vediamo chi crolla")
-                        return
-                    # passati i 2 extra ed è ancora sotto +zona ma sopra -zona →
-                    # resta incerto/debole → non entra (non si è dichiarato maschio)
-                    if _pos_fin < _zona:
-                        self._log("🪢", f"ANTI-CORDA (s{_rit_atteso:.0f}, dopo +{_extra:.0f}s): "
-                                        f"{_pos_fin:+.2f}$ ancora incerto, non corre — NON entra")
-                        self._rit_aggancio_ts = None
-                        self._rit_prezzo_nascita = None
-                        self._rit_picco_pre = None
-                        self._rit_crollo_min = None
-                        try:
-                            self._ritardo_stats["anticorda_scartati"] = self._ritardo_stats.get("anticorda_scartati", 0) + 1
-                        except Exception:
-                            pass
-                        # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
-                        try:
-                            self._record_phantom(price, "MINA_ANTICORDA_INCERTO",
-                                                 float(seed.get("score", 0) or 0),
-                                                 str(momentum), str(volatility), str(trend))
-                        except Exception:
-                            pass
-                        return
-                    # _pos_fin >= +zona → maschio chiaro/resistente → entra
-
-                # ════════════════════════════════════════════════════════════════
-                # GATE PEAK CONFERMATIVO (13giu2026, Roberto — IL KILLER)
-                # ════════════════════════════════════════════════════════════════
-                # SCOPERTA dimostrata su 154 trade (tabella curva_nascita):
-                # il distintivo maschi/fiacchi NON e' nella firma (ambigua) ne' nei
-                # primi 3s (indistinguibili). E' nel PICCO raggiunto entro una
-                # finestra LUNGA di osservazione. I maschi partono rossi e risalgono
-                # TARDI (t_peak medio WIN 33s vs LOSS 5s). Simulazione ONESTA
-                # (guadagno = pnl_finale - pnl_ingresso): gate "picco >= +1.0$ entro
-                # 15s" porta da -247$ (tutti entrano, WR 30%) a +60$ reali (WR 62%).
-                # Il picco dell'attesa e' gia' tracciato in _rit_picco_pre.
-                #
-                # MODALITA': GATE_PEAK_OBSERVER (default true = SOLO OSSERVA, logga
-                # ma NON blocca). Mettere false per farlo DECIDERE (bloccare chi non
-                # ha raggiunto il picco). ENV:
-                #   GATE_PEAK_USD (default 1.0)  = soglia picco minima per entrare
-                #   GATE_PEAK_FINESTRA_SEC (15)  = entro quanti secondi dall'aggancio
-                #   GATE_PEAK_OBSERVER (true)    = true osserva, false decide
-                #   GATE_PEAK_OFF (false)        = true spegne del tutto
-                # ════════════════════════════════════════════════════════════════
-                if os.environ.get("GATE_PEAK_OFF", "false").lower() != "true":
-                    try:
-                        _gp_soglia = float(os.environ.get("GATE_PEAK_USD", "1.0"))
-                        _gp_finestra = float(os.environ.get("GATE_PEAK_FINESTRA_SEC", "15"))
-                        _gp_observer = os.environ.get("GATE_PEAK_OBSERVER", "true").lower() == "true"
-                        _gp_picco = getattr(self, "_rit_picco_pre", None)
-                        _gp_picco = _gp_picco if _gp_picco is not None else -999.0
-                        # il picco e' valido solo se osservato entro la finestra
-                        _gp_entro_finestra = (_rit_atteso <= _gp_finestra)
-                        _gp_passa = (_gp_picco >= _gp_soglia) and _gp_entro_finestra
-                        if _gp_passa:
-                            self._log_m2("✅",
-                                f"GATE PEAK: picco attesa {_gp_picco:+.2f}$ >= {_gp_soglia}$ "
-                                f"entro {_rit_atteso:.1f}s (<= {_gp_finestra:.0f}s) — MASCHIO confermato")
-                        else:
-                            _gp_motivo = (f"picco {_gp_picco:+.2f}$ < {_gp_soglia}$" if _gp_picco < _gp_soglia
-                                          else f"fuori finestra ({_rit_atteso:.1f}s > {_gp_finestra:.0f}s)")
-                            if _gp_observer:
-                                # OSSERVATORE: logga cosa AVREBBE fatto, ma lascia entrare
-                                self._log_m2("👁️",
-                                    f"GATE PEAK [OSSERVA]: avrebbe SCARTATO ({_gp_motivo}) "
-                                    f"ma observer attivo — entra comunque")
-                            else:
-                                # DECISORE: blocca chi non ha confermato il picco
-                                self._log_m2("🚫",
-                                    f"GATE PEAK: SCARTATO ({_gp_motivo}) — non si e' "
-                                    f"dichiarato maschio nell'osservazione, NON entra")
+                        _sgonfio_pct = float(os.environ.get("SCATTO_SGONFIO_PCT", "0.50"))
+                        _picco_min = float(os.environ.get("SCATTO_PICCO_MIN", "0.6"))
+                        if _sgonfio_pct > 0 and _picco_pre is not None and _picco_pre >= _picco_min:
+                            # quanto si è sgonfiato dal picco dell'attesa?
+                            _sgonfio = (_picco_pre - _pos_usd) / _picco_pre if _picco_pre > 0 else 0
+                            if _sgonfio >= _sgonfio_pct:
+                                # falso scatto: ha fatto picco e si è sgonfiato -> schivo
+                                self._log("🦊", f"CONTROSCATTO: falsa partenza schivata "
+                                                f"(picco +{_picco_pre:.2f}$ → ora {_pos_usd:+.2f}$, "
+                                                f"sgonfio {_sgonfio*100:.0f}%) — NON entra")
                                 self._rit_aggancio_ts = None
                                 self._rit_prezzo_nascita = None
                                 self._rit_picco_pre = None
-                                self._rit_crollo_min = None
                                 try:
-                                    self._ritardo_stats["gate_peak_scartati"] = self._ritardo_stats.get("gate_peak_scartati", 0) + 1
+                                    self._ritardo_stats["controscatto_scartati"] = self._ritardo_stats.get("controscatto_scartati", 0) + 1
                                 except Exception:
                                     pass
+                                # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
                                 try:
-                                    self._record_phantom(price, "MINA_GATE_PEAK",
+                                    self._record_phantom(price, "MINA_CONTROSCATTO",
                                                          float(seed.get("score", 0) or 0),
                                                          str(momentum), str(volatility), str(trend))
                                 except Exception:
                                     pass
                                 return
-                    except Exception as _e_gp:
-                        log.debug(f"[GATE_PEAK_ERR] {_e_gp}")
 
-                # passato (maschio chiaro o resistente dopo i 2s) -> entro ORA, azzero
-                self._rit_aggancio_ts = None
-                self._rit_prezzo_nascita = None
-                self._rit_picco_pre = None
-                self._ritardo_stats["entrati"] = self._ritardo_stats.get("entrati", 0) + 1
-                # VEDERE DENTRO (8giu): marco entrato=1 sulla riga di questo aggancio.
-                # Cosi' nel DB: entrato=0 = scansato, entrato=1 = passato. Solo update.
-                _rid = getattr(self, "_rit_aggancio_rowid", None)
-                if _rid is not None:
-                    _up = None
-                    try:
-                        import sqlite3 as _sq3up
-                        _up = _sq3up.connect(DB_PATH, timeout=15)
-                        _up.execute("PRAGMA busy_timeout=15000;")
-                        _up.execute("UPDATE ritardo_agganci SET entrato=1 WHERE id=?", (_rid,))
-                        _up.commit()
-                    except Exception:
-                        pass
-                    finally:
-                        if _up is not None:
-                            try: _up.close()
-                            except Exception: pass
-                    self._rit_aggancio_rowid = None
-                self._log("⏱️", f"RITARDO ingresso: confermato dopo "
-                                f"{_rit_atteso:.1f}s, entro @ ${price:.1f}")
+                        # ════════════════════════════════════════════════════════
+                        # TAGLIO TRANS PIATTI (11giu, Roberto: "vanno tagliati punto").
+                        # Dai dati pre-ingresso: i TRANS piatti stanno a +0.2/0.0/-0.001
+                        # nei secondi gratis, NON salgono. I maschi veri salgono sopra
+                        # +0.5 e ci restano (es. +0.749 costante). Quindi: per entrare
+                        # NON basta "non scendere" — bisogna SALIRE da maschio. Se dopo
+                        # almeno SALITA_DOPO_SEC secondi di attesa il segnale non ha
+                        # superato +SALITA_MIN, è un trans piatto -> NON entra.
+                        # ENV: SALITA_MIN_USD (default 0.40; 0 = spento).
+                        #      SALITA_DOPO_SEC (default 3 = do 3s al maschio per salire).
+                        # ════════════════════════════════════════════════════════
+                        _salita_min = float(os.environ.get("SALITA_MIN_USD", "0.40"))
+                        _salita_dopo = float(os.environ.get("SALITA_DOPO_SEC", "3"))
+                        if _salita_min > 0:
+                            _eta_attesa = _rit_now - _rit_aggancio
+                            if _eta_attesa >= _salita_dopo and _pos_usd < _salita_min:
+                                # ha avuto il tempo di salire e NON è salito -> trans piatto -> fuori
+                                self._log("🟰", f"TRANS PIATTO scartato "
+                                                f"(dopo {_eta_attesa:.1f}s sta a {_pos_usd:+.2f}$ "
+                                                f"< +{_salita_min}$ — non sale da maschio) — NON entra")
+                                self._rit_aggancio_ts = None
+                                self._rit_prezzo_nascita = None
+                                self._rit_picco_pre = None
+                                try:
+                                    self._ritardo_stats["piatti_scartati"] = self._ritardo_stats.get("piatti_scartati", 0) + 1
+                                except Exception:
+                                    pass
+                                # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                                try:
+                                    self._record_phantom(price, "MINA_TRANS_PIATTI",
+                                                         float(seed.get("score", 0) or 0),
+                                                         str(momentum), str(volatility), str(trend))
+                                except Exception:
+                                    pass
+                                return
+
+                        # ════════════════════════════════════════════════════════
+                        # RIPIEGAMENTO PRE-INGRESSO (10giu, Roberto) — il gioco vero:
+                        # i secondi del ritardo sono GRATIS (non siamo nel trade, no
+                        # fee). Lì la dopata si dichiara: SALE e poi SI GIRA. Il MAE
+                        # assoluto becca solo chi nasce sotto zero; questo becca la
+                        # dopata "lenta" che sale verde (+2, +2.8) e poi ripiega —
+                        # PRIMA di entrare. Il maschio sale e TIENE (non ripiega) ->
+                        # entra. Traccio il picco durante l'attesa: se il segnale
+                        # ripiega di RIPIEG_USD dal suo picco mentre aspetta, è una
+                        # dopata che si svuota -> NON entra, non paghiamo fee.
+                        # ENV: RIPIEG_PRE_USD (default 0.60; 0 = spento). Reversibile.
+                        # ════════════════════════════════════════════════════════
+                        _ripieg_soglia = float(os.environ.get("RIPIEG_PRE_USD", "0.60"))
+                        if _ripieg_soglia > 0:
+                            _picco_pre = getattr(self, "_rit_picco_pre", None)
+                            if _picco_pre is None or self._rit_aggancio_ts == _rit_now:
+                                _picco_pre = _pos_usd
+                            if _pos_usd > _picco_pre:
+                                _picco_pre = _pos_usd          # nuovo massimo durante attesa
+                            self._rit_picco_pre = _picco_pre
+                            # ripiega solo se era salito davvero (picco sopra soglia)
+                            if _picco_pre >= _ripieg_soglia and (_picco_pre - _pos_usd) >= _ripieg_soglia:
+                                self._log("🔄", f"RIPIEGAMENTO pre-ingresso: dopata si svuota "
+                                                f"(picco {_picco_pre:+.2f}$ -> ora {_pos_usd:+.2f}$, "
+                                                f"giù {_picco_pre - _pos_usd:.2f}$) — NON entra, no fee")
+                                self._rit_aggancio_ts = None
+                                self._rit_prezzo_nascita = None
+                                self._rit_picco_pre = None
+                                try:
+                                    self._ritardo_stats["ripieg_scartati"] = self._ritardo_stats.get("ripieg_scartati", 0) + 1
+                                except Exception:
+                                    pass
+                                # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                                try:
+                                    self._record_phantom(price, "MINA_RIPIEGAMENTO",
+                                                         float(seed.get("score", 0) or 0),
+                                                         str(momentum), str(volatility), str(trend))
+                                except Exception:
+                                    pass
+                                return
+
+                    _rit_atteso = _rit_now - _rit_aggancio
+                    if _rit_atteso < _rit_sec:
+                        self._log("⏳", f"RITARDO ingresso: segnale agganciato, "
+                                        f"atteso {_rit_atteso:.1f}/{_rit_sec:.0f}s @ ${price:.1f}")
+                        return
+                    # ════════════════════════════════════════════════════════
+                    # STRATEGIA 4+2 (11giu, Roberto: "non 4 d'ufficio, ma 4+2 e
+                    # vediamo chi crolla — i due solo per i resistenti"). A 4s:
+                    #  - CHIARO positivo (sopra +zona) → maschio → entra subito
+                    #  - CHIARO negativo (sotto -zona) → corda → fuori subito
+                    #  - INCERTO (tra -zona e +zona, lì lì) → NON decido d'ufficio:
+                    #      proroga di RITARDO_EXTRA_SEC e guardo chi crolla. Il
+                    #      maschio tiene/corre, la dopata si smaschera crollando.
+                    # Il tempo è il giudice. ENV: ANTICORDA_ZONA (default 1.0 = zona
+                    #  incerta ±1$), RITARDO_EXTRA_SEC (default 2). ANTICORDA_OFF spegne.
+                    # ════════════════════════════════════════════════════════
+                    if os.environ.get("ANTICORDA_OFF", "false").lower() != "true":
+                        _zona = float(os.environ.get("ANTICORDA_ZONA", "1.0"))
+                        _extra = float(os.environ.get("RITARDO_EXTRA_SEC", "2"))
+                        _exp_fin = float(os.environ.get("EXPOSURE_USD", "5000"))
+                        _ep_fin = getattr(self, "_rit_prezzo_nascita", None) or price
+                        _dir_fin = getattr(self.campo, "_direction", "LONG")
+                        _delta_fin = (price - _ep_fin) / _ep_fin
+                        if str(_dir_fin).upper().startswith("SHORT"):
+                            _delta_fin = -_delta_fin
+                        _pos_fin = _delta_fin * _exp_fin
+
+                        # CORDA CHIARA: sotto -zona → fuori subito (a 4s o a 6s)
+                        if _pos_fin <= -_zona:
+                            self._log("🪢", f"ANTI-CORDA (s{_rit_atteso:.0f}): "
+                                            f"{_pos_fin:+.2f}$ <= -{_zona} — crollato, NON entra")
+                            self._rit_aggancio_ts = None
+                            self._rit_prezzo_nascita = None
+                            self._rit_picco_pre = None
+                            self._rit_crollo_min = None
+                            try:
+                                self._ritardo_stats["anticorda_scartati"] = self._ritardo_stats.get("anticorda_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                            try:
+                                self._record_phantom(price, "MINA_ANTICORDA_CROLLO",
+                                                     float(seed.get("score", 0) or 0),
+                                                     str(momentum), str(volatility), str(trend))
+                            except Exception:
+                                pass
+                            return
+
+                        # INCERTO: tra -zona e +zona → do 2 secondi extra (solo se non
+                        # li ho già dati). A 4+2=6s rivaluto: se ancora qui sotto/incerto
+                        # crollerà nel ramo sopra, se è salito sopra +zona entra sotto.
+                        if _pos_fin < _zona and _rit_atteso < (_rit_sec + _extra):
+                            self._log("⏳", f"INCERTO a s{_rit_atteso:.0f} ({_pos_fin:+.2f}$ "
+                                            f"dentro ±{_zona}) — +{_extra:.0f}s di prova: vediamo chi crolla")
+                            return
+                        # passati i 2 extra ed è ancora sotto +zona ma sopra -zona →
+                        # resta incerto/debole → non entra (non si è dichiarato maschio)
+                        if _pos_fin < _zona:
+                            self._log("🪢", f"ANTI-CORDA (s{_rit_atteso:.0f}, dopo +{_extra:.0f}s): "
+                                            f"{_pos_fin:+.2f}$ ancora incerto, non corre — NON entra")
+                            self._rit_aggancio_ts = None
+                            self._rit_prezzo_nascita = None
+                            self._rit_picco_pre = None
+                            self._rit_crollo_min = None
+                            try:
+                                self._ritardo_stats["anticorda_scartati"] = self._ritardo_stats.get("anticorda_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                            try:
+                                self._record_phantom(price, "MINA_ANTICORDA_INCERTO",
+                                                     float(seed.get("score", 0) or 0),
+                                                     str(momentum), str(volatility), str(trend))
+                            except Exception:
+                                pass
+                            return
+                        # _pos_fin >= +zona → maschio chiaro/resistente → entra
+
+                    # ════════════════════════════════════════════════════════════════
+                    # GATE PEAK CONFERMATIVO (13giu2026, Roberto — IL KILLER)
+                    # ════════════════════════════════════════════════════════════════
+                    # SCOPERTA dimostrata su 154 trade (tabella curva_nascita):
+                    # il distintivo maschi/fiacchi NON e' nella firma (ambigua) ne' nei
+                    # primi 3s (indistinguibili). E' nel PICCO raggiunto entro una
+                    # finestra LUNGA di osservazione. I maschi partono rossi e risalgono
+                    # TARDI (t_peak medio WIN 33s vs LOSS 5s). Simulazione ONESTA
+                    # (guadagno = pnl_finale - pnl_ingresso): gate "picco >= +1.0$ entro
+                    # 15s" porta da -247$ (tutti entrano, WR 30%) a +60$ reali (WR 62%).
+                    # Il picco dell'attesa e' gia' tracciato in _rit_picco_pre.
+                    #
+                    # MODALITA': GATE_PEAK_OBSERVER (default true = SOLO OSSERVA, logga
+                    # ma NON blocca). Mettere false per farlo DECIDERE (bloccare chi non
+                    # ha raggiunto il picco). ENV:
+                    #   GATE_PEAK_USD (default 1.0)  = soglia picco minima per entrare
+                    #   GATE_PEAK_FINESTRA_SEC (15)  = entro quanti secondi dall'aggancio
+                    #   GATE_PEAK_OBSERVER (true)    = true osserva, false decide
+                    #   GATE_PEAK_OFF (false)        = true spegne del tutto
+                    # ════════════════════════════════════════════════════════════════
+                    if os.environ.get("GATE_PEAK_OFF", "false").lower() != "true":
+                        try:
+                            _gp_soglia = float(os.environ.get("GATE_PEAK_USD", "1.0"))
+                            _gp_finestra = float(os.environ.get("GATE_PEAK_FINESTRA_SEC", "15"))
+                            _gp_observer = os.environ.get("GATE_PEAK_OBSERVER", "true").lower() == "true"
+                            _gp_picco = getattr(self, "_rit_picco_pre", None)
+                            _gp_picco = _gp_picco if _gp_picco is not None else -999.0
+                            # il picco e' valido solo se osservato entro la finestra
+                            _gp_entro_finestra = (_rit_atteso <= _gp_finestra)
+                            _gp_passa = (_gp_picco >= _gp_soglia) and _gp_entro_finestra
+                            if _gp_passa:
+                                self._log_m2("✅",
+                                    f"GATE PEAK: picco attesa {_gp_picco:+.2f}$ >= {_gp_soglia}$ "
+                                    f"entro {_rit_atteso:.1f}s (<= {_gp_finestra:.0f}s) — MASCHIO confermato")
+                            else:
+                                _gp_motivo = (f"picco {_gp_picco:+.2f}$ < {_gp_soglia}$" if _gp_picco < _gp_soglia
+                                              else f"fuori finestra ({_rit_atteso:.1f}s > {_gp_finestra:.0f}s)")
+                                if _gp_observer:
+                                    # OSSERVATORE: logga cosa AVREBBE fatto, ma lascia entrare
+                                    self._log_m2("👁️",
+                                        f"GATE PEAK [OSSERVA]: avrebbe SCARTATO ({_gp_motivo}) "
+                                        f"ma observer attivo — entra comunque")
+                                else:
+                                    # DECISORE: blocca chi non ha confermato il picco
+                                    self._log_m2("🚫",
+                                        f"GATE PEAK: SCARTATO ({_gp_motivo}) — non si e' "
+                                        f"dichiarato maschio nell'osservazione, NON entra")
+                                    self._rit_aggancio_ts = None
+                                    self._rit_prezzo_nascita = None
+                                    self._rit_picco_pre = None
+                                    self._rit_crollo_min = None
+                                    try:
+                                        self._ritardo_stats["gate_peak_scartati"] = self._ritardo_stats.get("gate_peak_scartati", 0) + 1
+                                    except Exception:
+                                        pass
+                                    try:
+                                        self._record_phantom(price, "MINA_GATE_PEAK",
+                                                             float(seed.get("score", 0) or 0),
+                                                             str(momentum), str(volatility), str(trend))
+                                    except Exception:
+                                        pass
+                                    return
+                        except Exception as _e_gp:
+                            log.debug(f"[GATE_PEAK_ERR] {_e_gp}")
+
+                    # passato (maschio chiaro o resistente dopo i 2s) -> entro ORA, azzero
+                    self._rit_aggancio_ts = None
+                    self._rit_prezzo_nascita = None
+                    self._rit_picco_pre = None
+                    self._ritardo_stats["entrati"] = self._ritardo_stats.get("entrati", 0) + 1
+                    # VEDERE DENTRO (8giu): marco entrato=1 sulla riga di questo aggancio.
+                    # Cosi' nel DB: entrato=0 = scansato, entrato=1 = passato. Solo update.
+                    _rid = getattr(self, "_rit_aggancio_rowid", None)
+                    if _rid is not None:
+                        _up = None
+                        try:
+                            import sqlite3 as _sq3up
+                            _up = _sq3up.connect(DB_PATH, timeout=15)
+                            _up.execute("PRAGMA busy_timeout=15000;")
+                            _up.execute("UPDATE ritardo_agganci SET entrato=1 WHERE id=?", (_rid,))
+                            _up.commit()
+                        except Exception:
+                            pass
+                        finally:
+                            if _up is not None:
+                                try: _up.close()
+                                except Exception: pass
+                        self._rit_aggancio_rowid = None
+                    self._log("⏱️", f"RITARDO ingresso: confermato dopo "
+                                    f"{_rit_atteso:.1f}s, entro @ ${price:.1f}")
 
             self._shadow = {
                 "price_entry":   price,
