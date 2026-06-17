@@ -1,237 +1,298 @@
-# STATO OVERTOP V16 — 14 giugno 2026 (v4)
+# STATO OVERTOP V16 — 17 giugno 2026 (v5)
 ## Caricare all'inizio della prossima chat. Sostituisce TUTTI gli stati precedenti.
 
 > Claude: leggi PRIMA di toccare codice. REGOLA #0: dati reali prima di modificare.
-> File SEMPRE come download. Test runtime (AST + py_compile + import con stub) prima
-> di consegnare. UNA cosa per volta. **Letture codice MIRATE** (range stretto, ~50 righe
-> max). Letture larghe del file da 16k righe saturano la chat in poche ore.
-> Roberto: analista NON programmatore, decide cosa/perché, Claude esegue come ingegnere capo
-> e VERIFICA TUTTO, anche le proprie certezze (spesso contengono errori).
-> Vuole SINCERITÀ TOTALE, nessuna piaggeria, anche scomoda. Mai dire "quando si lavora
-> o no" — gestione di Roberto.
+> File SEMPRE come download. Test runtime (AST + py_compile) prima di consegnare.
+> UNA cosa per volta. **Letture codice MIRATE** (range stretto, ~50 righe max).
+> Roberto: analista NON programmatore, decide cosa/perché, Claude esegue come ingegnere
+> capo e VERIFICA TUTTO, anche le proprie certezze (spesso contengono errori).
+> Vuole SINCERITÀ TOTALE, nessuna piaggeria. Mai dire "quando si lavora o no" — gestione
+> di Roberto. Mai narrazione: solo numeri dai dati.
 > Claude NON accede al server: Roberto incolla output da Web Shell Render.
-> Claude può fetchare endpoint pubblici (vedi REGOLA #0 originale).
 > Orari log UTC; Italia = UTC+2. Confidenzialità assoluta sul knowhow trading.
+> Roberto lavora da cellulare: query SU UNA RIGA SOLA e corte; niente nano (trappola).
+> Se la shell resta col `>` (parentesi aperta): scrivere `;` + Invio o Ctrl+C.
 
 ---
 
-## 🔖 BUILD ATTUALE IN PRODUZIONE (verificato 14giu 09:39 sul container)
-- **`305252c3332e`** = file con TUTTE le mine + telecamere + GATE PEAK + SINAPSI + CASSA_GRASSO
+## 🔖 BUILD ATTUALE — DA VERIFICARE A INIZIO SESSIONE
+- **Ultimo file consegnato 17giu: md5 `1a2e69687571d54cd11ef6541eec5c15`**
+  (contiene la CORSIA PRIVATA DEL MASCHIO — vedi sotto)
+- File precedente della giornata: `303b00823faa...` (girava in produzione fino al
+  pomeriggio 17giu, conteneva PRESA_SECCA + fix ANTIPRECIPIZIO)
 - File: `/opt/render/project/src/OVERTOP_BASSANO_V16_PRODUCTION.py`
-- Caricato 13giu alle 13:35 ora server (probabilmente da DeepSeek o altra istanza Claude
-  in chat separata; ha aggiunto 3 sistemi nuovi sopra la base "telecamere" di Claude 12giu)
 - DB: `/var/data/trading_data.db` — PAPER — Procfile: `web: python app.py`
-- Live: tecnaria-v2.onrender.com
-- Repo: ZanRoberto/Tecnaria_V2
-
-### Storico build recenti (per orientarsi)
-- `47ec6d5a52c8` (9-12giu) = solo le 7 mine, senza telecamere — solo CROMO registrava
-- `918edffdeab7` (12giu pomeriggio, Claude) = aggiunte 9 telecamere MINA_, mai messo in prod
-- `305252c3332e` (13giu 13:35, attuale) = `918edffdeab7` + GATE PEAK + SINAPSI + CASSA_GRASSO
-
-### Marchio build nei trade
-BUILD_MD5 = primi 12 char dell'md5 del file (r.44-53, salvato r.14363 e 14471).
-Query per i soli trade del codice attuale:
-```sql
-WHERE json_extract(data_json,'$.build')='305252c3332e'
-```
-A ogni nuovo deploy: rifare `md5sum` sul container e aggiornare questo valore.
+- Live: tecnaria-v2.onrender.com — Repo: ZanRoberto/Tecnaria_V2
+- **PRIMA COSA DELLA SESSIONE:** `md5sum ~/project/src/OVERTOP_BASSANO_V16_PRODUCTION.py`
+  e `ps -o lstart= -p 1` (ora avvio processo). I container Render cambiano spesso
+  (oggi: nxv4x → bcflq → lrsrv → 9975c...): verificare sempre cosa gira DAVVERO.
+- **Trappola dimostrata oggi:** la dashboard mostra trade VECCHI nello storico. Giudicare
+  solo i trade nati DOPO l'avvio del processo attuale (confronto orari). Più volte oggi
+  un trade "colpevole" si è rivelato essere di un container precedente.
 
 ---
 
-## 🎯 STATO OPERATIVO (14giu) — 8 MINE D'INGRESSO + USCITA
+## 🎯 LA SCOPERTA CHE CAMBIA TUTTO (consolidata 12-17giu)
 
-### Le 8 mine d'ingresso (in ordine di applicazione)
-1. **MAE** (📉, ~r.12307) — scarta chi scende dall'aggancio
-2. **ANTI-FALSA-RIPARTENZA** (💀, ~r.12362) — crolla sotto -2$ nei secondi gratis
-3. **RI-AGGANCIO SOSPETTO** (🎭, ~r.12253) — flag che marchia crollo entro 20s
-4. **CONTROSCATTO** (🦊) — falsa partenza sgonfiata dal picco
-5. **ANTI-ISTERIA** (🌀, ~r.12396) — vol_pressure alto + momentum debole
-6. **STRATEGIA 4+2** (⏳, ~r.12547) — incerti a 4s ricevono +2s. Roberto: FONDAMENTALE
-7. **TRANS PIATTI** (🟰) — chi non sale mai
-8. **GATE PEAK CONFERMATIVO** (✅, ~r.12750, NUOVO 13giu) — entra solo se picco ≥+1$ entro 15s.
-   "I maschi partono rossi e risalgono TARDI (t_peak medio WIN 33s vs LOSS 5s)".
-   Su 154 trade simulati: da -247$ a +60$, WR 30%→62%.
-   **DEFAULT: GATE_PEAK_OBSERVER=true (solo logga, NON blocca).**
-   Mettere `GATE_PEAK_OBSERVER=false` quando confermato dai dati.
+**Maschi, femmine, dopate e trans sono INDISTINGUIBILI all'ingresso e nei primi secondi.**
+Dimostrato sui dati: seme alto ce l'hanno sia maschi che capre (anzi le capre a volte di più).
+Si separano SOLO DOPO, nei secondi successivi: il maschio sale e TIENE, la capra crolla
+o resta piatta. Quindi:
+- **Inutile cercare di distinguerli all'ingresso.** Vietato perderci tempo.
+- **Il vero lavoro è il RITARDO/OSSERVAZIONE:** tenere il segnale FUORI dal trade
+  (zero esposizione, zero fee) abbastanza da farlo manifestare, e far entrare solo chi
+  si dichiara maschio.
+- **Le mine d'uscita (ANTIPRECIPIZIO, TRANELLO, CASSA_GRASSO) sono ammissione di
+  fallimento:** se una capra arriva all'uscita, vuol dire che è ENTRATA e non doveva.
+  Il lavoro è tutto a MONTE, nell'osservazione.
 
-### Telecamere attive (9 etichette MINA_ in `phantom_forensic`)
-- `MINA_MAE` 📉, `MINA_ANTIFALSA_RIPARTENZA` 💀, `MINA_RIAGGANCIO_EREDITATO` 🎭
-- `MINA_ANTIISTERIA` 🌀, `MINA_CONTROSCATTO` 🦊, `MINA_TRANS_PIATTI` 🟰
-- `MINA_RIPIEGAMENTO` 🔄, `MINA_ANTICORDA_CROLLO` 🪢, `MINA_ANTICORDA_INCERTO` 🪢
-- (`MINA_GATE_PEAK` appare solo se OBSERVER=false)
+**Principio di Roberto (17giu), tradotto in architettura:**
+> "Il maschio deve avere il suo occhio, la sua telecamera privata, e scatta nel momento
+> in cui ha le carte in regola. Gli altri vanno in purgatorio, ma non lui. Altrimenti è
+> tutto morto, non passa più nulla."
 
-Distinzione RI-AGGANCIO: nel branch ANTIFALSA_RIPARTENZA controllo `_crollo_min == -999.0`.
-Se sì → `MINA_RIAGGANCIO_EREDITATO`; altrimenti → `MINA_ANTIFALSA_RIPARTENZA`.
-
-### Sistemi nuovi del 13giu (NON cambiano il trading, sono telescopi)
-- **SINAPSI LOOKUP** (~r.12005, +87 righe). Prima dell'ingresso interroga `phantom_forensic`
-  cercando casi con stessa firma (regime+direction+momentum+vol+trend) negli ultimi N giorni.
-  Se ≥20 casi simili, logga WR storico, picco e crollo medio. SHADOW PURO: logga, non decide.
-  ENV: `SINAPSI_LOOKUP_ENABLED=false` (default). Tabella: `sinapsi_observations`.
-- **CASSA_GRASSO** (~r.13598, +77 righe). MINA USCITA: se peak≥1.5$ E età≥10s E ceduto 0.5$
-  E ancora_verde → chiude subito. Per catturare i "furbi" (190 LOSS che toccano grasso a
-  20s+ e poi mollano). **DEFAULT: CASSA_GRASSO_OFF=true (spenta).** Tabella: `cassa_grasso_tagli`.
-  **NOTA:** Roberto ha esplicitato CASSA_GRASSO_OFF=true in ENV Render il 14giu — comportamento
-  invariato, solo documentazione esplicita. Rischio se attivata: può tagliare maschi a +1$
-  che sarebbero saliti a +6/+11. La regola del 13giu *"DIVIETO USCITA prima di lavorare a
-  monte"* resta valida — CASSA_GRASSO esiste ma resta dormiente per ora.
-
-### Uscita attuale (invariato dal v3)
-- **SALVA_VERDE anticipato** (🎯, ~r.13305). ATTENZIONE ZONA MORTA verificata 12giu:
-  con `if _cur_sv >= _vm_sv and (_max_sv - _cur_sv) >= _tg_sv` (cur sopra 2.5$ E ceduto 0.5),
-  i picchi tra 2.5 e 3.0 NON scattano MAI matematicamente. Fix concettuale (NON deployato):
-  condizione sul PICCO invece dell'attuale. Aspettare dati prima di toccare.
-- **ANTI-PRECIPIZIO** (✂️, ~r.13397): dopo 8s, perdita E mai peak verde → taglio.
-  Roberto vorrebbe spegnerlo, decisione rimandata ai dati delle telecamere.
-
-### ENV CHIAVE (Render, 14giu)
-```
-VERDE_MIN_USD=2.5, TRAIL_GIU_USD=0.5, RITARDO_INGRESSO_SEC=4,
-RITARDO_EXTRA_SEC=2, ANTICORDA_ZONA=1.0, CROLLO_MAX_USD=2.0,
-RIAGGANCIO_MEMORIA_SEC=20, VOL_ISTERICO_MAX=1.0,
-HARD_STOP_USD=5, RIPIEG_PRE_USD=0, MERCATO_MORTO_OFF=true,
-CASSA_GRASSO_OFF=true (esplicito 14giu),
-GATE_PEAK_OBSERVER=true (default), GATE_PEAK_USD=1.0, GATE_PEAK_FINESTRA_SEC=15,
-SINAPSI_LOOKUP_ENABLED=false (default)
-```
-
-### MULTI-COPPIA (pronto, NON attivo) — Solana DORMIENTE, focus BTC.
+Cioè: NON un'attesa fissa per tutti (uccide i maschi veloci che a 5s sono già pronti e
+muoiono se aspetti). DUE CORSIE: il maschio entra SUBITO appena è pronto; gli incerti
+restano nel purgatorio del ritardo; le capre non entrano mai.
 
 ---
 
-## 🔭 SCOPERTE 12-14 GIUGNO (numeri sui dati, NON narrazione)
+## 🔧 LAVORO FATTO OGGI (17giu) — in ordine
 
-### CROMO_TOTALE processato — è un filtro anti-FEE, non anti-CROLLO
-Query 12giu su `phantom_forensic` (2.638 record CROMO):
-- bloccati: 2.638
-- avrebbero vinto (mfe≥2$): 203 (7.7%)
-- **sarebbero crollati (mae≤-2$): 0** — ZERO su 2.638
-- picco medio bloccato: 0.72$ — crollo medio 0.52$
-- range medio mfe-mae: **0.196$** (venti centesimi!)
-- pnl_netto medio: -1.896$ (include le fee ≈ 2$)
+### 1. PRESA SECCA (mina d'uscita, già in produzione build 303b...)
+"Porta a casa il grasso." Ad ogni tick, a qualunque secondo: se il PnL **NETTO**
+(lordo meno fee 2$) raggiunge la soglia → chiude e incassa SUBITO. Non importa
+maschio/femmina/trans. Non aspetta cedimenti.
+- Punto codice: `_evaluate_shadow_exit`, subito dopo calcolo `_eta` (~r.13763)
+- `current_pnl` è LORDO (def. r.343 funzione: `_sdelta * (5000.0/price_entry)`).
+  La mina sottrae la fee: `_presa_netto = current_pnl - (TRADE_SIZE*LEVERAGE*FEE_PCT*2)`
+- ENV: `PRESA_SECCA_USD` (default 1.0 = +1$ netto), `PRESA_SECCA_OFF`
+- Tabella: `presa_secca_tagli` (si crea al primo scatto)
+- **PRIMO SCATTO CONFERMATO 17giu** sul maschio delle 10:09: +1.02 netto, motivo PRE/PRESA_SECCA.
+- **LEZIONE CHIAVE:** il campo `pnl_10s` mostrato in dashboard è LORDO. Un trans con
+  "pnl_10s +1.34" era −0.66 NETTO (è morto lì). Da ora ragionare SEMPRE in netto.
 
-**Verdetto:** narrazione "CROMO salva dalle femmine che crollano a -9" è FALSA.
-È un filtro anti-noise su mercato piatto. Risparmia 2.638×~2$ = ~5.000$ di fee evitate
-su trade morti. Costo opportunità: 203 maschi veri lasciati fuori.
+### 2. Fix ANTIPRECIPIZIO (già in produzione build 303b...)
+**Tolta la condizione `_sta_scendendo`.** Prima ANTIPRECIPIZIO tagliava solo se beccava
+il trans nel tick esatto di discesa; i micro-rimbalzi (un centesimo su) lo salvavano e
+agonizzava fino a TRANELLO a 47s. CASO DIMOSTRATO: trans RANGE_STRONG picco 0.0,
+TRENDING_BEAR, colato a gradini fino a −3.53 in 47s.
+- Ora taglia con: età ≥8s + in perdita + mai-verde (`max_profit < ANTIPREC_PEAK_MIN`).
+  Non aspetta più il tick perfetto.
+- Il maschio lento NON rientra: lui un peak verde lo fa, quindi `_mai_verde` è falso.
+- Reversibile: `ANTIPREC_RICHIEDI_DISCESA=true` ripristina il vecchio comportamento.
+- Punto: ~r.13716
 
-### Le 7 mine giravano CIECHE prima del 12giu
-Verificato sul codice 12giu: 6 mine su 7 facevano `return` senza chiamare `_record_phantom`.
-Solo CROMO scriveva. Bug `trans_bloccati not writing` del 7giu = diagnosi sbagliata
-(INSERT corretto, ma blocco mai eseguito). Vera causa: telecamere mai installate.
-Risolto 12giu con patch telecamere + GATE PEAK + SINAPSI il 13giu.
-
-### Tribunale parziale (14giu 09:39, prime ore di telecamera vivente)
-Dati limitati ma indicativi:
-- `MINA_ANTIISTERIA` = **112 blocchi (84% del totale!)** — di gran lunga la più aggressiva
-- `MINA_TRANS_PIATTI` = 15
-- `MINA_MAE` = 5
-- `MINA_CONTROSCATTO` = 1
-- MINA_ANTIFALSA_RIPARTENZA, RIAGGANCIO_EREDITATO, RIPIEGAMENTO, ANTICORDA_×2 = ZERO scatti
-- Da processare con `WHERE block_reason LIKE 'MINA_%' AND mfe_usd IS NOT NULL`
-  appena passano 24-48h di mercato vivo.
-
-### SEME_GATE — narrazione "80-90% precisione" smentita su 570 trade live
-Dalla dashboard "SEME GATE VERITÀ DA TRADES" (12giu e 14giu):
-- 14giu: 134 maschi (+279.2$) / 440 femmine (-1229.68$) / **406 ERRORI: ♀alto 398, ♂basso 8**
-- 12giu: 133 maschi / 437 femmine / 403 errori (395 ♀alto, 8 ♂basso)
-- Trans bloccati cumulativi: 15.392 (era 12.936 il 12giu) → +2.500 in 48h
-- **Sostanzialmente identico in 48h** (mercato fermo: solo +1 maschio, +3 femmine entrati)
-
-**Realtà su 574 trade entrati:** 398/440 = 90% delle femmine sono ibridi che il gate
-non distingue. La narrazione 3-4giu basata su 44 trade era ottimistica.
-**Il SEME_GATE è un anti-NOISE (blocca 15.392 piatti), non un anti-TRANS.**
-Da rivedere come funzione, NON come "rete antitrans risolta".
-
-### Tesi Roberto del 12giu — DA VERIFICARE su `primi_secondi` (25.614 record vivi)
-**"Le mine d'ingresso fanno preselezione. Chi passa NON è morto. Molti a 10s hanno grasso
-piccolo. Ma il sistema d'uscita (SALVA_VERDE pavimento 2.5$, MIN_HOLD 10s, ANTI-PRECIPIZIO)
-non riconosce il lavoro delle mine: tratta i passati come potenziali maschioni che devono
-salire molto, e così lascia sfumare grassi reali."**
-
-Conseguenza ipotizzata da verificare sui dati: abbassare il pavimento SALVA_VERDE
-(incassare grasso piccolo > 0 invece di lasciar tornare a -2 netti) sarebbe meglio
-matematicamente, perché la fee è già spesa e non torna indietro.
-
-Query da costruire dopo aver letto `.schema primi_secondi`.
-
-### Silenzio di 9-21 ore (13-14giu) — diagnosi
-Bot vivo, mercato piatto + ANTIISTERIA aggressiva = 0 entrati su 294 agganci.
-NON è WebSocket congelato (gli scansamenti aumentano: 36→294 in 21h).
-ANTIISTERIA fa 84% dei blocchi → forte sospetto di zavorra, ma verdetto vero solo
-da query con mfe/mae.
+### 3. CORSIA PRIVATA DEL MASCHIO (NUOVO — file `1a2e6968...`, DA DEPLOYARE)
+La telecamera privata del maschio. Durante l'attesa, ad OGNI secondo, se il grasso
+**NETTO** (`_pos_usd − fee 2$`) supera la soglia → il trade ENTRA SUBITO, saltando
+TUTTO il purgatorio (ritardo, ANTICORDA, GATE PEAK, ecc.).
+- Punto codice: dentro `_evaluate_shadow_entry`, blocco ritardo, ~r.12579-12620
+- I guardiani del purgatorio (r.12624-12900) sono stati avvolti in
+  `if not _maschio_entra_ora:` (reindentazione automatica via script, testata).
+  L'apertura del trade (`self._shadow = {`, ~r.12903) è FUORI da quel blocco → il
+  maschio confermato ci arriva diretto.
+- `_maschio_entra_ora` definito a r.12579 (indent 20), guardia a r.12625 (indent 20):
+  stesso livello, nessun rischio NameError.
+- Aggiorna `ritardo_agganci SET entrato=1` e stat `maschi_corsia`.
+- ENV: `MASCHIO_CORSIA_USD` (default 1.0 = grasso netto per scattare),
+  `MASCHIO_CORSIA_OFF` (spegne).
+- Log allo scatto: 🐺 "CORSIA MASCHIO: grasso netto +X$ — carte in regola, ENTRA SUBITO".
+- **NON ancora deployato né visto vivo.** Prova vera = quando mercato si muove e nasce
+  un maschio: cercare il log 🐺 e verificare che entri presto + presa_secca lo spolpa.
 
 ---
 
-## 📊 QUERY PRONTE PER LA PROSSIMA SESSIONE
+## 🐛 IL GRANDE BUCO TROVATO OGGI: INTERRUTTORI "OSSERVA" CHE NON BLOCCANO
 
-### Processo del tribunale per mina (dopo 24-48h di vita)
-```sql
-SELECT block_reason, COUNT(*) AS bloccati,
-       SUM(CASE WHEN mfe_usd>=2.0 THEN 1 ELSE 0 END) AS avrebbero_vinto,
-       SUM(CASE WHEN mae_usd<=-2.0 THEN 1 ELSE 0 END) AS sarebbero_crollati,
-       ROUND(AVG(mfe_usd),2) AS picco_medio,
-       ROUND(AVG(mae_usd),2) AS crollo_medio
-FROM phantom_forensic
-WHERE block_reason LIKE 'MINA_%' AND mfe_usd IS NOT NULL
-GROUP BY block_reason ORDER BY bloccati DESC;
+Pattern ricorrente e velenoso: **guardiani potenti messi in modalità OSSERVA invece che
+DECIDE.** Vedono la merda, la loggano, e la lasciano passare lo stesso.
+
+1. **ANTICORDA aveva DUE interruttori in conflitto:** `ANTICORDA_ZONA=1.2` (acceso) MA
+   `ANTICORDA_OFF=true` (che lo spegneva di nascosto). Roberto credeva acceso, era spento.
+   **RISOLTO 17giu:** messo `ANTICORDA_OFF=false`. Verificato `env | grep ANTICORDA`.
+2. **GATE PEAK** — verificato `GATE_PEAK_OBSERVER=false` (già decide, OK).
+3. **CapsulaRegimeEdge** (file `capsula_regime_edge.py`): in L3 OSSERVA di default,
+   ritorna None, non blocca. Si arma con `CAPSULA_REGIME_EDGE_L4=true` (NON impostata →
+   sta osservando). **DECISIONE ROBERTO: NON armarla.** Ragiona per categorie larghe di
+   mercato (SIDEWAYS/UP/DOWN); bloccherebbe anche i maschi nati nei mercati "merda".
+   Il ritardo/corsia-maschio è più fine (giudica l'individuo, non la media). Appartiene
+   a "prima della scoperta".
+4. **L'ORACOLO PREDITTIVO è scollegato:** `predict_from_signals` (~r.3208) calcola la
+   tabella ECONOMIC EDGE (verdetto ENTRA/BLOCCA/NEUTRO per ogni mercato) ma **non è MAI
+   chiamato dalla logica d'ingresso** — solo per la dashboard. Conoscenza calcolata e
+   ignorata. NON collegato per ora (stessa ragione della regime edge: ragiona per medie).
+
+**Insegnamento:** prima di dare la colpa al codice, controllare SEMPRE le ENV con
+`env | grep`. Più volte oggi il "buco nel codice" era un interruttore spento/osserva.
+
+---
+
+## 🎯 STATO ENV (Render, 17giu — verificare a inizio sessione)
 ```
+ANTICORDA_ZONA=1.2
+ANTICORDA_OFF=false          ← CORRETTO oggi (era true, spegneva il filtro)
+RITARDO_INGRESSO_SEC=4        ← ancora 4 (la dashboard mostra "4")
+RITARDO_EXTRA_SEC=2
+RITARDO_RESET_GAP=3
+GATE_PEAK_OBSERVER=false      ← decide (OK)
+GATE_PEAK_USD=1.0
+GATE_PEAK_FINESTRA_SEC=15
+RIPIEG_PRE_USD=0.01           ← praticamente spento (1 centesimo)
+SALITA_MIN_USD=1.0            ← aggiunto oggi (guardiano trans piatti)
+SALITA_DOPO_SEC=12            ← aggiunto oggi
+CAP_MAT_L4_DECIDE=true        ← capsula matrigna (altra cosa)
+PRESA_SECCA_USD=1.0 (default se non impostata)
+MASCHIO_CORSIA_USD=1.0 (NUOVO — default; impostare quando si deploya 1a2e6968)
+```
+**NOTA su SALITA vs RITARDO:** oggi scoperto che SALITA_DOPO_SEC=12 NON basta da solo,
+perché ANTICORDA/4+2 decide a 4-6s e fa entrare PRIMA che il guardiano SALITA (a 12s)
+intervenga. Si pestano i piedi. La corsia-maschio (file nuovo) risolve a monte: il maschio
+entra appena pronto, gli incerti restano nel ritardo. Da valutare se serve anche alzare
+`RITARDO_INGRESSO_SEC` a 10-12 per dare al purgatorio il tempo di smascherare gli incerti.
 
-### Verifica vita bot
+---
+
+## 📊 DATI CHIAVE DI OGGI (numeri, non narrazione)
+
+### La merda recente è quasi tutta TRANS_PIATTI (picco 0.0)
+Su 43 perdenti recenti: 42 erano TRANS_PIATTI (picco 0.00), 1 TRANS_SCATTO, 0 FEMMINA_DOPATA.
+Le dopate "che salgono come maschi e poi crollano" quasi NON esistono nei dati recenti.
+Il 98% del problema sono trade piatti che non salgono mai → facili da bloccare con soglia.
+
+### Separazione netta a 10s (dimostrata su trade 14-16giu)
+- A 10s i perdenti (42 su 42) erano TUTTI sotto +0.6$ lordo. ZERO trans a +1$ a 10s.
+- I maschi (pochi: 2-9 nel campione) erano sopra +1$ a 10s.
+- **MA:** campione maschi piccolo. E un maschio delle 13:31 (17giu) aveva pnl_10s +1.96,
+  pnl_20s +2.79, picco 0.83 → maschio vero, profittevole.
+
+### Drift NON è il discriminante
+Maschi drift medio 0.63, femmine 0.51. Troppo vicini, si sovrappongono. Il drift NON
+separa mercato-vero da pattume. Lasciato perdere come filtro.
+
+### t_peak: i maschi GROSSI nascono LENTI
+Maschi piccoli/veloci: picco a 4-8s. Maschi grossi: picco a 16-20s (uno visto +4.71 a 16.6s,
++2.22 a un trade bloccato da GATE PEAK perché fuori finestra 15s).
+**TENSIONE IRRISOLTA:** aspettare i maschi lenti (>15s) = stare esposti troppo a lungo =
+mangiarsi le capre. Roberto: "i grossi sono pochi e rari, non puoi stare col culo fuori
+16-20s". Per ora si sacrificano i maschi lenti. Recupero futuro = GATE PEAK ASIMMETRICO
+(intercettare il maschio lento DENTRO i 15s da una firma di salita sana), ma è il passo dopo.
+
+### ECONOMIC EDGE (la mappa, calcolata ma non usata per decidere)
+Dalla dashboard, mercati per redditività (n = casi):
+- ✅ RANGING LONG DEBOLE: hit 55%, +2.76$, n=157.993 (il pane)
+- ✅ TRENDING_BEAR LONG DEBOLE: hit 55%, +2.27$, n=2.322
+- 🟡 EXPLOSIVE/TRENDING_BULL LONG: ~35%, marginali
+- 🔴 RANGING SHORT: 25%, −0.49$, n=11.996
+- 🔴 TRENDING_BEAR SHORT: 10%, −2.13$, n=54 (veleno)
+
+---
+
+## 🔭 SCOPERTE STRUTTURALI DI FONDO (consolidate)
+
+### Il problema vero NON è il filtraggio, è il TERRENO + il TEMPO
+1. Fee 2$/trade su 60s è altissima rispetto al segnale su BTC fermo. BTC piatto è la
+   prova più dura (sfida sui centesimi). Se il bot regge qui, su coppie più volatili
+   (Solana) la fee fissa pesa meno → dovrebbe premiare di più. MA: chiudere i buchi
+   PRIMA di passare a coppie volatili, sennò i buchi diventano voragini.
+2. Tutta la fisica (seme, campo, ritardo, mine) è AGNOSTICA alla coppia. Il PnL usa
+   `delta * (5000/price)` → proporzionale, si adatta da solo. Le SOGLIE in $ vanno
+   ricalibrate per ogni coppia.
+
+### MULTI-COPPIA / SOLANA (pronto a metà, NON attivo)
+- `SYMBOL = "BTCUSDC"` è **hardcoded a r.159** — NON è una ENV. Per Solana serve UNA
+  modifica codice: `SYMBOL = os.environ.get("SYMBOL", "BTCUSDC")`. Poi ENV `SYMBOL=SOLUSDC`.
+- Calcolo PnL già agnostico. Soglie ($) da ricalibrare osservando SOL 1-2 giorni.
+- **DECISIONE:** finire la verifica BTC con corsia-maschio PRIMA di toccare coppia.
+
+---
+
+## 📊 QUERY PRONTE (cellulare: UNA RIGA, corte)
+
+### Verifica build in produzione
 ```bash
-sqlite3 /var/data/trading_data.db "SELECT datetime(MAX(ts),'unixepoch','+2 hours') AS ultimo_prezzo FROM primi_secondi;"
+md5sum ~/project/src/OVERTOP_BASSANO_V16_PRODUCTION.py
 ```
 
-### Verdetto BTC sulla build attuale
-```sql
-SELECT COUNT(*), ROUND(SUM(pnl),2), ROUND(AVG(pnl),2)
-FROM trades WHERE json_extract(data_json,'$.build')='305252c3332e'
-AND reason NOT LIKE '%ENTRY%';
+### Ora avvio processo (per distinguere trade vecchi da nuovi)
+```bash
+ps -o lstart= -p 1
 ```
 
-### Verifica GATE PEAK in observer mode (legge logs)
-Quando GATE_PEAK_OBSERVER=true, logga "GATE PEAK [OSSERVA]: avrebbe SCARTATO...".
-Per misurare i suoi verdetti, andrà costruita query su log o aggiunto un counter dedicato.
+### ENV chiave
+```bash
+env | grep -E "ANTICORDA|RITARDO|GATE_PEAK|SALITA|PRESA|MASCHIO|RIPIEG"
+```
+
+### Trade ultimi 15 min (solo roba del processo attuale)
+```bash
+sqlite3 /var/data/trading_data.db "SELECT datetime(timestamp,'+2 hours') AS ora, ROUND(pnl,2) AS netto, ROUND(CAST(json_extract(data_json,'\$.peak_pnl') AS REAL),2) AS picco, ROUND(CAST(json_extract(data_json,'\$.duration') AS REAL),0) AS durata, reason FROM trades WHERE event_type='M2_EXIT' AND timestamp>=datetime('now','-15 minutes') ORDER BY id DESC;" -header -column
+```
+
+### Contenuto grezzo ultimo trade di un tipo (per autopsia)
+```bash
+sqlite3 /var/data/trading_data.db "SELECT data_json FROM trades WHERE event_type='M2_EXIT' AND reason='ANTIPRECIPIZIO' ORDER BY id DESC LIMIT 1;"
+```
+
+### Cosa hanno bloccato le mine, ultima ora
+```bash
+sqlite3 /var/data/trading_data.db "SELECT block_reason, COUNT(*) AS n FROM phantom_forensic WHERE ts_entry > strftime('%s','now','-1 hour') GROUP BY block_reason ORDER BY n DESC;" -header -column
+```
+
+### Prese secche portate a casa
+```bash
+sqlite3 /var/data/trading_data.db "SELECT * FROM presa_secca_tagli ORDER BY id DESC LIMIT 10;" -header -column
+```
+
+### Maschi entrati in corsia privata (dopo deploy 1a2e6968)
+Cercare nei log la scritta 🐺 "CORSIA MASCHIO". (Aggiungere counter dedicato se serve.)
 
 ---
 
-## 📜 STORICO INVARIATO
+## ✅ PROSSIMI PASSI (in ordine)
+1. **Deployare il file `1a2e6968...`** (corsia maschio) e verificare md5 sul container.
+2. **Lasciar scorrere** e vedere col mercato vivo: il maschio entra presto in corsia?
+   Le capre restano fuori? La presa secca spolpa? Query: ultimi 15 min + log 🐺.
+3. Se le capre incerte (non-piatte, non-maschio-chiaro) entrano ancora dal purgatorio
+   e muoiono: valutare alzare `RITARDO_INGRESSO_SEC` a 10-12 SOLO per il purgatorio
+   (il maschio già bypassa via corsia privata, quindi non lo penalizza).
+4. **DOPO** aver certificato i maschi su BTC: studiare le dopate/femmine col grasso a 10s
+   (perché partono sotto e poi trovano grasso). Solo col metro del maschio certificato.
+5. GATE PEAK ASIMMETRICO (intercettare maschi lenti dentro i 15s) — passo successivo.
+6. Solana — solo dopo che BTC è pulito (1 riga codice su SYMBOL + ricalibro soglie).
 
-### CROMOSOMA-SEME / SEME_GATE 0.60 (3-4giu, ATTIVO)
-seme = (seed_traj[0]+seed_traj[4])/2 da campo._seed_history[-5:].
-SEME_GATE=0.60 in _open_shadow_position (parametrico SEME_GATE_SOGLIA).
-**ATTENZIONE:** narrazione "filtro probabilistico 80-90%" SMENTITA da 574 trade live.
-Realtà: distingue piatti da non-piatti, non distingue maschi da trans.
+---
 
-### INFRASTRUTTURA (6-7giu, valido)
-- DB bonificato (442MB→3.5MB, autopulitore 10min, AUTOPULITORE_OFF interruttore)
-- Websocket fix (ping_interval=20, ping_timeout=10) — ha tenuto, nessuna ricaduta
-- Veritas riacceso (peso 16%). Fee: $2/trade. BTC ~60k.
+## 📜 STORICO INVARIATO (dal v4, valido)
 
 ### CADAVERI (NON riattivare)
-streak_4, observe_entry, Narratore, RSI/MACD fissi, ZONA_MORTA, range_pos saturo (ROTTO 0/1),
-TRANELLO_FEE_ZERO, gate antibolla "3 morsi" (7giu, superato).
+streak_4, observe_entry, Narratore, RSI/MACD fissi, ZONA_MORTA, range_pos saturo,
+TRANELLO_FEE_ZERO, gate antibolla "3 morsi", quarantena capsule (rimossa, mai menzionare).
 
-### METODO (lezioni consolidate 12-14giu)
-- **Letture codice MIRATE** (range stretto, ~50 righe). Letture larghe saturano la chat in
-  poche ore. Lezione dolorosa del 12giu.
-- **Le narrazioni delle istanze precedenti sono opinioni fossilizzate, NON fatti.**
-  Una frase tipo "il gate funziona" senza numeri non vale niente. Verificare con query.
-  Esempi: "CROMO blocca femmine che crollerebbero" (FALSO sui dati), "SEME_GATE 80-90%
-  precisione" (FALSO sui dati).
-- **Una mina muta è ingiudicabile.** Sempre accendere telecamera prima di decidere.
-- **MD5 sul container = unica verità di un deploy.** Marchio `build` nei trade = unica
-  verità del giudizio. **Verificare il file in produzione PRIMA di consegnare patch**:
-  potrebbero esserci modifiche di altre istanze (come è successo 13giu con GATE PEAK).
+### PROIBIZIONI PERMANENTI
+- MAI distinguere maschi/femmine ALL'INGRESSO (firma ambigua, etichette retrospettive).
+- MAI proporre SHORT (LONG-only per scelta strutturale; zero-trade in fase ribassista è
+  comportamento CORRETTO, non un problema).
+- MAI veti con finestre temporali/conteggi (REGOLA-22MAG: un LOSS marca firma PERICOLOSA
+  finché un WIN stessa firma la pulisce).
+- MAI citare parametri/fee/costanti senza leggerli dal codice.
+- MAI proporre azioni sul vivo senza simulazione/verifica sui dati storici.
+- MAI pacchettare più modifiche insieme (una modifica = un test = un deploy).
+
+### METODO (lezioni consolidate)
+- Letture codice MIRATE (~50 righe). Letture larghe saturano la chat.
+- Le narrazioni delle istanze precedenti sono opinioni, NON fatti. Verificare con query.
+- Una mina muta è ingiudicabile: accendere telecamera prima di decidere.
+- MD5 sul container = unica verità del deploy. Build nei trade = unica verità del giudizio.
+- PRIMA di dare la colpa al codice: `env | grep` (oggi 2 buchi su 2 erano ENV osserva/off).
 - DISTRIBUZIONI, non MEDIE. Far calcolare al DB, non a occhio.
+- Modifiche grosse al file (reindentazione di blocchi lunghi): farle via SCRIPT Python,
+  non a mano, e testare AST+py_compile prima di consegnare (fatto oggi per la corsia maschio).
 
-### VISIONE DI FONDO (discussa, NON da implementare)
-Il cervello è Roberto; Claude/DeepSeek amplificano, non sostituiscono. Claude NON vive
-nel bot, NON ha memoria tra chat. Idea futura: DeepSeek "fabbricante di capsule".
-Agenti autonomi / `/goal`: rimandati.
+### INFRASTRUTTURA (valido)
+DB autopulitore, websocket fix (ping_interval=20/ping_timeout=10), Veritas peso 16%,
+fee $2/trade, BTC ~60-66k. Telecamere MINA_ in phantom_forensic.
 
-### BUG NOTI ANCORA APERTI
-- `trans_bloccati` ancora vuota (diagnosi 7giu sbagliata, vera causa: blocco mai eseguito).
-  Potrebbe non più servire dato che `phantom_forensic` registra tutto via telecamere.
-- Documento `/mnt/user-data/outputs/AUDIT_SINAPSI_13GIU2026.md` citato nel codice (zona
-  SINAPSI LOOKUP) — esiste su qualche istanza Claude del 13giu, non accessibile da qui.
+### VISIONE DI FONDO (NON da implementare)
+Il cervello è Roberto; Claude/DeepSeek amplificano. Claude NON vive nel bot, NON ha
+memoria tra chat — questo documento È la memoria. Agenti autonomi/`/goal`: rimandati.
