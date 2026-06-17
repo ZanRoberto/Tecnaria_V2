@@ -13716,13 +13716,21 @@ class OvertopBassanoV16Production:
                         _sta_scendendo = (_pnl_prec is not None and current_pnl < _pnl_prec)
                         _mai_verde     = (max_profit < _ap_peak_min)
                         _in_perdita    = (current_pnl < 0)
+                        # 17giu2026 (Roberto) — TOLTA la condizione _sta_scendendo.
+                        # Un trans col picco ~0 che cola a gradini (micro-rimbalzi
+                        # di un centesimo) sfuggiva: nell'istante del rimbalzo
+                        # "_sta_scendendo" era falso e lo lasciava vivere fino a
+                        # TRANELLO a 47s. Ora: mai-verde + in-perdita + oltre 8s =
+                        # CAPRA, taglio SUBITO senza aspettare il tick perfetto.
+                        # Il maschio lento (max_profit >= ANTIPREC_PEAK_MIN) NON
+                        # rientra: ha visto verde, resta protetto.
                         if (_eta_ap >= _ap_min_eta and _in_perdita
-                                and _mai_verde and _sta_scendendo
+                                and _mai_verde
                                 and not self._shadow.get("_ap_gia_tagliato")):
                             self._shadow["_ap_gia_tagliato"] = True
                             self._log("✂️", f"ANTIPRECIPIZIO taglia TRANS @ {_eta_ap:.0f}s: "
                                             f"pnl={current_pnl:+.2f} peak_max={max_profit:+.2f} "
-                                            f"(mai verde, sta scendendo) @ ${price:.1f}")
+                                            f"(mai verde, in perdita) @ ${price:.1f}")
                             if not hasattr(self, "_antiprec_tagli"):
                                 self._antiprec_tagli = 0
                             self._antiprec_tagli += 1
