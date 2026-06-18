@@ -2771,7 +2771,9 @@ class OracoloDinamico:
             return True, f"OC4_FALSO_FORTE_drift{drift:+.3f}"
 
         # OC5 - LOSS_STREAK: dopo 5 loss, fermati
-        if loss_streak >= 5:
+        # LOSS_STREAK_OFF (18giu, Roberto): freno a conteggio spento se richiesto.
+        if (loss_streak >= 5
+                and os.environ.get("LOSS_STREAK_OFF", "false").lower() != "true"):
             return True, f"OC5_LOSS_STREAK_{loss_streak}"
 
         # OC6 - RSI ESTREMO IN RANGING = rumore, non segnale
@@ -5048,7 +5050,14 @@ class CampoGravitazionale:
         drift_f, drift_detail = self._drift_factor()
 
         # Loss streak: alza soglia proporzionalmente, non blocca
-        if loss_consecutivi >= self.MAX_LOSS_CONSECUTIVI:
+        # LOSS_STREAK_OFF (18giu, Roberto): "tira via il blocco dopo 3 perdite".
+        # E' un freno a CONTEGGIO (contro REGOLA-22MAG: mai conteggi). Con
+        # LOSS_STREAK_OFF=true il freno e' spento: loss_f resta 1.0 sempre,
+        # decide solo il piattello (sale/scende), trade per trade, senza memoria
+        # di quante perdite di fila. Default false = vecchio comportamento.
+        if os.environ.get("LOSS_STREAK_OFF", "false").lower() == "true":
+            loss_f = 1.0
+        elif loss_consecutivi >= self.MAX_LOSS_CONSECUTIVI:
             extra = loss_consecutivi - self.MAX_LOSS_CONSECUTIVI + 1
             loss_f = min(1.50, 1.0 + extra * 0.10)
         else:
