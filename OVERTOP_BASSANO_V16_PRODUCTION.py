@@ -8552,7 +8552,76 @@ class OvertopBassanoV16Production:
         if self._shadow:
             self._evaluate_shadow_exit(price, momentum, volatility, trend)
         else:
-            self._evaluate_shadow_entry(price, momentum, volatility, trend)
+            # ════════════════════════════════════════════════════════════════
+            # 🐺 CANCELLO SALITA (18giu2026, Roberto — IL PRIMO E UNICO CANCELLO)
+            # ════════════════════════════════════════════════════════════════
+            # PRINCIPIO (Roberto): non guardo il VALORE, guardo la SEQUENZA tick
+            # by tick a esposizione zero. Il maschio SALE (fa nuovi massimi, anche
+            # con respiri in mezzo: 1.20->1.18->1.25). La femmina/trans COLLASSA
+            # (smette di fare nuovi massimi e non torna piu' su). Non serve soglia
+            # di valore ne' timer fisso: il TEMPO mostra tutto. Finche' rifa' nuovi
+            # massimi = vivo, lo lascio passare all'entry. Se passano troppi tick
+            # SENZA un nuovo massimo = ha smesso di salire = collassata = BLOCCO,
+            # non chiamo nemmeno _evaluate_shadow_entry (il labirinto non parla).
+            #
+            # Questo cancello sta PRIMA di tutto (P1, P2, campo, gate, mine): e' il
+            # primo a decidere. Nessuno lo puo' bypassare perche' chi non sale non
+            # arriva nemmeno alla valutazione.
+            #
+            # ENV:
+            #   CANCELLO_SALITA_OFF (default false = attivo)
+            #   CANCELLO_RESPIRO_TICK (default 40) = quanti tick di tolleranza
+            #       senza nuovo massimo prima di dichiarare collasso. Generoso:
+            #       da' spazio al respiro del maschio. Si abbassa se entrano
+            #       ancora femmine, si alza se vengono tagliati maschi che respirano.
+            #   CANCELLO_MIN_SALITA_USD (default 0.0 = spento) = se >0, il massimo
+            #       osservato deve almeno superare questo valore lordo per entrare
+            #       (rete opzionale, di default NON usata: conta solo la salita).
+            # try/except totale: in caso di errore, FAIL-OPEN (chiama l'entry come
+            # prima) per non bloccare mai il bot per colpa del cancello.
+            # ════════════════════════════════════════════════════════════════
+            _cancello_passa = True
+            try:
+                if os.environ.get("CANCELLO_SALITA_OFF", "false").lower() != "true":
+                    _ag_ts_c = getattr(self, "_rit_aggancio_ts", None)
+                    if _ag_ts_c is not None:
+                        # nuovo aggancio? resetto lo stato del cancello
+                        if _ag_ts_c != getattr(self, "_canc_ag_ts", None):
+                            self._canc_ag_ts   = _ag_ts_c
+                            self._canc_prezzo0 = price
+                            self._canc_max_usd = 0.0
+                            self._canc_tick_da_max = 0
+                        _exp_c = float(os.environ.get("EXPOSURE_USD", "5000"))
+                        _p0_c  = getattr(self, "_canc_prezzo0", price) or price
+                        _pos_c = ((price - _p0_c) / _p0_c) * _exp_c if _p0_c else 0.0
+                        _max_c = getattr(self, "_canc_max_usd", 0.0)
+                        if _pos_c > _max_c:
+                            # NUOVO MASSIMO = sta salendo (o ha respirato e ripartito) = VIVO
+                            self._canc_max_usd = _pos_c
+                            self._canc_tick_da_max = 0
+                        else:
+                            # non e' un nuovo massimo: conto i tick di "fermo/giu"
+                            self._canc_tick_da_max = getattr(self, "_canc_tick_da_max", 0) + 1
+                        _respiro = int(float(os.environ.get("CANCELLO_RESPIRO_TICK", "40")))
+                        _min_sal = float(os.environ.get("CANCELLO_MIN_SALITA_USD", "0.0"))
+                        # COLLASSO: troppi tick senza nuovo massimo
+                        if self._canc_tick_da_max >= _respiro:
+                            _cancello_passa = False
+                            self._log_m2("🐺",
+                                f"CANCELLO SALITA: COLLASSO — {self._canc_tick_da_max} tick "
+                                f"senza nuovo massimo (max visto +{self._canc_max_usd:.2f}$) — "
+                                f"femmina/trans, NON entra")
+                        # rete opzionale: se richiesto un minimo di salita e non c'e'
+                        elif _min_sal > 0 and self._canc_tick_da_max == 0 and self._canc_max_usd < _min_sal:
+                            # sta ancora salendo ma sotto il minimo: lascio osservare,
+                            # non blocco (bloccare qui ucciderebbe il maschio lento)
+                            pass
+            except Exception as _e_canc:
+                log.debug(f"[CANCELLO_SALITA_ERR] {_e_canc}")
+                _cancello_passa = True   # FAIL-OPEN: mai bloccare per errore del cancello
+
+            if _cancello_passa:
+                self._evaluate_shadow_entry(price, momentum, volatility, trend)
 
         # -- PHANTOM TRACKER: aggiorna trade fantasma ogni tick ------------
         if self._phantoms_open:
