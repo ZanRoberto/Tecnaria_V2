@@ -7805,13 +7805,51 @@ class OvertopBassanoV16Production:
                     if self.tsunami is not None:
                         self.tsunami.feed_tick(price, volume)
                     self._last_volume = volume
-                    self._process_tick(price)
+                    # ════════════════════════════════════════════════════════
+                    # FIX 18giu (Roberto: "il bot conta i tick ma non scrive
+                    # piu' niente dalle 19:02"). PRIMA _process_tick era nello
+                    # stesso try del parsing: se crashava ad ogni tick, l'errore
+                    # veniva silenziato e il bot restava cieco (contatore sale,
+                    # tabelle ferme). ORA _process_tick ha il SUO try che:
+                    #  1) registra il crash COMPLETO (con traceback) nella tabella
+                    #     crash_log del DB -> diagnosticabile con una query.
+                    #  2) conta i crash consecutivi: se il motore crasha sempre,
+                    #     il contatore _proc_crash_streak cresce e si vede.
+                    # Cosi' il bot non resta mai "cieco in silenzio".
+                    # ════════════════════════════════════════════════════════
+                    try:
+                        self._process_tick(price)
+                        self._proc_crash_streak = 0   # ok: azzero lo streak
+                    except Exception as _e_proc:
+                        import traceback as _tb_proc
+                        self._proc_crash_streak = getattr(self, "_proc_crash_streak", 0) + 1
+                        _tb_str = _tb_proc.format_exc()
+                        log.error(f"[PROC_TICK_CRASH] streak={self._proc_crash_streak} "
+                                  f"{type(_e_proc).__name__}: {_e_proc}")
+                        log.error(f"[PROC_TICK_TB] {_tb_str}")
+                        # registra nel DB solo i primi crash e poi ogni 200, per non floodare
+                        if self._proc_crash_streak <= 5 or self._proc_crash_streak % 200 == 0:
+                            try:
+                                _cc = _safe_connect(DB_PATH, timeout=10)
+                                _cc.execute("""CREATE TABLE IF NOT EXISTS crash_log (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    ts TEXT DEFAULT CURRENT_TIMESTAMP,
+                                    streak INTEGER, err_type TEXT, err_msg TEXT, traceback TEXT)""")
+                                _cc.execute("""INSERT INTO crash_log (streak, err_type, err_msg, traceback)
+                                    VALUES (?,?,?,?)""",
+                                    (self._proc_crash_streak, type(_e_proc).__name__,
+                                     str(_e_proc), _tb_str[:2000]))
+                                _cc.commit()
+                                _cc.close()
+                            except Exception:
+                                pass
                 else:
                     log.warning(f"[WS_TICK_NOPRICE] msg#{self._ws_tick_count} data={data}")
             except Exception as e:
                 log.error(f"[WS_MSG_ERR] {type(e).__name__}: {e} | msg[:200]={msg[:200] if msg else 'None'}")
                 import traceback
                 log.error(f"[WS_MSG_TB] {traceback.format_exc()}")
+
 
         def on_error(ws, error):
             log.error(f"[WS_ERROR] type={type(error).__name__} err={error}")
@@ -7858,7 +7896,48 @@ class OvertopBassanoV16Production:
                     time.sleep(5)
         threading.Thread(target=_ws_loop, daemon=True, name="ws_thread").start()
         log.info(f"[WS_THREAD] Thread WS avviato (con ping keepalive + auto-reconnect)")
-        log.info(f"[WS_THREAD] Thread WS avviato")
+
+        # ════════════════════════════════════════════════════════════════════
+        # WATCHDOG TICK (18giu, debito #1 segnalato da analisi esterna).
+        # La riconnessione sopra scatta SOLO se run_forever ESCE (WS cade
+        # pulito). Ma se Binance smette di mandare tick SENZA chiudere
+        # (connessione "zombie": aperta ma muta), run_forever non esce e il
+        # bot resta cieco. Il watchdog veglia: se non arriva un tick da piu'
+        # di WS_WATCHDOG_SEC secondi, forza la chiusura del WS -> il loop di
+        # riconnessione riparte. Solo sopravvivenza, non tocca il trading.
+        # ENV: WS_WATCHDOG_SEC (default 60; 0 = spento).
+        # ════════════════════════════════════════════════════════════════════
+        self._ws_last_tick_ts = time.time()
+        def _ws_watchdog():
+            _wd_sec = float(os.environ.get("WS_WATCHDOG_SEC", "60"))
+            if _wd_sec <= 0:
+                return
+            _last_seen_count = -1
+            while True:
+                time.sleep(_wd_sec / 2.0)
+                try:
+                    _now = time.time()
+                    _cnt = getattr(self, "_ws_tick_count", 0)
+                    # se il contatore e' avanzato dall'ultimo controllo, il flusso e' vivo
+                    if _cnt != _last_seen_count:
+                        _last_seen_count = _cnt
+                        self._ws_last_tick_ts = _now
+                        continue
+                    # contatore fermo: da quanto?
+                    _silenzio = _now - getattr(self, "_ws_last_tick_ts", _now)
+                    if _silenzio >= _wd_sec:
+                        log.error(f"[WS_WATCHDOG] nessun tick da {_silenzio:.0f}s "
+                                  f"(contatore fermo a {_cnt}) — forzo riconnessione")
+                        self._ws_last_tick_ts = _now
+                        try:
+                            self.ws.close()   # fa uscire run_forever -> _ws_loop riconnette
+                        except Exception as _wce:
+                            log.error(f"[WS_WATCHDOG_CLOSE_ERR] {_wce}")
+                except Exception as _wde:
+                    log.error(f"[WS_WATCHDOG_ERR] {_wde}")
+        threading.Thread(target=_ws_watchdog, daemon=True, name="ws_watchdog").start()
+        log.info(f"[WS_WATCHDOG] Watchdog tick avviato (soglia {os.environ.get('WS_WATCHDOG_SEC','60')}s)")
+
 
     # ========================================================================
     # PROCESS TICK - orchestratore principale
@@ -16692,7 +16771,13 @@ class OvertopBassanoV16Production:
 
             # Svuota gli errori dal log per evitare loop infiniti
             if hasattr(self, '_m2_log'):
-                cleaned = [l for l in self._m2_log if 'ERRORE' not in str(l)]
+                # FIX 18giu (debito #4 analisi esterna): copia difensiva PRIMA
+                # di iterare. _m2_log e' una deque scritta dal thread del tick
+                # (_log_m2); iterarla qui mentre l'altro thread ci scrive puo'
+                # dare RuntimeError: deque mutated during iteration. list() e'
+                # atomica in CPython -> snapshot sicuro, poi filtro lo snapshot.
+                _snap_m2 = list(self._m2_log)
+                cleaned = [l for l in _snap_m2 if 'ERRORE' not in str(l)]
                 self._m2_log = type(self._m2_log)(cleaned, maxlen=getattr(self._m2_log, 'maxlen', 200))
 
         except Exception as e:
