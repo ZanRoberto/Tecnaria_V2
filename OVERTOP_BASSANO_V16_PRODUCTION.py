@@ -12748,28 +12748,46 @@ class OvertopBassanoV16Production:
                         # ════════════════════════════════════════════════════════
                         _salita_min = float(os.environ.get("SALITA_MIN_USD", "0.40"))
                         _salita_dopo = float(os.environ.get("SALITA_DOPO_SEC", "3"))
+                        # CANCELLO_TIENI_PCT (18giu, Roberto): quanto deve stare VICINO
+                        # al suo picco nel momento della decisione per essere maschio.
+                        # 0.75 = deve tenere almeno il 75% del massimo raggiunto.
+                        # Il rimbalzo-femmina (sale a +1.1, crolla a +0.1 = 9% del picco)
+                        # viene tagliato. Il maschio che respira (+1.5 -> +1.4 = 93%) passa.
+                        # Cosi' guardiamo il FILM (la sequenza), non la FOTO (l'istante).
+                        _tieni_pct = float(os.environ.get("CANCELLO_TIENI_PCT", "0.75"))
                         if _salita_min > 0:
                             _eta_attesa = _rit_now - _rit_aggancio
-                            if _eta_attesa >= _salita_dopo and _pos_usd < _salita_min:
-                                # ha avuto il tempo di salire e NON è salito -> trans piatto -> fuori
-                                self._log("🟰", f"TRANS PIATTO scartato "
-                                                f"(dopo {_eta_attesa:.1f}s sta a {_pos_usd:+.2f}$ "
-                                                f"< +{_salita_min}$ — non sale da maschio) — NON entra")
-                                self._rit_aggancio_ts = None
-                                self._rit_prezzo_nascita = None
-                                self._rit_picco_pre = None
-                                try:
-                                    self._ritardo_stats["piatti_scartati"] = self._ritardo_stats.get("piatti_scartati", 0) + 1
-                                except Exception:
-                                    pass
-                                # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
-                                try:
-                                    self._record_phantom(price, "MINA_TRANS_PIATTI",
-                                                         float(seed.get("score", 0) or 0),
-                                                         str(momentum), str(volatility), str(trend))
-                                except Exception:
-                                    pass
-                                return
+                            _picco_osservato = getattr(self, "_rit_picco_pre", None) or 0.0
+                            if _eta_attesa >= _salita_dopo:
+                                # DUE condizioni (il film):
+                                # 1) ha dato segno di vita: il PICCO ha superato SALITA_MIN
+                                # 2) ci sta ancora vicino: ORA >= picco * TIENI_PCT (non crollato)
+                                _ha_salito   = _picco_osservato >= _salita_min
+                                _tiene_ora   = (_picco_osservato > 0 and
+                                                _pos_usd >= _picco_osservato * _tieni_pct)
+                                if (not _ha_salito) or (not _tiene_ora):
+                                    # o non e' mai salito (trans piatto), o e' salito e poi
+                                    # crollato sotto il 75% del picco (femmina che si svuota) -> fuori
+                                    _motivo_taglio = ("non sale da maschio" if not _ha_salito
+                                                      else f"crollato a {(_pos_usd/_picco_osservato*100 if _picco_osservato>0 else 0):.0f}% del picco +{_picco_osservato:.2f}$")
+                                    self._log("🟰", f"TRANS PIATTO scartato "
+                                                    f"(dopo {_eta_attesa:.1f}s sta a {_pos_usd:+.2f}$, "
+                                                    f"picco +{_picco_osservato:.2f}$ — {_motivo_taglio}) — NON entra")
+                                    self._rit_aggancio_ts = None
+                                    self._rit_prezzo_nascita = None
+                                    self._rit_picco_pre = None
+                                    try:
+                                        self._ritardo_stats["piatti_scartati"] = self._ritardo_stats.get("piatti_scartati", 0) + 1
+                                    except Exception:
+                                        pass
+                                    # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                                    try:
+                                        self._record_phantom(price, "MINA_TRANS_PIATTI",
+                                                             float(seed.get("score", 0) or 0),
+                                                             str(momentum), str(volatility), str(trend))
+                                    except Exception:
+                                        pass
+                                    return
 
                         # ════════════════════════════════════════════════════════
                         # RIPIEGAMENTO PRE-INGRESSO (10giu, Roberto) — il gioco vero:
