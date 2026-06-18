@@ -40,6 +40,69 @@ import hashlib
 import operator
 import sqlite3
 import os
+# ════════════════════════════════════════════════════════════════════
+# BUILD_MD5 (11giu, Roberto: "serve un segno sulla lista per sapere quale
+# codice ha prodotto il trade"). Calcolo l'md5 del file all'avvio, una
+# volta sola, e lo marchio su ogni trade. Così nel database si legge nero
+# su bianco quale assetto l'ha generato — niente più "è vecchio o nuovo?"
+# a vista. Si auto-aggiorna: cambi file, cambia il marchio.
+try:
+    with open(os.path.abspath(__file__), "rb") as _bf:
+        BUILD_MD5 = hashlib.md5(_bf.read()).hexdigest()[:12]
+except Exception:
+    BUILD_MD5 = "unknown"
+# ════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════
+# FIX DEFINITIVO LOCK (6giu) — connessione serializzata da lock globale.
+# Tutte le connessioni passano da _safe_connect, che le mette in fila con
+# un unico lock. Due scritture non possono MAI sovrapporsi -> niente piu'
+# "database is locked". Sostituisce i cerotti (timeout, interruttori).
+import threading as _thr_db
+_DB_GLOBAL_LOCK = _thr_db.RLock()
+_orig_sqlite_connect = sqlite3.connect
+def _safe_connect(*args, **kwargs):
+    kwargs.setdefault("timeout", 30)
+    kwargs["check_same_thread"] = False
+    _DB_GLOBAL_LOCK.acquire()
+    try:
+        _c = _orig_sqlite_connect(*args, **kwargs)
+        try:
+            _c.execute("PRAGMA journal_mode=WAL;")
+            _c.execute("PRAGMA busy_timeout=30000;")
+            _c.execute("PRAGMA synchronous=NORMAL;")
+        except Exception:
+            pass
+        return _DBConnWrapper(_c)
+    except Exception:
+        _DB_GLOBAL_LOCK.release()
+        raise
+class _DBConnWrapper:
+    """Avvolge la connessione: rilascia il lock globale alla chiusura/uscita."""
+    def __init__(self, conn):
+        self._conn = conn
+        self._released = False
+    def _release(self):
+        if not self._released:
+            self._released = True
+            try:
+                _DB_GLOBAL_LOCK.release()
+            except Exception:
+                pass
+    def close(self):
+        try:
+            self._conn.close()
+        finally:
+            self._release()
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+    def __enter__(self):
+        self._conn.__enter__()
+        return self
+    def __exit__(self, *a):
+        try:
+            self._conn.__exit__(*a)
+        finally:
+            self._release()
 from datetime import datetime
 from collections import deque, defaultdict
 import logging
@@ -210,7 +273,7 @@ class WinningSignatureLogger:
         """Crea la tabella se non esiste. Idempotente."""
         try:
             import sqlite3
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS winning_signatures (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -240,7 +303,7 @@ class WinningSignatureLogger:
             import sqlite3
             import json
             import time
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             conn.execute("""
                 INSERT INTO winning_signatures (ts, trade_outcome, pnl_netto, pnl_lordo, signature_json, match_at_entry)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -262,7 +325,7 @@ class WinningSignatureLogger:
             import sqlite3
             import json
             import time
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             conn.row_factory = sqlite3.Row
             cutoff = time.time() - max_age_sec
             if outcome_filter:
@@ -660,14 +723,24 @@ class StabilityTelemetry:
         FIX V16:
         - Drena self._events dopo il commit (era N²: riscriveva tutto ad ogni chiamata)
         - Auto-pruning a 50.000 righe (era unbounded: 6.4M righe = 3.8 GB)
+
+        INTERRUTTORE 6giu: TELEMETRY_OFF=true spegne questa scrittura ad alta
+        frequenza (martellava il DB ogni tick -> lock). Reversibile via env var.
         """
+        if os.environ.get("TELEMETRY_OFF", "false").lower() == "true":
+            try:
+                self._events.clear()
+            except Exception:
+                pass
+            return
         try:
             # Drena eventi accumulati: copia + svuota subito,
             # cosi' le append concorrenti non perdono dati.
             events_to_save = list(self._events)
             self._events.clear()
 
-            conn = sqlite3.connect(db_path)
+            conn = _safe_connect(db_path, timeout=15)
+            conn.execute("PRAGMA busy_timeout=15000;")
             conn.execute("""CREATE TABLE IF NOT EXISTS telemetry (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -759,6 +832,18 @@ try:
         _CAP_MATRIGNA_AVAILABLE = True
     except Exception as _e_cap_mat:
         _CAP_MATRIGNA_AVAILABLE = False
+    # ═══════════════════════════════════════════════════════════════
+    # CAPSULA REGIME-EDGE (31mag2026) — Gioca dove i win pagano i loss.
+    # Sui dati reali oracolo_snapshot: SIDEWAYS = merda (perdita reale
+    # dimostrata), UP/trend = campo buono (WR 55-78%, ma simulato).
+    # Nasce OSSERVATRICE (L3): osserva e registra, NON tocca il bot.
+    # Kill: env CAPSULA_REGIME_EDGE_DEAD=true | Decide: CAPSULA_REGIME_EDGE_L4=true
+    # ═══════════════════════════════════════════════════════════════
+    try:
+        from capsula_regime_edge import CapsulaRegimeEdge
+        _CAP_REGIME_EDGE_AVAILABLE = True
+    except Exception as _e_cap_re:
+        _CAP_REGIME_EDGE_AVAILABLE = False
     _CE_AVAILABLE = True
 except ImportError:
     _CE_AVAILABLE = False
@@ -767,6 +852,7 @@ except ImportError:
     _FASE_AVAILABLE = False
     _CAP_TSUNAMI_AVAILABLE = False
     _CAP_MATRIGNA_AVAILABLE = False
+    _CAP_REGIME_EDGE_AVAILABLE = False
     log.warning("[CE] capsule_executor.py non trovato")
 
 try:
@@ -982,8 +1068,9 @@ class IntelligenzaAutonoma:
         trades = list(self._trade_buffer)
 
         # -- LIVELLO 2 da Signal Tracker — non aspetta trade reali --------
-        # Il Signal Tracker ha centinaia di osservazioni — usale subito
-        nuove += self._analisi_l2_signal_tracker()
+        # SCARTATO (18giu, Roberto): nasce su regime+direction = circolare,
+        # ed è doppione del boost (l3_opportunita) e del blocco (l3_regime_tossico).
+        # nuove += self._analisi_l2_signal_tracker()
 
         if len(trades) < self.MIN_SAMPLES_L3:
             if nuove:
@@ -991,17 +1078,21 @@ class IntelligenzaAutonoma:
             return nuove
 
         # -- LIVELLO 2: pattern statistici ---------------------------------
-        nuove += self._analisi_l2_matrimoni(trades)
-        nuove += self._analisi_l2_contesto(trades)
-        nuove += self._analisi_l2_drift_regime(trades)
+        nuove += self._analisi_l2_matrimoni(trades)       # TIENI: matrimonio = pattern d'ingresso
+        # SCARTATO: l2_contesto nasce su regime (chiusura) = circolare + doppione del blocco
+        # nuove += self._analisi_l2_contesto(trades)
+        nuove += self._analisi_l2_drift_regime(trades)    # TIENI: drift_pct misurato PRIMA
 
         # -- LIVELLO 3: eventi anomali adesso ------------------------------
-        nuove += self._analisi_l3_loss_streak(trades)
-        nuove += self._analisi_l3_regime_tossico(trades)
-        nuove += self._analisi_l3_opportunita(trades)
+        # SCARTATO: l3_loss_streak blocca su streak di perdite = finestra/conteggio, vietato (antiaerea)
+        # nuove += self._analisi_l3_loss_streak(trades)
+        # SCARTATO: l3_regime_tossico blocca su regime (chiusura) = circolare, fabbrica "blocca BEAR"
+        # nuove += self._analisi_l3_regime_tossico(trades)
+        # SCARTATO: l3_opportunita boost su regime (chiusura) = circolare + doppione del boost
+        # nuove += self._analisi_l3_opportunita(trades)
 
         # -- AUTO-CORRETTIVE: capsule dai dati live -------------------------
-        nuove += self._analisi_auto_correttive()
+        nuove += self._analisi_auto_correttive()          # TIENI: misura il controfattuale, non l'etichetta
 
         if nuove:
             self._persisti(nuove)
@@ -2235,7 +2326,7 @@ class AIExplainer:
 
     def _init_db(self):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS narrative_log (
                     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2252,7 +2343,7 @@ class AIExplainer:
 
     def log_decision(self, event_type: str, narrative: str, trade_data: dict = None):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             conn.execute("""
                 INSERT INTO narrative_log (timestamp, event_type, narrative, trade_data)
                 VALUES (?, ?, ?, ?)
@@ -3527,7 +3618,7 @@ class PersistenzaStato:
 
     def _init_db(self):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS bot_state (
                     key   TEXT PRIMARY KEY,
@@ -3620,7 +3711,7 @@ class PersistenzaStato:
     def load(self) -> tuple:
         """Ritorna (capital, total_trades)."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             rows = dict(conn.execute("SELECT key, value FROM bot_state").fetchall())
             conn.close()
             capital      = float(rows.get('capital',      self.DEFAULT_CAPITAL))
@@ -3639,7 +3730,7 @@ class PersistenzaStato:
         """
         try:
             import json
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
 
             # -- OracoloDinamico 2.0 --------------------------------------
             # Serializza _memory con deque → list per JSON
@@ -3756,7 +3847,7 @@ class PersistenzaStato:
                 # ════════════════════════════════════════════════════════════
                 'tsunami_state': bot.tsunami.to_persist() if (hasattr(bot, 'tsunami') and bot.tsunami is not None) else None,
             }
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('runtime_state', ?)",
                         (json.dumps(data, default=str),))
             conn.commit()
@@ -3767,7 +3858,7 @@ class PersistenzaStato:
     def load_runtime_state(self, bot):
         """Ripristina lo stato runtime dal DB."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             rows = dict(conn.execute(
                 "SELECT key, value FROM bot_state WHERE key='runtime_state'"
             ).fetchall())
@@ -3924,7 +4015,7 @@ class PersistenzaStato:
                     'hit_120':  list(s.get('hit_120',  [])),
                     'pnl_sim':  list(s.get('pnl_sim',  [])),
                 }
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('signal_tracker', ?)",
                         (json.dumps({
                             'stats':        stats_data,
@@ -3939,7 +4030,7 @@ class PersistenzaStato:
         """Ripristina le stats del PreTradeSignalTracker dal DB."""
         try:
             import json
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             rows = dict(conn.execute("SELECT key, value FROM bot_state WHERE key='signal_tracker'").fetchall())
             conn.close()
             if 'signal_tracker' not in rows:
@@ -3970,7 +4061,7 @@ class PersistenzaStato:
         """
         try:
             import json
-            conn  = sqlite3.connect(self.db_path)
+            conn  = _safe_connect(self.db_path, timeout=30)
             rows  = dict(conn.execute("SELECT key, value FROM bot_state").fetchall())
             conn.close()
 
@@ -4033,7 +4124,7 @@ class PersistenzaStato:
     def save(self, capital: float, total_trades: int):
         """Persiste capital e total_trades su SQLite."""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('capital', ?)",      (str(capital),))
             conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('total_trades', ?)", (str(total_trades),))
             conn.commit()
@@ -4700,6 +4791,10 @@ class CampoGravitazionale:
         self._direction = "LONG"  # LONG o SHORT - il bridge decide
         self._direction_last_change = 0       # timestamp ultimo flip
         self._direction_bearish_streak = 0    # tick consecutivi bearish >=2
+        # SHORT_VIA_DRIFT (30mag, Roberto): tick consecutivi con drift negativo
+        # sostenuto. Via pulita allo SHORT in RANGING — speculare al LONG.
+        # Non dipende da RSI (cadavere, fisso 50) né da pred (mai qualificata).
+        self._drift_neg_streak = 0            # tick consecutivi drift < soglia short
         # -- PRE-BREAKOUT DETECTOR -----------------------------------------
         self._prices_short = deque(maxlen=50)     # ultimi 50 prezzi per compressione
         self._seed_history = deque(maxlen=10)     # ultimi 10 seed per derivata
@@ -5609,10 +5704,17 @@ class VeritatisTracker:
         }
 
     def save(self, db_path: str):
-        """Persiste _stats e _closed su SQLite — sopravvive al restart."""
+        """Persiste _stats e _closed su SQLite — sopravvive al restart.
+
+        INTERRUTTORE 6giu: VERITAS_OFF=true spegne questa scrittura frequente
+        (DELETE+INSERT a raffica) che contribuiva al lock. Reversibile.
+        """
+        if os.environ.get("VERITAS_OFF", "false").lower() == "true":
+            return
         try:
             import sqlite3, json
-            conn = sqlite3.connect(db_path)
+            conn = _safe_connect(db_path, timeout=15)
+            conn.execute("PRAGMA busy_timeout=15000;")
             c = conn.cursor()
             c.execute("""CREATE TABLE IF NOT EXISTS veritas_stats
                          (chiave TEXT PRIMARY KEY, data TEXT)""")
@@ -5636,7 +5738,7 @@ class VeritatisTracker:
         try:
             import sqlite3, json, os
             if not os.path.exists(db_path): return
-            conn = sqlite3.connect(db_path)
+            conn = _safe_connect(db_path, timeout=30)
             c = conn.cursor()
             # Stats
             try:
@@ -5964,7 +6066,16 @@ class SuperCervello:
         #  - capsule_block_score, veritas_ctx_wr → valori osservati nei log live
         #  - MARGINE_OVERRIDE → unico parametro nuovo. Parte CONSERVATIVO.
         # ════════════════════════════════════════════════════════════════════
-        if loss_streak >= 4:
+        # ════════════════════════════════════════════════════════════════════
+        # DISATTIVATO (4giu, Roberto): streak >= 4 era ZAVORRA, non salvagente.
+        # Nello stato attuale (caccia al cromosoma-seme) bloccare dopo 4 loss
+        # IMPEDISCE di raccogliere i trade che servono a misurare se il seme
+        # separa femmine/maschi. I loss NON sono pericolo da cui nascondersi:
+        # sono DATI che alimentano le capsule e raffinano il cromosoma.
+        # Soglia alzata 4 → 999 = di fatto mai. Meccanismo INTATTO sotto: se
+        # un domani serve un freno vero (es. >= 20), basta cambiare il numero.
+        # ════════════════════════════════════════════════════════════════════
+        if loss_streak >= 999:
             # Retro-compat: se il verbale non è arrivato (chiamata vecchia,
             # tutti i param costituzionali None) → comportamento di prima.
             _verbale_presente = (tsunami_vote is not None
@@ -6062,8 +6173,20 @@ class SuperCervello:
                               and oi_stato_short == "FUOCO"
                               and (oi_carica_short or 0) >= 0.75)
         _pred_attiva = _pred_attiva_long or _pred_attiva_short
+        _fp_tossico_off = os.environ.get("SC_FP_TOSSICO_OFF", "false").lower() == "true"
         if fp_samples >= 20 and fp_wr < 0.45 and not _pred_attiva:
-            return self._out("BLOCCA", 0.5, 0, f"FP_TOSSICO_wr={fp_wr:.0%}_n={fp_samples}", 0.95)
+            if _fp_tossico_off:
+                # INTERRUTTORE (7giu, Roberto): veto firma-tossica DISATTIVATO da ENV.
+                # Lascio passare al voto SC + CROMO + ritardo (le reti nuove filtrano a valle).
+                # Reversibile in un colpo: SC_FP_TOSSICO_OFF=false (o tolto) -> veto di nuovo attivo.
+                # Log con freno a 30s per non intasare i log.
+                _now_fpoff = time.time()
+                if _now_fpoff - getattr(self, "_fp_off_last_log", 0.0) > 30:
+                    self._fp_off_last_log = _now_fpoff
+                    print(f"[SC] 🔓 FP_TOSSICO_OFF attivo: lascio passare firma tossica "
+                          f"wr={fp_wr:.0%}_n={fp_samples} (veto spento da ENV)")
+            else:
+                return self._out("BLOCCA", 0.5, 0, f"FP_TOSSICO_wr={fp_wr:.0%}_n={fp_samples}", 0.95)
 
         # ════════════════════════════════════════════════════════════════
         # PASSO 11 — BOOST PREDIZIONE BILATERALE (15mag2026)
@@ -6146,7 +6269,19 @@ class SuperCervello:
         # CAPSULE — il voto pesato degli anticorpi.
         # block_score alto = voto contro ; boost_score alto = voto a favore.
         # block_score reale osservato nei log: 180 sul contesto tossico.
-        if capsule_block_score is None and capsule_boost_score is None:
+        # ────────────────────────────────────────────────────────────────
+        # INTERRUTTORE (8giu, Roberto): SC_CAPSULE_VOTO_OFF=true → il voto
+        # capsule diventa NEUTRO (0.5): non pesa né contro né a favore, come
+        # se le capsule tacessero nel voto. Serve a far scendere i segnali
+        # oltre la porta 2 (voto) verso CROMO/ritardo, per riempire la
+        # telemetria. NON tocca Veritas né gli altri organi. NON tocca il
+        # veto FP_TOSSICO (porta 1, suo interruttore separato). NON tocca il
+        # block delle capsule altrove (CROMO ecc.). Solo il VOTO.
+        # Reversibile: SC_CAPSULE_VOTO_OFF=false (o tolto) → voto com'era.
+        # ────────────────────────────────────────────────────────────────
+        if os.environ.get("SC_CAPSULE_VOTO_OFF", "false").lower() == "true":
+            v['capsule'] = 0.5          # capsule neutralizzate nel voto (da ENV)
+        elif capsule_block_score is None and capsule_boost_score is None:
             v['capsule'] = 0.5          # nessun input → neutro
         else:
             _block = capsule_block_score if capsule_block_score is not None else 0.0
@@ -6214,6 +6349,28 @@ class SuperCervello:
 
         # Score pesato con pesi effettivi (dinamici o default)
         st = sum(v[k] * pesi_eff[k] for k in v)
+
+        # ════════════════════════════════════════════════════════════════
+        # INTERRUTTORE B (8giu, Roberto): SC_VOTO_BYPASS=true
+        # Salta il VOTO di SC: forza ENTRA così il segnale scende a
+        # SEME/CROMO/ritardo, che diventano gli unici filtri. Serve a far
+        # lavorare CROMO+ritardo (firma + tempo) senza il vecchio coprifuoco.
+        # LOGGA ogni bypass: così nei dati i trade entrati col bypass si
+        # distinguono da quelli entrati di diritto (esito misurabile a parte).
+        # NON tocca il veto FP_TOSSICO (porta 1, suo interruttore) né i gate
+        # a valle. Reversibile: SC_VOTO_BYPASS=false (o tolto) → voto com'era.
+        # ⚠ In paper. Da esperimento, non da produzione: salta gli organi
+        #   che riconoscono i pattern. Riaccendere il voto dopo la raccolta.
+        # ════════════════════════════════════════════════════════════════
+        _voto_bypass = os.environ.get("SC_VOTO_BYPASS", "false").lower() == "true"
+        if _voto_bypass:
+            _st_reale = st
+            st = 0.70   # sopra 0.68 → ENTRA (giusto sopra soglia, non forzato al max)
+            _now_byp = time.time()
+            if _now_byp - getattr(self, "_voto_bypass_last_log", 0.0) > 30:
+                self._voto_bypass_last_log = _now_byp
+                print(f"[SC] 🔓 SC_VOTO_BYPASS attivo: salto il voto "
+                      f"(score reale={_st_reale:.2f}) → ENTRA, decidono CROMO+ritardo")
 
         if st >= 0.68:
             azione = "ENTRA"
@@ -6540,7 +6697,7 @@ class LibroPesca:
 
     def _init_db(self):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             cur = conn.cursor()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS libro_pesca (
@@ -6596,7 +6753,7 @@ class LibroPesca:
 
     def _reload_next_id(self):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             cur = conn.cursor()
             cur.execute("SELECT MAX(id) FROM libro_pesca")
             row = cur.fetchone()
@@ -6611,7 +6768,7 @@ class LibroPesca:
         if not self.enabled:
             return
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             cur = conn.cursor()
             cur.execute("""
                 INSERT OR REPLACE INTO libro_pesca
@@ -6863,7 +7020,7 @@ class LibroPesca:
             'lp_orizzonti': {}, 'lp_active': [],
         }
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             cur = conn.cursor()
             cur.execute("SELECT COUNT(*) FROM libro_pesca WHERE esito_finale='VERA' AND versione='v15j'")
             out['lp_vere'] = cur.fetchone()[0] or 0
@@ -6950,7 +7107,7 @@ class LibroPesca:
             return []
         out = []
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = _safe_connect(self.db_path, timeout=30)
             cur = conn.cursor()
             cur.execute("""
                 SELECT id, ts_piantata, prezzo_lenza, direzione, orizzonte_s,
@@ -6992,9 +7149,48 @@ class OvertopBassanoV16Production:
     """
 
     def __init__(self, heartbeat_data=None, db_execute=None, heartbeat_lock=None):
+        # ════════════════════════════════════════════════════════════════
+        # FIX DATABASE LOCKED (5giu) — WAL + busy_timeout all'avvio.
+        # Prima: sqlite3.connect nudo -> "database is locked" appena una query
+        # diagnostica o la telemetry toccava il DB mentre il bot scriveva ->
+        # il bot moriva (es. 11:27 del 5giu). WAL = letture e scritture non si
+        # bloccano piu' a vicenda. busy_timeout = aspetta invece di mollare.
+        # WAL e' una proprieta' del FILE: impostato una volta, vale per tutte
+        # le connessioni successive del bot.
+        try:
+            import sqlite3 as _sq
+            _c = _sq.connect(DB_PATH, timeout=10)
+            _c.execute("PRAGMA journal_mode=WAL;")
+            _c.execute("PRAGMA busy_timeout=5000;")
+            _c.commit()
+            _c.close()
+        except Exception as _e:
+            try:
+                print(f"[DB] setup WAL fallito (non bloccante): {_e}")
+            except Exception:
+                pass
+
         self.symbol         = SYMBOL
         self.ws_url         = BINANCE_WS_URL
         self.paper_trade    = PAPER_TRADE
+
+        # CONTATORE TRANS: carico il totale REALE dal DB (non riparte da zero al restart)
+        try:
+            import sqlite3 as _sqc
+            _cc = _sqc.connect(DB_PATH, timeout=10)
+            _cc.execute("""CREATE TABLE IF NOT EXISTS trans_bloccati (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                causa TEXT, vpress REAL, comp REAL, prezzo REAL)""")
+            _rows = _cc.execute("SELECT causa, COUNT(*) FROM trans_bloccati GROUP BY causa").fetchall()
+            _cc.close()
+            self._cromo_blocchi = {"vol_basso":0,"vol_isterico":0,"comp_alta":0,"cdur_breve":0,"totale":0}
+            for _ca, _n in _rows:
+                if _ca in self._cromo_blocchi:
+                    self._cromo_blocchi[_ca] = _n
+                self._cromo_blocchi["totale"] += _n
+        except Exception:
+            self._cromo_blocchi = {"vol_basso":0,"vol_isterico":0,"comp_alta":0,"cdur_breve":0,"totale":0}
 
         self.heartbeat_data = heartbeat_data if heartbeat_data is not None else {}
         self.heartbeat_lock = heartbeat_lock
@@ -7018,6 +7214,14 @@ class OvertopBassanoV16Production:
         self.FEE_PCT        = 0.0002
         self.FEE_TRADE      = self.EXPOSURE * self.FEE_PCT * 2     # $2.00 fissi
         self.STOP_LIVE      = 7.0  # lordo live — $7 lordi = ~$5 netti dopo fee
+
+        # ── MICROSCOPIO VISIBILITA' ESTESA (1giu, opzione B) ──────────────
+        # Nascita densa (0-10.5s ogni tick) + evoluzione campionata fino alla
+        # chiusura. Regolabili da env senza redeploy.
+        #   MICRO_PASSO_S   = ogni quanti secondi campionare DOPO i 10s (def 3)
+        #   MICRO_MAX_PUNTI = tetto duro punti/curva → la lista non esplode mai
+        self.MICRO_PASSO_S   = float(os.environ.get('MICRO_PASSO_S', '3.0'))
+        self.MICRO_MAX_PUNTI = int(os.environ.get('MICRO_MAX_PUNTI', '200'))
         self.wins    = 0
         self.losses  = 0
 
@@ -7068,7 +7272,13 @@ class OvertopBassanoV16Production:
         self.canvas = None
         if _CANVAS_AVAILABLE:
             try:
-                self.canvas = CapsulaCanvas(bot_ref=self, db_path=DB_PATH)
+                # FIX 2giu (Roberto — "l'occhio cieco dal 31mag, la radice"):
+                # l'__init__ reale di CapsulaCanvas (capsula_canvas.py riga 205) è
+                # `def __init__(self, db_path)` — NON accetta bot_ref. La chiamata
+                # con bot_ref=self lanciava TypeError → except → self.canvas=None →
+                # canvas mai creato → 1569 valutazioni, 0 scritture dal 31mag.
+                # Tolto bot_ref: ora la firma combacia, il canvas nasce, l'occhio vede.
+                self.canvas = CapsulaCanvas(db_path=DB_PATH)
                 log.info(f"[CANVAS] ✅ skill caricata — stato={self.canvas.status()}")
             except Exception as _e_cv:
                 log.warning(f"[CANVAS] init fallita (silenziato): {_e_cv}")
@@ -7161,6 +7371,20 @@ class OvertopBassanoV16Production:
             except Exception as _e_mat:
                 log.warning(f"[CAP_MATRIGNA] init fallita (silenziato): {_e_mat}")
                 self.matrigna = None
+
+        # ═══════════════════════════════════════════════════════════════
+        # CAPSULA REGIME-EDGE (31mag2026) — osservatrice (L3) di default.
+        # ═══════════════════════════════════════════════════════════════
+        self.cap_regime_edge = None
+        if _CAP_REGIME_EDGE_AVAILABLE:
+            try:
+                self.cap_regime_edge = CapsulaRegimeEdge(db_path=DB_PATH)
+                _st_re = self.cap_regime_edge.stato()
+                log.info(f"[CAP_REGIME_EDGE] 🧭 attiva — "
+                         f"L4_decide={_st_re.get('l4_decide')} (default osservatrice)")
+            except Exception as _e_re:
+                log.warning(f"[CAP_REGIME_EDGE] init fallita (silenziato): {_e_re}")
+                self.cap_regime_edge = None
 
         self.log_analyzer    = LogAnalyzer()
         self.ai_explainer    = AIExplainer(db_path=NARRATIVES_DB)
@@ -7320,7 +7544,7 @@ class OvertopBassanoV16Production:
         # Senza questo, dopo restart il gate Veritas riparte da 0.
         # Con questo, il gate è subito operativo basandosi su tutto lo storico.
         try:
-            _conn_v = sqlite3.connect(DB_PATH)
+            _conn_v = _safe_connect(DB_PATH, timeout=30)
             _ctx_rows = _conn_v.execute("""
                 SELECT json_extract(data_json,'$.momentum') as m,
                        json_extract(data_json,'$.volatility') as v,
@@ -7363,7 +7587,7 @@ class OvertopBassanoV16Production:
         self._m2_pnl     = 0.0
         self._m2_trades  = 0
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = _safe_connect(DB_PATH, timeout=30)
             rows = dict(conn.execute("SELECT key, value FROM bot_state WHERE key LIKE 'm2_%'").fetchall())
             conn.close()
             if rows:
@@ -7589,10 +7813,7 @@ class OvertopBassanoV16Production:
             log.error(f"[WS_ERROR] type={type(error).__name__} err={error}")
 
         def on_close(ws, code, msg):
-            log.warning(f"[WS_CLOSE] code={code} msg={msg} tick_ricevuti={self._ws_tick_count} reconn={self._ws_reconnect_count} - riconnessione in 5s...")
-            time.sleep(5)
-            self._ws_reconnect_count += 1
-            self.connect_binance()
+            log.warning(f"[WS_CLOSE] code={code} msg={msg} tick_ricevuti={self._ws_tick_count} reconn={self._ws_reconnect_count}")
 
         def on_open(ws):
             log.info(f"[WS_OPEN] ✓ Connesso a {self.ws_url} (reconn={self._ws_reconnect_count})")
@@ -7605,7 +7826,34 @@ class OvertopBassanoV16Production:
             on_close=on_close,
             on_open=on_open,
         )
-        threading.Thread(target=self.ws.run_forever, daemon=True, name="ws_thread").start()
+        # FIX 6giu — IL BUCO + riconnessione robusta.
+        # 1) ping_interval: senza, run_forever non manda keepalive, Binance
+        #    chiude in silenzio, tick congelati (il "fermo a 689").
+        # 2) loop nello STESSO thread: run_forever esce -> aspetta 5s ->
+        #    ricrea il WS e ripialla. Niente thread annidati. Riparte SEMPRE.
+        def _ws_loop():
+            while True:
+                try:
+                    self.ws.run_forever(ping_interval=20, ping_timeout=10)
+                except Exception as _wre:
+                    log.error(f"[WS_LOOP_ERR] {_wre}")
+                self._ws_reconnect_count = getattr(self, '_ws_reconnect_count', 0) + 1
+                log.warning(f"[WS_RECONNECT] WS caduto, riconnessione #{self._ws_reconnect_count} tra 5s "
+                            f"(tick ricevuti finora={self._ws_tick_count})")
+                time.sleep(5)
+                try:
+                    self.ws = websocket.WebSocketApp(
+                        self.ws_url,
+                        on_message=on_message,
+                        on_error=on_error,
+                        on_close=on_close,
+                        on_open=on_open,
+                    )
+                except Exception as _rce:
+                    log.error(f"[WS_RECREATE_ERR] {_rce}")
+                    time.sleep(5)
+        threading.Thread(target=_ws_loop, daemon=True, name="ws_thread").start()
+        log.info(f"[WS_THREAD] Thread WS avviato (con ping keepalive + auto-reconnect)")
         log.info(f"[WS_THREAD] Thread WS avviato")
 
     # ========================================================================
@@ -7732,6 +7980,75 @@ class OvertopBassanoV16Production:
 
         # Aggiorna prezzo live ad ogni tick
         self._last_price = price
+
+        # ════════════════════════════════════════════════════════════════
+        # TRACKER PRIMI SECONDI (9giu, Roberto) — LA LUCE NEI PRIMI 3s
+        # Il bot era cieco sotto i 10s. Qui campiono ogni segnale agganciato
+        # a 1s/2s/3s dalla nascita: prezzo e variazione $ rispetto all'aggancio.
+        # Cosi' si VEDE la curva nei primi secondi dove maschio e dopata si
+        # separano (maschio tiene/sale, dopata gia' molla). Solo osservazione,
+        # NON decide niente. Scrive in tabella primi_secondi.
+        # ENV TRACK_PRIMI_SEC_OFF=true per spegnerlo. try/except: mai rompe il tick.
+        # ════════════════════════════════════════════════════════════════
+        try:
+            if os.environ.get("TRACK_PRIMI_SEC_OFF", "false").lower() != "true":
+                _ag_ts = getattr(self, "_rit_aggancio_ts", None)
+                # timestamp AUTONOMO del tracker: parte al nuovo aggancio e dura
+                # 10s anche dopo che il ritardo ha deciso (entra/scarta a ~4s).
+                _ps_nascita = getattr(self, "_ps_nascita_ts", None)
+                _ps_prezzo0 = getattr(self, "_ps_prezzo0", None)
+                if _ag_ts is not None and _ag_ts != getattr(self, "_ps_last_ag_ts", None):
+                    # nuovo aggancio rilevato: faccio nascere una nuova traccia
+                    _ps_nascita = now
+                    _ps_prezzo0 = price
+                    self._ps_nascita_ts = now
+                    self._ps_prezzo0 = price
+                    self._ps_last_ag_ts = _ag_ts
+                if _ps_nascita is not None:
+                    _eta = now - _ps_nascita   # secondi di vita (autonomi, fino a 10s+)
+                    if _eta > 12:
+                        # traccia esaurita: chiudo, aspetto il prossimo aggancio
+                        self._ps_nascita_ts = None
+                    else:
+                        _ag_prezzo = _ps_prezzo0 if _ps_prezzo0 is not None else price
+                        if not hasattr(self, "_ps_campionati"):
+                            self._ps_campionati = {}
+                        _gia = self._ps_campionati.get(_ps_nascita, set())
+                        _exp = float(os.environ.get("EXPOSURE_USD", "5000"))
+                        for _sec in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
+                            # campiona al primo tick che supera _sec secondi di vita
+                            if _eta >= _sec and _sec not in _gia:
+                                _var_usd = ((price - _ag_prezzo) / _ag_prezzo) * _exp if _ag_prezzo else 0.0
+                                _ps = None
+                                try:
+                                    import sqlite3 as _sq3ps
+                                    _ps = _sq3ps.connect(DB_PATH, timeout=10)
+                                    _ps.execute("PRAGMA busy_timeout=10000;")
+                                    _ps.execute("""CREATE TABLE IF NOT EXISTS primi_secondi (
+                                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                        timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                                        aggancio_ts REAL, secondo INTEGER,
+                                        prezzo_aggancio REAL, prezzo_ora REAL, var_usd REAL)""")
+                                    _ps.execute(
+                                        """INSERT INTO primi_secondi
+                                           (aggancio_ts, secondo, prezzo_aggancio, prezzo_ora, var_usd)
+                                           VALUES (?,?,?,?,?)""",
+                                        (_ps_nascita, _sec, float(_ag_prezzo), float(price), float(_var_usd)))
+                                    _ps.commit()
+                                    _gia.add(_sec)
+                                    self._ps_campionati[_ps_nascita] = _gia
+                                except Exception:
+                                    pass
+                                finally:
+                                    if _ps is not None:
+                                        try: _ps.close()
+                                        except Exception: pass
+                        # pulizia: tengo solo gli ultimi 50 agganci tracciati
+                        if len(self._ps_campionati) > 50:
+                            for _k in list(self._ps_campionati.keys())[:-50]:
+                                self._ps_campionati.pop(_k, None)
+        except Exception:
+            pass
 
         # ════════════════════════════════════════════════════════════════
         # PATCH 18 — CAPSULA FASE: alimentazione buffer prezzi (25mag2026)
@@ -7882,13 +8199,13 @@ class OvertopBassanoV16Production:
                 if _bull:
                     self._regime_current = 'TRENDING_BULL'
                     self._regime_conf    = min(1.0, abs(_move200) / 0.5)
-                    self._log(f"🔄 AUTOCORRETTORE: RANGING→TRENDING_BULL "
-                             f"(m50={_move50:+.2f}% m200={_move200:+.2f}% dir={_dir200:.2f})")
+                    self._log("🔄", f"AUTOCORRETTORE: RANGING→TRENDING_BULL "
+                                    f"(m50={_move50:+.2f}% m200={_move200:+.2f}% dir={_dir200:.2f})")
                 elif _bear:
                     self._regime_current = 'TRENDING_BEAR'
                     self._regime_conf    = min(1.0, abs(_move200) / 0.5)
-                    self._log(f"🔄 AUTOCORRETTORE: RANGING→TRENDING_BEAR "
-                             f"(m50={_move50:+.2f}% m200={_move200:+.2f}% dir={_dir200:.2f})")
+                    self._log("🔄", f"AUTOCORRETTORE: RANGING→TRENDING_BEAR "
+                                    f"(m50={_move50:+.2f}% m200={_move200:+.2f}% dir={_dir200:.2f})")
 
         # Persistenza ogni 5 minuti
         if now - self.last_persist > 300:
@@ -7898,6 +8215,50 @@ class OvertopBassanoV16Production:
             self._persist.save_runtime_state(self)
             self.telemetry.persist_to_db(DB_PATH)
             self.last_persist = now
+
+        # ════════════════════════════════════════════════════════════════
+        # AUTO-PULITORE DB (6giu) — il DB si era gonfiato a 442MB da tabelle
+        # di log esplose (canvas_snapshots, regime_edge_log, capsule_log,
+        # capsula_fase_osservazioni, phantom_forensic = 1.5M righe) -> lock.
+        # Questo, ogni 10 min, tiene solo le ultime N righe di ciascuna log.
+        # Cosi' il DB NON puo' piu' rigonfiarsi, chiunque le scriva.
+        # Le tabelle VERE (trades, signatures) NON sono toccate.
+        # Interruttore: AUTOPULITORE_OFF=true lo spegne.
+        # ════════════════════════════════════════════════════════════════
+        if (os.environ.get("AUTOPULITORE_OFF", "false").lower() != "true"
+                and now - getattr(self, "_last_dbclean", 0) > 600):
+            self._last_dbclean = now
+            _tabelle_log = {
+                "canvas_snapshots": 2000, "regime_edge_log": 2000,
+                "capsule_log": 2000, "capsula_fase_osservazioni": 2000,
+                "phantom_forensic": 2000, "regime_edge_esiti": 2000,
+                "capsula_fase_verdetti": 2000, "capsula_tsunami_verdetti": 2000,
+                "canvas_shadow_log": 2000, "libro_pesca": 2000,
+            }
+            _cl = None
+            try:
+                import sqlite3 as _scl
+                _cl = _scl.connect(DB_PATH, timeout=10)
+                _cl.execute("PRAGMA busy_timeout=10000;")
+                for _tname, _keep in _tabelle_log.items():
+                    try:
+                        _n = _cl.execute(f"SELECT COUNT(*) FROM {_tname}").fetchone()[0]
+                        if _n > _keep * 1.5:  # pulisco solo se ben oltre la soglia
+                            _cl.execute(
+                                f"DELETE FROM {_tname} WHERE id NOT IN "
+                                f"(SELECT id FROM {_tname} ORDER BY id DESC LIMIT {_keep})")
+                            _cl.commit()
+                            self._log("🧹", f"AUTOPULITORE: {_tname} {_n}->{_keep} righe")
+                    except Exception:
+                        pass  # tabella inesistente o senza id: salto
+            except Exception:
+                pass
+            finally:
+                if _cl is not None:
+                    try:
+                        _cl.close()
+                    except Exception:
+                        pass
 
         # AUTO-TUNE soglia — DISABILITATO in V15+V16
         # L'AutoCalibratore alzava la soglia fino a 83 — il CompartoEngine gestisce le soglie
@@ -9396,12 +9757,61 @@ class OvertopBassanoV16Production:
             campo._direction_bearish_streak = 0
             self._log_m2("🔄", f"FLIP → LONG in EXPLOSIVE (bullish_energy={_bullish_energy} drift={drift:+.3f}%)")
 
+        # ════════════════════════════════════════════════════════════════
+        # TRENDING_BEAR GATE — LA PORTA FISICA ALLO SHORT (31mag, Roberto)
+        # ════════════════════════════════════════════════════════════════
+        # Finora il campo poteva andare SHORT solo in EXPLOSIVE o RANGING.
+        # In TRENDING_BEAR — il regime dove i dati storici danno allo SHORT
+        # il WR più alto (SHORT|*|*|DOWN 48-55%) — non c'era nessuna porta:
+        # in trend ribassista il campo restava LONG e non si girava mai.
+        #
+        # Principio (Roberto): la capsula/gate AGISCE SUBITO dove la fisica
+        # dice profitto. Qui la fisica è già dichiarata dal REGIME stesso:
+        # TRENDING_BEAR = il mercato sta scendendo in modo strutturato, non
+        # è uno spike. Quindi NON serve una soglia di drift inventata: riuso
+        # bearish_energy, la misura fisica composita già calcolata sopra
+        # (momentum veloce giù, MACD giù, decel bassa, drift giù). Soglia >=2
+        # = stessa permissività del gate EXPLOSIVE, coerente.
+        # Lo STREAK non è richiesto: il regime BEAR è già la conferma. "Subito".
+        #
+        # NB: questo apre SOLO la nascita del flip (infrastruttura). La
+        # decisione se il trade nasce davvero resta a valle (SC + capsule).
+        # L'antiaerea sulle firme perdenti è il passo successivo, non qui.
+        if (self._regime_current == "TRENDING_BEAR" and campo._direction == "LONG"
+                and bearish_energy >= 2 and cooldown_ok):
+            campo._direction = "SHORT"
+            campo._direction_last_change = now
+            campo._direction_bearish_streak = 0
+            self._log_m2("🔄", f"FLIP → SHORT in TRENDING_BEAR "
+                              f"(bearish_energy={bearish_energy} drift={drift:+.3f}%)")
+
         # -- RANGING GATE: in laterale NON flippare a SHORT --------------
         # ECCEZIONE VERITAS: se il Veritas vede movimento ribassista reale
         # con delta_60s < -20 su almeno 5 segnali → lo SHORT è legittimo
         # ECCEZIONE OI SHORT FUOCO: mercato ha dichiarato la direzione
         _veritas_short_ok = False
-        _drift_short_ok = drift < -0.005 and bearish_energy >= 3
+        # ════════════════════════════════════════════════════════════════
+        # SHORT_VIA_DRIFT (30mag, Roberto) — LA VIA PULITA ALLO SHORT
+        # ════════════════════════════════════════════════════════════════
+        # Prima: _drift_short_ok = drift < -0.005 AND bearish_energy >= 3
+        #   Due cadaveri occupavano le altre vie (RSI fisso 50, pred mai
+        #   qualificata) e questa era strozzata da bearish_energy>=3 (3 segnali
+        #   fisici insieme). Risultato: 20/20 trade LONG, mai uno SHORT.
+        # Ora: la fisica di Roberto — "il mercato scende sostenuto → vado short".
+        #   Soglia -0.02% = 4x il rumore tipico del RANGING (±0.05% lo dice il
+        #   commento del codice stesso). Persistenza 3 tick = non è uno spike,
+        #   è un calo vero. Speculare a come il LONG segue il drift positivo.
+        #   Niente RSI, niente pred: vie morte rimosse dal blocco.
+        SHORT_DRIFT_THRESHOLD = -0.02   # drift % sotto cui conta come calo vero
+        SHORT_DRIFT_TICKS     = 3       # tick consecutivi di conferma
+        if drift < SHORT_DRIFT_THRESHOLD:
+            campo._drift_neg_streak += 1
+        else:
+            campo._drift_neg_streak = 0
+        _drift_short_ok = campo._drift_neg_streak >= SHORT_DRIFT_TICKS
+        if _drift_short_ok:
+            self._log_m2("📉", f"SHORT_VIA_DRIFT: drift={drift:+.3f}% sostenuto "
+                              f"{campo._drift_neg_streak} tick (soglia {SHORT_DRIFT_THRESHOLD}%)")
         _rsi_ipercomprato = _rsi_now >= 75 and bearish_energy >= 3
         # Predizione indica DOWN: energia short > energia long + pred_score alto
         # PATCH 0: SOLO se _pred["qualified"]. Senza qualifica, _pred_down=False,
@@ -9462,7 +9872,23 @@ class OvertopBassanoV16Production:
         except Exception:
             pass
 
-        if self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok and not _veritas_short_ok and not _drift_short_ok and not _tsunami_short_ok:
+        # ════════════════════════════════════════════════════════════════
+        # SHORT_VIA_DRIFT — RAMO DEDICATO (30mag, Roberto)
+        # ════════════════════════════════════════════════════════════════
+        # Questa via NON dipende da bearish_streak >= 3: il drift negativo
+        # sostenuto per 3 tick È GIÀ la conferma fisica. È la porta pulita
+        # allo SHORT che il LONG ha sempre avuto col drift positivo.
+        # Sta PRIMA del gate "evita short" così non viene intrappolata.
+        if (self._regime_current == "RANGING" and campo._direction == "LONG"
+                and cooldown_ok and _drift_short_ok):
+            campo._direction = "SHORT"
+            campo._direction_last_change = now
+            campo._direction_bearish_streak = 0
+            campo._drift_neg_streak = 0
+            self._log_m2("🔄", f"FLIP → SHORT in RANGING via DRIFT "
+                              f"(drift={drift:+.3f}% sostenuto)")
+
+        elif self._regime_current == "RANGING" and campo._direction == "LONG" and campo._direction_bearish_streak >= 3 and cooldown_ok and not _veritas_short_ok and not _drift_short_ok and not _tsunami_short_ok:
             # NON flippare - logga come SHORT evitato
             if not hasattr(self, '_shadow_short_log'):
                 self._shadow_short_log = []
@@ -10185,6 +10611,10 @@ class OvertopBassanoV16Production:
             "momentum":         momentum,
             "volatility":       volatility,
             "trend":            trend,
+            # FIX TRACCIATURA (31mag): direction mancava del tutto nel verbale
+            # → la fingerprint canvas usciva "?|?|?|?" senza direzione. Uso lo
+            # stato del campo, sempre disponibile (LONG o SHORT). Copre P1 e P2.
+            "direction":        self.campo._direction,
             # TSUNAMI (statuto Passo 3 — tsunami.vota())
             "tsunami_vote":         None,
             "tsunami_confidence":   None,
@@ -10212,14 +10642,26 @@ class OvertopBassanoV16Production:
             "capsule_size_delta":   1.0,
             "capsule_reasons":      [],
             "capsule_oracolo_override": False,
-            # BREATH
-            "breath_fase":          None,
-            "breath_energia":       None,
+            # BREATH — popolato subito (era None → null nel canvas, vedi fix sensori sopra)
+            "breath_fase":          (self._breath._fase    if getattr(self, '_breath', None) else None),
+            "breath_energia":       (self._breath._energia if getattr(self, '_breath', None) else None),
             # CONTESTO BASE
-            "regime":               None,
-            "oi_carica":            None,
-            "oi_stato":             None,
-            "oi_carica_short":      None,
+            # FIX TRACCIATURA (31mag): era None alla nascita e veniva riempito
+            # DOPO la chiamata a observe_entry → la snapshot registrava regime
+            # mancante. Popolato subito col regime corrente.
+            "regime":               self._regime_current,
+            # FIX TRACCIATURA SENSORI (2giu, Roberto — "l'indizio prima del seme"):
+            # PRIMA: oi_carica/breath/fp_wr nascevano None e venivano riempiti DOPO
+            # la chiamata a observe_entry (righe ~10823) → il canvas registrava i
+            # sensori del campo TUTTI null. L'indizio pre-nascita (carica, respiro,
+            # energia del campo nell'istante della valutazione) veniva BUTTATO.
+            # ADESSO: popolati SUBITO coi valori che il bot già ha in mano, così la
+            # scatola nera (canvas_snapshots.sensori_json) registra lo stato del campo
+            # PRIMA che il trade nasca. È il dato da cui cercare il segnale subdolo:
+            # ciò che distingue chi nascerà femmina-e-resta da chi diventerà maschio.
+            "oi_carica":            getattr(self, '_oi_carica', None),
+            "oi_stato":             getattr(self, '_oi_stato', None),
+            "oi_carica_short":      getattr(self, '_oi_carica_short', None),
             "score":                None,
             "soglia":               None,
             # CAMPO GRAVITAZIONALE (Passo 5a-bis — 5° testimone)
@@ -10229,6 +10671,64 @@ class OvertopBassanoV16Production:
             "percorso":             None,   # 'P1_EXPLOSIVE' | 'P2_NORMALE'
             "blocked_by":           None,
         }
+
+        # ════════════════════════════════════════════════════════════════
+        # HOOK CANVAS ANTICIPATO (2giu, Roberto — "la signora respira ma è cieca")
+        # ════════════════════════════════════════════════════════════════
+        # Il vecchio hook (più sotto, ~10810) era DOPO tutti i veti/return. Ma
+        # il guardiano FP_TOSSICO blocca col `return` PRIMA di arrivarci → il
+        # canvas vedeva SOLO i trade che passavano il guardiano (quasi nessuno).
+        # 54 valutazioni bloccate, canvas=0. La signora respira (phantom scrive)
+        # ma è cieca (canvas vuoto).
+        # FIX: registro QUI, subito dopo la nascita del verbale, PRIMA di ogni
+        # veto. Il verbale ha già i sensori del campo (oi_carica, breath, regime,
+        # momentum, volatility) = lo stato PRE-DECISIONE, che è esattamente il
+        # "prima del seme" che cerchiamo. Score/voti sono il "durante", non
+        # servono qui. Così il canvas vede OGNI valutazione — anche (soprattutto)
+        # quelle che il guardiano blocca, dove si nascondono i maschi-lingotti.
+        # Try/except totale: mai blocca il motore.
+        # ════════════════════════════════════════════════════════════════
+        try:
+            if getattr(self, "canvas", None) is not None:
+                # PRIMA DEL SEME (2giu, Roberto): l'hook canvas è anticipato,
+                # ma range_pos/drift_slope (vita dell'energia) si calcolano più
+                # in basso. Li anticipo qui così l'occhio li registra alla
+                # nascita. Calcolo leggero e già usato altrove, nessun effetto
+                # sulle decisioni: solo per riempire il verbale dell'occhio.
+                try:
+                    _seed_early = self.seed_scorer.score()
+                    _verbale["range_pos"]   = _seed_early.get("range_pos")
+                    _verbale["drift_slope"] = _seed_early.get("drift_slope")
+                    _verbale["seed_score"]  = _seed_early.get("score")
+                except Exception:
+                    pass
+                _canvas_tid = f"t_{int(time.time()*1000)}"
+                _verbale["_canvas_tid"] = _canvas_tid
+                # DISATTIVATO 4giu (Roberto): observe_entry scriveva ~60k
+                # valutazioni/giorno → lock DB → EXIT perse (contatore che
+                # perdeva trade). _canvas_tid resta per agganciare nascita→esito.
+                # self.canvas.observe_entry(_verbale, trade_id=_canvas_tid)
+        except Exception as _ce_early:
+            log.debug(f"[CANVAS_HOOK_EARLY_ERR] {_ce_early}")
+
+        # ════════════════════════════════════════════════════════════════
+        # CAPSULA REGIME-EDGE (31mag) — consulta. In L3 (default) OSSERVA e
+        # registra, ritorna None → non tocca nulla. In L4 (armata) può
+        # bloccare il SIDEWAYS-merda. Fail-open: se assente o crasha, prosegue.
+        # ════════════════════════════════════════════════════════════════
+        if getattr(self, 'cap_regime_edge', None):
+            try:
+                _re_verdetto = self.cap_regime_edge.consulta(
+                    regime=self._regime_current,
+                    momentum=momentum,
+                    trend=trend,
+                    direction=self.campo._direction,
+                )
+                if _re_verdetto and _re_verdetto[0] == "BLOCCA":
+                    self._log_m2("🧭", f"REGIME_EDGE BLOCCA: {_re_verdetto[1]}")
+                    return
+            except Exception as _e_re_consulta:
+                pass  # fail-open: la capsula non deve mai fermare il bot per un errore
 
         try:
             # ════════════════════════════════════════════════════════════════
@@ -10293,6 +10793,19 @@ class OvertopBassanoV16Production:
                 _verbale["blocked_by"] = "ZONA1_SEED_INSUFFICIENT"
                 self._log_constitutional(_verbale, "PRE_SC_VETO_SEED_INSUFFICIENT")
                 return
+
+            # ── PRIMA DEL SEME: vita dell'energia (2giu, Roberto) ───────────
+            # Intuizione: il bot misura QUANTA energia c'è (livello) ma non se
+            # quell'energia è VIVA (sale) o MORTA (picco che cola). range_pos
+            # alto + drift_slope negativo = comprato sul picco morto = femmina.
+            # Registriamo questi due nel verbale così il canvas (l'occhio) li
+            # salva alla nascita. Domani confrontiamo: le femmine nascono con
+            # slope<0 (energia morta) e i maschi con slope>0 (energia viva)?
+            # NON cambia nessuna decisione: aggiunge solo l'elemento oggettivo
+            # che mancava per provare/smentire l'intuizione sui dati.
+            _verbale["range_pos"]   = seed.get("range_pos")
+            _verbale["drift_slope"] = seed.get("drift_slope")
+            _verbale["seed_score"]  = seed.get("score")
 
             # ════════════════════════════════════════════════════════════════
             # PATCH 9 BUG 16 — Disable Operational BYPASS_ORACOLO
@@ -10647,19 +11160,10 @@ class OvertopBassanoV16Production:
                 except Exception as _le:
                     log.debug(f"[CAPSULE_DEP_ERR] {_le}")
 
-                # ═══════════════════════════════════════════════════════
-                # PATCH 15 BUG 22 — Hook CapsulaCanvas (osservativo)
-                # Skill esterna che registra il fotogramma di entry.
-                # Try/except totale: mai blocca il motore.
-                # ═══════════════════════════════════════════════════════
-                try:
-                    if getattr(self, "canvas", None) is not None:
-                        _canvas_tid = f"t_{int(time.time()*1000)}"
-                        # Salva trade_id nel _verbale per recupero a close
-                        _verbale["_canvas_tid"] = _canvas_tid
-                        self.canvas.observe_entry(_verbale, trade_id=_canvas_tid)
-                except Exception as _ce:
-                    log.debug(f"[CANVAS_HOOK_ENTRY_ERR] {_ce}")
+            # NOTA (2giu): l'hook canvas observe_entry è stato SPOSTATO in alto,
+            # subito dopo la nascita del verbale (~riga 10355), PRIMA dei veti,
+            # così registra anche le valutazioni bloccate dal guardiano. Qui era
+            # ridondante e avrebbe causato doppia scrittura → rimosso.
 
             # ── CALCOLA EFFECTIVE REGIME ─────────────────────────────────────
             _now_eo    = time.time()
@@ -10944,7 +11448,9 @@ class OvertopBassanoV16Production:
                             f"reason=ZONA_MORTA_MERCATO")
                         _verbale["blocked_by"] = "PATCH12_FLAT_DRIFT"
                         self._log_constitutional(_verbale, "PRE_OPEN_VETO_FLAT_DRIFT_P1")
-                        return
+                        if os.environ.get("CANCELLI_OBSERVER", "false").lower() != "true":
+                            return
+                        self._log_m2("👁", "OBSERVER: FLAT_DRIFT avrebbe bloccato — LASCIO PASSARE")
                 except Exception as _e_p12_p1:
                     # Se errore nel calcolo drift, NON blocchiamo (conservativo)
                     pass
@@ -10960,12 +11466,21 @@ class OvertopBassanoV16Production:
                 # Hook 1/2: canvas observe_entry per Percorso 1
                 try:
                     if getattr(self, "canvas", None) is not None:
+                        # PRIMA DEL SEME (2giu): vita dell'energia anche su P1
+                        try:
+                            _seed_p1 = self.seed_scorer.score()
+                            _verbale["range_pos"]   = _seed_p1.get("range_pos")
+                            _verbale["drift_slope"] = _seed_p1.get("drift_slope")
+                            _verbale["seed_score"]  = _seed_p1.get("score")
+                        except Exception:
+                            pass
                         _canvas_tid_p1 = f"t_{int(time.time()*1000)}_P1"
                         _verbale["_canvas_tid"] = _canvas_tid_p1
                         _verbale["_path"] = "P1_EXPLOSIVE"
                         # Salvo per transfer in _open_shadow_position
                         self._pending_canvas_tid_p1 = _canvas_tid_p1
-                        self.canvas.observe_entry(_verbale, trade_id=_canvas_tid_p1)
+                        # DISATTIVATO 4giu (Roberto): vedi nota punto 1.
+                        # self.canvas.observe_entry(_verbale, trade_id=_canvas_tid_p1)
                 except Exception as _ce_p1:
                     log.debug(f"[CANVAS_HOOK_ENTRY_P1_ERR] {_ce_p1}")
 
@@ -11038,7 +11553,9 @@ class OvertopBassanoV16Production:
                             self._log_m2("👵", f"MATRIGNA BLOCCA P1: {_mat_motivo}")
                             _verbale["blocked_by"] = f"MATRIGNA:{_mat_info.get('firma_key','?')}"
                             self._log_constitutional(_verbale, "PRE_OPEN_VETO_MATRIGNA_P1")
-                            return
+                            if os.environ.get("CANCELLI_OBSERVER", "false").lower() != "true":
+                                return
+                            self._log_m2("👁", "OBSERVER: MATRIGNA P1 avrebbe bloccato — LASCIO PASSARE")
                         elif "OBSERVER_WOULD_BLOCK" in _mat_motivo:
                             self._log_m2("👁", f"MATRIGNA suggerirebbe blocco (OBSERVER P1): {_mat_motivo}")
                     except Exception as _e_mat_p1:
@@ -11111,6 +11628,30 @@ class OvertopBassanoV16Production:
                     _verbale["blocked_by"] = f"ZONA1_CAMPO_WARMUP:{_campo_veto}"
                     self._log_constitutional(_verbale, "PRE_SC_VETO_CAMPO_WARMUP")
                     return
+
+                # ════════════════════════════════════════════════════════════
+                # MERCATO MORTO — il campo dice la VERITA' (11giu, Roberto).
+                # Il campo riconosce il contesto tossico (CTX_TOSSICO_DEBOLE_BASSA)
+                # e predice WR ~13%. I dati lo confermano: 10 morti su 13 trade in
+                # mercato morto. Era stato declassato a deposizione scavalcabile
+                # dall'SC (col VOLPE_BOOST che entrava lo stesso). GLI RIDIAMO IL
+                # POTERE DI BLOCCARE: se il veto è tossico E il mercato è morto
+                # PURO (momentum DEBOLE + volatility BASSA), torna a essere return
+                # FISICO come il WARMUP. Nessuno lo scavalca. Se il campo dice
+                # morto, NON si opera. STRETTO: solo il morto puro (DEBOLE+BASSA),
+                # i borderline passano (non strangoliamo i maschi).
+                # ENV: MERCATO_MORTO_OFF=true per spegnere/tarare al volo.
+                # ════════════════════════════════════════════════════════════
+                if os.environ.get("MERCATO_MORTO_OFF", "false").lower() != "true":
+                    _mom = str(momentum).upper()
+                    _vol = str(volatility).upper()
+                    _tox = ("TOSSICO" in _campo_veto) or ("CTX_" in _campo_veto)
+                    if _tox and _mom == "DEBOLE" and _vol == "BASSA":
+                        self._log_m2("⚰️", f"MERCATO MORTO (campo dice verità): "
+                                            f"{_campo_veto} | {_mom}/{_vol} — NON si opera (BLOCCO)")
+                        _verbale["blocked_by"] = f"MERCATO_MORTO:{_campo_veto}"
+                        self._log_constitutional(_verbale, "PRE_SC_VETO_MERCATO_MORTO")
+                        return
 
                 # Tutto il resto (CM_TOSSICO, TOSSICO_, DIVORZIO, DRIFT_VETO)
                 # è giudizio di merito → DEPOSIZIONE, niente return.
@@ -11326,7 +11867,9 @@ class OvertopBassanoV16Production:
                 self._log_m2("🚫", f"SC_BLOCCA: {_sc_dec['motivo']}")
                 self._record_phantom(price, f"SC_BLOCCA_{_sc_dec['motivo'][:20]}",
                                      seed['score'], momentum, volatility, trend)
-                return
+                if os.environ.get("CANCELLI_OBSERVER", "false").lower() != "true":
+                    return
+                self._log_m2("👁", "OBSERVER: SC_BLOCCA avrebbe bloccato — LASCIO PASSARE")
 
             # ════════════════════════════════════════════════════════════════
             # FIX #32 (12mag2026 sera): FLIP_BY_SUPERCERVELLO
@@ -11456,11 +11999,100 @@ class OvertopBassanoV16Production:
                         self._log_m2("👵", f"MATRIGNA BLOCCA P2: {_mat_motivo}")
                         _verbale["blocked_by"] = f"MATRIGNA:{_mat_info.get('firma_key','?')}"
                         self._log_constitutional(_verbale, "PRE_OPEN_VETO_MATRIGNA_P2")
-                        return
+                        if os.environ.get("CANCELLI_OBSERVER", "false").lower() != "true":
+                            return
+                        self._log_m2("👁", "OBSERVER: MATRIGNA P2 avrebbe bloccato — LASCIO PASSARE")
                     elif "OBSERVER_WOULD_BLOCK" in _mat_motivo:
                         self._log_m2("👁", f"MATRIGNA suggerirebbe blocco (OBSERVER P2): {_mat_motivo}")
                 except Exception as _e_mat_p2:
                     log.debug(f"[MATRIGNA_HOOK_P2_ERR] {_e_mat_p2}")
+
+            # ════════════════════════════════════════════════════════════════
+            # SINAPSI LOOKUP — FASE 2 (13giu2026, Roberto)
+            # ════════════════════════════════════════════════════════════════
+            # Phantom non e' post-mortem: e' tessuto sinaptico. Qui, prima
+            # dell'apertura del trade, interroghiamo phantom_forensic per
+            # vedere come sono andati casi storici con firma simile.
+            # SHADOW PURO: logga e basta, NON modifica la decisione.
+            # ENV control: SINAPSI_LOOKUP_ENABLED (default false)
+            # Documento audit: /mnt/user-data/outputs/AUDIT_SINAPSI_13GIU2026.md
+            # ════════════════════════════════════════════════════════════════
+            try:
+                if os.environ.get("SINAPSI_LOOKUP_ENABLED", "false").lower() == "true":
+                    _sin_days = int(os.environ.get("SINAPSI_LOOKUP_DAYS", "7"))
+                    _sin_min_n = int(os.environ.get("SINAPSI_LOOKUP_MIN_N", "20"))
+                    _sin_dir = self.campo._direction
+                    _sin_reg = self._regime_current
+                    _sin_cutoff = time.time() - (_sin_days * 86400)
+                    _sin_conn = None
+                    try:
+                        import sqlite3 as _sql_sin
+                        _sin_conn = _sql_sin.connect(self.db_path, timeout=5)
+                        _sin_conn.execute("PRAGMA busy_timeout=5000;")
+                        # Lookup: casi storici con firma identica (regime/direction/momentum/volatility/trend)
+                        _sin_q = """SELECT COUNT(*) AS n,
+                                           SUM(CASE WHEN is_win=1 THEN 1 ELSE 0 END) AS wins,
+                                           AVG(mfe_usd) AS peak_medio,
+                                           AVG(mae_usd) AS crollo_medio
+                                    FROM phantom_forensic
+                                    WHERE ts_entry >= ?
+                                      AND regime = ?
+                                      AND direction = ?
+                                      AND momentum = ?
+                                      AND volatility = ?
+                                      AND trend = ?
+                                      AND mfe_usd IS NOT NULL"""
+                        _sin_cur = _sin_conn.execute(_sin_q, (_sin_cutoff, _sin_reg, _sin_dir,
+                                                              momentum, volatility, trend))
+                        _sin_row = _sin_cur.fetchone()
+                        _sin_n = _sin_row[0] if _sin_row else 0
+                        _sin_wins = _sin_row[1] if _sin_row else 0
+                        _sin_peak = _sin_row[2] if _sin_row else None
+                        _sin_crollo = _sin_row[3] if _sin_row else None
+                        _sin_wr = (_sin_wins / _sin_n) if _sin_n > 0 else None
+                        _sin_firma = f"{_sin_reg}|{_sin_dir}|{momentum}|{volatility}|{trend}"
+                        # Logga sempre se ha trovato campione minimo
+                        if _sin_n >= _sin_min_n:
+                            self._log_m2("🧬",
+                                f"SINAPSI: firma={_sin_firma} n={_sin_n} "
+                                f"WR_storico={_sin_wr:.0%} peak_medio={_sin_peak:.2f}$ "
+                                f"crollo_medio={_sin_crollo:.2f}$")
+                            # Avviso speciale se contesto storicamente sfavorevole
+                            if _sin_wr is not None and _sin_wr < 0.25 and _sin_n >= 10:
+                                self._log_m2("⚠️",
+                                    f"SINAPSI_AVVISO: contesto storicamente sfavorevole "
+                                    f"WR={_sin_wr:.0%} su n={_sin_n} casi (peak medio {_sin_peak:.2f}$)")
+                        # Registra l'osservazione su tabella dedicata
+                        _sin_conn.execute("""CREATE TABLE IF NOT EXISTS sinapsi_observations (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            ts REAL,
+                            firma TEXT,
+                            n_storici INTEGER,
+                            wr_storico REAL,
+                            peak_medio_storico REAL,
+                            crollo_medio_storico REAL,
+                            bot_decisione TEXT,
+                            entry_price REAL,
+                            score REAL,
+                            soglia REAL
+                        )""")
+                        _sin_conn.execute("""INSERT INTO sinapsi_observations
+                            (ts, firma, n_storici, wr_storico, peak_medio_storico,
+                             crollo_medio_storico, bot_decisione, entry_price, score, soglia)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (time.time(), _sin_firma, _sin_n, _sin_wr, _sin_peak,
+                             _sin_crollo, "ENTERING", float(price), float(score), float(soglia)))
+                        _sin_conn.commit()
+                    except Exception as _e_sin:
+                        log.debug(f"[SINAPSI_ERR] {_e_sin}")
+                    finally:
+                        if _sin_conn is not None:
+                            try:
+                                _sin_conn.close()
+                            except Exception:
+                                pass
+            except Exception:
+                pass  # mai bloccare il bot per errori sinapsi
 
             self._open_shadow_position(price, score, soglia, seed, size,
                                         momentum, volatility, trend,
@@ -11485,12 +12117,807 @@ class OvertopBassanoV16Production:
         Registra tutti i dati necessari per l'exit e il tracking.
         """
         try:
+            # ════════════════════════════════════════════════════════════════
+            # 🛡️ GRANDE FRATELLO DIREZIONE (GF) — 8giu, Roberto
+            # ════════════════════════════════════════════════════════════════
+            # Regola UNICA, sopra a tutto: se la spinta del mercato è giù
+            # (drift < soglia) e il campo vuole entrare LONG → NON SI ENTRA.
+            # Punto. Non importa maschio/femmina/trans: se la direzione è
+            # sbagliata, si sta fuori. Filtro di DIREZIONE, non di qualità.
+            # È PRIMA di tutto (SEME/CROMO/ritardo) e NON viene deposto.
+            # Drift calcolato sul momento da _prices_long (stessa formula del
+            # campo, riga ~4975) per non dipendere da _last_drift (che a volte
+            # non esiste). Reversibile e tarabile da ENV:
+            #   GF_DIREZIONE_OFF=true  → guardiano spento (default false=attivo)
+            #   GF_DRIFT_SOGLIA=-0.05  → soglia % (più vicino a 0 = più severo)
+            # ════════════════════════════════════════════════════════════════
+            if os.environ.get("GF_DIREZIONE_OFF", "false").lower() != "true":
+                _gf_dir = getattr(self.campo, "_direction", "LONG")
+                if _gf_dir == "LONG":
+                    _gf_soglia = float(os.environ.get("GF_DRIFT_SOGLIA", "-0.05"))
+                    _gf_prices = list(getattr(self.campo, "_prices_long", []))
+                    if len(_gf_prices) >= 100:
+                        _gf_old = sum(_gf_prices[:50]) / 50
+                        _gf_new = sum(_gf_prices[-50:]) / 50
+                        _gf_drift = (_gf_new - _gf_old) / _gf_old * 100 if _gf_old else 0.0
+                        if _gf_drift < _gf_soglia:
+                            _now_gf = time.time()
+                            if _now_gf - getattr(self, "_gf_last_log", 0.0) > 30:
+                                self._gf_last_log = _now_gf
+                                print(f"[GF] 🛡️ FUORI: spinta ribassista "
+                                      f"drift={_gf_drift:+.3f}% < {_gf_soglia}% "
+                                      f"(LONG bloccato — direzione sbagliata)")
+                            try:
+                                self._ritardo_stats["gf_fuori"] = self._ritardo_stats.get("gf_fuori", 0) + 1
+                            except Exception:
+                                pass
+                            # espone lo stato alla dashboard: "fuori perché SHORT"
+                            try:
+                                if self.heartbeat_data is not None:
+                                    self.heartbeat_data["gf_stato"] = "FUORI_SHORT"
+                                    self.heartbeat_data["gf_drift"] = round(_gf_drift, 3)
+                                    self.heartbeat_data["gf_soglia"] = _gf_soglia
+                                    self.heartbeat_data["gf_ts"] = datetime.utcnow().isoformat()
+                                    self.heartbeat_data["gf_fuori_count"] = self._ritardo_stats.get("gf_fuori", 0)
+                            except Exception:
+                                pass
+                            return  # NON ENTRA — direzione giù
+                        else:
+                            # direzione OK in questo aggancio: segnala "campo libero"
+                            try:
+                                if self.heartbeat_data is not None:
+                                    self.heartbeat_data["gf_stato"] = "LIBERO"
+                                    self.heartbeat_data["gf_drift"] = round(_gf_drift, 3)
+                                    self.heartbeat_data["gf_ts"] = datetime.utcnow().isoformat()
+                            except Exception:
+                                pass
+
+            # ════════════════════════════════════════════════════════════════
+            # SEME_GATE (3giu, Roberto) — EVITARE LE FEMMINE PRIMA DELLA NASCITA
+            # ════════════════════════════════════════════════════════════════
+            # Scoperta sui dati (44 trade reali, 1-2giu): il "sesso" del trade è
+            # già nel SEME prima che nasca. Maschi (WIN) nascono da seme medio
+            # ~0.62 e tengono; femmine (LOSS) da ~0.49 e si sgonfiano.
+            # I maschi fanno +42$; le femmine tolgono -105$ → netto -63$.
+            # Il bot SA guadagnare: sono le femmine che cancellano i maschi.
+            #
+            # Simulazione retrospettiva su quei 44 trade, filtro per soglia:
+            #   0.50 → -2.44 | 0.55 → +0.23 | 0.60 → +6.94 (PICCO, 15/15 maschi
+            #   tenuti) | 0.65 → +0.50 (qui inizia a uccidere maschi).
+            # → soglia 0.60 = ultimo gradino prima di perdere maschi. PARAMETRICA.
+            #
+            # seme medio = (primo + ultimo degli ultimi 5 seed_score), come la
+            # colonna seed_traj usata nella simulazione (campo._seed_history[-5:]).
+            # Sotto soglia → NON nasce (femmina evitata). Sopra → passa (maschio).
+            # NOTA: filtro probabilistico, non perfetto (una femmina con seme alto
+            # esiste). Logga ogni blocco → sui dati nuovi si verifica e si ritara.
+            SEME_GATE_SOGLIA = float(getattr(self, "SEME_GATE_SOGLIA", 0.60))
+            _sh = list(getattr(self.campo, "_seed_history", []))[-5:]
+            if len(_sh) >= 2:
+                _seme_medio = (_sh[0] + _sh[-1]) / 2.0
+                if _seme_medio < SEME_GATE_SOGLIA:
+                    self._log("🚫", f"SEME_GATE BLOCCO femmina: seme={_seme_medio:.3f} "
+                                    f"< {SEME_GATE_SOGLIA} | {momentum}/{volatility}/{trend} "
+                                    f"seed={seed.get('score', 0):.3f} @ ${price:.1f}")
+                    return
+
             matrimonio = MatrimonioIntelligente.get_marriage(momentum, volatility, trend)
             pb_signals = self.campo._pre_breakout_factor()[2] \
                          if len(self.campo._prices_short) >= 30 else 0
 
+            # ════════════════════════════════════════════════════════════════
+            # GATE CROMOSOMA v2 — CORRETTO 5giu (Roberto: "lavoravi in modo inverso")
+            # ════════════════════════════════════════════════════════════════
+            # ERRORE v1 (4giu): avevo messo compression >= 0.18 ("manca la carica
+            # = femmina"). SBAGLIATO, segno invertito. Su 24 trade sobri reali:
+            # le FEMMINE hanno compression ALTA (0.92/0.95/0.99/1.0), i MASCHI bassa.
+            # Cartesiana 2 geni (la piu' robusta, no overfitting):
+            #   MASCHIO = vol_pressure >= 0.50  E  compression <= 0.70
+            #   -> tiene 10 maschi su 11, blocca 10 femmine su 13.
+            # Le regole a 3-4 geni (cdur, flips) davano 1-2 femmine in meno ma erano
+            # cucite su 1-2 casi (overfitting su 24 trade) -> NON usate.
+            # ⚠ SPERIMENTALE: base 24 trade. Sospetto solido, non legge. Parametrico
+            # e reversibile. Logga ogni blocco. Resta 1 maschio "gemello" non preso
+            # (stesso profilo di una femmina) -> baratto accettato (10/11 vs 10/13).
+            # ════════════════════════════════════════════════════════════════
+            # GATE CROMOSOMA v4 — linea ritarata su 28 trade nati-sotto-gate (5giu)
+            # ════════════════════════════════════════════════════════════════
+            # Griglia su 28 trade (13 maschi peak>0, 15 trans peak=0/perdono):
+            # miglior separazione M/T = finestra vp + tetto comp:
+            #   MASCHIO se  0.46 <= vp <= 1.13  E  comp <= 0.64
+            #   -> tiene 10/13 maschi, blocca 13/15 trans (ne passano 2 "gemelli").
+            # Differenze dal v3: comp 0.70->0.64 (stretta), aggiunto tetto vp 1.13
+            #   (i trans isterici stavano sopra), cdur DISATTIVATO di default
+            #   (era tarato su 2 casi, non confermato sui dati nuovi -> CDUR_MIN=0).
+            # ⚠ I 2 trans che restano (vp~0.95/cp~0.58, vp~0.72/cp~0.46) hanno firma
+            #   da maschio PURO: il gate NON puo' vederli. Si prendono solo col
+            #   "primo respiro" (peak nei primi tick), 2o cancello DA COSTRUIRE.
+            # ⚠ Costa 2 maschi grossi tagliati (vp1.48/+7.74, cp0.74/+6.48). Baratto
+            #   accettato da Roberto: blocca ~90$ di trans, sacrifica ~14$ di maschi.
+            # ⚠ TUTTO tarato su 28 trade. Validare alla prossima raccolta sui NUOVI.
+            CROMO_GATE_ON   = os.environ.get("CROMO_GATE_ON", "true").lower() == "true"
+            CROMO_VPRESS_MIN = float(os.environ.get("CROMO_VPRESS_MIN", "0.46"))
+            CROMO_VPRESS_MAX = float(os.environ.get("CROMO_VPRESS_MAX", "1.13"))
+            CROMO_COMP_MAX   = float(os.environ.get("CROMO_COMP_MAX", "0.64"))
+            CROMO_CDUR_MIN   = float(os.environ.get("CROMO_CDUR_MIN", "0"))
+            if CROMO_GATE_ON:
+                _vp = seed.get('vol_pressure')
+                _cp = seed.get('compression')
+                _cd = seed.get('comp_duration')
+                if _vp is not None and _cp is not None:
+                    _cd_breve = (_cd is not None and CROMO_CDUR_MIN > 0 and _cd < CROMO_CDUR_MIN)
+                    if (_vp < CROMO_VPRESS_MIN or _vp > CROMO_VPRESS_MAX
+                            or _cp > CROMO_COMP_MAX or _cd_breve):
+                        _causa = ("vol_basso" if _vp < CROMO_VPRESS_MIN else
+                                  "vol_isterico" if _vp > CROMO_VPRESS_MAX else
+                                  "comp_alta" if _cp > CROMO_COMP_MAX else "cdur_breve")
+                        # CONTATORE TRANS BLOCCATI (in memoria, si azzera al riavvio)
+                        if not hasattr(self, "_cromo_blocchi"):
+                            self._cromo_blocchi = {"vol_basso": 0, "vol_isterico": 0,
+                                                   "comp_alta": 0, "cdur_breve": 0, "totale": 0}
+                        self._cromo_blocchi[_causa] = self._cromo_blocchi.get(_causa, 0) + 1
+                        self._cromo_blocchi["totale"] = self._cromo_blocchi.get("totale", 0) + 1
+                        # PERSISTENZA 6giu: scrivo il blocco nel DB (non solo in RAM).
+                        # Cosi' NON si azzera al restart e si fanno i conti veri:
+                        # quando e' stato bloccato, con che firma, a che prezzo.
+                        _cn = None
+                        try:
+                            import sqlite3 as _sq3
+                            _cn = _sq3.connect(DB_PATH, timeout=15)
+                            _cn.execute("PRAGMA busy_timeout=15000;")
+                            _cn.execute("""CREATE TABLE IF NOT EXISTS trans_bloccati (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                                causa TEXT, vpress REAL, comp REAL, prezzo REAL)""")
+                            _cn.execute("INSERT INTO trans_bloccati (causa,vpress,comp,prezzo) VALUES (?,?,?,?)",
+                                        (_causa, float(_vp), float(_cp), float(price)))
+                            _cn.commit()
+                        except Exception:
+                            pass
+                        finally:
+                            if _cn is not None:
+                                try:
+                                    _cn.close()
+                                except Exception:
+                                    pass
+                        self._log("🚫", f"CROMO_GATE v4 BLOCCO femmina ({_causa}) "
+                                        f"[tot: {self._cromo_blocchi['totale']}]: "
+                                        f"vpress={_vp:.3f}[{CROMO_VPRESS_MIN}-{CROMO_VPRESS_MAX}] "
+                                        f"comp={_cp:.3f}(<={CROMO_COMP_MAX}) | "
+                                        f"seed={seed.get('score', 0):.3f} @ ${price:.1f}")
+                        # ════════════════════════════════════════════════════════
+                        # OSSERVA IL TAGLIATO (9giu, Roberto): invece di buttarlo
+                        # via, lo registro come PHANTOM così il sistema esistente
+                        # lo segue (max_price/peak, is_win a 30s/2min) e dopo
+                        # sappiamo: era un MASCHIO ucciso per sbaglio (sarebbe
+                        # salito) o una dopata (giusto tagliarla)? Misura, non naso.
+                        # NON entra in trade: solo osservazione in ombra.
+                        # ENV CROMO_OSSERVA_SEC>0 = attivo (default 30); 0 = spento.
+                        # block_reason marcato CROMO_ così si filtra in query.
+                        # ════════════════════════════════════════════════════════
+                        try:
+                            if float(os.environ.get("CROMO_OSSERVA_SEC", "30")) > 0:
+                                self._record_phantom(
+                                    price,
+                                    f"CROMO_{_causa}_vp{_vp:.2f}_cp{_cp:.2f}",
+                                    float(seed.get("score", 0) or 0),
+                                    str(momentum), str(volatility), str(trend))
+                        except Exception:
+                            pass
+                        return
+
+            # ════════════════════════════════════════════════════════════════
+            # RITARDO INGRESSO (prova 7giu, Roberto) — non entrare di getto.
+            # ════════════════════════════════════════════════════════════════
+            # Quando il sistema vuole entrare NON apre subito: aspetta N secondi
+            # che il segnale REGGA. Il maschio (anche lento) continua a chiamare
+            # l'ingresso tick dopo tick -> dopo N secondi entra. Il trans si
+            # sgonfia: smette di chiamare l'ingresso -> il conteggio si azzera e
+            # non entra mai. Si entra SOLO sui segnali che durano N secondi, al
+            # prezzo CORRENTE (di adesso, non di N secondi fa).
+            # Interruttore: RITARDO_INGRESSO_SEC (0 = spento, default 4).
+            #   RITARDO_RESET_GAP = pausa oltre cui il segnale e' "interrotto".
+            # ⚠ PROVA: guardare dal vivo se i maschi lenti salgono e i trans
+            #   calano. Reversibile in un colpo: RITARDO_INGRESSO_SEC=0.
+            # ════════════════════════════════════════════════════════════════
+            _rit_sec = float(os.environ.get("RITARDO_INGRESSO_SEC", "4"))
+            if _rit_sec > 0:
+                _rit_now      = time.time()
+                _rit_gap      = float(os.environ.get("RITARDO_RESET_GAP", "3.0"))
+                _rit_aggancio = getattr(self, "_rit_aggancio_ts", None)
+                _rit_last     = getattr(self, "_rit_last_call", 0.0)
+                if not hasattr(self, "_ritardo_stats"):
+                    self._ritardo_stats = {"sec": _rit_sec, "agganciati": 0, "entrati": 0}
+                self._ritardo_stats["sec"] = _rit_sec
+                # primo aggancio o segnale interrotto (pausa > gap) -> riparte il conteggio
+                if _rit_aggancio is None or (_rit_now - _rit_last) > _rit_gap:
+                    _rit_aggancio = _rit_now
+                    self._rit_aggancio_ts = _rit_now
+                    self._rit_prezzo_nascita = price   # FISSO il prezzo di NASCITA (10giu fix radice)
+                    self._rit_picco_pre = None
+                    self._rit_crollo_min = None   # reset minimo attesa (anti-falsa-ripartenza)
+                    # ANTI-MAGO — RI-AGGANCIO SOSPETTO (11giu, Roberto: "sono maghi").
+                    # Il mago crolla (aggancio scartato), poi si ri-aggancia sul
+                    # RIMBALZO con fedina pulita (17:30: crollo 17:30:06 scartato,
+                    # rimbalzo 17:30:16 entrato → -9). Se è crollato da poco e a
+                    # prezzo vicino, il nuovo aggancio NON parte pulito: eredita
+                    # il minimo del crollo, così l'anti-falsa-ripartenza lo becca.
+                    # ENV: RIAGGANCIO_MEMORIA_SEC (default 20; 0 = spento).
+                    _riag_sec = float(os.environ.get("RIAGGANCIO_MEMORIA_SEC", "20"))
+                    _ult_crollo_ts = getattr(self, "_rit_ultimo_crollo_ts", None)
+                    if _riag_sec > 0 and _ult_crollo_ts is not None and (_rit_now - _ult_crollo_ts) <= _riag_sec:
+                        # ri-aggancio dopo un crollo recente -> eredita il sospetto
+                        self._rit_crollo_min = -999.0   # marchio: parte già "crollato"
+                        self._log("🎭", f"RI-AGGANCIO SOSPETTO: nuovo aggancio "
+                                        f"{_rit_now - _ult_crollo_ts:.0f}s dopo un crollo — "
+                                        f"eredita il sospetto (mago travestito)")
+                    self._ritardo_stats["agganciati"] = self._ritardo_stats.get("agganciati", 0) + 1
+                    # ════════════════════════════════════════════════════════════
+                    # VEDERE DENTRO CHI VIENE SCANSATO (8giu, Roberto)
+                    # Ad OGNI aggancio scrivo nel DB i numeri del segnale in QUESTO
+                    # istante. Poi, quando/se entra, aggiorno entrato=1 (sotto).
+                    # Cosi' dopo si vede: gli agganci NON entrati (entrato=0) che
+                    # numeri avevano? vp/comp/peak da maschio (deglutito = male) o
+                    # da trans (giusto)? Risponde a "i maschi vengono scansati?".
+                    # Solo scrittura: NON tocca la logica di entrata/blocco.
+                    # ════════════════════════════════════════════════════════════
+                    _ag = None
+                    try:
+                        import sqlite3 as _sq3ag
+                        _ag = _sq3ag.connect(DB_PATH, timeout=15)
+                        _ag.execute("PRAGMA busy_timeout=15000;")
+                        _ag.execute("""CREATE TABLE IF NOT EXISTS ritardo_agganci (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                            aggancio_ts REAL, direction TEXT,
+                            vpress REAL, comp REAL, seed REAL,
+                            momentum TEXT, volatility TEXT, trend TEXT,
+                            prezzo REAL, peak_pnl REAL, entrato INTEGER DEFAULT 0)""")
+                        _cur_ag = _ag.execute(
+                            """INSERT INTO ritardo_agganci
+                               (aggancio_ts, direction, vpress, comp, seed,
+                                momentum, volatility, trend, prezzo, peak_pnl, entrato)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,0)""",
+                            (_rit_now,
+                             getattr(self.campo, "_direction", "LONG"),
+                             (float(seed.get("vol_pressure")) if seed.get("vol_pressure") is not None else None),
+                             (float(seed.get("compression")) if seed.get("compression") is not None else None),
+                             float(seed.get("score", 0) or 0),
+                             str(momentum), str(volatility), str(trend),
+                             float(price),
+                             float((self._shadow or {}).get("peak_pnl", 0) or 0)))
+                        self._rit_aggancio_rowid = _cur_ag.lastrowid
+                        _ag.commit()
+                    except Exception:
+                        self._rit_aggancio_rowid = None
+                    finally:
+                        if _ag is not None:
+                            try: _ag.close()
+                            except Exception: pass
+                self._rit_last_call = _rit_now
+                # ════════════════════════════════════════════════════════════
+                # FILTRO MAE (9giu, Roberto) — IL MASCHIO NON SCENDE, LA DOPATA SI'
+                # Scoperto sui dati (1077 segnali firma-maschio): i 138 maschi
+                # hanno mae medio -0.08 (non scendono), le 939 dopate -1.06
+                # (crollano). Separazione 13x. Durante l'attesa del ritardo
+                # traccio quanto scende il prezzo dall'aggancio: se scende oltre
+                # soglia -> e' una dopata che si sta sgonfiando -> NON entra,
+                # azzero. Se tiene -> maschio -> prosegue verso l'ingresso.
+                # ENV: MAE_FILTRO_USD (default 0.50; 0 = spento). E' in $ sul
+                # movimento prezzo proporzionale a size/exposure. Reversibile.
+                # ════════════════════════════════════════════════════════════
+                _mae_soglia = float(os.environ.get("MAE_FILTRO_USD", "0.50"))
+                if _mae_soglia > 0:
+                    # uso il prezzo di NASCITA fisso (10giu fix radice): non si
+                    # resetta a ogni ripartenza del conteggio. Prima il TRANS che
+                    # scendeva a gradini resettava il riferimento e fregava il MAE.
+                    _prezzo_aggancio = getattr(self, "_rit_prezzo_nascita", None)
+                    if _prezzo_aggancio is None:
+                        self._rit_prezzo_nascita = price
+                        _prezzo_aggancio = price
+                    _exposure = float(os.environ.get("EXPOSURE_USD", "5000"))
+                    # POSIZIONE ASSOLUTA rispetto all'aggancio (10giu, logica corretta):
+                    # i dati di Roberto dicono maschi SEMPRE sopra zero (mae -0.08),
+                    # dopate SEMPRE sotto (mae -1.06). Quindi NON misuro la caduta dal
+                    # massimo (sbagliato: scartava maschi che respirano e lasciava
+                    # passare dopate che scendono dritte). Misuro DOVE SONO ORA
+                    # rispetto al prezzo di partenza. Sotto soglia negativa = dopata.
+                    _direction = getattr(self.campo, "_direction", "LONG")
+                    _delta = (price - _prezzo_aggancio) / _prezzo_aggancio
+                    if str(_direction).upper().startswith("SHORT"):
+                        _delta = -_delta   # per SHORT, scendere è guadagno
+                    _pos_usd = _delta * _exposure
+                    if _pos_usd < -_mae_soglia:
+                        # è SOTTO l'aggancio oltre soglia -> dopata -> fuori, azzero
+                        self._log("📉", f"MAE FILTRO: dopata scartata "
+                                        f"(posizione {_pos_usd:+.2f}$ < -{_mae_soglia}$ "
+                                        f"vs aggancio ${_prezzo_aggancio:.1f}) — NON entra")
+                        self._rit_aggancio_ts = None
+                        self._rit_prezzo_nascita = None
+                        self._rit_picco_pre = None
+                        try:
+                            self._ritardo_stats["mae_scartati"] = self._ritardo_stats.get("mae_scartati", 0) + 1
+                        except Exception:
+                            pass
+                        # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                        try:
+                            self._record_phantom(price, "MINA_MAE",
+                                                 float(seed.get("score", 0) or 0),
+                                                 str(momentum), str(volatility), str(trend))
+                        except Exception:
+                            pass
+                        return
+
+                    # ════════════════════════════════════════════════════════
+                    # ANTI-FALSA-RIPARTENZA (11giu, Roberto — il -9.19 del 17:30).
+                    # Il segnale crolla nei secondi gratis (-5.21 al s3), poi
+                    # RIMBALZA (+1.85 al s5). Il bot lo aggancia SUL RIMBALZO
+                    # (vede +1.85, sembra buono) ed entra. Poi ricrolla a -9.
+                    # Il MAE guarda solo l'ISTANTE del giudizio, non il MINIMO
+                    # toccato durante l'attesa. Fix: traccio il minimo; se ha
+                    # toccato sotto -CROLLO_MAX in qualsiasi momento dei secondi
+                    # gratis, è MARCIO -> non entra MAI, anche se rimbalza. Una
+                    # ripartenza vera non crolla a -5 prima di partire.
+                    # ENV: CROLLO_MAX_USD (default 2.0; 0 = spento).
+                    # ════════════════════════════════════════════════════════
+                    _crollo_min = getattr(self, "_rit_crollo_min", None)
+                    if _crollo_min is None or _pos_usd < _crollo_min:
+                        self._rit_crollo_min = _pos_usd
+                        _crollo_min = _pos_usd
+                    _crollo_max = float(os.environ.get("CROLLO_MAX_USD", "2.0"))
+                    if _crollo_max > 0 and _crollo_min is not None and _crollo_min <= -_crollo_max:
+                        # ha toccato il fondo (crollo) durante l'attesa -> marcio anche se rimbalza
+                        self._log("💀", f"FALSA RIPARTENZA scartata "
+                                        f"(ha toccato {_crollo_min:+.2f}$ nei secondi gratis "
+                                        f"< -{_crollo_max}$ — crolla e rimbalza, marcio) — NON entra")
+                        # MEMORIA DEL CROLLO (anti-mago): salvo quando e a che prezzo
+                        # è crollato, così il ri-aggancio sul rimbalzo (entro
+                        # RIAGGANCIO_MEMORIA_SEC) non parte con fedina pulita.
+                        self._rit_ultimo_crollo_ts = _rit_now
+                        self._rit_ultimo_crollo_prezzo = price
+                        self._rit_aggancio_ts = None
+                        self._rit_prezzo_nascita = None
+                        self._rit_picco_pre = None
+                        self._rit_crollo_min = None
+                        try:
+                            self._ritardo_stats["crollo_scartati"] = self._ritardo_stats.get("crollo_scartati", 0) + 1
+                        except Exception:
+                            pass
+                        # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic.
+                        # Distingue se il crollo era ORIGINALE (osservato in questi secondi gratis)
+                        # oppure EREDITATO dal RI-AGGANCIO (flag _crollo_min == -999.0, impostato
+                        # dal blocco RI-AGGANCIO SOSPETTO ~r.12258 quando il nuovo aggancio arriva
+                        # entro RIAGGANCIO_MEMORIA_SEC da un crollo precedente). Così il tribunale
+                        # può giudicare il RI-AGGANCIO separatamente.
+                        try:
+                            _etichetta_mina = ("MINA_RIAGGANCIO_EREDITATO"
+                                               if _crollo_min == -999.0
+                                               else "MINA_ANTIFALSA_RIPARTENZA")
+                            self._record_phantom(price, _etichetta_mina,
+                                                 float(seed.get("score", 0) or 0),
+                                                 str(momentum), str(volatility), str(trend))
+                        except Exception:
+                            pass
+                        return
+
+                    # ════════════════════════════════════════════════════════
+                    # ANTI-MAGO — VOL ISTERICO (11giu, Roberto: "sono maghi").
+                    # Il 17:30 aveva vol_pressure 1.1 + momentum DEBOLE: isteria
+                    # (sbatte su-giù con forza apparente) ma NESSUNA corsa vera
+                    # (momentum debole). Il mago crea isteria per sembrare vivo.
+                    # Se vol_pressure è alto MA momentum è DEBOLE → movimento
+                    # sbattuto senza forza → non entra. Il maschio vero ha vol E
+                    # momentum coerenti. ENV: VOL_ISTERICO_MAX (default 0 = spento,
+                    # accendere a ~1.0 per bloccare vp oltre soglia con mom DEBOLE).
+                    # ════════════════════════════════════════════════════════
+                    _vol_ist = float(os.environ.get("VOL_ISTERICO_MAX", "0"))
+                    if _vol_ist > 0:
+                        _vp_now = seed.get("vol_pressure")
+                        if (_vp_now is not None and float(_vp_now) >= _vol_ist
+                                and str(momentum).upper() == "DEBOLE"):
+                            self._log("🌀", f"VOL ISTERICO scartato "
+                                            f"(vol_pressure {float(_vp_now):.2f} >= {_vol_ist} "
+                                            f"ma momentum DEBOLE — isteria senza forza) — NON entra")
+                            self._rit_aggancio_ts = None
+                            self._rit_prezzo_nascita = None
+                            self._rit_picco_pre = None
+                            self._rit_crollo_min = None
+                            try:
+                                self._ritardo_stats["isterico_scartati"] = self._ritardo_stats.get("isterico_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                            try:
+                                self._record_phantom(price, "MINA_ANTIISTERIA",
+                                                     float(seed.get("score", 0) or 0),
+                                                     str(momentum), str(volatility), str(trend))
+                            except Exception:
+                                pass
+                            return
+
+                    # ════════════════════════════════════════════════════════
+                    # CONTROSCATTO (11giu, Roberto — "facciamo anche noi un
+                    # controscatto :)"). I TRANS-forbice fanno un FALSO SCATTO
+                    # nei secondi gratis (15:47: picco +1.10 a s2-4) e poi si
+                    # SGONFIANO (+0.26 a s5), ingannando il filtro che li fa
+                    # entrare perché ancora positivi. Poi nascono morti (peak 0).
+                    # Il maschio vero invece SALE e TIENE/CRESCE (+0.19→+1.62
+                    # costante, non si sgonfia mai). Controscatto: traccio il
+                    # PICCO dell'attesa; se al giudizio il segnale si è sgonfiato
+                    # dal picco oltre SCATTO_SGONFIO_PCT, è una falsa partenza ->
+                    # SCHIVO (non entro). Il maschio (vicino al picco) entra.
+                    # ENV: SCATTO_SGONFIO_PCT (default 0.50 = sgonfiato >50% dal
+                    #      picco -> fuori). 0 = spento. Picco minimo per valutare:
+                    #      SCATTO_PICCO_MIN (default 0.6, sotto è rumore).
+                    # ════════════════════════════════════════════════════════
+                    # ANTI-CORDA (11giu, Roberto: "non subire più il trade che si
+                    # mette la corda al collo piano piano"). Il 18:10: piatto
+                    # +0.74 (s1-3), poi GIRA sotto zero (-0.52 al s4 = giudizio),
+                    # cola a -4. Al momento del giudizio stava GIÀ scendendo sotto
+                    # l'aggancio. Una corda che inizia a stringersi. Regola secca:
+                    # se al giudizio _pos_usd < 0 (è sotto l'aggancio, sta girando
+                    # giù) → NON entra. Il maschio al giudizio è POSITIVO (sale).
+                    # Becca le morte piatte-calanti che né crollo né sgonfio né
+                    # isteria coprono. ENV: ANTICORDA_OFF=true per spegnere.
+                    # ════════════════════════════════════════════════════════
+                    # aggiorno il picco col tick corrente (serve al controscatto sotto
+                    # e alla logica 4+2). L'anti-corda vera decide all'ingresso (4+2).
+                    _pp = getattr(self, "_rit_picco_pre", None)
+                    if _pp is None or _pos_usd > _pp:
+                        self._rit_picco_pre = _pos_usd
+
+                    # ── CORSIA MASCHIO RIMOSSA (17giu, Roberto). Era rotta:
+                    # azzerava lo stato del ritardo e poi cadeva nei cancelli a
+                    # valle (ANTICORDA, GATE PEAK) che lo rileggevano "piatto", e
+                    # scriveva entrato=1 falso senza mai aprire il trade. Tolta.
+                    # Niente ENV nuove. Comportamento = vivo: guardiani sempre attivi.
+                    _maschio_entra_ora = False
+
+
+                    # ════════════════════════════════════════════════════════
+                    # ── guardiani del purgatorio: SOLO se NON e' un maschio confermato
+                    if not _maschio_entra_ora:
+                        # traccio il picco dell'attesa (sempre, costa nulla)
+                        _picco_pre = getattr(self, "_rit_picco_pre", None)
+                        if _picco_pre is None or _pos_usd > _picco_pre:
+                            self._rit_picco_pre = _pos_usd
+                            _picco_pre = _pos_usd
+                        _sgonfio_pct = float(os.environ.get("SCATTO_SGONFIO_PCT", "0.50"))
+                        _picco_min = float(os.environ.get("SCATTO_PICCO_MIN", "0.6"))
+                        if _sgonfio_pct > 0 and _picco_pre is not None and _picco_pre >= _picco_min:
+                            # quanto si è sgonfiato dal picco dell'attesa?
+                            _sgonfio = (_picco_pre - _pos_usd) / _picco_pre if _picco_pre > 0 else 0
+                            if _sgonfio >= _sgonfio_pct:
+                                # falso scatto: ha fatto picco e si è sgonfiato -> schivo
+                                self._log("🦊", f"CONTROSCATTO: falsa partenza schivata "
+                                                f"(picco +{_picco_pre:.2f}$ → ora {_pos_usd:+.2f}$, "
+                                                f"sgonfio {_sgonfio*100:.0f}%) — NON entra")
+                                self._rit_aggancio_ts = None
+                                self._rit_prezzo_nascita = None
+                                self._rit_picco_pre = None
+                                try:
+                                    self._ritardo_stats["controscatto_scartati"] = self._ritardo_stats.get("controscatto_scartati", 0) + 1
+                                except Exception:
+                                    pass
+                                # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                                try:
+                                    self._record_phantom(price, "MINA_CONTROSCATTO",
+                                                         float(seed.get("score", 0) or 0),
+                                                         str(momentum), str(volatility), str(trend))
+                                except Exception:
+                                    pass
+                                return
+
+                        # ════════════════════════════════════════════════════════
+                        # TAGLIO TRANS PIATTI (11giu, Roberto: "vanno tagliati punto").
+                        # Dai dati pre-ingresso: i TRANS piatti stanno a +0.2/0.0/-0.001
+                        # nei secondi gratis, NON salgono. I maschi veri salgono sopra
+                        # +0.5 e ci restano (es. +0.749 costante). Quindi: per entrare
+                        # NON basta "non scendere" — bisogna SALIRE da maschio. Se dopo
+                        # almeno SALITA_DOPO_SEC secondi di attesa il segnale non ha
+                        # superato +SALITA_MIN, è un trans piatto -> NON entra.
+                        # ENV: SALITA_MIN_USD (default 0.40; 0 = spento).
+                        #      SALITA_DOPO_SEC (default 3 = do 3s al maschio per salire).
+                        # ════════════════════════════════════════════════════════
+                        _salita_min = float(os.environ.get("SALITA_MIN_USD", "0.40"))
+                        _salita_dopo = float(os.environ.get("SALITA_DOPO_SEC", "3"))
+                        if _salita_min > 0:
+                            _eta_attesa = _rit_now - _rit_aggancio
+                            if _eta_attesa >= _salita_dopo and _pos_usd < _salita_min:
+                                # ha avuto il tempo di salire e NON è salito -> trans piatto -> fuori
+                                self._log("🟰", f"TRANS PIATTO scartato "
+                                                f"(dopo {_eta_attesa:.1f}s sta a {_pos_usd:+.2f}$ "
+                                                f"< +{_salita_min}$ — non sale da maschio) — NON entra")
+                                self._rit_aggancio_ts = None
+                                self._rit_prezzo_nascita = None
+                                self._rit_picco_pre = None
+                                try:
+                                    self._ritardo_stats["piatti_scartati"] = self._ritardo_stats.get("piatti_scartati", 0) + 1
+                                except Exception:
+                                    pass
+                                # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                                try:
+                                    self._record_phantom(price, "MINA_TRANS_PIATTI",
+                                                         float(seed.get("score", 0) or 0),
+                                                         str(momentum), str(volatility), str(trend))
+                                except Exception:
+                                    pass
+                                return
+
+                        # ════════════════════════════════════════════════════════
+                        # RIPIEGAMENTO PRE-INGRESSO (10giu, Roberto) — il gioco vero:
+                        # i secondi del ritardo sono GRATIS (non siamo nel trade, no
+                        # fee). Lì la dopata si dichiara: SALE e poi SI GIRA. Il MAE
+                        # assoluto becca solo chi nasce sotto zero; questo becca la
+                        # dopata "lenta" che sale verde (+2, +2.8) e poi ripiega —
+                        # PRIMA di entrare. Il maschio sale e TIENE (non ripiega) ->
+                        # entra. Traccio il picco durante l'attesa: se il segnale
+                        # ripiega di RIPIEG_USD dal suo picco mentre aspetta, è una
+                        # dopata che si svuota -> NON entra, non paghiamo fee.
+                        # ENV: RIPIEG_PRE_USD (default 0.60; 0 = spento). Reversibile.
+                        # ════════════════════════════════════════════════════════
+                        _ripieg_soglia = float(os.environ.get("RIPIEG_PRE_USD", "0.60"))
+                        if _ripieg_soglia > 0:
+                            _picco_pre = getattr(self, "_rit_picco_pre", None)
+                            if _picco_pre is None or self._rit_aggancio_ts == _rit_now:
+                                _picco_pre = _pos_usd
+                            if _pos_usd > _picco_pre:
+                                _picco_pre = _pos_usd          # nuovo massimo durante attesa
+                            self._rit_picco_pre = _picco_pre
+                            # ripiega solo se era salito davvero (picco sopra soglia)
+                            if _picco_pre >= _ripieg_soglia and (_picco_pre - _pos_usd) >= _ripieg_soglia:
+                                self._log("🔄", f"RIPIEGAMENTO pre-ingresso: dopata si svuota "
+                                                f"(picco {_picco_pre:+.2f}$ -> ora {_pos_usd:+.2f}$, "
+                                                f"giù {_picco_pre - _pos_usd:.2f}$) — NON entra, no fee")
+                                self._rit_aggancio_ts = None
+                                self._rit_prezzo_nascita = None
+                                self._rit_picco_pre = None
+                                try:
+                                    self._ritardo_stats["ripieg_scartati"] = self._ritardo_stats.get("ripieg_scartati", 0) + 1
+                                except Exception:
+                                    pass
+                                # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                                try:
+                                    self._record_phantom(price, "MINA_RIPIEGAMENTO",
+                                                         float(seed.get("score", 0) or 0),
+                                                         str(momentum), str(volatility), str(trend))
+                                except Exception:
+                                    pass
+                                return
+
+                    _rit_atteso = _rit_now - _rit_aggancio
+                    if _rit_atteso < _rit_sec:
+                        self._log("⏳", f"RITARDO ingresso: segnale agganciato, "
+                                        f"atteso {_rit_atteso:.1f}/{_rit_sec:.0f}s @ ${price:.1f}")
+                        return
+                    # ════════════════════════════════════════════════════════
+                    # STRATEGIA 4+2 (11giu, Roberto: "non 4 d'ufficio, ma 4+2 e
+                    # vediamo chi crolla — i due solo per i resistenti"). A 4s:
+                    #  - CHIARO positivo (sopra +zona) → maschio → entra subito
+                    #  - CHIARO negativo (sotto -zona) → corda → fuori subito
+                    #  - INCERTO (tra -zona e +zona, lì lì) → NON decido d'ufficio:
+                    #      proroga di RITARDO_EXTRA_SEC e guardo chi crolla. Il
+                    #      maschio tiene/corre, la dopata si smaschera crollando.
+                    # Il tempo è il giudice. ENV: ANTICORDA_ZONA (default 1.0 = zona
+                    #  incerta ±1$), RITARDO_EXTRA_SEC (default 2). ANTICORDA_OFF spegne.
+                    # ════════════════════════════════════════════════════════
+                    if os.environ.get("ANTICORDA_OFF", "false").lower() != "true":
+                        _zona = float(os.environ.get("ANTICORDA_ZONA", "1.0"))
+                        _extra = float(os.environ.get("RITARDO_EXTRA_SEC", "2"))
+                        _exp_fin = float(os.environ.get("EXPOSURE_USD", "5000"))
+                        _ep_fin = getattr(self, "_rit_prezzo_nascita", None) or price
+                        _dir_fin = getattr(self.campo, "_direction", "LONG")
+                        _delta_fin = (price - _ep_fin) / _ep_fin
+                        if str(_dir_fin).upper().startswith("SHORT"):
+                            _delta_fin = -_delta_fin
+                        _pos_fin = _delta_fin * _exp_fin
+
+                        # CORDA CHIARA: sotto -zona → fuori subito (a 4s o a 6s)
+                        if _pos_fin <= -_zona:
+                            self._log("🪢", f"ANTI-CORDA (s{_rit_atteso:.0f}): "
+                                            f"{_pos_fin:+.2f}$ <= -{_zona} — crollato, NON entra")
+                            self._rit_aggancio_ts = None
+                            self._rit_prezzo_nascita = None
+                            self._rit_picco_pre = None
+                            self._rit_crollo_min = None
+                            try:
+                                self._ritardo_stats["anticorda_scartati"] = self._ritardo_stats.get("anticorda_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                            try:
+                                self._record_phantom(price, "MINA_ANTICORDA_CROLLO",
+                                                     float(seed.get("score", 0) or 0),
+                                                     str(momentum), str(volatility), str(trend))
+                            except Exception:
+                                pass
+                            return
+
+                        # INCERTO: tra -zona e +zona → do 2 secondi extra (solo se non
+                        # li ho già dati). A 4+2=6s rivaluto: se ancora qui sotto/incerto
+                        # crollerà nel ramo sopra, se è salito sopra +zona entra sotto.
+                        if _pos_fin < _zona and _rit_atteso < (_rit_sec + _extra):
+                            self._log("⏳", f"INCERTO a s{_rit_atteso:.0f} ({_pos_fin:+.2f}$ "
+                                            f"dentro ±{_zona}) — +{_extra:.0f}s di prova: vediamo chi crolla")
+                            return
+                        # passati i 2 extra ed è ancora sotto +zona ma sopra -zona →
+                        # resta incerto/debole → non entra (non si è dichiarato maschio)
+                        if _pos_fin < _zona:
+                            self._log("🪢", f"ANTI-CORDA (s{_rit_atteso:.0f}, dopo +{_extra:.0f}s): "
+                                            f"{_pos_fin:+.2f}$ ancora incerto, non corre — NON entra")
+                            self._rit_aggancio_ts = None
+                            self._rit_prezzo_nascita = None
+                            self._rit_picco_pre = None
+                            self._rit_crollo_min = None
+                            try:
+                                self._ritardo_stats["anticorda_scartati"] = self._ritardo_stats.get("anticorda_scartati", 0) + 1
+                            except Exception:
+                                pass
+                            # TELECAMERA TRIBUNALE (12giu): registra il taglio in phantom_forensic
+                            try:
+                                self._record_phantom(price, "MINA_ANTICORDA_INCERTO",
+                                                     float(seed.get("score", 0) or 0),
+                                                     str(momentum), str(volatility), str(trend))
+                            except Exception:
+                                pass
+                            return
+                        # _pos_fin >= +zona → maschio chiaro/resistente → entra
+
+                    # ════════════════════════════════════════════════════════════════
+                    # GATE PEAK CONFERMATIVO (13giu2026, Roberto — IL KILLER)
+                    # ════════════════════════════════════════════════════════════════
+                    # SCOPERTA dimostrata su 154 trade (tabella curva_nascita):
+                    # il distintivo maschi/fiacchi NON e' nella firma (ambigua) ne' nei
+                    # primi 3s (indistinguibili). E' nel PICCO raggiunto entro una
+                    # finestra LUNGA di osservazione. I maschi partono rossi e risalgono
+                    # TARDI (t_peak medio WIN 33s vs LOSS 5s). Simulazione ONESTA
+                    # (guadagno = pnl_finale - pnl_ingresso): gate "picco >= +1.0$ entro
+                    # 15s" porta da -247$ (tutti entrano, WR 30%) a +60$ reali (WR 62%).
+                    # Il picco dell'attesa e' gia' tracciato in _rit_picco_pre.
+                    #
+                    # MODALITA': GATE_PEAK_OBSERVER (default true = SOLO OSSERVA, logga
+                    # ma NON blocca). Mettere false per farlo DECIDERE (bloccare chi non
+                    # ha raggiunto il picco). ENV:
+                    #   GATE_PEAK_USD (default 1.0)  = soglia picco minima per entrare
+                    #   GATE_PEAK_FINESTRA_SEC (15)  = entro quanti secondi dall'aggancio
+                    #   GATE_PEAK_OBSERVER (true)    = true osserva, false decide
+                    #   GATE_PEAK_OFF (false)        = true spegne del tutto
+                    # ════════════════════════════════════════════════════════════════
+                    if os.environ.get("GATE_PEAK_OFF", "false").lower() != "true":
+                        try:
+                            _gp_soglia = float(os.environ.get("GATE_PEAK_USD", "1.0"))
+                            _gp_finestra = float(os.environ.get("GATE_PEAK_FINESTRA_SEC", "15"))
+                            _gp_observer = os.environ.get("GATE_PEAK_OBSERVER", "true").lower() == "true"
+                            _gp_picco = getattr(self, "_rit_picco_pre", None)
+                            _gp_picco = _gp_picco if _gp_picco is not None else -999.0
+                            # il picco e' valido solo se osservato entro la finestra
+                            _gp_entro_finestra = (_rit_atteso <= _gp_finestra)
+                            _gp_passa = (_gp_picco >= _gp_soglia) and _gp_entro_finestra
+                            # ════════════════════════════════════════════════
+                            # OSSERVA-GATE (17giu, Roberto: "vai").
+                            # Registra cosa VEDE GATE PEAK a ogni aggancio, senza
+                            # toccare la decisione. UNA riga per aggancio. Serve a
+                            # simulare la soglia sui dati veri: il picco pre-ingresso
+                            # non era salvato da nessuna parte -> senza questo non si
+                            # puo' simulare l'ingresso (il 97% del sangue). Solo INSERT,
+                            # try/except totale: non puo' mai fermare un trade.
+                            # Tabella usa-e-getta: DROP quando la taratura e' fatta.
+                            # ════════════════════════════════════════════════
+                            try:
+                                # ── VETTORE DEL PIATTELLO (18giu, Roberto): non il picco
+                                # (un punto fermo = occhio della mucca) ma la TRAIETTORIA —
+                                # due finestre (occhio in movimento), da dove parte, il
+                                # vento (vol_pressure), il peso. Solo osserva, zero decisione.
+                                # Le finestre le sceglie il vivo (ENV), non l'istanza.
+                                _vx_px = list(getattr(getattr(self, "campo", None), "_prices_short", []) or [])
+                                _vx_wc = int(os.environ.get("VETTORE_WIN_CORTO", "5"))
+                                _vx_wl = int(os.environ.get("VETTORE_WIN_LUNGO", "15"))
+                                _vx_sc = ((_vx_px[-1] - _vx_px[-_vx_wc - 1]) / _vx_wc) if len(_vx_px) >= _vx_wc + 1 else None
+                                _vx_sl = ((_vx_px[-1] - _vx_px[-_vx_wl - 1]) / _vx_wl) if len(_vx_px) >= _vx_wl + 1 else None
+                                _vx_peso = (max(_vx_px[-_vx_wl:]) - min(_vx_px[-_vx_wl:])) if len(_vx_px) >= _vx_wl else None
+                                _vx_vento = (seed.get("vol_pressure") if isinstance(seed, dict) else None)
+                                _vx_pos = (seed.get("range_pos") if isinstance(seed, dict) else None)
+                                _vx_nasc = getattr(self, "_rit_prezzo_nascita", None)
+                                _vx_rid = getattr(self, "_rit_aggancio_rowid", None)
+                                _go = _safe_connect(DB_PATH, timeout=5)
+                                _go.execute("PRAGMA busy_timeout=5000;")
+                                _go.execute("""CREATE TABLE IF NOT EXISTS piattello_osserva (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    ts REAL DEFAULT (strftime('%s','now')),
+                                    agg_rowid INTEGER,
+                                    picco_pre REAL, soglia REAL, t_atteso REAL,
+                                    passa INTEGER, observer INTEGER,
+                                    regime TEXT, direction TEXT, prezzo REAL, prezzo_nascita REAL,
+                                    slope_corto REAL, slope_lungo REAL, win_corto INTEGER, win_lungo INTEGER,
+                                    vento REAL, pos_start REAL, peso REAL)""")
+                                _go.execute("""INSERT INTO piattello_osserva
+                                    (agg_rowid, picco_pre, soglia, t_atteso, passa, observer, regime, direction,
+                                     prezzo, prezzo_nascita, slope_corto, slope_lungo, win_corto, win_lungo,
+                                     vento, pos_start, peso)
+                                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                    (int(_vx_rid) if _vx_rid is not None else None,
+                                     float(_gp_picco), float(_gp_soglia), float(_rit_atteso),
+                                     1 if _gp_passa else 0, 1 if _gp_observer else 0,
+                                     str(getattr(self, "_regime_current", "") or ""),
+                                     str(getattr(getattr(self, "campo", None), "_direction", "") or ""),
+                                     float(price),
+                                     float(_vx_nasc) if _vx_nasc is not None else None,
+                                     float(_vx_sc) if _vx_sc is not None else None,
+                                     float(_vx_sl) if _vx_sl is not None else None,
+                                     int(_vx_wc), int(_vx_wl),
+                                     float(_vx_vento) if _vx_vento is not None else None,
+                                     float(_vx_pos) if _vx_pos is not None else None,
+                                     float(_vx_peso) if _vx_peso is not None else None))
+                                _go.commit()
+                                _go.close()
+                            except Exception:
+                                pass
+                            if _gp_passa:
+                                self._log_m2("✅",
+                                    f"GATE PEAK: picco attesa {_gp_picco:+.2f}$ >= {_gp_soglia}$ "
+                                    f"entro {_rit_atteso:.1f}s (<= {_gp_finestra:.0f}s) — MASCHIO confermato")
+                            else:
+                                _gp_motivo = (f"picco {_gp_picco:+.2f}$ < {_gp_soglia}$" if _gp_picco < _gp_soglia
+                                              else f"fuori finestra ({_rit_atteso:.1f}s > {_gp_finestra:.0f}s)")
+                                if _gp_observer:
+                                    # OSSERVATORE: logga cosa AVREBBE fatto, ma lascia entrare
+                                    self._log_m2("👁️",
+                                        f"GATE PEAK [OSSERVA]: avrebbe SCARTATO ({_gp_motivo}) "
+                                        f"ma observer attivo — entra comunque")
+                                else:
+                                    # DECISORE: blocca chi non ha confermato il picco
+                                    self._log_m2("🚫",
+                                        f"GATE PEAK: SCARTATO ({_gp_motivo}) — non si e' "
+                                        f"dichiarato maschio nell'osservazione, NON entra")
+                                    self._rit_aggancio_ts = None
+                                    self._rit_prezzo_nascita = None
+                                    self._rit_picco_pre = None
+                                    self._rit_crollo_min = None
+                                    try:
+                                        self._ritardo_stats["gate_peak_scartati"] = self._ritardo_stats.get("gate_peak_scartati", 0) + 1
+                                    except Exception:
+                                        pass
+                                    try:
+                                        self._record_phantom(price, "MINA_GATE_PEAK",
+                                                             float(seed.get("score", 0) or 0),
+                                                             str(momentum), str(volatility), str(trend))
+                                    except Exception:
+                                        pass
+                                    return
+                        except Exception as _e_gp:
+                            log.debug(f"[GATE_PEAK_ERR] {_e_gp}")
+
+                    # passato (maschio chiaro o resistente dopo i 2s) -> entro ORA, azzero
+                    self._rit_aggancio_ts = None
+                    self._rit_prezzo_nascita = None
+                    self._rit_picco_pre = None
+                    self._ritardo_stats["entrati"] = self._ritardo_stats.get("entrati", 0) + 1
+                    # VEDERE DENTRO (8giu): marco entrato=1 sulla riga di questo aggancio.
+                    # Cosi' nel DB: entrato=0 = scansato, entrato=1 = passato. Solo update.
+                    _rid = getattr(self, "_rit_aggancio_rowid", None)
+                    if _rid is not None:
+                        _up = None
+                        try:
+                            import sqlite3 as _sq3up
+                            _up = _sq3up.connect(DB_PATH, timeout=15)
+                            _up.execute("PRAGMA busy_timeout=15000;")
+                            _up.execute("UPDATE ritardo_agganci SET entrato=1 WHERE id=?", (_rid,))
+                            _up.commit()
+                        except Exception:
+                            pass
+                        finally:
+                            if _up is not None:
+                                try: _up.close()
+                                except Exception: pass
+                        self._rit_aggancio_rowid = None
+                    self._log("⏱️", f"RITARDO ingresso: confermato dopo "
+                                    f"{_rit_atteso:.1f}s, entro @ ${price:.1f}")
+
             self._shadow = {
                 "price_entry":   price,
+                "nato_ts":       time.time(),   # istante di nascita, per filmato 10s/20s
+                "pnl_10s":       None,           # fotografia PnL a 10 secondi (riempita dopo)
+                "pnl_20s":       None,           # fotografia PnL a 20 secondi (riempita dopo)
                 "direction":     self.campo._direction,
                 "duration_avg":  matrimonio.get("duration_avg", 20),
                 "score":         round(score, 2),
@@ -11501,11 +12928,50 @@ class OvertopBassanoV16Production:
                 "matrimonio":    matrimonio_name,
                 "fingerprint_wr": round(fingerprint_wr, 3),
                 "seed":          round(seed.get('score', 0), 3),
+                # ════════════════════════════════════════════════════════════
+                # SEME D'INGRESSO (4giu, Roberto: "tutto questo PRIMA del trade")
+                # ════════════════════════════════════════════════════════════
+                # Il valore ESATTO su cui il gate ha deciso all'ENTRY — stessa
+                # finestra e formula della riga ~11714/11716. _seed_history non
+                # e' cambiata tra il gate e qui (stessa chiamata sincrona), quindi
+                # seme_entry == _seme_medio del gate. NON contaminato dall'exit.
+                # Da qui si misura il cromosoma per quello che e': un PRE-segnale.
+                "seme_entry":      (lambda s: round((s[0] + s[-1]) / 2.0, 4) if len(s) >= 2 else None)(list(getattr(self.campo, "_seed_history", []))[-5:]),
+                "seed_traj_entry": list(getattr(self.campo, "_seed_history", []))[-5:],
                 "ts_entry":      time.time(),
                 # L1.5: contesto entry per VERITAS GATE
                 "momentum_entry":   momentum,
                 "volatility_entry": volatility,
                 "trend_entry":      trend,
+                # ════════════════════════════════════════════════════════════
+                # SENSORI DI NASCITA — "il prima del seme" (3giu, Roberto)
+                # ════════════════════════════════════════════════════════════
+                # Salvo nello shadow la firma del campo ALLA NASCITA del trade
+                # VERO (lo shadow esiste solo per i trade reali, non per le 30k
+                # valutazioni abortite). Alla chiusura observe_exit li scrive nel
+                # canvas insieme all'esito → ogni riga = un trade completo
+                # (nascita+morte) SENZA aggancio temporale fragile.
+                # Questi vengono dal seed, l'unico calcolo non saturo verificato.
+                "nascita_range_pos":   seed.get('range_pos'),
+                "nascita_drift_slope": seed.get('drift_slope'),
+                "nascita_seed_score":  seed.get('score'),
+                "nascita_compression": seed.get('compression'),
+                "nascita_drift_persist": seed.get('drift_persist'),
+                "nascita_vol_pressure": seed.get('vol_pressure'),
+                "nascita_comp_duration": seed.get('comp_duration'),
+                "nascita_sign_flips":   seed.get('sign_flips'),
+                # ════════════════════════════════════════════════════════════
+                # PICCO PRE-INGRESSO (15giu2026, Roberto) — TRACCIO IL BYPASS
+                # ════════════════════════════════════════════════════════════
+                # Salvo il picco massimo raggiunto durante il ritardo di
+                # osservazione (i secondi gratis PRIMA dell'apertura). Permette
+                # di vedere quale picco_pre aveva il trade quando GATE PEAK
+                # ha dato il via libera. Se trade morti hanno picco_pre>=1.0$
+                # è il fenomeno "maschio svuotato". Se picco_pre<1.0$ allora
+                # GATE PEAK ha un bypass: vanno trovati e chiusi.
+                # Letto da self._rit_picco_pre (popolato dal blocco
+                # CONTROSCATTO/RIPIEGAMENTO durante l'attesa).
+                "rit_picco_pre":    getattr(self, "_rit_picco_pre", None),
             }
             self._shadow_entry_time        = time.time()
             self._shadow_max_price         = price
@@ -11820,6 +13286,58 @@ class OvertopBassanoV16Production:
             self._shadow = None
 
 
+    def _save_curva_nascita(self, trade_ts, firma, curva):
+        """
+        CURVA DI NASCITA — MICROSCOPIO (31mag, Roberto).
+        Salva la curva di vita del trade: lista di (secondi_da_nascita,
+        pnl_live, peak_so_far). VISIBILITA' ESTESA (1giu, opzione B):
+        nascita densa 0-10.5s (ogni tick) + evoluzione ogni 3s fino alla
+        chiusura. Una riga per trade, flush alla chiusura. Solo osserva.
+          - pnl_a_10s   = PnL al punto piu' vicino a 10s (confrontabile con lo storico)
+          - pnl_finale  = PnL all'ultimo punto della curva (alla chiusura)
+        """
+        try:
+            if not curva:
+                return
+            n_punti = len(curva)
+            # pnl_a_10s: il punto piu' vicino a 10s (non l'ultimo: la curva va oltre)
+            _p10 = min(curva, key=lambda p: abs(p[0] - 10.0))
+            pnl_a_10s = _p10[1]
+            pnl_finale = curva[-1][1]
+            peak_nascita = max((p[2] for p in curva), default=0.0)
+            t_peak = next((p[0] for p in curva if p[2] >= peak_nascita), None)
+            conn = _safe_connect(DB_PATH, timeout=30)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS curva_nascita (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trade_ts     REAL,
+                    firma        TEXT,
+                    n_punti      INTEGER,
+                    peak_nascita REAL,
+                    t_peak_s     REAL,
+                    pnl_a_10s    REAL,
+                    curva_json   TEXT,
+                    created_ts   REAL DEFAULT (strftime('%s','now'))
+                )
+            """)
+            # Migrazione dolce: aggiunge pnl_finale se la tabella e' vecchia
+            try:
+                _cols = [r[1] for r in conn.execute("PRAGMA table_info(curva_nascita)").fetchall()]
+                if 'pnl_finale' not in _cols:
+                    conn.execute("ALTER TABLE curva_nascita ADD COLUMN pnl_finale REAL")
+            except Exception as _ae:
+                log.debug(f"[CURVA_NASCITA_MIGRATE] {_ae}")
+            conn.execute("""
+                INSERT INTO curva_nascita
+                    (trade_ts, firma, n_punti, peak_nascita, t_peak_s, pnl_a_10s, curva_json, pnl_finale)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (trade_ts, firma, n_punti, round(peak_nascita, 4),
+                  t_peak, round(pnl_a_10s, 4), json.dumps(curva), round(pnl_finale, 4)))
+            conn.commit()
+            conn.close()
+        except Exception as _e:
+            log.debug(f"[SAVE_CURVA_NASCITA_ERR] {_e}")
+
     def _evaluate_shadow_exit(self, price, momentum, volatility, trend):
         """Stessa logica di uscita V15 + BreathEngine V16 per timing ottimale."""
         try:
@@ -11845,6 +13363,40 @@ class OvertopBassanoV16Production:
 
             # CRITICO: direzione al momento dell'ENTRY, non quella attuale
             entry_direction = self._shadow.get("direction", "LONG")
+
+            # ════════════════════════════════════════════════════════════
+            # CURVA DI NASCITA — MICROSCOPIO (31mag, Roberto)
+            # ════════════════════════════════════════════════════════════
+            # NON 4 fotografie (occhiali) — OGNI TICK nei primi 10s di vita
+            # (microscopio). Cattura lo SCHIZZO iniziale e il momento esatto
+            # in cui il trade matura o muore, che tra due checkpoint fissi si
+            # perdeva. Su stream @aggTrade arrivano più tick/sec → curva densa.
+            #
+            # VISIBILITA' ESTESA (1giu, Roberto, opzione B):
+            #   - 0-10.5s: OGNI TICK (nascita densa — qui si decide il sesso).
+            #   - dopo 10.5s: UN CAMPIONE ogni 3s fino alla chiusura (evoluzione).
+            #     Niente piu' buco cieco tra i 10s e l'uscita.
+            #   - flush UNICO alla chiusura (in _close_shadow_trade), NON a 10.5s.
+            #     Una scrittura per trade → niente raffica, niente disco pieno.
+            #   - tetto duro MICRO_MAX_PUNTI: la lista non esplode mai.
+            # Solo osserva: zero impatto sulle decisioni del bot.
+            try:
+                _micro = self._shadow.setdefault('_micro_nascita', [])
+                if len(_micro) < self.MICRO_MAX_PUNTI:
+                    if duration <= 10.5:
+                        # Nascita: ogni tick
+                        _micro.append((round(duration, 3), round(_pnl_live, 4),
+                                       round(self._trade_peak_pnl, 4)))
+                    else:
+                        # Evoluzione: un campione ogni MICRO_PASSO_S secondi
+                        _last_t = _micro[-1][0] if _micro else 0.0
+                        if (duration - _last_t) >= self.MICRO_PASSO_S:
+                            _micro.append((round(duration, 3), round(_pnl_live, 4),
+                                           round(self._trade_peak_pnl, 4)))
+            except Exception as _ne:
+                log.debug(f"[CURVA_NASCITA_ERR] {_ne}")
+
+
 
             # ── CAPSULE INTELLIGENTE EXIT — uscita anticipata predittiva ────
             if duration > 5:
@@ -11972,10 +13524,74 @@ class OvertopBassanoV16Production:
             # ZONA_MORTA disattivata: non si taglia per tempo un trade in perdita.
             # (Lo stop loss 2% qui sotto resta il solo freno sulle perdite.)
 
-            HARD_STOP_USD = self.STOP_LIVE
+            HARD_STOP_USD = float(os.environ.get("HARD_STOP_USD", str(self.STOP_LIVE)))
             if current_pnl_real < -HARD_STOP_USD:
                 self._close_shadow_trade(price, f"HARD_STOP_${abs(current_pnl_real):.1f}_max${HARD_STOP_USD:.0f}")
                 return
+
+            # ════════════════════════════════════════════════════════════════
+            # FRENO-COLATA (1giu, Roberto) — "poche e tante sberle in faccia".
+            # ════════════════════════════════════════════════════════════════
+            # CASO DIMOSTRATO (trade 14:00, curva_nascita): femmina conclamata
+            # (energia/peak 0.64 FISSO, mai manifestata) colata LENTA da +0.64
+            # a -7.99 a gradini: -3 a 52s, -4 a 57s, -5 a 65s, HARD_STOP a 88s.
+            # Il KILLER E40 NON l'ha presa: vive dentro `if exit_energy<exit_soglia`
+            # (cancello del decadimento-energia) che tra 52-88s non si è aperto.
+            # Così la femmina è scivolata indisturbata fino all'HARD_STOP -9.
+            #
+            # Questo freno sta FUORI da quel cancello (valutato a OGNI tick come
+            # l'HARD_STOP) e taglia la femmina conclamata PRIMA che arrivi a -7:
+            #   - peak basso (mai manifestata maschio: peak < FRENO_PEAK)
+            #   - durata oltre il respiro (> KILLER_TEMPO: il maschio ha già preso E)
+            #   - perdita oltre metà strada verso l'HARD_STOP (< -FRENO_PNL)
+            # Il MASCHIO (peak alto) NON rientra → il suo respiro è intatto.
+            # NON tocca i primi 35s (respiro). Regolabile da env, disarmabile.
+            # ⚠️ TARATO SU 1 TRADE: -3.5 è metà strada verso HARD_STOP -7; peak
+            # 1.5 è la soglia maschio/femmina già vista nel microscopio. Da
+            # riverificare su più femmine-colata coi dati nuovi.
+            # ⚠️ RITARATO 5giu su 20 trade (non più 1): le femmine che passano il
+            # gate v4 hanno peak MAX 2.74; i maschi (tranne 2 piccoli) peak >= 3.6.
+            # Soglia peak 1.5 -> 3.0: prende TUTTE le 9 femmine (0 sfuggite), costa
+            # solo 2 maschietti (peak 1.84/+1.65 e 1.24/+1.10). Baratto: blocca 9
+            # femmine (2 da -9) per 2 maschi da +1. Il +22 (peak 22) non e' toccato.
+            _freno_off   = os.environ.get("FRENO_COLATA_OFF", "false").lower() == "true"
+            _freno_pnl   = float(os.environ.get("FRENO_COLATA_PNL", "3.5"))
+            _freno_peak  = float(os.environ.get("FRENO_COLATA_PEAK", "3.0"))
+            _freno_tempo = float(os.environ.get("KILLER_TEMPO", "35"))
+            if (not _freno_off
+                    and current_pnl_real < -_freno_pnl
+                    and self._trade_peak_pnl < _freno_peak
+                    and duration >= _freno_tempo):
+                self._close_shadow_trade(price,
+                    f"FRENO_COLATA_peak{self._trade_peak_pnl:.1f}_dur{duration:.0f}s_{current_pnl_real:+.1f}")
+                self._log_m2("🩸",
+                    f"FRENO_COLATA: femmina conclamata in colata "
+                    f"(peak{self._trade_peak_pnl:.1f}<{_freno_peak} dur{duration:.0f}s "
+                    f"pnl{current_pnl_real:+.1f}) → tagliata prima dell'HARD_STOP")
+                return
+
+            # ════════════════════════════════════════════════════════════════
+            # SPIA DIAGNOSTICA FRENO (2giu, Roberto — "perché i loss non sono
+            # castrati al minimo"). Una femmina è arrivata a -9 (HARD_STOP) il
+            # 14:26 nonostante peak 0.0 e 10min di colata: il freno NON è
+            # scattato e non sappiamo perché. Questa spia NON cambia il
+            # comportamento: scrive solo PERCHÉ il freno non scatta quando il
+            # PnL è già oltre la soglia. Al prossimo loss-colata il log dirà
+            # quale condizione manca (peak troppo alto? durata? off?), così
+            # diagnostichiamo dai dati invece di indovinare.
+            # ════════════════════════════════════════════════════════════════
+            if (current_pnl_real < -_freno_pnl and not _freno_off):
+                # il PnL è già oltre soglia ma il freno sopra NON ha tagliato:
+                # quindi è fallita peak<soglia oppure durata>=tempo. Lo dico.
+                _why = []
+                if not (self._trade_peak_pnl < _freno_peak):
+                    _why.append(f"peak={self._trade_peak_pnl:.2f}>={_freno_peak}(NON-femmina?)")
+                if not (duration >= _freno_tempo):
+                    _why.append(f"dur={duration:.0f}s<{_freno_tempo}(troppo-giovane)")
+                if _why:
+                    self._log_m2("🔍",
+                        f"FRENO_SPIA: pnl{current_pnl_real:+.1f} oltre soglia ma NON taglio → "
+                        f"{' '.join(_why)}")
 
             # -- MINIMUM HOLD TIME ---------------------------------------------
             # FIX: MIN_HOLD_SECONDS era dichiarato ma mai applicato.
@@ -11987,6 +13603,33 @@ class OvertopBassanoV16Production:
                 drawdown_pct = ((price - self._shadow_min_price) / self._shadow["price_entry"]) * 100
             else:
                 drawdown_pct = ((self._shadow_max_price - price) / self._shadow["price_entry"]) * 100
+
+            # ════════════════════════════════════════════════════════════════
+            # SALVA_VERDE ANTICIPATO (11giu, Roberto: "non lascio grasso a
+            # nessuno"). I TRANS-obiettivo fanno picco a 8-10s e crollano; il
+            # MIN_HOLD di 10s impediva al SALVA_VERDE (più sotto) di incassarli
+            # (15:38: picco +2.71 lordo a 10s → perso a -0.12). Qui il SALVA_VERDE
+            # agisce PRIMA di ogni cancello temporale: appena c'è grasso vero che
+            # cede dal picco, incassa — in qualsiasi secondo. Il maschio lento che
+            # sale e NON cede non scatta (resta protetto, corre). Stessa logica
+            # del SALVA_VERDE sotto, solo anticipata. Spegnibile TRAIL_OFF.
+            # ════════════════════════════════════════════════════════════════
+            if os.environ.get("TRAIL_OFF", "false").lower() != "true":
+                _ep_sv = self._shadow["price_entry"]
+                _sdelta_sv = (price - _ep_sv) if entry_direction != "SHORT" else (_ep_sv - price)
+                _cur_sv = _sdelta_sv * (5000.0 / _ep_sv)   # lordo
+                if entry_direction == "SHORT":
+                    _max_sv = (_ep_sv - self._shadow_min_price) * (5000.0 / _ep_sv)
+                else:
+                    _max_sv = (self._shadow_max_price - _ep_sv) * (5000.0 / _ep_sv)
+                _tg_sv = float(os.environ.get("TRAIL_GIU_USD", "0.5"))
+                _vm_sv = float(os.environ.get("VERDE_MIN_USD", "2.5"))
+                if _tg_sv > 0 and _cur_sv >= _vm_sv and (_max_sv - _cur_sv) >= _tg_sv:
+                    _sc_sv = _max_sv - _cur_sv
+                    _st_sv = "CRESC" if _sc_sv < 0.4 else "CEDE"
+                    self._close_shadow_trade(price,
+                        f"SALVA_VERDE*{_cur_sv:+.1f}_dapicco{_max_sv:+.1f}_{_st_sv}")
+                    return
 
             if duration >= MIN_HOLD_SECONDS:
                 # -- 4 DIVORCE TRIGGERS (attivi solo dopo MIN_HOLD) ---------------
@@ -12038,6 +13681,318 @@ class OvertopBassanoV16Production:
                 max_profit = (self._shadow["price_entry"] - self._shadow_min_price) * (5000.0 / self._shadow["price_entry"])
                 retreat    = price - self._shadow_min_price
             current_pnl = _sdelta * (5000.0 / self._shadow["price_entry"])  # lordo — fee al close
+
+            # ════════════════════════════════════════════════════════════════
+            # MINA CASSA_GRASSO (12giu2026, Roberto) — CATTURA DEI FURBI.
+            # ════════════════════════════════════════════════════════════════
+            # Sui dati (574 trade chiusi, di cui 440 LOSS):
+            #   - Fascia 4 "furbi" (durata 20s+, n=190 LOSS): peak medio +0.36$,
+            #     35 hanno toccato +0.5$, 26 +1.0$, 19 +1.5$, 10 +2.0$.
+            #     Vivono in media 69s. Salgono, oscillano, toccano grasso reale,
+            #     POI mollano. Oggi muoiono a -2.97$ medio.
+            #   - Le altre fasce (rapide/medie/lente, n=250 LOSS): peak medio
+            #     +0.01/+0.10/+0.12 — non c'e' grasso da catturare li'.
+            # IDEA: quando un trade ha toccato un PICCO sopra soglia E sta cedendo
+            # dal picco oltre una distanza, CHIUDI SUBITO. Non aspettare che torni
+            # in rosso (li' interviene ANTIPRECIPIZIO che pero' non vede grasso
+            # mai preso). Non aspettare TRANELLO_TRANS a 20s (troppo tardi per
+            # certi furbi). La cassa scatta SOPRA ZERO, prima che il grasso evapori.
+            #
+            # PARAMETRI ENV (default sicuri, reversibili):
+            #   CASSA_GRASSO_OFF=true   -> spenta (default)
+            #   CASSA_PEAK_MIN=1.5      -> sotto questo peak, non armare (no fee mangiate)
+            #   CASSA_GIU_USD=0.5       -> se cede di 0.5$ dal peak, esci
+            #   CASSA_MIN_ETA=10        -> non scattare prima di 10s (lascia respirare i maschi)
+            #
+            # NB: ENV default OFF. Si accende solo deliberatamente con
+            # CASSA_GRASSO_OFF=false. Numeri tarati sui 190 furbi visti.
+            # Da validare nelle 48h successive con: SELECT COUNT(*),
+            # AVG(pnl) FROM trades WHERE reason='CASSA_GRASSO';
+            # ════════════════════════════════════════════════════════════════
+            try:
+                if os.environ.get("CASSA_GRASSO_OFF", "true").lower() != "true":
+                    _nato_cg = self._shadow.get("nato_ts")
+                    if _nato_cg is not None:
+                        _eta_cg = time.time() - _nato_cg
+                        _cg_min_eta  = float(os.environ.get("CASSA_MIN_ETA",  "10.0"))
+                        _cg_peak_min = float(os.environ.get("CASSA_PEAK_MIN", "1.5"))
+                        _cg_giu_usd  = float(os.environ.get("CASSA_GIU_USD",  "0.5"))
+                        # max_profit e' gia' calcolato sopra (riga 13442). E' il PICCO storico del trade.
+                        _peak_ok    = (max_profit >= _cg_peak_min)
+                        _eta_ok     = (_eta_cg >= _cg_min_eta)
+                        _ceduto     = (max_profit - current_pnl) >= _cg_giu_usd
+                        _ancora_verde = (current_pnl > 0)  # solo se ANCORA in verde, no doppione con ANTIPRECIPIZIO
+                        if (_peak_ok and _eta_ok and _ceduto and _ancora_verde
+                                and not self._shadow.get("_cg_gia_tagliato")):
+                            self._shadow["_cg_gia_tagliato"] = True
+                            self._log("💰", f"CASSA_GRASSO chiude @ {_eta_cg:.0f}s: "
+                                            f"peak={max_profit:+.2f} ora={current_pnl:+.2f} "
+                                            f"(ceduto {max_profit-current_pnl:.2f}$ dal picco) @ ${price:.1f}")
+                            if not hasattr(self, "_cassa_grasso_tagli"):
+                                self._cassa_grasso_tagli = 0
+                            self._cassa_grasso_tagli += 1
+                            _cg = None
+                            try:
+                                import sqlite3 as _sqcg
+                                _cg = _sqcg.connect(self.db_path, timeout=15)
+                                _cg.execute("PRAGMA busy_timeout=15000;")
+                                _cg.execute("""CREATE TABLE IF NOT EXISTS cassa_grasso_tagli (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                                    eta_s REAL, peak_max REAL, pnl_taglio REAL,
+                                    ceduto_usd REAL, prezzo REAL)""")
+                                _cg.execute("""INSERT INTO cassa_grasso_tagli 
+                                    (eta_s,peak_max,pnl_taglio,ceduto_usd,prezzo) 
+                                    VALUES (?,?,?,?,?)""",
+                                    (float(_eta_cg), float(max_profit), float(current_pnl),
+                                     float(max_profit - current_pnl), float(price)))
+                                _cg.commit()
+                            except Exception:
+                                pass
+                            finally:
+                                if _cg is not None:
+                                    try:
+                                        _cg.close()
+                                    except Exception:
+                                        pass
+                            return self._close_shadow_trade(price, "CASSA_GRASSO")
+            except Exception:
+                pass
+
+            # ════════════════════════════════════════════════════════════════
+            # TRANELLO ANTI-PRECIPIZIO (6giu, Roberto) — taglio AL MINIMO.
+            # ════════════════════════════════════════════════════════════════
+            # I dati (103 curve_nascita) hanno mostrato:
+            #  - TRANS che precipitano: scendono e basta, peak quasi zero,
+            #    a 10s gia' a -0.46/-2.66 e poi giu' fino a -7.75 (peggiorano
+            #    di 4-7$ DOPO i 10s). Il tranello a 20s li prende troppo tardi.
+            #  - MASCHI LENTI: a 10s sono in perdita (-1.0/-1.4) MA fanno un
+            #    peak verde e poi risalgono a +4/+5 (t_peak 20-40s).
+            # DISTINZIONE: non il tempo (a 10s si assomigliano), ma il PEAK.
+            #   Il trans non vede MAI verde. Il maschio lento SI'.
+            # REGOLA: dopo 8s, se in perdita E non ha MAI fatto un peak verde
+            #   (max_profit < soglia) E sta scendendo -> taglio AL MINIMO ora,
+            #   senza aspettare che precipiti. Chi ha visto verde -> lo salvo
+            #   (e' un possibile maschio lento), lo gestisce il tranello 20s.
+            # Interruttore: ANTIPREC_OFF=true lo spegne. Reversibile.
+            # ⚠ Tarato su 103 curve storiche. Da validare sui nuovi trade.
+            # ════════════════════════════════════════════════════════════════
+            try:
+                if os.environ.get("ANTIPREC_OFF", "false").lower() != "true":
+                    _nato_ap = self._shadow.get("nato_ts")
+                    if _nato_ap is not None:
+                        _eta_ap = time.time() - _nato_ap
+                        _ap_min_eta  = float(os.environ.get("ANTIPREC_MIN_ETA", "8.0"))
+                        _ap_peak_min = float(os.environ.get("ANTIPREC_PEAK_MIN", "0.5"))
+                        # registro il PnL precedente per capire se sta scendendo
+                        _pnl_prec = self._shadow.get("_ap_pnl_prec")
+                        self._shadow["_ap_pnl_prec"] = round(current_pnl, 3)
+                        _sta_scendendo = (_pnl_prec is not None and current_pnl < _pnl_prec)
+                        _mai_verde     = (max_profit < _ap_peak_min)
+                        _in_perdita    = (current_pnl < 0)
+                        # 17giu2026 (Roberto) — TOLTA la condizione _sta_scendendo.
+                        # Un trans col picco ~0 che cola a gradini (micro-rimbalzi
+                        # di un centesimo) sfuggiva: nell'istante del rimbalzo
+                        # "_sta_scendendo" era falso e lo lasciava vivere fino a
+                        # TRANELLO a 47s. Ora: mai-verde + in-perdita + oltre 8s =
+                        # CAPRA, taglio SUBITO senza aspettare il tick perfetto.
+                        # Il maschio lento (max_profit >= ANTIPREC_PEAK_MIN) NON
+                        # rientra: ha visto verde, resta protetto.
+                        if (_eta_ap >= _ap_min_eta and _in_perdita
+                                and _mai_verde
+                                and not self._shadow.get("_ap_gia_tagliato")):
+                            self._shadow["_ap_gia_tagliato"] = True
+                            self._log("✂️", f"ANTIPRECIPIZIO taglia TRANS @ {_eta_ap:.0f}s: "
+                                            f"pnl={current_pnl:+.2f} peak_max={max_profit:+.2f} "
+                                            f"(mai verde, in perdita) @ ${price:.1f}")
+                            if not hasattr(self, "_antiprec_tagli"):
+                                self._antiprec_tagli = 0
+                            self._antiprec_tagli += 1
+                            _ca = None
+                            try:
+                                import sqlite3 as _sqa
+                                _ca = _sqa.connect(self.db_path, timeout=15)
+                                _ca.execute("PRAGMA busy_timeout=15000;")
+                                _ca.execute("""CREATE TABLE IF NOT EXISTS antiprec_tagli (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                                    eta_s REAL, pnl_taglio REAL, peak_max REAL, prezzo REAL)""")
+                                _ca.execute("INSERT INTO antiprec_tagli (eta_s,pnl_taglio,peak_max,prezzo) VALUES (?,?,?,?)",
+                                            (float(_eta_ap), float(current_pnl), float(max_profit), float(price)))
+                                _ca.commit()
+                            except Exception:
+                                pass
+                            finally:
+                                if _ca is not None:
+                                    try:
+                                        _ca.close()
+                                    except Exception:
+                                        pass
+                            return self._close_shadow_trade(price, "ANTIPRECIPIZIO")
+            except Exception:
+                pass
+
+            # ════════════════════════════════════════════════════════════════
+            # FILMATO PRIMI TICK (5giu) — fotografia PnL a 10s e 20s di vita.
+            # Serve PER DOPO: costruire il "primo respiro" (2o cancello).
+            # NON tocca il trading, solo registra. Il maschio respira (verde subito),
+            # il trans resta a zero. Confronteremo pnl_10s/pnl_20s alla raccolta.
+            try:
+                _nato = self._shadow.get("nato_ts")
+                if _nato is not None:
+                    _eta = time.time() - _nato
+                    # ════════════════════════════════════════════════════════════════
+                    # PRESA SECCA (16giu2026, Roberto) — PORTA A CASA IL GRASSO.
+                    # ════════════════════════════════════════════════════════════════
+                    # REGOLA ASSOLUTA: appena il trade tocca la soglia di profitto,
+                    # CHIUDO SUBITO. Non importa se maschio, femmina o trans. Non
+                    # aspetto che ceda. Non aspetto i 10 secondi. Se hai +1$ in mano
+                    # a qualunque secondo, lo metto al sicuro e basta.
+                    # ENV: PRESA_SECCA_OFF (default false = attiva),
+                    #      PRESA_SECCA_USD (default 1.0 = chiudi appena tocchi +1$).
+                    # ════════════════════════════════════════════════════════════════
+                    if os.environ.get("PRESA_SECCA_OFF", "false").lower() != "true":
+                        _presa_usd = float(os.environ.get("PRESA_SECCA_USD", "1.0"))
+                        # current_pnl e' LORDO. Tolgo la fee (2$) per avere il NETTO.
+                        # Cosi' PRESA_SECCA_USD=1.0 significa "+1$ NETTO in tasca".
+                        _presa_netto = current_pnl - (self.TRADE_SIZE_USD * self.LEVERAGE * self.FEE_PCT * 2)
+                        if _presa_netto >= _presa_usd:
+                            self._log_m2("💰",
+                                f"PRESA SECCA: +{_presa_netto:.2f}$ NETTO a {_eta:.0f}s "
+                                f"(lordo +{current_pnl:.2f}$) — porto a casa SUBITO")
+                            _ps = None
+                            try:
+                                import sqlite3 as _sqps
+                                _ps = _sqps.connect(self.db_path, timeout=15)
+                                _ps.execute("PRAGMA busy_timeout=15000;")
+                                _ps.execute("""CREATE TABLE IF NOT EXISTS presa_secca_tagli (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                                    eta_s REAL, pnl_presa REAL, prezzo REAL)""")
+                                _ps.execute("""INSERT INTO presa_secca_tagli
+                                    (eta_s, pnl_presa, prezzo) VALUES (?, ?, ?)""",
+                                    (float(_eta), float(_presa_netto), float(price)))
+                                _ps.commit()
+                            except Exception:
+                                pass
+                            finally:
+                                if _ps is not None:
+                                    try:
+                                        _ps.close()
+                                    except Exception:
+                                        pass
+                            return self._close_shadow_trade(price, "PRESA_SECCA")
+                    if _eta >= 10 and self._shadow.get("pnl_10s") is None:
+                        self._shadow["pnl_10s"] = round(current_pnl, 3)
+                    # ════════════════════════════════════════════════════════════════
+                    # INCASSO AL MOMENTO GIUSTO (15giu2026, Roberto)
+                    # ════════════════════════════════════════════════════════════════
+                    # OSSERVAZIONE: 5 trade su 14 fascia D hanno pnl_10s >= +0.6$ ma
+                    # peak_post-ingresso = 0 (picco già fatto nei secondi gratis).
+                    # CASSA_GRASSO classico non li intercetta (guarda peak post).
+                    # Erosione media: +1.30$ a 10s diventano -2.32$ a fine.
+                    #
+                    # REGOLA: dopo i 10s, se pnl_10s era "rispettabile" (>= MIN),
+                    # quel valore diventa il riferimento da difendere. Se il PnL
+                    # attuale scende di più di GIU_USD sotto pnl_10s, chiudo subito.
+                    #
+                    # ENV: INCASSO_10S_OFF (default false), INCASSO_10S_MIN (0.6),
+                    # INCASSO_GIU_USD (0.4). Reversibile.
+                    # ════════════════════════════════════════════════════════════════
+                    if (_eta >= 10 and
+                        os.environ.get("INCASSO_10S_OFF", "false").lower() != "true"):
+                        _i10_min = float(os.environ.get("INCASSO_10S_MIN", "0.6"))
+                        _i10_giu = float(os.environ.get("INCASSO_GIU_USD", "0.4"))
+                        _p10_inc = self._shadow.get("pnl_10s")
+                        if (_p10_inc is not None and _p10_inc >= _i10_min and
+                            current_pnl < (_p10_inc - _i10_giu) and
+                            not self._shadow.get("_i10_gia_tagliato")):
+                            self._shadow["_i10_gia_tagliato"] = True
+                            self._log_m2("💰",
+                                f"INCASSO 10s: pnl_10s era +{_p10_inc:.2f}$ ora "
+                                f"{current_pnl:+.2f}$ (ceduto {_p10_inc - current_pnl:.2f}$) "
+                                f"— il momento giusto, chiudo")
+                            # Tabella tracciamento (creata al primo taglio)
+                            _i10c = None
+                            try:
+                                import sqlite3 as _sqi10
+                                _i10c = _sqi10.connect(self.db_path, timeout=15)
+                                _i10c.execute("PRAGMA busy_timeout=15000;")
+                                _i10c.execute("""CREATE TABLE IF NOT EXISTS incasso_10s_tagli (
+                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                                    eta_s REAL, pnl_10s REAL, pnl_taglio REAL,
+                                    ceduto_usd REAL, prezzo REAL)""")
+                                _i10c.execute("""INSERT INTO incasso_10s_tagli
+                                    (eta_s, pnl_10s, pnl_taglio, ceduto_usd, prezzo)
+                                    VALUES (?, ?, ?, ?, ?)""",
+                                    (float(_eta), float(_p10_inc), float(current_pnl),
+                                     float(_p10_inc - current_pnl), float(price)))
+                                _i10c.commit()
+                            except Exception:
+                                pass
+                            finally:
+                                if _i10c is not None:
+                                    try:
+                                        _i10c.close()
+                                    except Exception:
+                                        pass
+                            return self._close_shadow_trade(price, "INCASSO_10S")
+                    if _eta >= 20 and self._shadow.get("pnl_20s") is None:
+                        self._shadow["pnl_20s"] = round(current_pnl, 3)
+                        # ════════════════════════════════════════════════════════
+                        # TRANELLO (6giu) — 2o cancello sul PRIMO RESPIRO.
+                        # A 20s confronto col 10s. Regola tarata su 6 trade:
+                        #   MASCHIO: cresce 10s->20s ED e' in verde -> LASCIO CORRERE
+                        #   TRANS:   evapora (20s<10s) o resta rosso -> CHIUDO SUBITO
+                        # Cosi' il trans muore a ~zero invece di -4/-9. I maschi
+                        # sani che scendono POCO ma restano forti (>= soglia) li
+                        # salvo, per non ammazzare i grassi lenti (es. 06:09).
+                        # Interruttore: TRANELLO_OFF=true lo spegne. Reversibile.
+                        # ⚠ TARATO SU 6 TRADE. Da validare sui nuovi.
+                        # ════════════════════════════════════════════════════════
+                        if os.environ.get("TRANELLO_OFF", "false").lower() != "true":
+                            _p10 = self._shadow.get("pnl_10s")
+                            _p20 = self._shadow.get("pnl_20s")
+                            # soglia "ancora forte": se a 20s e' sopra questo, e' un
+                            # maschio sano anche se sceso un po' (salva i 06:09).
+                            _tr_forte = float(os.environ.get("TRANELLO_FORTE", "2.0"))
+                            if _p10 is not None and _p20 is not None:
+                                _cresce   = _p20 > _p10
+                                _in_verde = _p20 > 0
+                                _forte    = _p20 >= _tr_forte
+                                # MASCHIO se: cresce ED in verde, OPPURE ancora forte
+                                _e_maschio = (_cresce and _in_verde) or _forte
+                                if not _e_maschio:
+                                    self._log("🎯", f"TRANELLO chiude TRANS: "
+                                                    f"10s={_p10:+.2f} 20s={_p20:+.2f} "
+                                                    f"(non cresce/non forte) @ ${price:.1f}")
+                                    if not hasattr(self, "_tranello_tagli"):
+                                        self._tranello_tagli = 0
+                                    self._tranello_tagli += 1
+                                    _ct = None
+                                    try:
+                                        import sqlite3 as _sqt
+                                        _ct = _sqt.connect(self.db_path, timeout=15)
+                                        _ct.execute("PRAGMA busy_timeout=15000;")
+                                        _ct.execute("""CREATE TABLE IF NOT EXISTS tranello_tagli (
+                                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                                            pnl_10s REAL, pnl_20s REAL, prezzo REAL)""")
+                                        _ct.execute("INSERT INTO tranello_tagli (pnl_10s,pnl_20s,prezzo) VALUES (?,?,?)",
+                                                    (float(_p10), float(_p20), float(price)))
+                                        _ct.commit()
+                                    except Exception:
+                                        pass
+                                    finally:
+                                        if _ct is not None:
+                                            try:
+                                                _ct.close()
+                                            except Exception:
+                                                pass
+                                    return self._close_shadow_trade(price, "TRANELLO_TRANS")
+            except Exception:
+                pass
 
             # -- COMPONENTE 1: MOMENTUM (peso 30) ---------------------
             # FORTE=30, MEDIO=20, DEBOLE=5
@@ -12247,8 +14202,22 @@ class OvertopBassanoV16Production:
                 BREATH_MEDIA_RANGE   = (PROFIT_FLOOR_LOW * 0.5, PROFIT_FLOOR_HIGH * 0.7)
             else:  # DEBOLE
                 # DEBOLE = trade fragile. Soglie basse, prendi quello che dà.
+                # ════════════════════════════════════════════════════════════
+                # FRONTIERA MASCHI DEBOLE (1giu, Roberto — dai dati reali):
+                # phantom_forensic, is_win=1, DEBOLE|BASSA: mfe_min=2.01.
+                # NESSUN maschio DEBOLE fa picco sotto 2$ → sotto 2 = femmina.
+                # Fasce: 2-3$ (344), 3-4$ (176), 4-6$ (219), >6$ (482, media 10.36).
+                # Il floor LOW era 3.00 → tagliava fuori i 344 maschi della
+                # fascia 2-3: SMORZ_TAKE non si armava mai su di loro e il grasso
+                # evaporava. Portato a 2.20 (appena sopra la frontiera 2.01) così
+                # la presa sul picco si arma appena il maschio si manifesta.
+                # SMORZ_TAKE scatta solo CON decelerometro → non taglia il maschio
+                # che ancora corre, solo quello che sta gia' rallentando.
+                # Regolabile da env senza redeploy.
+                # ════════════════════════════════════════════════════════════
                 _margine_pct = 0.0004   # 0.04% di $5k = $2 netto target
-                PROFIT_FLOOR_LOW     = _fee_rt + (_exp_usd * _margine_pct * 0.5)   # ~$3.00 lordo
+                _floor_low_deb = float(os.environ.get('FLOOR_LOW_DEBOLE', '2.20'))
+                PROFIT_FLOOR_LOW     = _floor_low_deb                              # ~$2.20 lordo (era 3.00)
                 PROFIT_FLOOR_HIGH    = _fee_rt + (_exp_usd * _margine_pct * 1.0)   # ~$4.00 lordo
                 PROFIT_BIG_THRESHOLD = _fee_rt + (_exp_usd * _margine_pct * 1.6)   # ~$5.20 lordo
                 LOCK_LOW_RETREAT     = 0.18   # retreat aggressivo (chiudi presto)
@@ -12277,42 +14246,99 @@ class OvertopBassanoV16Production:
 
             if current_pnl > 0 and max_profit > 0:
                 # ═══════════════════════════════════════════════════════════
-                # VOLPE — PROFIT_LOCK A 4 LIVELLI calibrati per momentum
+                # TRAILING SUL MASSIMO (10giu, Roberto) — la sintesi:
+                # "sono tutti ibridi all'ingresso. Se hanno grasso e lo tengono
+                #  (corrono) li lasciamo correre. Se si sgonfiano, strappiamo
+                #  il grasso che c'è prima che evapori."
+                # NON serve sapere se è maschio o femmina: seguo il MASSIMO.
+                #  - finché fa nuovi massimi (sale) -> TENGO, corre
+                #  - appena ripiega di TRAIL_GIU$ dal massimo -> STRAPPO e incasso
+                # Maschio +11 che torna +10 -> strappo +10 (jackpot preso).
+                # Dopata peak +1.71 che si gira -> strappo +0.9 (grasso preso,
+                #  invece di -0.62 evaporato).
+                # Attivo solo sopra TRAIL_MIN$ di profitto (lascia formare il
+                # grasso). Spegnibile con TRAIL_OFF=true. Reversibile.
                 # ═══════════════════════════════════════════════════════════
+                if os.environ.get("TRAIL_OFF", "false").lower() != "true":
+                    # ═══════════════════════════════════════════════════════
+                    # SALVA IL VERDE (11giu, Roberto) — niente soglie di profitto!
+                    # Errore precedente: PRENDI_SUBITO a +2.5 e TRAIL_MIN a 1.5
+                    # NON prendevano mai i TRANS-obiettivo, che fanno grasso a
+                    # +1.3/+2.3 e poi si svuotano (16:49 +2.29->-0.62, 03:56
+                    # +1.39->-5.06). Quel grasso, con le FEE GIA' PAGATE, è
+                    # denaro puro che buttavamo via.
+                    # Logica giusta: appena il trade è in VERDE (qualunque,
+                    # sopra il costo già speso) traccio il picco. Appena CEDE
+                    # dal picco di TRAIL_GIU$, STRAPPO il verde che c'è — non
+                    # aspetto nessuna soglia. Il maschio che sale e NON cede
+                    # resta dentro (corre). Il TRANS/dopata che si gira lo
+                    # incasso mentre è ancora verde.
+                    # ENV: TRAIL_GIU_USD (default 0.6 = cede 0.6$ dal picco).
+                    #      VERDE_MIN_USD = profitto LORDO minimo in mano per
+                    #      strappare. ATTENZIONE: current_pnl qui è LORDO (il
+                    #      trade respira). Fee = 0.75/lato = 1.50 a giro (Roberto).
+                    #      Quindi LORDO 2.0 = NETTO +0.50 dopo fee. Sotto 2.0
+                    #      lordo si chiude in PERDITA netta. Default prudente 2.0.
+                    # FIX (Roberto): NON strappo se il lordo in mano non copre le
+                    # fee + margine. Strappo solo se current_pnl (lordo) >=
+                    # VERDE_MIN_USD, cosi' il NETTO resta positivo. Mai fottuti.
+                    # 0 = spento.
+                    # ═══════════════════════════════════════════════════════
+                    _trail_giu  = float(os.environ.get("TRAIL_GIU_USD", "0.5"))
+                    _verde_min  = float(os.environ.get("VERDE_MIN_USD", "2.5"))
+                    if _trail_giu > 0 and current_pnl >= _verde_min:
+                        # lordo in mano copre le fee + margine E ho ceduto dal
+                        # picco -> salvo il verde NETTO che ho, vicino al picco
+                        if (max_profit - current_pnl) >= _trail_giu:
+                            _scarto = max_profit - current_pnl
+                            _stato = "CRESC" if _scarto < 0.4 else "CEDE"
+                            self._close_shadow_trade(price,
+                                f"SALVA_VERDE*{current_pnl:+.1f}_dapicco{max_profit:+.1f}_{_stato}")
+                            return
 
-                # ─ Livello 4 PROTECT_HI: WIN grosso, lascia correre ─
-                # FORTE: scatta a $4.50, retreat 40% (lascia correre fino a $6+)
-                # MEDIO: scatta a $4.00, retreat 40%
-                # DEBOLE: scatta a $3.50, retreat 35%
-                if max_profit >= PROFIT_BIG_THRESHOLD:
-                    retreat_pct_now = retreat / max_profit
-                    _big_retreat = 0.40 if _entry_mom != "DEBOLE" else 0.35
-                    if retreat_pct_now > _big_retreat:
+                # ═══════════════════════════════════════════════════════════
+                # VOLPE — PROFIT_LOCK A 4 LIVELLI calibrati per momentum
+                # ───────────────────────────────────────────────────────────
+                # DISATTIVATO DI DEFAULT (11giu, Roberto). Questi 4 livelli
+                # lasciavano ritirare il 40-55% dal picco prima di agire. Prova
+                # sui dati: 16:07 picco +7.2 → SALVAGENTE a pct0.55 → chiuso
+                # -0.77. Il grasso evaporava. Ora l'uscita in profitto è UNA
+                # sola: il SALVA_VERDE sopra (strappa appena cedi TRAIL_GIU dal
+                # picco, vicino al massimo). Niente più ritirate percentuali.
+                # Riattivabile: env PROFIT_LOCK_VECCHIO_ON=true
+                # ═══════════════════════════════════════════════════════════
+                if os.environ.get("PROFIT_LOCK_VECCHIO_ON", "false").lower() == "true":
+                    # ─ Livello 4 PROTECT_HI: WIN grosso, lascia correre ─
+                    if max_profit >= PROFIT_BIG_THRESHOLD:
+                        retreat_pct_now = retreat / max_profit
+                        _big_retreat = 0.40 if _entry_mom != "DEBOLE" else 0.35
+                        if retreat_pct_now > _big_retreat:
+                            self._close_shadow_trade(price,
+                                f"PROTECT_HI_E{exit_energy}_{_entry_mom}_max{max_profit:+.1f}_keep{current_pnl:+.1f}")
+                            return
+
+                    # ─ Livello 3 EVAPORATION: max stava sopra, ora torna sotto floor low ─
+                    elif max_profit >= (PROFIT_FLOOR_LOW + 0.10) and current_pnl < PROFIT_FLOOR_LOW:
                         self._close_shadow_trade(price,
-                            f"PROTECT_HI_E{exit_energy}_{_entry_mom}_max{max_profit:+.1f}_keep{current_pnl:+.1f}")
+                            f"LOCK_EVAP_E{exit_energy}_{_entry_mom}_max{max_profit:+.1f}_now{current_pnl:+.1f}")
                         return
 
-                # ─ Livello 3 EVAPORATION: max stava sopra, ora torna sotto floor low ─
-                elif max_profit >= (PROFIT_FLOOR_LOW + 0.10) and current_pnl < PROFIT_FLOOR_LOW:
-                    self._close_shadow_trade(price,
-                        f"LOCK_EVAP_E{exit_energy}_{_entry_mom}_max{max_profit:+.1f}_now{current_pnl:+.1f}")
-                    return
+                    # ─ Livello 2 LOCK_LOW: profit medio, retreat calibrato ─
+                    elif current_pnl >= PROFIT_FLOOR_LOW and current_pnl < PROFIT_FLOOR_HIGH:
+                        retreat_pct_now = retreat / max_profit
+                        if retreat_pct_now > LOCK_LOW_RETREAT:
+                            self._close_shadow_trade(price,
+                                f"LOCK_LOW_E{exit_energy}_{_entry_mom}_WIN_{current_pnl:+.1f}")
+                            return
 
-                # ─ Livello 2 LOCK_LOW: profit medio, retreat calibrato ─
-                elif current_pnl >= PROFIT_FLOOR_LOW and current_pnl < PROFIT_FLOOR_HIGH:
-                    retreat_pct_now = retreat / max_profit
-                    if retreat_pct_now > LOCK_LOW_RETREAT:
-                        self._close_shadow_trade(price,
-                            f"LOCK_LOW_E{exit_energy}_{_entry_mom}_WIN_{current_pnl:+.1f}")
-                        return
+                    # ─ Livello 1 PROTECT: profit alto, retreat normale ─
+                    elif current_pnl >= PROFIT_FLOOR_HIGH:
+                        retreat_pct_now = retreat / max_profit
+                        if retreat_pct_now > _cm_retreat:
+                            self._close_shadow_trade(price, 
+                                f"PROFIT_LOCK_E{exit_energy}_{_entry_mom}_WIN_{max_profit:+.0f}")
+                            return
 
-                # ─ Livello 1 PROTECT: profit alto, retreat normale ─
-                elif current_pnl >= PROFIT_FLOOR_HIGH:
-                    retreat_pct_now = retreat / max_profit
-                    if retreat_pct_now > _cm_retreat:
-                        self._close_shadow_trade(price, 
-                            f"PROFIT_LOCK_E{exit_energy}_{_entry_mom}_WIN_{max_profit:+.0f}")
-                        return
 
             # -- DECISIONE ---------------------------------------------
             # PATCH 3 BUG 8 — Honest WIN Classification
@@ -12332,6 +14358,41 @@ class OvertopBassanoV16Production:
                 _fee_rt = float(getattr(self, "FEE_TRADE", 2.00))
                 pnl_netto_stimato = current_pnl - _fee_rt
 
+                # ════════════════════════════════════════════════════════
+                # KILLER E40 (31mag, Roberto) — "tutti nascono femmina, il
+                # maschio si manifesta entro un tempo preciso."
+                # ════════════════════════════════════════════════════════
+                # PROVA SUI DATI (204 trade reali):
+                #   energia >= 40  → 88% WIN (71 win / 10 loss) = il MASCHIO
+                #   energia <  40  → 28% WIN (34 win / 89 loss)  = la FEMMINA
+                # Frontiera NETTA a 40 (non graduale: 30-40 e <30 hanno stesso
+                # 28% — o sei sopra 40 o sei femmina).
+                #
+                # Regola: do al trade un TEMPO per manifestarsi maschio
+                # (raggiungere energia 40). Se passato quel tempo è ancora
+                # sotto 40 ED è in perdita → è femmina che non si manifesta,
+                # la MOLLO subito invece di tenerla aperta a bruciare la fee.
+                # Questo CORREGGE il "timeframe lungo" che teneva aperte le
+                # femmine sperando respirassero (dati: peggiorava i loss).
+                #
+                # KILLER_E_SOGLIA=40 (la frontiera dei dati).
+                # KILLER_TEMPO=35s  (i win medi vivono ~100s, i loss ~35s:
+                #   dopo 35s un maschio vero ha già preso energia).
+                # Disarmabile: env KILLER_E40_OFF=true
+                _killer_off = os.environ.get("KILLER_E40_OFF", "false").lower() == "true"
+                _killer_e_soglia = float(os.environ.get("KILLER_E_SOGLIA", "40"))
+                _killer_tempo    = float(os.environ.get("KILLER_TEMPO", "35"))
+                if (not _killer_off
+                        and exit_energy < _killer_e_soglia
+                        and duration >= _killer_tempo
+                        and current_pnl < 0):
+                    self._close_shadow_trade(price,
+                        f"KILLER_E40_FEMMINA_E{exit_energy}_dur{duration:.0f}s_{current_pnl:+.1f}")
+                    self._log_m2("⚰️",
+                        f"KILLER_E40: femmina non manifestata "
+                        f"(E{exit_energy}<{_killer_e_soglia:.0f} dur{duration:.0f}s) → mollata")
+                    return
+
                 if pnl_netto_stimato > 0:
                     # WIN vero: lordo > fee
                     self._close_shadow_trade(price,
@@ -12349,10 +14410,37 @@ class OvertopBassanoV16Production:
                         f"lordo=${current_pnl:+.2f} netto=${pnl_netto_stimato:+.2f}")
                     # NON return: continua agli altri controlli (timeout, drawdown)
                 else:
-                    # LOSS vera: chiusura come prima
-                    self._close_shadow_trade(price,
-                        f"EXIT_E{exit_energy}_S{exit_soglia}_LOSS_{current_pnl:+.1f}")
-                    return
+                    # ════════════════════════════════════════════════════════
+                    # TIMEFRAME LUNGO (30mag, Roberto) — "se non ha guadagnato,
+                    # vai avanti; se ha guadagnato, chiudi."
+                    # ════════════════════════════════════════════════════════
+                    # PROVA SUI DATI (403 trade): in RANGING LONG il lordo medio
+                    # è +0.47 (la DIREZIONE è giusta), ma -587$ netti perché il
+                    # bot chiudeva i trade a calo-energia (S35) appena andavano
+                    # un soffio sotto zero (-0.04, -0.19, -0.10...) senza dare
+                    # tempo di risalire e pagare la fee.
+                    # ORA: una perdita LIEVE (entro -fee) NON chiude per energia.
+                    # Il trade respira come il SUBFEE qui sopra. Lo chiudono solo
+                    # i freni VERI già attivi più sotto:
+                    #   - HARD_STOP 2% (frana)
+                    #   - TIMEOUT_DD (drawdown >1% oltre durata media)
+                    #   - TIMEOUT_MAX_30M (assoluto)
+                    #   - o torna in profitto e incassa
+                    # PALETTO SICUREZZA: se la perdita è già SERIA (oltre -fee,
+                    # cioè il trade sta franando davvero) → chiude subito, non si
+                    # aspetta. Così non trasformiamo tanti -0.20 in pochi -10.
+                    _fee_loss_floor = float(getattr(self, "FEE_TRADE", 2.00))
+                    if current_pnl <= -_fee_loss_floor:
+                        # Perdita seria: chiudi (freno energia legittimo)
+                        self._close_shadow_trade(price,
+                            f"EXIT_E{exit_energy}_S{exit_soglia}_LOSS_{current_pnl:+.1f}")
+                        return
+                    else:
+                        # Perdita lieve: NON chiudere per energia. Lascia maturare.
+                        self._log_m2("🟢",
+                            f"HOLD_IMMATURO E{exit_energy} S{exit_soglia} "
+                            f"lordo=${current_pnl:+.2f} (sotto fee, lascio respirare)")
+                        # NON return: prosegue ai freni veri (HARD_STOP, TIMEOUT_DD)
 
             # -- TIMEOUT SAFETY - solo se l'exit intelligente non chiude -----
             # Niente TIMEOUT_3X - l'exit intelligente decide.
@@ -12360,14 +14448,18 @@ class OvertopBassanoV16Production:
             if duration > duration_avg * 5 and drawdown_pct > 1.0:
                 self._close_shadow_trade(price, "TIMEOUT_DD")
                 return
-            # FIX 11mag-notte: timeout assoluto da 3 min → 30 min
-            # MOTIVAZIONE: la simulazione del 9mag mostra che holding 20-60 min
-            # avrebbe portato +$32 invece di -$30. Test empirico: 1 sola posizione
-            # alla volta (verificato self._shadow è singola), TIMEOUT_DD a 1%
-            # drawdown lavora come circuit breaker intelligente. Se il test
-            # produce risultati negativi nei log, ripristinare a 180.
-            if duration > 1800:
-                self._close_shadow_trade(price, "TIMEOUT_MAX_30M")
+            # ════════════════════════════════════════════════════════════════
+            # VINCOLO CASSA — MAX 8 MINUTI (30mag, Roberto)
+            # ════════════════════════════════════════════════════════════════
+            # Capitale 10k$, esposizione 5k$/trade. Se i trade restano aperti
+            # 30 min, la coda accumula esposizione (10 trade × 5k = 50k su 10k
+            # di cassa) → la cassa si satura e blocca le opportunità nuove.
+            # Roberto: "massimo tempo 8 minuti". 8 min = 480s.
+            # Il fix timeframe-lungo (sopra) lascia respirare i trade immaturi,
+            # ma il tetto cassa resta INVALICABILE: oltre 480s si chiude e basta.
+            TIMEOUT_MAX_CASSA = 480   # 8 minuti — vincolo cassa, non negoziabile
+            if duration > TIMEOUT_MAX_CASSA:
+                self._close_shadow_trade(price, f"TIMEOUT_MAX_8M_dur{int(duration)}s")
                 return
 
         except Exception as e:
@@ -12392,6 +14484,27 @@ class OvertopBassanoV16Production:
             if not self._shadow:
                 self._shadow_closing = False
                 return
+
+            # ── MICROSCOPIO: FLUSH CURVA ALLA CHIUSURA (1giu, opzione B) ──────
+            # La curva (nascita densa + evoluzione ogni 3s) si salva QUI, alla
+            # chiusura reale, NON piu' a 10.5s. Una scrittura per trade.
+            # Isolato: se fallisce non deve mai impedire la chiusura del trade.
+            try:
+                if not self._shadow.get('_micro_flushed'):
+                    self._shadow['_micro_flushed'] = True
+                    _firma_n = (f"{self._shadow.get('momentum_entry','?')}|"
+                                f"{self._shadow.get('volatility_entry','?')}|"
+                                f"{self._shadow.get('trend_entry','?')}|"
+                                f"{self._shadow.get('regime_entry', self._regime_current)}|"
+                                f"{self._shadow.get('direction','LONG')}")
+                    self._save_curva_nascita(
+                        trade_ts=self._shadow_entry_time,
+                        firma=_firma_n,
+                        curva=self._shadow.get('_micro_nascita', []),
+                    )
+            except Exception as _mfe:
+                log.debug(f"[MICRO_FLUSH_CLOSE_ERR] {_mfe}")
+
             # PnL REALE FUTURES = delta_prezzo × quantita BTC nella posizione
             # CRITICO: usa la direzione al momento dell'ENTRY, non quella attuale
             # Se il campo ha flippato durante il trade, la direzione attuale è sbagliata
@@ -12702,7 +14815,7 @@ class OvertopBassanoV16Production:
 
             # -- SCRIVI NEL DATABASE - sopravvive ai restart -------------------
             try:
-                conn = sqlite3.connect(DB_PATH)
+                conn = _safe_connect(DB_PATH, timeout=30)
                 conn.execute("""
                     INSERT INTO trades (event_type, asset, price, size, pnl, direction, reason, data_json)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -12730,6 +14843,7 @@ class OvertopBassanoV16Production:
                           "macd_val":  round(getattr(self.campo, "_last_macd_hist", 0), 4),
                           # V16: peak intra-trade
                           "peak_pnl":     round(self._trade_peak_pnl, 4),
+                          "build":        BUILD_MD5,   # marchio di versione (quale codice ha prodotto il trade)
                           "peak_delta_s": round(self._trade_peak_ts - self._shadow_entry_time, 1)
                                          if self._trade_peak_ts and self._shadow_entry_time else 0,
                           # CARICA VIVA (29mag, Roberto): traiettoria del seed
@@ -12738,6 +14852,32 @@ class OvertopBassanoV16Production:
                           # Da qui si dimostra: il vincente ha la carica viva prima.
                           "seed_traj": list(getattr(self.campo, "_seed_history", []))[-5:],
                           "seed_dir":  round((lambda s: (s[-1]-s[0])/max(len(s)-1,1) if len(s)>=2 else 0.0)(list(getattr(self.campo,"_seed_history",[]))[-5:]), 4),
+                          # SEME D'INGRESSO (4giu): il valore PRIMA del trade su cui
+                          # il gate ha deciso. Stipato nello shadow alla nascita.
+                          # Il pannello legge QUESTO, non il seed_traj dell'exit.
+                          "seme_entry":      self._shadow.get("seme_entry"),
+                          "seed_traj_entry": self._shadow.get("seed_traj_entry"),
+                          # ════════════════════════════════════════════════════
+                          # CARTA D'IDENTITA' DI NASCITA (4giu, Roberto: la
+                          # "femmina travestita da maschio"). Questi sensori sono
+                          # gia' calcolati dal seed alla nascita e gia' nello
+                          # shadow; finora finivano SOLO nel canvas (che perde
+                          # righe). Qui entrano nel trade vero: ogni femmina nasce
+                          # con la firma completa, per smascherare chi ha seme da
+                          # maschio ma un carattere di nascita da femmina.
+                          # NB onesta': nascita_range_pos e' ROTTO (saturo 0/1);
+                          # drift_slope/seed_dir e' lead debole. I non testati
+                          # (compression, drift_persist, vol_pressure,
+                          # comp_duration) sono i veri candidati. Decide il dato.
+                          "n_range_pos":     self._shadow.get("nascita_range_pos"),
+                          "n_compression":   self._shadow.get("nascita_compression"),
+                          "n_drift_persist": self._shadow.get("nascita_drift_persist"),
+                          "n_vol_pressure":  self._shadow.get("nascita_vol_pressure"),
+                          "n_drift_slope":   self._shadow.get("nascita_drift_slope"),
+                          "n_comp_duration": self._shadow.get("nascita_comp_duration"),
+                          "n_sign_flips":    self._shadow.get("nascita_sign_flips"),
+                          "pnl_10s":         self._shadow.get("pnl_10s"),
+                          "pnl_20s":         self._shadow.get("pnl_20s"),
                       })))
                 conn.commit()
                 conn.close()
@@ -12811,6 +14951,7 @@ class OvertopBassanoV16Production:
                             "entry_price": self._shadow.get("price_entry", 0),
                             "duration": round(trade_duration, 1),
                             "peak_pnl": round(self._trade_peak_pnl, 4),
+                            "build": BUILD_MD5,
                             "fp_wr": round(self._shadow.get("fingerprint_wr", 0), 4),
                         }
                     }
@@ -12835,7 +14976,7 @@ class OvertopBassanoV16Production:
 
             # -- PERSISTI STATS M2 - sopravvivono ai restart ------------------
             try:
-                conn = sqlite3.connect(DB_PATH)
+                conn = _safe_connect(DB_PATH, timeout=30)
                 conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_wins', ?)", (str(self._m2_wins),))
                 conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_losses', ?)", (str(self._m2_losses),))
                 conn.execute("INSERT OR REPLACE INTO bot_state VALUES ('m2_pnl', ?)", (str(self._m2_pnl),))
@@ -13035,7 +15176,22 @@ class OvertopBassanoV16Production:
                         outcome=_canvas_outcome,
                         pnl_netto=float(pnl),
                         durata_s=float(trade_duration) if trade_duration else 0.0,
-                        reason=str(reason)
+                        reason=str(reason),
+                        nascita={
+                            "range_pos":     self._shadow.get("nascita_range_pos") if self._shadow else None,
+                            "drift_slope":   self._shadow.get("nascita_drift_slope") if self._shadow else None,
+                            "seed_score":    self._shadow.get("nascita_seed_score") if self._shadow else None,
+                            "compression":   self._shadow.get("nascita_compression") if self._shadow else None,
+                            "drift_persist": self._shadow.get("nascita_drift_persist") if self._shadow else None,
+                            "vol_pressure":  self._shadow.get("nascita_vol_pressure") if self._shadow else None,
+                            "comp_duration": self._shadow.get("nascita_comp_duration") if self._shadow else None,
+                            "regime_entry":  self._shadow.get("regime_entry") if self._shadow else None,
+                            "momentum":      self._shadow.get("momentum_entry") if self._shadow else None,
+                            "volatility":    self._shadow.get("volatility_entry") if self._shadow else None,
+                            "trend":         self._shadow.get("trend_entry") if self._shadow else None,
+                            "direction":     self._shadow.get("direction") if self._shadow else None,
+                            "score":         self._shadow.get("score") if self._shadow else None,
+                        }
                     )
             except Exception as _cxe:
                 log.debug(f"[CANVAS_HOOK_EXIT_ERR] {_cxe}")
@@ -13149,6 +15305,21 @@ class OvertopBassanoV16Production:
             except Exception as _mat_oe:
                 log.debug(f"[CAP_MATRIGNA_HOOK_EXIT_ERR] {_mat_oe}")
 
+            # ═══════════════════════════════════════════════════════════
+            # CAPSULA REGIME-EDGE (31mag) — observe: verifica se i suoi
+            # verdetti erano giusti. Serve a raccogliere le prove REALI
+            # (oggi UP è simulato) per poter armare L4 con dati veri.
+            # ═══════════════════════════════════════════════════════════
+            try:
+                if getattr(self, "cap_regime_edge", None) is not None:
+                    self.cap_regime_edge.observe_outcome(
+                        momentum=self._shadow_entry_momentum or '?',
+                        trend=self._shadow_entry_trend or '?',
+                        pnl_reale=float(pnl),
+                    )
+            except Exception as _re_oe:
+                log.debug(f"[CAP_REGIME_EDGE_HOOK_EXIT_ERR] {_re_oe}")
+
         except Exception as e:
             import traceback
             self._log_m2("💥", f"ERRORE close_shadow: {e}")
@@ -13220,7 +15391,7 @@ class OvertopBassanoV16Production:
         try:
             import sqlite3, json
             db_path = getattr(self, '_db_path', '/var/data/trading_data.db')
-            with sqlite3.connect(db_path) as conn:
+            with _safe_connect(db_path, timeout=30) as conn:
                 rows = conn.execute("""
                     SELECT pnl, data_json FROM trades
                     WHERE event_type='EXIT' AND pnl > 0
@@ -13700,7 +15871,7 @@ class OvertopBassanoV16Production:
             commands = []
             # -- PROTOCOLLO NUOVO: legge da DB (bridge predittivo V48+) ----
             try:
-                conn = sqlite3.connect(DB_PATH)
+                conn = _safe_connect(DB_PATH, timeout=30)
                 rows = conn.execute(
                     "SELECT value FROM bot_state WHERE key='bridge_cmd'"
                 ).fetchall()
@@ -13956,6 +16127,8 @@ class OvertopBassanoV16Production:
                 _hb_set("losses",              lambda: self.losses)
                 _hb_set("wr",                  lambda: round(self.wins / tot, 4) if tot > 0 else 0)
                 _hb_set("last_seen",           lambda: datetime.utcnow().isoformat())
+                _hb_set("cromo_blocchi",       lambda: dict(getattr(self, "_cromo_blocchi", {"vol_basso":0,"vol_isterico":0,"comp_alta":0,"cdur_breve":0,"totale":0})))
+                _hb_set("ritardo_stats",       lambda: dict(getattr(self, "_ritardo_stats", {"sec":0,"agganciati":0,"entrati":0})))
                 _hb_set("matrimoni_divorzio",  lambda: list(self.memoria.divorzio))
                 _hb_set("oracolo_snapshot",    lambda: self.oracolo.dump())
                 _hb_set("posizione_aperta",    lambda: self.trade_open is not None)
@@ -14392,7 +16565,7 @@ class OvertopBassanoV16Production:
     def _carica_capsule_permanenti(self):
         """Al boot carica le capsule permanenti dal DB."""
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = _safe_connect(DB_PATH, timeout=30)
             rows = conn.execute("""
                 SELECT id, azione, params_json, motivo, forza, creata_ts,
                        analisi_causale, prompt_contestuale
@@ -14429,7 +16602,7 @@ class OvertopBassanoV16Production:
         """Salva una capsula nel DB come permanente."""
         try:
             import json as _j
-            conn = sqlite3.connect(DB_PATH)
+            conn = _safe_connect(DB_PATH, timeout=30)
             conn.execute("""
                 INSERT OR REPLACE INTO capsule_permanenti
                 (id, azione, params_json, motivo, forza, contesto, creata_ts,
@@ -14488,7 +16661,7 @@ class OvertopBassanoV16Production:
         try:
             import json as _j
             _mom, _vol, _tr, _reg, _dir = (firma.split('|') + ['', '', '', '', ''])[:5]
-            conn = sqlite3.connect(DB_PATH)
+            conn = _safe_connect(DB_PATH, timeout=30)
             conn.row_factory = sqlite3.Row
             _rows = conn.execute("""
                 SELECT id, azione, params_json, contesto FROM capsule_permanenti
