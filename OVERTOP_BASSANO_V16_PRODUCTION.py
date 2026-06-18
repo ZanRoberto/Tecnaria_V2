@@ -11187,7 +11187,18 @@ class OvertopBassanoV16Production:
             # restano return — sono ZONA 1, matematica del trade.
             # Il veto CAPSULE diventa deposizione.
             # ═══════════════════════════════════════════════════════════════
-            if _effective_regime == 'EXPLOSIVE' and _eo_carica >= 0.80:
+            # P1_EXPLOSIVE_OFF (18giu2026, Roberto — IL GRANDE BUCO).
+            # La corsia P1 EXPLOSIVE apriva il trade e faceva return, SALTANDO
+            # tutto il Percorso 2 (ritardo, osservazione, GATE PEAK 2.50). Per 15
+            # mesi gli EXPLOSIVE (trans inclusi) entravano da questa porta laterale
+            # scavalcando ogni logica sana. Con P1_EXPLOSIVE_OFF=true la porta si
+            # chiude: l'EXPLOSIVE NON prende la corsia, cade nel Percorso 2 e passa
+            # dal gate peak come tutti. Reversibile: false (o non settata) = vecchio
+            # comportamento. NON tocca la logica interna di P1, solo l'ingresso.
+            # ═══════════════════════════════════════════════════════════════
+            _p1_off = os.environ.get("P1_EXPLOSIVE_OFF", "false").lower() == "true"
+            if (_effective_regime == 'EXPLOSIVE' and _eo_carica >= 0.80
+                    and not _p1_off):
                 _verbale["percorso"] = "P1_EXPLOSIVE"
                 _verbale["regime"]   = _effective_regime
                 _verbale["oi_carica"]= _eo_carica
