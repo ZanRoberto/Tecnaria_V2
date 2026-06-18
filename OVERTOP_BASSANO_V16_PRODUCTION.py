@@ -12767,7 +12767,17 @@ class OvertopBassanoV16Production:
                         if _salita_min > 0:
                             _eta_attesa = _rit_now - _rit_aggancio
                             _picco_osservato = getattr(self, "_rit_picco_pre", None) or 0.0
-                            if _eta_attesa >= _salita_dopo:
+                            # FIX 18giu (Roberto: "il film non morde piu' da ieri"):
+                            # PRIMA il taglio scattava solo se _eta_attesa >= _salita_dopo
+                            # (cronometro). Ma l'aggancio si resetta ad ogni segnale
+                            # intermittente -> _eta_attesa ripartiva e NON arrivava mai
+                            # a 3s al momento giusto -> il film NON giudicava MAI e le
+                            # capre passavano. ORA il film giudica sul PICCO, non sul
+                            # cronometro: conta CHE sale, non quando. Diamo comunque un
+                            # minimo di osservazione (almeno _salita_dopo s OPPURE il
+                            # picco si e' gia' espresso) per non tagliare al primo tick.
+                            _ha_osservato = (_eta_attesa >= _salita_dopo) or (_picco_osservato >= _salita_min)
+                            if _ha_osservato:
                                 # DUE condizioni (il film):
                                 # 1) ha dato segno di vita: il PICCO ha superato SALITA_MIN
                                 # 2) ci sta ancora vicino: ORA >= picco * TIENI_PCT (non crollato)
