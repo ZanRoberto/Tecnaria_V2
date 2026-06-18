@@ -12193,6 +12193,58 @@ class OvertopBassanoV16Production:
         """
         try:
             # ════════════════════════════════════════════════════════════════
+            # 🐺 CANCELLO SALITA @ APERTURA (18giu2026, Roberto — IL VERO COLLO
+            #     DI BOTTIGLIA, blindato). PRIMA di TUTTO, anche del Grande Fratello.
+            # ════════════════════════════════════════════════════════════════
+            # SCOPERTA DAI DATI (18giu, trans 17:11 picco 0.0 dur 8.9s entrato e
+            # morto -2.05): il cancello messo PRIMA della chiamata a
+            # _evaluate_shadow_entry NON bastava — l'evaluate apriva dai suoi
+            # percorsi interni (P1/P2) prima che il collasso si manifestasse.
+            # QUI invece passano TUTTI i trade per nascere, qualunque percorso
+            # (P1, P2, explosive, ranging): e' l'UNICO collo di bottiglia.
+            #
+            # REGOLA (Roberto): il maschio SALE. Al momento di aprire ha gia' un
+            # picco POSITIVO osservato (_rit_picco_pre, lordo, esposizione zero).
+            # La femmina/trans NON e' mai salita: picco osservato ~0. Se in tutta
+            # l'osservazione il candidato non ha mai messo grasso sopra la soglia,
+            # NON e' un maschio -> NON apre. Niente timer: o e' salito o no.
+            #
+            # ENV:
+            #   CANCELLO_APERTURA_OFF (default false = attivo)
+            #   CANCELLO_PICCO_MIN_USD (default 0.30) = grasso LORDO minimo che il
+            #       candidato deve aver toccato in osservazione per essere maschio.
+            #       Basso apposta: non e' il 2.50, e' solo "ha dato un segno di
+            #       vita salendo". Chi ha picco 0.0 (capra piatta) viene tagliato.
+            #       Si alza se passano ancora piatte, si abbassa se taglia maschi.
+            # try/except totale, FAIL-OPEN: mai bloccare per errore del cancello.
+            # ════════════════════════════════════════════════════════════════
+            if os.environ.get("CANCELLO_APERTURA_OFF", "false").lower() != "true":
+                try:
+                    _canc_picco = getattr(self, "_rit_picco_pre", None)
+                    _canc_min = float(os.environ.get("CANCELLO_PICCO_MIN_USD", "0.30"))
+                    if _canc_picco is None or _canc_picco < _canc_min:
+                        self._log_m2("🐺",
+                            f"CANCELLO @APERTURA: picco osservato "
+                            f"{(_canc_picco if _canc_picco is not None else 0.0):+.2f}$ "
+                            f"< {_canc_min:.2f}$ — NON e' salito, capra/femmina/trans, "
+                            f"NON apre")
+                        try:
+                            self._ritardo_stats["cancello_apertura_scartati"] = \
+                                self._ritardo_stats.get("cancello_apertura_scartati", 0) + 1
+                        except Exception:
+                            pass
+                        try:
+                            self._record_phantom(price, "MINA_CANCELLO_SALITA",
+                                                 float(seed.get("score", 0) or 0) if isinstance(seed, dict) else 0.0,
+                                                 str(momentum), str(volatility), str(trend))
+                        except Exception:
+                            pass
+                        return  # NON APRE — non e' mai salito
+                except Exception as _e_canc_ap:
+                    log.debug(f"[CANCELLO_APERTURA_ERR] {_e_canc_ap}")
+                    # FAIL-OPEN: in caso di errore prosegue (non blocca)
+
+            # ════════════════════════════════════════════════════════════════
             # 🛡️ GRANDE FRATELLO DIREZIONE (GF) — 8giu, Roberto
             # ════════════════════════════════════════════════════════════════
             # Regola UNICA, sopra a tutto: se la spinta del mercato è giù
