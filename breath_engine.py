@@ -64,7 +64,7 @@ class BreathEngine:
         self._volumes.append(volume)
         self._times.append(now)
 
-        if len(self._prices) < 5:
+        if len(self._prices) < 6:
             return self._stato()
 
         prices = list(self._prices)
