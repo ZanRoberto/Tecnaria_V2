@@ -8732,44 +8732,71 @@ class OvertopBassanoV16Production:
 
                 if _segnale_vivo:
                     # NASCITA candidato: primo tick in cui il segnale e' vivo
-                    # dopo un periodo di silenzio -> fisso il prezzo di nascita.
+                    # dopo un periodo di silenzio -> fisso il prezzo di nascita
+                    # e azzero i contatori di comportamento.
                     if not getattr(self, "_canc_in_osservazione", False):
                         self._canc_in_osservazione = True
-                        self._canc_prezzo0     = price
-                        self._canc_max_usd     = 0.0
-                        self._canc_tick_da_max = 0
+                        self._canc_prezzo_prec  = price   # prezzo del tick precedente
+                        self._canc_su_consec    = 0       # movimenti su consecutivi
+                        self._canc_giu_consec   = 0       # movimenti giu consecutivi
+                        self._canc_maschio_ok   = False   # ha gia' confermato maschio?
 
-                    _exp_c = float(os.environ.get("EXPOSURE_USD", "5000"))
-                    _p0_c  = getattr(self, "_canc_prezzo0", price) or price
-                    _pos_c = ((price - _p0_c) / _p0_c) * _exp_c if _p0_c else 0.0
-                    _max_c = getattr(self, "_canc_max_usd", 0.0)
-                    if _pos_c > _max_c:
-                        # NUOVO MASSIMO = sale (o ha respirato e ripartito) = VIVO
-                        self._canc_max_usd = _pos_c
-                        self._canc_tick_da_max = 0
-                    else:
-                        # non e' un nuovo massimo: conto i tick di sgonfiamento
-                        self._canc_tick_da_max = getattr(self, "_canc_tick_da_max", 0) + 1
-
-                    # ── TAGLIO PER SGONFIAMENTO (Roberto 19giu): solo se ACCESO ──
-                    # REGOLA: NON aspetto che arrivi a zero, NON aspetto N tick.
-                    # Appena la VEDO sgonfiare — cioe' aveva fatto un massimo
-                    # (era salita) e ORA e' scesa sotto quel massimo (comincia a
-                    # perdere) — la taglio SUBITO, prima del gate. L'abbiamo gia'
-                    # vista: si sta svuotando -> fuori. Il maschio invece tiene il
-                    # massimo o ne fa di nuovi (non scende), quindi passa.
-                    # CANCELLO_CEDIMENTO_USD = di quanto deve scendere dal max per
-                    #   dichiararla sgonfiata (piccolo: il segno che ha girato giu).
-                    #   Default 0.0 = appena scende sotto il max precedente.
+                    # ════════════════════════════════════════════════════════════
+                    # 🐺 REGOLA ROBERTO (19giu2026) — SOLO IL COMPORTAMENTO PRIMA
+                    #    DEL GATE DECIDE. NON i numeri (seme/score sono trappole:
+                    #    i trans hanno numeri da maschio ma si comportano da
+                    #    femmina -> li tagliamo come le femmine).
+                    #
+                    # Osservo il movimento tick by tick dalla nascita:
+                    # - MASCHIO: sale piano, N movimenti consecutivi in SU (fa
+                    #   prezzi piu' alti di fila) = ho capito che e' un maschio che
+                    #   sale e LASCIA GRASSO -> ENTRA SUBITO, in quel punto, per
+                    #   prendere la corsa che resta (entrare tardi = grasso gia'
+                    #   andato: se nasce a 10 e va a 14, il +4 e' mio solo se entro
+                    #   presto; se aspetto e entro a 13 prendo solo +1).
+                    # - FEMMINA/TRANS: N movimenti consecutivi di STORNO (scende
+                    #   di fila) = si sta svuotando -> TAGLIO SUBITO, chiuso.
+                    #
+                    # ASIMMETRIA: il maschio appena conferma la salita ENTRA (non
+                    # aspetto oltre, ogni tick e' grasso perso). La femmina appena
+                    # conferma lo storno e' TAGLIATA. Default: nessuno passa finche'
+                    # non ha confermato salita da maschio.
+                    # ENV: CANCELLO_MOSSE (default 3) = movimenti consecutivi per
+                    #   confermare la tendenza. 3 = tendenza vera (2 puo' essere
+                    #   rumore). Abbassa a 2 per piu' reattivita'.
+                    # ════════════════════════════════════════════════════════════
                     if os.environ.get("CANCELLO_SALITA_OFF", "false").lower() != "true":
-                        _cedimento = float(os.environ.get("CANCELLO_CEDIMENTO_USD", "0.0"))
-                        # era salita (max > 0) E ora e' scesa sotto il max - cedimento
-                        if _max_c > 0.0 and _pos_c < (_max_c - _cedimento):
+                        _mosse_n = int(float(os.environ.get("CANCELLO_MOSSE", "3")))
+                        _prec    = getattr(self, "_canc_prezzo_prec", price)
+
+                        if price > _prec:
+                            # movimento in SU: conto, azzero i giu
+                            self._canc_su_consec  = getattr(self, "_canc_su_consec", 0) + 1
+                            self._canc_giu_consec = 0
+                        elif price < _prec:
+                            # movimento in GIU (storno): conto, azzero i su
+                            self._canc_giu_consec = getattr(self, "_canc_giu_consec", 0) + 1
+                            self._canc_su_consec  = 0
+                        # price == _prec: tick piatto, non muove i contatori
+                        self._canc_prezzo_prec = price
+
+                        # MASCHIO confermato: N movimenti su consecutivi -> entra
+                        if self._canc_su_consec >= _mosse_n:
+                            self._canc_maschio_ok = True
+
+                        # FEMMINA/TRANS: N storni consecutivi -> taglio subito
+                        if self._canc_giu_consec >= _mosse_n:
                             _cancello_passa = False
+                            self._canc_maschio_ok = False
                             self._log_m2("🐺",
-                                f"CANCELLO: SGONFIA — era salita a +{_max_c:.2f}$, "
-                                f"ora scesa a +{_pos_c:.2f}$ (cede dal max) — "
-                                f"femmina/trans, TAGLIO prima del gate")
+                                f"CANCELLO: STORNA — {self._canc_giu_consec} movimenti "
+                                f"giu di fila = si svuota = femmina/trans, TAGLIO")
+
+                        # DEFAULT NEGATO: passa SOLO chi ha confermato maschio.
+                        # Chi non ha ancora N mosse su (sta nascendo, o e' piatto)
+                        # NON entra ancora -> aspetta. Non e' un taglio: e' attesa.
+                        if not getattr(self, "_canc_maschio_ok", False):
+                            _cancello_passa = False
                 else:
                     # segnale sparito: il candidato e' finito, chiudo l'osservazione
                     self._canc_in_osservazione = False
