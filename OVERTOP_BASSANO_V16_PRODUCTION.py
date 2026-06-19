@@ -12349,25 +12349,34 @@ class OvertopBassanoV16Production:
             # ════════════════════════════════════════════════════════════════
             if os.environ.get("CANCELLO_APERTURA_OFF", "false").lower() != "true":
                 try:
-                    # FIX 19giu (Roberto, dai dati: candidati con mfe 1.5 venivano
-                    # bloccati perche' _rit_picco_pre dipende dal ritardo e i maschi
-                    # che saltano il ritardo non lo valorizzavano). Ora il picco si
-                    # legge dal MAX di DUE fonti indipendenti:
-                    #   _rit_picco_pre  = picco osservato dal blocco ritardo
-                    #   _canc_max_usd   = picco tracciato dal cancello salita (8727),
-                    #                     indipendente dal ritardo, aggiornato a ogni tick
-                    # Maschio che sale a +1.5 -> almeno una delle due fonti lo vede -> passa.
-                    # Capra che non sale -> entrambe 0 -> bloccata. LONG-only.
-                    _p_ritardo = getattr(self, "_rit_picco_pre", None) or 0.0
-                    _p_salita  = getattr(self, "_canc_max_usd", None) or 0.0
-                    _canc_picco = max(_p_ritardo, _p_salita)
-                    _canc_min = float(os.environ.get("CANCELLO_PICCO_MIN_USD", "0.30"))
-                    if _canc_picco < _canc_min:
+                    # ════════════════════════════════════════════════════════════
+                    # FILTRO MASCHIO/FEMMINA (19giu2026, Roberto) — da 316 curve reali.
+                    # Verita' misurata sui dati (curva_nascita):
+                    #   MASCHIO: grasso max ~4.30, picco toccato a ~14s (sale tanto E
+                    #            ci mette TEMPO — costruisce, dura).
+                    #   FEMMINA: grasso max ~0.45, picco a ~1.5s (sale poco E si
+                    #            esaurisce SUBITO, poi storna e si svuota).
+                    # Nessuna femmina ha ENTRAMBI i tratti del maschio. Quindi:
+                    #   maschio = grasso >= GRASSO_MIN  E  t_picco >= PICCO_MIN_SEC
+                    #   manca anche uno solo -> femmina/trans -> NON apre.
+                    # Simulazione 316 curve: grasso>=2.0 & tpicco>=2s -> 90% femmine
+                    # tagliate, 7/68 maschi persi. ENV per tarare sul vivo:
+                    #   OSSERVA_GRASSO_MIN    (default 1.0 = conservativo sui maschi)
+                    #   OSSERVA_PICCO_MIN_SEC (default 2.0)
+                    # "Dagli tempo": il picco precoce (<2s) e' la firma della femmina
+                    # che si esaurisce subito; il maschio costruisce il grasso nel tempo.
+                    # try/except FAIL-OPEN: mai bloccare per errore del filtro.
+                    # ════════════════════════════════════════════════════════════
+                    _grasso     = getattr(self, "_rit_picco_pre", None) or 0.0
+                    _t_picco    = getattr(self, "_rit_picco_pre_t", None) or 0.0
+                    _grasso_min = float(os.environ.get("OSSERVA_GRASSO_MIN", "1.0"))
+                    _tpicco_min = float(os.environ.get("OSSERVA_PICCO_MIN_SEC", "2.0"))
+                    _e_maschio  = (_grasso >= _grasso_min and _t_picco >= _tpicco_min)
+                    if not _e_maschio:
                         self._log_m2("🐺",
-                            f"CANCELLO @APERTURA: picco osservato "
-                            f"{(_canc_picco if _canc_picco is not None else 0.0):+.2f}$ "
-                            f"< {_canc_min:.2f}$ — NON e' salito, capra/femmina/trans, "
-                            f"NON apre")
+                            f"FILTRO M/F: grasso {_grasso:+.2f}$ (min {_grasso_min:.1f}) "
+                            f"picco a {_t_picco:.1f}s (min {_tpicco_min:.1f}s) — "
+                            f"femmina/trans (sale poco o si esaurisce subito), NON apre")
                         try:
                             self._ritardo_stats["cancello_apertura_scartati"] = \
                                 self._ritardo_stats.get("cancello_apertura_scartati", 0) + 1
@@ -12379,7 +12388,7 @@ class OvertopBassanoV16Production:
                                                  str(momentum), str(volatility), str(trend))
                         except Exception:
                             pass
-                        return  # NON APRE — non e' mai salito
+                        return  # NON APRE — femmina/trans
                 except Exception as _e_canc_ap:
                     log.debug(f"[CANCELLO_APERTURA_ERR] {_e_canc_ap}")
                     # FAIL-OPEN: in caso di errore prosegue (non blocca)
@@ -12602,6 +12611,7 @@ class OvertopBassanoV16Production:
                     self._rit_aggancio_ts = _rit_now
                     self._rit_prezzo_nascita = price   # FISSO il prezzo di NASCITA (10giu fix radice)
                     self._rit_picco_pre = None
+                    self._rit_picco_pre_t = None   # reset tempo del picco (filtro M/F)
                     self._rit_crollo_min = None   # reset minimo attesa (anti-falsa-ripartenza)
                     # ANTI-MAGO — RI-AGGANCIO SOSPETTO (11giu, Roberto: "sono maghi").
                     # Il mago crolla (aggancio scartato), poi si ri-aggancia sul
@@ -12837,6 +12847,12 @@ class OvertopBassanoV16Production:
                         # trade o un residuo ereditato da un candidato precedente
                         # (era il buco: le capre passavano col picco di un altro).
                         self._rit_picco_pre_ag_ts = getattr(self, "_rit_aggancio_ts", None)
+                        # FILTRO MASCHIO/FEMMINA (19giu, da 316 curve reali):
+                        # salvo QUANDO (secondi dall'aggancio) e' stato toccato il picco.
+                        # Dato vero: maschio tocca il picco a ~14s e fa grasso ~4.3;
+                        # femmina tocca a ~1.5s e fa solo ~0.45.
+                        _ag0 = getattr(self, "_rit_aggancio_ts", None)
+                        self._rit_picco_pre_t = (_rit_now - _ag0) if _ag0 else 0.0
 
                     # ── CORSIA MASCHIO RIMOSSA (17giu, Roberto). Era rotta:
                     # azzerava lo stato del ritardo e poi cadeva nei cancelli a
