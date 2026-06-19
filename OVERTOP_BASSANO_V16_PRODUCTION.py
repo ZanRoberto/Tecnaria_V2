@@ -8751,16 +8751,25 @@ class OvertopBassanoV16Production:
                         # non e' un nuovo massimo: conto i tick di sgonfiamento
                         self._canc_tick_da_max = getattr(self, "_canc_tick_da_max", 0) + 1
 
-                    # ── BLOCCO SGONFIAMENTO: solo se il cancello e' ACCESO ──
+                    # ── TAGLIO PER SGONFIAMENTO (Roberto 19giu): solo se ACCESO ──
+                    # REGOLA: NON aspetto che arrivi a zero, NON aspetto N tick.
+                    # Appena la VEDO sgonfiare — cioe' aveva fatto un massimo
+                    # (era salita) e ORA e' scesa sotto quel massimo (comincia a
+                    # perdere) — la taglio SUBITO, prima del gate. L'abbiamo gia'
+                    # vista: si sta svuotando -> fuori. Il maschio invece tiene il
+                    # massimo o ne fa di nuovi (non scende), quindi passa.
+                    # CANCELLO_CEDIMENTO_USD = di quanto deve scendere dal max per
+                    #   dichiararla sgonfiata (piccolo: il segno che ha girato giu).
+                    #   Default 0.0 = appena scende sotto il max precedente.
                     if os.environ.get("CANCELLO_SALITA_OFF", "false").lower() != "true":
-                        _respiro = int(float(os.environ.get("CANCELLO_RESPIRO_TICK", "40")))
-                        # SI E' SGONFIATA: troppi tick senza nuovo massimo
-                        if self._canc_tick_da_max >= _respiro:
+                        _cedimento = float(os.environ.get("CANCELLO_CEDIMENTO_USD", "0.0"))
+                        # era salita (max > 0) E ora e' scesa sotto il max - cedimento
+                        if _max_c > 0.0 and _pos_c < (_max_c - _cedimento):
                             _cancello_passa = False
                             self._log_m2("🐺",
-                                f"CANCELLO: SGONFIATA — {self._canc_tick_da_max} tick "
-                                f"senza nuovo massimo (max salita +{self._canc_max_usd:.2f}$) — "
-                                f"femmina/trans, NON entra")
+                                f"CANCELLO: SGONFIA — era salita a +{_max_c:.2f}$, "
+                                f"ora scesa a +{_pos_c:.2f}$ (cede dal max) — "
+                                f"femmina/trans, TAGLIO prima del gate")
                 else:
                     # segnale sparito: il candidato e' finito, chiudo l'osservazione
                     self._canc_in_osservazione = False
