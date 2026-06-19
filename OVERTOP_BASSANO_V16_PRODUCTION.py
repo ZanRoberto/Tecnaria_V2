@@ -8709,42 +8709,61 @@ class OvertopBassanoV16Production:
             # ════════════════════════════════════════════════════════════════
             _cancello_passa = True
             try:
-                # FIX 19giu: il TRACKING del picco (_canc_max_usd) gira SEMPRE,
-                # anche se il cancello salita-collasso e' spento. Serve al cancello
-                # @apertura come fonte indipendente dal ritardo per riconoscere i
-                # maschi (che salgono). Il BLOCCO per collasso resta opzionale (ENV).
-                _ag_ts_c = getattr(self, "_rit_aggancio_ts", None)
-                if _ag_ts_c is not None:
-                    # nuovo aggancio? resetto lo stato del cancello
-                    if _ag_ts_c != getattr(self, "_canc_ag_ts", None):
-                        self._canc_ag_ts   = _ag_ts_c
-                        self._canc_prezzo0 = price
-                        self._canc_max_usd = 0.0
+                # ════════════════════════════════════════════════════════════
+                # FIX 19giu2026 (Roberto): IL RITARDO NON ESISTE PIU'.
+                # L'osservazione del movimento NON e' piu' ancorata a
+                # _rit_aggancio_ts (i candidati veri lo saltavano -> grasso 0 ->
+                # maschi a +315 buttati). Adesso l'osservazione parte dal
+                # SEGNALE che gira SEMPRE: quando lo score supera la soglia
+                # (_last_score >= _last_soglia, calcolati appena sopra a ogni
+                # tick), c'e' un candidato LONG da osservare.
+                #
+                # REGOLA PURA (Roberto): osservo il movimento tick by tick.
+                # - Fa nuovi massimi = SALE costante e continuo = MASCHIO = passa.
+                #   (anche piano: non serve una soglia di grasso, basta che salga.)
+                # - Smette di fare nuovi massimi e si sgonfia (cola, perde) =
+                #   FEMMINA/TRANS = TAGLIO, prima del gate.
+                # Nessuna soglia di valore, nessun ritardo, nessun timer fisso.
+                # Solo: sale continuo -> passa | si sgonfia -> taglia.
+                # ════════════════════════════════════════════════════════════
+                _score_now  = getattr(self.campo, "_last_score", 0.0) or 0.0
+                _soglia_now = getattr(self.campo, "_last_soglia", 0.0) or 0.0
+                _segnale_vivo = (_score_now >= _soglia_now and _soglia_now > 0)
+
+                if _segnale_vivo:
+                    # NASCITA candidato: primo tick in cui il segnale e' vivo
+                    # dopo un periodo di silenzio -> fisso il prezzo di nascita.
+                    if not getattr(self, "_canc_in_osservazione", False):
+                        self._canc_in_osservazione = True
+                        self._canc_prezzo0     = price
+                        self._canc_max_usd     = 0.0
                         self._canc_tick_da_max = 0
+
                     _exp_c = float(os.environ.get("EXPOSURE_USD", "5000"))
                     _p0_c  = getattr(self, "_canc_prezzo0", price) or price
                     _pos_c = ((price - _p0_c) / _p0_c) * _exp_c if _p0_c else 0.0
                     _max_c = getattr(self, "_canc_max_usd", 0.0)
                     if _pos_c > _max_c:
-                        # NUOVO MASSIMO = sta salendo (o ha respirato e ripartito) = VIVO
+                        # NUOVO MASSIMO = sale (o ha respirato e ripartito) = VIVO
                         self._canc_max_usd = _pos_c
                         self._canc_tick_da_max = 0
                     else:
-                        # non e' un nuovo massimo: conto i tick di "fermo/giu"
+                        # non e' un nuovo massimo: conto i tick di sgonfiamento
                         self._canc_tick_da_max = getattr(self, "_canc_tick_da_max", 0) + 1
-                    # ── BLOCCO COLLASSO: solo se il cancello salita e' ACCESO ──
+
+                    # ── BLOCCO SGONFIAMENTO: solo se il cancello e' ACCESO ──
                     if os.environ.get("CANCELLO_SALITA_OFF", "false").lower() != "true":
                         _respiro = int(float(os.environ.get("CANCELLO_RESPIRO_TICK", "40")))
-                        _min_sal = float(os.environ.get("CANCELLO_MIN_SALITA_USD", "0.0"))
-                        # COLLASSO: troppi tick senza nuovo massimo
+                        # SI E' SGONFIATA: troppi tick senza nuovo massimo
                         if self._canc_tick_da_max >= _respiro:
                             _cancello_passa = False
                             self._log_m2("🐺",
-                                f"CANCELLO SALITA: COLLASSO — {self._canc_tick_da_max} tick "
-                                f"senza nuovo massimo (max visto +{self._canc_max_usd:.2f}$) — "
+                                f"CANCELLO: SGONFIATA — {self._canc_tick_da_max} tick "
+                                f"senza nuovo massimo (max salita +{self._canc_max_usd:.2f}$) — "
                                 f"femmina/trans, NON entra")
-                        elif _min_sal > 0 and self._canc_tick_da_max == 0 and self._canc_max_usd < _min_sal:
-                            pass
+                else:
+                    # segnale sparito: il candidato e' finito, chiudo l'osservazione
+                    self._canc_in_osservazione = False
             except Exception as _e_canc:
                 log.debug(f"[CANCELLO_SALITA_ERR] {_e_canc}")
                 _cancello_passa = True   # FAIL-OPEN: mai bloccare per errore del cancello
@@ -12350,48 +12369,41 @@ class OvertopBassanoV16Production:
             if os.environ.get("CANCELLO_APERTURA_OFF", "false").lower() != "true":
                 try:
                     # ════════════════════════════════════════════════════════════
-                    # FILTRO MASCHIO/FEMMINA (19giu2026, Roberto) — da 316 curve reali.
-                    # Verita' misurata sui dati (curva_nascita):
-                    #   MASCHIO: grasso max ~4.30, picco toccato a ~14s (sale tanto E
-                    #            ci mette TEMPO — costruisce, dura).
-                    #   FEMMINA: grasso max ~0.45, picco a ~1.5s (sale poco E si
-                    #            esaurisce SUBITO, poi storna e si svuota).
-                    # Nessuna femmina ha ENTRAMBI i tratti del maschio. Quindi:
-                    #   maschio = grasso >= GRASSO_MIN  E  t_picco >= PICCO_MIN_SEC
-                    #   manca anche uno solo -> femmina/trans -> NON apre.
-                    # Simulazione 316 curve: grasso>=2.0 & tpicco>=2s -> 90% femmine
-                    # tagliate, 7/68 maschi persi. ENV per tarare sul vivo:
-                    #   OSSERVA_GRASSO_MIN    (default 1.0 = conservativo sui maschi)
-                    #   OSSERVA_PICCO_MIN_SEC (default 2.0)
-                    # "Dagli tempo": il picco precoce (<2s) e' la firma della femmina
-                    # che si esaurisce subito; il maschio costruisce il grasso nel tempo.
+                    # FILTRO MASCHIO/FEMMINA (19giu2026, Roberto) — REGOLA PURA.
+                    # "Il ritardo non esiste piu'. C'e' solo l'osservazione del
+                    #  movimento nel tempo. Il maschio sale costante e continuo
+                    #  (anche piano, non serve un grasso minimo): fa nuovi massimi
+                    #  -> passa. La femmina/trans magari sale o sta ferma, ma poi
+                    #  si sgonfia, comincia a perdere -> la taglio, prima del gate."
+                    #
+                    # La decisione e' GIA' stata presa dal CANCELLO SALITA (in
+                    # _process_tick_body), che a ogni tick osserva il candidato dal
+                    # segnale: nuovo massimo = sale (vivo), troppi tick senza nuovo
+                    # massimo = sgonfiata (morta). Qui leggo quello stato:
+                    #   _canc_max_usd     = grasso massimo salito in osservazione
+                    #   _canc_tick_da_max = tick senza nuovo massimo (sgonfiamento)
+                    # Fonte SEMPRE valida (gira dal segnale, non dal ritardo): e'
+                    # quella che vede i maschi a +6/+27/+315 — NON piu' _rit_picco_pre
+                    # (cieca quando il candidato salta il ritardo -> buttava maschi).
+                    #
+                    # TAGLIO se: non e' mai salito (_canc_max_usd ~0) OPPURE si e'
+                    #            sgonfiato (tick senza nuovo massimo >= respiro).
+                    # PASSA se:  sta salendo (ha messo grasso e fa ancora nuovi massimi).
+                    # Niente soglia di valore: basta che salga e non si sgonfi.
                     # try/except FAIL-OPEN: mai bloccare per errore del filtro.
                     # ════════════════════════════════════════════════════════════
-                    # ════════════════════════════════════════════════════════════
-                    # GRASSO: lo conosco SEMPRE (MAX di due fonti indipendenti dal
-                    #   percorso: _rit_picco_pre dal ritardo + _canc_max_usd dal
-                    #   tracker salita che gira sempre). E' il filtro PRINCIPALE.
-                    # TEMPO: lo conosco SOLO se il candidato e' passato dal ritardo.
-                    #   Se NON lo conosco (=0), NON taglio per il tempo: un maschio a
-                    #   +6 che salta il ritardo NON deve morire perche' non ho il suo
-                    #   tempo. Il tempo e' un filtro EXTRA, attivo solo quando c'e'.
-                    # REGOLA: taglia se grasso < min (sempre), OPPURE se il tempo e'
-                    #   noto (>0) E precoce (< min). Tempo sconosciuto => non blocca.
-                    # ════════════════════════════════════════════════════════════
-                    _g_ritardo  = getattr(self, "_rit_picco_pre", None) or 0.0
-                    _g_salita   = getattr(self, "_canc_max_usd", None) or 0.0
-                    _grasso     = max(_g_ritardo, _g_salita)
-                    _t_picco    = getattr(self, "_rit_picco_pre_t", None) or 0.0
-                    _grasso_min = float(os.environ.get("OSSERVA_GRASSO_MIN", "1.0"))
-                    _tpicco_min = float(os.environ.get("OSSERVA_PICCO_MIN_SEC", "2.0"))
-                    _taglia_grasso = (_grasso < _grasso_min)
-                    _taglia_tempo  = (_t_picco > 0.0 and _t_picco < _tpicco_min)
-                    if _taglia_grasso or _taglia_tempo:
-                        _motivo_f = ("grasso basso" if _taglia_grasso
-                                     else "picco precoce")
+                    _grasso  = getattr(self, "_canc_max_usd", None) or 0.0
+                    _sgonfio = getattr(self, "_canc_tick_da_max", None) or 0
+                    _respiro = int(float(os.environ.get("CANCELLO_RESPIRO_TICK", "40")))
+                    # mai salito: nessun grasso positivo in tutta l'osservazione
+                    _mai_salito = (_grasso <= 0.0)
+                    # sgonfiata: ha smesso di fare nuovi massimi da troppi tick
+                    _si_sgonfia = (_sgonfio >= _respiro)
+                    if _mai_salito or _si_sgonfia:
+                        _motivo_f = ("mai salita (piatta)" if _mai_salito
+                                     else f"sgonfiata ({_sgonfio} tick senza nuovo max)")
                         self._log_m2("🐺",
-                            f"FILTRO M/F: grasso {_grasso:+.2f}$ (min {_grasso_min:.1f}) "
-                            f"picco a {_t_picco:.1f}s (min {_tpicco_min:.1f}s) — "
+                            f"FILTRO M/F: max salita +{_grasso:.2f}$ — "
                             f"{_motivo_f} = femmina/trans, NON apre")
                         try:
                             self._ritardo_stats["cancello_apertura_scartati"] = \
