@@ -39,6 +39,14 @@ app = Flask(__name__)
 
 DB_DIR  = os.environ.get("DB_DIR",  "/home/app/data")
 DB_PATH = os.environ.get("DB_PATH", os.path.join(DB_DIR, "trading_data.db"))
+
+# ════════════════════════════════════════════════════════════════════
+# CONTORNO_OFF (19giu2026, Roberto): spegne i thread di contorno che
+# aprono connessioni DB a raffica e causano "database is locked" che
+# blocca le scritture del bot (agganci) dopo pochi minuti. In paper non
+# servono. Default ON (contorno spento). Per riaccendere: CONTORNO_OFF=false
+# ════════════════════════════════════════════════════════════════════
+CONTORNO_OFF = os.environ.get("CONTORNO_OFF", "true").lower() == "true"
 NARRATIVES_DB = os.environ.get("NARRATIVES_DB", os.path.join(DB_DIR, "narratives.db"))
 LOG_FILE= os.path.join(DB_DIR, "trading.log")
 
@@ -725,7 +733,10 @@ def brain_analysis_thread():
         except Exception as e:
             log(f"[BRAIN] ❌ {e}")
 
-threading.Thread(target=brain_analysis_thread, daemon=True, name='brain').start()
+if not CONTORNO_OFF:
+    threading.Thread(target=brain_analysis_thread, daemon=True, name='brain').start()
+else:
+    log('[CONTORNO_OFF] thread brain SPENTO')
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BOT LAUNCHER THREAD + AI BRIDGE
@@ -1839,7 +1850,10 @@ Spiega perché ha vinto/perso e cosa imparare."""
 # Avvia narratore solo se DeepSeek e' configurato E flag attivo
 if DEEPSEEK_API_KEY and NARRATORE_ENABLED:
     threading.Thread(target=narratore_thread, daemon=True, name='narratore_ai').start()
-    threading.Thread(target=analizzatore_trade_thread, daemon=True, name='analizzatore_trade').start()
+    if not CONTORNO_OFF:
+        threading.Thread(target=analizzatore_trade_thread, daemon=True, name='analizzatore_trade').start()
+    else:
+        log('[CONTORNO_OFF] thread analizzatore_trade SPENTO')
     log("[MAIN] ✅ Narratore AI + Analizzatore Trade avviati")
 elif not NARRATORE_ENABLED:
     log("[MAIN] 🚫 Narratore AI DISABILITATO (NARRATORE_ENABLED=False) — V16 in caccia pura")
@@ -4946,6 +4960,8 @@ _oracle_init_db()
 
 # Avvia background worker Oracle Auto
 try:
+    if CONTORNO_OFF:
+        raise RuntimeError("CONTORNO_OFF: oracle_auto worker SPENTO")
     import oracle_auto as _oa
     # Leggi mode salvato dal DB e sincronizza
     try:
@@ -5995,7 +6011,10 @@ def orchestrator_thread():
 
 # Avvia thread
 if ORCHESTRATOR_ENABLED:
-    threading.Thread(target=orchestrator_thread, daemon=True, name='canvas_orchestrator').start()
+    if not CONTORNO_OFF:
+        threading.Thread(target=orchestrator_thread, daemon=True, name='canvas_orchestrator').start()
+    else:
+        log('[CONTORNO_OFF] thread canvas_orchestrator SPENTO')
     log("[MAIN] ✅ Canvas Orchestrator thread avviato (shadow mode)")
 
 
@@ -7945,7 +7964,10 @@ def canvas_capsule_v2_verifica_ora(capsula_id):
 # Avvio del thread auto-verifica
 # ─────────────────────────────────────────────────────────────────────────
 if CAPSULE_AUTO_VERIFICA_ENABLED:
-    threading.Thread(target=auto_verifica_thread, daemon=True, name='capsule_auto_verifica').start()
+    if not CONTORNO_OFF:
+        threading.Thread(target=auto_verifica_thread, daemon=True, name='capsule_auto_verifica').start()
+    else:
+        log('[CONTORNO_OFF] thread capsule_auto_verifica SPENTO')
     log("[MAIN] ✅ Thread auto-verifica capsule avviato")
 else:
     log("[MAIN] ⚠️ Thread auto-verifica capsule DISABILITATO via env")
