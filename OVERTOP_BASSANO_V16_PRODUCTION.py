@@ -8039,6 +8039,45 @@ class OvertopBassanoV16Production:
         return out
 
     def _process_tick(self, price: float):
+        # ════════════════════════════════════════════════════════════════
+        # BLINDAGGIO DIAGNOSTICO (18giu2026, notte — Roberto: "si e' bloccato
+        # tutto"). I tick salivano (contatore +1 in on_message) ma niente si
+        # scriveva: _process_tick crashava ad ogni tick dentro l'except
+        # silenzioso di on_message. Qui catturo il crash, lo SCRIVO nel DB
+        # (tabella crash_log) con riga esatta, e FAIL-CONTINUE: il bot non si
+        # blocca piu'. Domani: SELECT dal crash_log -> riga colpevole -> fix.
+        # ════════════════════════════════════════════════════════════════
+        try:
+            return self._process_tick_body(price)
+        except Exception as _tick_err:
+            import traceback as _tb
+            _tbtxt = _tb.format_exc()
+            # ultima riga del traceback nel nostro file = il punto del crash
+            _riga = "?"
+            try:
+                for _ln in reversed(_tbtxt.splitlines()):
+                    if 'BOT_VIVO' in _ln or 'OVERTOP_BASSANO' in _ln or '_process_tick_body' in _ln:
+                        _riga = _ln.strip()
+                        break
+            except Exception:
+                pass
+            try:
+                _dbp = getattr(self, 'db_path', None) or os.environ.get('DB_PATH', '/var/data/trading_data.db')
+                _cx = _safe_connect(_dbp, timeout=30)
+                _cx.execute("CREATE TABLE IF NOT EXISTS crash_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, err_type TEXT, err_msg TEXT, riga TEXT, tb TEXT)")
+                _cx.execute("INSERT INTO crash_log (ts, err_type, err_msg, riga, tb) VALUES (?,?,?,?,?)",
+                            (time.strftime('%Y-%m-%d %H:%M:%S'), type(_tick_err).__name__, str(_tick_err)[:300], _riga[:300], _tbtxt[:2000]))
+                _cx.commit()
+                _cx.close()
+            except Exception:
+                pass
+            log.error(f"[TICK_CRASH] {type(_tick_err).__name__}: {_tick_err} @ {_riga}")
+            # contatore in RAM per vedere se crasha ad OGNI tick
+            self._tick_crash_n = getattr(self, '_tick_crash_n', 0) + 1
+            return None
+
+
+    def _process_tick_body(self, price: float):
         now = time.time()
 
         # Config hot-reload ogni 30 s
@@ -12310,6 +12349,15 @@ class OvertopBassanoV16Production:
                 try:
                     _canc_picco = getattr(self, "_rit_picco_pre", None)
                     _canc_min = float(os.environ.get("CANCELLO_PICCO_MIN_USD", "0.30"))
+                    # FIX 19giu (Roberto): il picco vale SOLO se e' di QUESTO aggancio.
+                    # Era il buco: _rit_picco_pre restava "sporco" col valore di un
+                    # candidato precedente, e la capra (picco vero 0) lo ereditava e
+                    # passava. Ora: se il picco non e' legato all'aggancio corrente,
+                    # lo tratto come 0 (non salito) -> blocca. Sempre LONG-only.
+                    _canc_ag_now  = getattr(self, "_rit_aggancio_ts", None)
+                    _canc_ag_pic  = getattr(self, "_rit_picco_pre_ag_ts", None)
+                    if _canc_ag_now is None or _canc_ag_pic != _canc_ag_now:
+                        _canc_picco = 0.0
                     if _canc_picco is None or _canc_picco < _canc_min:
                         self._log_m2("🐺",
                             f"CANCELLO @APERTURA: picco osservato "
@@ -12780,6 +12828,11 @@ class OvertopBassanoV16Production:
                     _pp = getattr(self, "_rit_picco_pre", None)
                     if _pp is None or _pos_usd > _pp:
                         self._rit_picco_pre = _pos_usd
+                        # FIX 19giu (Roberto): lego il picco all'aggancio CORRENTE.
+                        # Cosi' il cancello @apertura sa se il picco e' di QUESTO
+                        # trade o un residuo ereditato da un candidato precedente
+                        # (era il buco: le capre passavano col picco di un altro).
+                        self._rit_picco_pre_ag_ts = getattr(self, "_rit_aggancio_ts", None)
 
                     # ── CORSIA MASCHIO RIMOSSA (17giu, Roberto). Era rotta:
                     # azzerava lo stato del ritardo e poi cadeva nei cancelli a
@@ -12797,6 +12850,7 @@ class OvertopBassanoV16Production:
                         if _picco_pre is None or _pos_usd > _picco_pre:
                             self._rit_picco_pre = _pos_usd
                             _picco_pre = _pos_usd
+                            self._rit_picco_pre_ag_ts = getattr(self, "_rit_aggancio_ts", None)
                         _sgonfio_pct = float(os.environ.get("SCATTO_SGONFIO_PCT", "0.50"))
                         _picco_min = float(os.environ.get("SCATTO_PICCO_MIN", "0.6"))
                         if _sgonfio_pct > 0 and _picco_pre is not None and _picco_pre >= _picco_min:
