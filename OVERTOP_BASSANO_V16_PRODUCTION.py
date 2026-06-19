@@ -12367,16 +12367,32 @@ class OvertopBassanoV16Production:
                     # che si esaurisce subito; il maschio costruisce il grasso nel tempo.
                     # try/except FAIL-OPEN: mai bloccare per errore del filtro.
                     # ════════════════════════════════════════════════════════════
-                    _grasso     = getattr(self, "_rit_picco_pre", None) or 0.0
+                    # ════════════════════════════════════════════════════════════
+                    # GRASSO: lo conosco SEMPRE (MAX di due fonti indipendenti dal
+                    #   percorso: _rit_picco_pre dal ritardo + _canc_max_usd dal
+                    #   tracker salita che gira sempre). E' il filtro PRINCIPALE.
+                    # TEMPO: lo conosco SOLO se il candidato e' passato dal ritardo.
+                    #   Se NON lo conosco (=0), NON taglio per il tempo: un maschio a
+                    #   +6 che salta il ritardo NON deve morire perche' non ho il suo
+                    #   tempo. Il tempo e' un filtro EXTRA, attivo solo quando c'e'.
+                    # REGOLA: taglia se grasso < min (sempre), OPPURE se il tempo e'
+                    #   noto (>0) E precoce (< min). Tempo sconosciuto => non blocca.
+                    # ════════════════════════════════════════════════════════════
+                    _g_ritardo  = getattr(self, "_rit_picco_pre", None) or 0.0
+                    _g_salita   = getattr(self, "_canc_max_usd", None) or 0.0
+                    _grasso     = max(_g_ritardo, _g_salita)
                     _t_picco    = getattr(self, "_rit_picco_pre_t", None) or 0.0
                     _grasso_min = float(os.environ.get("OSSERVA_GRASSO_MIN", "1.0"))
                     _tpicco_min = float(os.environ.get("OSSERVA_PICCO_MIN_SEC", "2.0"))
-                    _e_maschio  = (_grasso >= _grasso_min and _t_picco >= _tpicco_min)
-                    if not _e_maschio:
+                    _taglia_grasso = (_grasso < _grasso_min)
+                    _taglia_tempo  = (_t_picco > 0.0 and _t_picco < _tpicco_min)
+                    if _taglia_grasso or _taglia_tempo:
+                        _motivo_f = ("grasso basso" if _taglia_grasso
+                                     else "picco precoce")
                         self._log_m2("🐺",
                             f"FILTRO M/F: grasso {_grasso:+.2f}$ (min {_grasso_min:.1f}) "
                             f"picco a {_t_picco:.1f}s (min {_tpicco_min:.1f}s) — "
-                            f"femmina/trans (sale poco o si esaurisce subito), NON apre")
+                            f"{_motivo_f} = femmina/trans, NON apre")
                         try:
                             self._ritardo_stats["cancello_apertura_scartati"] = \
                                 self._ritardo_stats.get("cancello_apertura_scartati", 0) + 1
@@ -15826,6 +15842,7 @@ class OvertopBassanoV16Production:
         for i, ph in enumerate(self._phantoms_open):
             if price > ph['max_price']:
                 ph['max_price'] = price
+                ph['max_price_ts'] = time.time()   # FIX 19giu: QUANDO ha toccato il picco
             if price < ph['min_price']:
                 ph['min_price'] = price
 
