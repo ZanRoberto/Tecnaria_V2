@@ -8709,26 +8709,31 @@ class OvertopBassanoV16Production:
             # ════════════════════════════════════════════════════════════════
             _cancello_passa = True
             try:
-                if os.environ.get("CANCELLO_SALITA_OFF", "false").lower() != "true":
-                    _ag_ts_c = getattr(self, "_rit_aggancio_ts", None)
-                    if _ag_ts_c is not None:
-                        # nuovo aggancio? resetto lo stato del cancello
-                        if _ag_ts_c != getattr(self, "_canc_ag_ts", None):
-                            self._canc_ag_ts   = _ag_ts_c
-                            self._canc_prezzo0 = price
-                            self._canc_max_usd = 0.0
-                            self._canc_tick_da_max = 0
-                        _exp_c = float(os.environ.get("EXPOSURE_USD", "5000"))
-                        _p0_c  = getattr(self, "_canc_prezzo0", price) or price
-                        _pos_c = ((price - _p0_c) / _p0_c) * _exp_c if _p0_c else 0.0
-                        _max_c = getattr(self, "_canc_max_usd", 0.0)
-                        if _pos_c > _max_c:
-                            # NUOVO MASSIMO = sta salendo (o ha respirato e ripartito) = VIVO
-                            self._canc_max_usd = _pos_c
-                            self._canc_tick_da_max = 0
-                        else:
-                            # non e' un nuovo massimo: conto i tick di "fermo/giu"
-                            self._canc_tick_da_max = getattr(self, "_canc_tick_da_max", 0) + 1
+                # FIX 19giu: il TRACKING del picco (_canc_max_usd) gira SEMPRE,
+                # anche se il cancello salita-collasso e' spento. Serve al cancello
+                # @apertura come fonte indipendente dal ritardo per riconoscere i
+                # maschi (che salgono). Il BLOCCO per collasso resta opzionale (ENV).
+                _ag_ts_c = getattr(self, "_rit_aggancio_ts", None)
+                if _ag_ts_c is not None:
+                    # nuovo aggancio? resetto lo stato del cancello
+                    if _ag_ts_c != getattr(self, "_canc_ag_ts", None):
+                        self._canc_ag_ts   = _ag_ts_c
+                        self._canc_prezzo0 = price
+                        self._canc_max_usd = 0.0
+                        self._canc_tick_da_max = 0
+                    _exp_c = float(os.environ.get("EXPOSURE_USD", "5000"))
+                    _p0_c  = getattr(self, "_canc_prezzo0", price) or price
+                    _pos_c = ((price - _p0_c) / _p0_c) * _exp_c if _p0_c else 0.0
+                    _max_c = getattr(self, "_canc_max_usd", 0.0)
+                    if _pos_c > _max_c:
+                        # NUOVO MASSIMO = sta salendo (o ha respirato e ripartito) = VIVO
+                        self._canc_max_usd = _pos_c
+                        self._canc_tick_da_max = 0
+                    else:
+                        # non e' un nuovo massimo: conto i tick di "fermo/giu"
+                        self._canc_tick_da_max = getattr(self, "_canc_tick_da_max", 0) + 1
+                    # ── BLOCCO COLLASSO: solo se il cancello salita e' ACCESO ──
+                    if os.environ.get("CANCELLO_SALITA_OFF", "false").lower() != "true":
                         _respiro = int(float(os.environ.get("CANCELLO_RESPIRO_TICK", "40")))
                         _min_sal = float(os.environ.get("CANCELLO_MIN_SALITA_USD", "0.0"))
                         # COLLASSO: troppi tick senza nuovo massimo
@@ -8738,10 +8743,7 @@ class OvertopBassanoV16Production:
                                 f"CANCELLO SALITA: COLLASSO — {self._canc_tick_da_max} tick "
                                 f"senza nuovo massimo (max visto +{self._canc_max_usd:.2f}$) — "
                                 f"femmina/trans, NON entra")
-                        # rete opzionale: se richiesto un minimo di salita e non c'e'
                         elif _min_sal > 0 and self._canc_tick_da_max == 0 and self._canc_max_usd < _min_sal:
-                            # sta ancora salendo ma sotto il minimo: lascio osservare,
-                            # non blocco (bloccare qui ucciderebbe il maschio lento)
                             pass
             except Exception as _e_canc:
                 log.debug(f"[CANCELLO_SALITA_ERR] {_e_canc}")
@@ -12347,18 +12349,20 @@ class OvertopBassanoV16Production:
             # ════════════════════════════════════════════════════════════════
             if os.environ.get("CANCELLO_APERTURA_OFF", "false").lower() != "true":
                 try:
-                    _canc_picco = getattr(self, "_rit_picco_pre", None)
+                    # FIX 19giu (Roberto, dai dati: candidati con mfe 1.5 venivano
+                    # bloccati perche' _rit_picco_pre dipende dal ritardo e i maschi
+                    # che saltano il ritardo non lo valorizzavano). Ora il picco si
+                    # legge dal MAX di DUE fonti indipendenti:
+                    #   _rit_picco_pre  = picco osservato dal blocco ritardo
+                    #   _canc_max_usd   = picco tracciato dal cancello salita (8727),
+                    #                     indipendente dal ritardo, aggiornato a ogni tick
+                    # Maschio che sale a +1.5 -> almeno una delle due fonti lo vede -> passa.
+                    # Capra che non sale -> entrambe 0 -> bloccata. LONG-only.
+                    _p_ritardo = getattr(self, "_rit_picco_pre", None) or 0.0
+                    _p_salita  = getattr(self, "_canc_max_usd", None) or 0.0
+                    _canc_picco = max(_p_ritardo, _p_salita)
                     _canc_min = float(os.environ.get("CANCELLO_PICCO_MIN_USD", "0.30"))
-                    # FIX 19giu (Roberto): il picco vale SOLO se e' di QUESTO aggancio.
-                    # Era il buco: _rit_picco_pre restava "sporco" col valore di un
-                    # candidato precedente, e la capra (picco vero 0) lo ereditava e
-                    # passava. Ora: se il picco non e' legato all'aggancio corrente,
-                    # lo tratto come 0 (non salito) -> blocca. Sempre LONG-only.
-                    _canc_ag_now  = getattr(self, "_rit_aggancio_ts", None)
-                    _canc_ag_pic  = getattr(self, "_rit_picco_pre_ag_ts", None)
-                    if _canc_ag_now is None or _canc_ag_pic != _canc_ag_now:
-                        _canc_picco = 0.0
-                    if _canc_picco is None or _canc_picco < _canc_min:
+                    if _canc_picco < _canc_min:
                         self._log_m2("🐺",
                             f"CANCELLO @APERTURA: picco osservato "
                             f"{(_canc_picco if _canc_picco is not None else 0.0):+.2f}$ "
