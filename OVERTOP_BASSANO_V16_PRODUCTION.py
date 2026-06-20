@@ -2745,18 +2745,9 @@ class OracoloDinamico:
         """
         5 capsule statiche dell'Oracolo. Ritorna (block, reason) o (False, '').
         """
-        # ════════════════════════════════════════════════════════════════════
-        # CAPSULE STATICHE OC1-OC5 (19giu2026, Roberto): IMPALCATURA.
-        # Sono veti A PRIORI sul contesto (range_position, rsi, drift) che
-        # servivano a CAPIRE prima di avere la regola del movimento. Ora che
-        # il CANCELLO decide guardando come si muove il candidato (3 mosse su
-        # = maschio entra, 3 giu = femmina/trans taglia), questi diventano
-        # doppioni: provano a indovinare dal contesto cio' che il cancello
-        # vede direttamente dal movimento. OC1 (MIDZONE) e' quello che tiene
-        # lo score a 0 bloccando il "centro del range". Spegnibili via ENV.
-        # Default OFF (spenti). Per riaccendere: CAPSULE_STATICHE_OFF=false
-        # REVERSIBILE: una ENV li riaccende tutti.
-        # ════════════════════════════════════════════════════════════════════
+        # CAPSULE STATICHE OC1-OC5 spegnibili (20giu, Roberto): impalcatura a
+        # priori. Il CANCELLO decide sul movimento. Default OFF.
+        # Riaccendere: CAPSULE_STATICHE_OFF=false
         if os.environ.get("CAPSULE_STATICHE_OFF", "true").lower() == "true":
             return False, ''
 
@@ -8112,14 +8103,7 @@ class OvertopBassanoV16Production:
 
         # Heartbeat ogni 30 s
         if now - self.last_heartbeat > 30:
-            # FIX 20giu: l'heartbeat e' SOLO telemetria (dashboard). Se crasha
-            # (heartbeat_lock None, bug telemetry slice, ecc.) NON deve uccidere
-            # il tick e mandare il bot in crash-loop che impedisce il deploy
-            # verde. Isolato: se fallisce, si logga e si va avanti.
-            try:
-                self._update_heartbeat()
-            except Exception as _hb_err:
-                log.error(f"[HEARTBEAT_SKIP] {_hb_err}")
+            self._update_heartbeat()
             self.last_heartbeat = now
 
         # Aggiorna prezzo live ad ogni tick
@@ -8492,14 +8476,14 @@ class OvertopBassanoV16Production:
             # Aggiorna heartbeat con dati V16
             if self.heartbeat_lock:
                 try:
-                    if self.heartbeat_lock: self.heartbeat_lock.acquire()
+                    self.heartbeat_lock.acquire()
                     if self.heartbeat_data is not None:
                         self.heartbeat_data["comparto"]    = _comp_nome
                         self.heartbeat_data["nervosismo"]  = _nerv_val
                         self.heartbeat_data["gomme"]       = _gomme
                         self.heartbeat_data["breath_fase"] = self._breath._fase if self._breath else "NEUTRO"
                 finally:
-                    if self.heartbeat_lock: self.heartbeat_lock.release()
+                    self.heartbeat_lock.release()
 
         # ── CAPSULE INTELLIGENTE — tick predittivo ad ogni ciclo ──────────
         try:
@@ -16768,7 +16752,7 @@ class OvertopBassanoV16Production:
             except Exception as _ote:
                 log.warning(f"[ORACLE_TRIGGER] error: {_ote}")
 
-            if self.heartbeat_lock: self.heartbeat_lock.release()
+            self.heartbeat_lock.release()
 
     def _get_shadow_short_report(self):
         """Report aggregato degli SHORT evitati in RANGING."""
