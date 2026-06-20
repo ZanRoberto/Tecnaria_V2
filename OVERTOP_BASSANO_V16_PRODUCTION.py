@@ -2745,12 +2745,6 @@ class OracoloDinamico:
         """
         5 capsule statiche dell'Oracolo. Ritorna (block, reason) o (False, '').
         """
-        # CAPSULE STATICHE OC1-OC5 spegnibili (20giu, Roberto): impalcatura a
-        # priori. Il CANCELLO decide sul movimento. Default OFF.
-        # Riaccendere: CAPSULE_STATICHE_OFF=false
-        if os.environ.get("CAPSULE_STATICHE_OFF", "true").lower() == "true":
-            return False, ''
-
         # OC1 - RANGING_MIDZONE: non tradare al centro del range
         if regime == "RANGING" and 0.40 <= range_position <= 0.60:
             return True, f"OC1_MIDZONE_{range_position:.0%}"
