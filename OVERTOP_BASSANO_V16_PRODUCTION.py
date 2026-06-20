@@ -1023,7 +1023,7 @@ class IntelligenzaAutonoma:
     """
 
     # -- PAVIMENTI FISICI - non delegabili --------------------------------
-    SCORE_FLOOR       = 48     # sotto questo = rumore puro
+    SCORE_FLOOR       = int(os.environ.get("SCORE_FLOOR", "48"))  # ENV (era 48 fisso)
     STOP_LOSS_PCT     = 0.01   # 1% margine max loss per trade
     MIN_SAMPLES_L2    = 8      # campioni minimi per capsule L2
     # ANTIAEREA (29mag, Roberto): "UN loss con firma X marca la firma."
