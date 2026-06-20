@@ -8112,7 +8112,14 @@ class OvertopBassanoV16Production:
 
         # Heartbeat ogni 30 s
         if now - self.last_heartbeat > 30:
-            self._update_heartbeat()
+            # FIX 20giu: l'heartbeat e' SOLO telemetria (dashboard). Se crasha
+            # (heartbeat_lock None, bug telemetry slice, ecc.) NON deve uccidere
+            # il tick e mandare il bot in crash-loop che impedisce il deploy
+            # verde. Isolato: se fallisce, si logga e si va avanti.
+            try:
+                self._update_heartbeat()
+            except Exception as _hb_err:
+                log.error(f"[HEARTBEAT_SKIP] {_hb_err}")
             self.last_heartbeat = now
 
         # Aggiorna prezzo live ad ogni tick
