@@ -4938,15 +4938,15 @@ class CampoGravitazionale:
                 'breath_energia':getattr(getattr(getattr(self,'_bot_ref',None),'_breath',None),'_energia',0.0),
             }
             _cm_result = _cm.valuta(_veto_ctx)
-            if _cm_result.get('blocca'):
+            if _cm_result.get('blocca') and os.environ.get("ATTRITO_OFF","false").lower() != "true":
                 return self._veto(_cm_result.get('reason', f"CM_TOSSICO_{self._direction}_{momentum}_{volatility}_{trend}"))
         else:
             # Fallback hardcodato
             veti = self.VETI_SHORT if self._direction == "SHORT" else self.VETI_LONG
-            if combo in veti:
+            if combo in veti and os.environ.get("ATTRITO_OFF","false").lower() != "true":
                 return self._veto(f"TOSSICO_{self._direction}_{momentum}_{volatility}_{trend}")
 
-        if matrimonio_name in divorzio_set:
+        if matrimonio_name in divorzio_set and os.environ.get("ATTRITO_OFF","false").lower() != "true":
             return self._veto("DIVORZIO_PERMANENTE")
 
         is_fantasma, fantasma_reason = fantasma_info
@@ -4989,9 +4989,10 @@ class CampoGravitazionale:
             _drift = (_avg_new - _avg_old) / _avg_old * 100
             _drift_thr = {"RANGING":-0.30,"TRENDING_BULL":-0.10,
                           "TRENDING_BEAR":-0.10,"EXPLOSIVE":-0.18}.get(regime,-0.20)
-            if self._direction == "LONG" and _drift < _drift_thr:
+            _attrito_off = os.environ.get("ATTRITO_OFF","false").lower() == "true"
+            if self._direction == "LONG" and _drift < _drift_thr and not _attrito_off:
                 return self._veto(f"DRIFT_VETO_LONG_{_drift:+.3f}%(thr={_drift_thr})")
-            elif self._direction == "SHORT" and _drift > abs(_drift_thr):
+            elif self._direction == "SHORT" and _drift > abs(_drift_thr) and not _attrito_off:
                 return self._veto(f"DRIFT_VETO_SHORT_{_drift:+.3f}%(thr={_drift_thr})")
 
         # -- CALCOLO PUNTEGGIO CAMPO ---------------------------------------
@@ -5106,16 +5107,22 @@ class CampoGravitazionale:
         # la prudenza ma NON può più aprire la porta sull'energia bassa.
         # ════════════════════════════════════════════════════════════════════
         _pred_score_floor = kwargs.get('pred_score', 0.0)
+        # SCORE_FLOOR configurabile via ENV (20giu, Roberto): il floor era
+        # inchiodato a 48 ("freno" da storico negativo). Ora abbassabile:
+        # SCORE_FLOOR=40 (o meno) lascia entrare lo score piu' basso, cosi'
+        # i candidati arrivano al cancello che decide sul movimento.
+        # Default 48 (comportamento invariato). REVERSIBILE.
+        _floor_base = int(os.environ.get("SCORE_FLOOR", "48"))
         if _pred_score_floor >= 85:
-            _floor_dyn = 48   # era 34 — mai sotto rumore puro, anche se "sicura"
+            _floor_dyn = _floor_base
         elif _pred_score_floor >= 70:
-            _floor_dyn = 48   # era 38
+            _floor_dyn = _floor_base
         elif _pred_score_floor >= 50:
-            _floor_dyn = 48   # era 44
+            _floor_dyn = _floor_base
         elif _pred_score_floor >= 30:
-            _floor_dyn = 49   # era 47
+            _floor_dyn = _floor_base + 1
         else:
-            _floor_dyn = 50  # cold start: prudenza
+            _floor_dyn = _floor_base + 2  # cold start: prudenza
 
         # Applica il floor dinamico SOLO se è più alto del soglia_min_ctx
         # (così non strangola il sistema sotto sanity_floor)
@@ -12232,7 +12239,9 @@ class OvertopBassanoV16Production:
                         f"reason=ZONA_MORTA_MERCATO")
                     _verbale["blocked_by"] = "PATCH12_FLAT_DRIFT"
                     self._log_constitutional(_verbale, "PRE_OPEN_VETO_FLAT_DRIFT_P2")
-                    return
+                    if os.environ.get("CANCELLI_OBSERVER", "false").lower() != "true":
+                        return
+                    self._log_m2("👁", "OBSERVER: FLAT_DRIFT P2 avrebbe bloccato — LASCIO PASSARE")
             except Exception as _e_p12_p2:
                 pass
             # ════════════════════════════════════════════════════════════════
