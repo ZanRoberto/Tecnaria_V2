@@ -16564,6 +16564,21 @@ class OvertopBassanoV16Production:
                 _hb_set("pt_stats",            lambda: self._pt_get_stats())
                 _hb_set("m2_last_score",       lambda: round(getattr(self.campo, '_last_score', 0), 1))
                 _hb_set("m2_last_soglia",      lambda: round(getattr(self.campo, '_last_soglia', 60), 1))
+                # gf_drift VIVO (20giu, Roberto): la dashboard mostrava gf_drift
+                # MORTO (0.000), aggiornato solo dentro il guardiano GF_DIREZIONE.
+                # Qui lo calcolo dal drift VERO (_prices_long) a OGNI heartbeat,
+                # cosi' il pannello vede il mercato muoversi davvero.
+                def _drift_vivo():
+                    try:
+                        _pl = list(getattr(self.campo, "_prices_long", []))
+                        if len(_pl) >= 100:
+                            _o = sum(_pl[:50]) / 50
+                            _n = sum(_pl[-50:]) / 50
+                            return round((_n - _o) / _o * 100, 3) if _o else 0.0
+                    except Exception:
+                        pass
+                    return 0.0
+                _hb_set("gf_drift",            _drift_vivo)
                 _hb_set("m2_buy_distance",     lambda: round(getattr(self.campo, '_last_soglia', 60) - getattr(self.campo, '_last_score', 0), 1))
                 _hb_set("m2_score_components", lambda: {
                     "seed":   round(min(1.0,max(0.0,(self.seed_scorer.score().get('score',0)-0.20)/0.60))*25, 1),
