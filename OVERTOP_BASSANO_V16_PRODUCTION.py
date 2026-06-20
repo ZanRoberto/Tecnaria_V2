@@ -4893,6 +4893,12 @@ class CampoGravitazionale:
         # Soglia proporzionale pura: sanity floor 24, allineato a evaluate()
         soglia = max(24, min(80, soglia_raw))
 
+        # SOGLIA_PIATTA (20giu, Roberto): anche qui (score_now alimenta il
+        # display e _last_soglia via riga ~8864). Se attiva, soglia FISSA al
+        # valore SCORE_FLOOR: niente giudizio adattivo, decide il cancello.
+        if os.environ.get("SOGLIA_PIATTA", "false").lower() == "true":
+            soglia = float(int(os.environ.get("SCORE_FLOOR", "34")))
+
         return {
             'score':  round(score,1),
             'soglia': round(soglia,1),
