@@ -5045,7 +5045,14 @@ class CampoGravitazionale:
 
         regime_f  = self.REGIME_FACTOR.get(regime, 1.0)
         vol_f     = self.VOL_FACTOR.get(volatility, 1.0)
-        history_f = self._history_factor()
+        # ATTRITO_OFF (20giu, Roberto): lo storico del sistema VECCHIO (femmine
+        # perse, -1286$) non deve zavorrare la soglia del cancello nuovo. Con
+        # ATTRITO_OFF=true, history_f=1.0 (nessuna paura ereditata). La soglia
+        # resta adattiva su regime/volatilita/drift, ma non sul passato sporco.
+        if os.environ.get("ATTRITO_OFF", "false").lower() == "true":
+            history_f = 1.0
+        else:
+            history_f = self._history_factor()
         prebreak_f, prebreak_detail, prebreak_signals = self._pre_breakout_factor()
         self._last_regime_for_drift = regime  # passa il regime al drift_factor
         drift_f, drift_detail = self._drift_factor()
@@ -5128,6 +5135,21 @@ class CampoGravitazionale:
         # (così non strangola il sistema sotto sanity_floor)
         soglia = max(_floor_dyn, soglia)
 
+        # ════════════════════════════════════════════════════════════════════
+        # SOGLIA_PIATTA (20giu, Roberto) — UN MODELLO SOLO, NIENTE CONFUSIONE.
+        # Il calcolo adattivo sopra (regime_f, vol_f, history_f, floor_dyn...)
+        # giudica il MERCATO a priori: in RANGING alza l'asticella per
+        # "scartare il mercato non adatto". Ma il modello di Roberto NON giudica
+        # il mercato sui fattori: aspetta e guarda il MOVIMENTO (cancello).
+        # Anche in RANGING un maschio puo' nascere -> la soglia adattiva alta lo
+        # ucciderebbe PRIMA del cancello. Le due logiche sono INCOMPATIBILI.
+        # SOGLIA_PIATTA=true abbraccia il modello di Roberto: ignora tutto il
+        # calcolo adattivo e mette la soglia FISSA al valore SCORE_FLOOR. E' solo
+        # un filtro anti-rumore: sopra -> candidato -> il cancello decide sul
+        # movimento. REVERSIBILE: SOGLIA_PIATTA=false (o tolto) -> adattivo.
+        if os.environ.get("SOGLIA_PIATTA", "false").lower() == "true":
+            soglia = float(int(os.environ.get("SCORE_FLOOR", "34")))
+
         # -- BOOST SOGLIA DA CAPSULE L3 (Narratore/IntelligenzaAutonoma) ----
         # Le capsule generate da DeepSeek possono alzare la soglia in base
         # all'osservazione del mercato. Il pavimento proporzionale resta valido.
@@ -5136,6 +5158,11 @@ class CampoGravitazionale:
             # FIX 29mag: pavimento = _floor_dyn (48), NON soglia_min_ctx (che
             # poteva scendere a 24-34). Nemmeno il boost riapre la porta sotto rumore.
             soglia = max(_floor_dyn, min(dynamic_max, soglia + soglia_boost))
+
+        # SOGLIA_PIATTA ha l'ULTIMA parola: ne' boost ne' floor la rialzano.
+        # Filtro anti-rumore fisso, il cancello decide il resto.
+        if os.environ.get("SOGLIA_PIATTA", "false").lower() == "true":
+            soglia = float(int(os.environ.get("SCORE_FLOOR", "34")))
 
         # -- DECISIONE -----------------------------------------------------
         # Salva score e soglia per heartbeat/grafico
@@ -11610,7 +11637,9 @@ class OvertopBassanoV16Production:
                                              seed['score'], momentum, volatility, trend)
                         _verbale["blocked_by"] = f"SC_EXPLOSIVE:{_sc_p1.get('motivo','')[:30]}"
                         self._log_constitutional(_verbale, "SC_BLOCCA_EXPLOSIVE")
-                        return
+                        if os.environ.get("CANCELLI_OBSERVER", "false").lower() != "true":
+                            return
+                        self._log_m2("👁", "OBSERVER: SC_BLOCCA_EXPLOSIVE avrebbe bloccato — LASCIO PASSARE")
 
                     # 2) SC propone un FLIP → PERCORSO 1 flippa prima di aprire
                     _sc_dv   = _sc_p1.get('direction_vote')
@@ -11929,15 +11958,21 @@ class OvertopBassanoV16Production:
                 # NB: score/soglia da result restano validi e vengono usati sotto.
 
             # ── Warmup (veti fisici ZONA 1) ────────────────────────────────
+            # BOOT_GUARD basato su _prices_ta = serie RSI/MACD. RSI/MACD sono
+            # MORTI nel modello di Roberto. Questo warmup e' un residuo: aspetta
+            # 20 campioni di un indicatore che non si usa piu'. Il warmup VERO
+            # (prezzi, _prices_long) resta nel motore a monte. ATTRITO_OFF=true
+            # spegne questo doppione e il grace post-warmup. REVERSIBILE.
+            _attrito_warmup = os.environ.get("ATTRITO_OFF","false").lower() == "true"
             _warmup_rsi = len(self.campo._prices_ta) if hasattr(self.campo, '_prices_ta') else 0
-            if _warmup_rsi < 20:
+            if _warmup_rsi < 20 and not _attrito_warmup:
                 self._log_m2("⏳", f"BOOT_GUARD: warmup RSI {_warmup_rsi}/20")
                 _verbale["blocked_by"] = "ZONA1_BOOT_GUARD"
                 self._log_constitutional(_verbale, "PRE_SC_VETO_BOOT_GUARD")
                 return
             if not hasattr(self, '_warmup_done_time'):
                 self._warmup_done_time = time.time()
-            if time.time() - self._warmup_done_time < 10:
+            if time.time() - self._warmup_done_time < 10 and not _attrito_warmup:
                 _verbale["blocked_by"] = "ZONA1_POST_WARMUP_GRACE"
                 self._log_constitutional(_verbale, "PRE_SC_VETO_POST_WARMUP_GRACE")
                 return
@@ -12540,9 +12575,14 @@ class OvertopBassanoV16Production:
             # Sotto soglia → NON nasce (femmina evitata). Sopra → passa (maschio).
             # NOTA: filtro probabilistico, non perfetto (una femmina con seme alto
             # esiste). Logga ogni blocco → sui dati nuovi si verifica e si ritara.
+            # SEME_GATE_OFF (20giu, Roberto): il SEME_GATE giudica la femmina
+            # sul SEME a priori (< 0.60 = femmina). Ma il modello giudica sul
+            # MOVIMENTO (cancello), non sul seme. Dimostrato sbagliato su dati
+            # larghi (398 false-female). SEME_GATE_OFF=true lo spegne: lascia
+            # passare al cancello, che decide sul movimento. REVERSIBILE.
             SEME_GATE_SOGLIA = float(getattr(self, "SEME_GATE_SOGLIA", 0.60))
             _sh = list(getattr(self.campo, "_seed_history", []))[-5:]
-            if len(_sh) >= 2:
+            if len(_sh) >= 2 and os.environ.get("SEME_GATE_OFF","false").lower() != "true":
                 _seme_medio = (_sh[0] + _sh[-1]) / 2.0
                 if _seme_medio < SEME_GATE_SOGLIA:
                     self._log("🚫", f"SEME_GATE BLOCCO femmina: seme={_seme_medio:.3f} "
