@@ -8112,7 +8112,13 @@ class OvertopBassanoV16Production:
 
         # Heartbeat ogni 30 s
         if now - self.last_heartbeat > 30:
-            self._update_heartbeat()
+            # FIX 20giu: heartbeat e' SOLO telemetria. Se crasha (lock None,
+            # bug telemetry slice) NON deve uccidere il tick -> niente crash-loop
+            # che impedisce il deploy verde (Port scan timeout). Isolato.
+            try:
+                self._update_heartbeat()
+            except Exception as _hb_err:
+                log.error(f"[HEARTBEAT_SKIP] {_hb_err}")
             self.last_heartbeat = now
 
         # Aggiorna prezzo live ad ogni tick
@@ -9275,7 +9281,10 @@ class OvertopBassanoV16Production:
         # Persiste immediatamente dopo ogni trade
         self._persist.save(self.capital, self.total_trades)
         self._persist.save_brain(self.oracolo, self.memoria, self.calibratore)
-        self._update_heartbeat()
+        try:
+            self._update_heartbeat()
+        except Exception as _hb_err:
+            log.error(f"[HEARTBEAT_SKIP] {_hb_err}")
 
         # Salva info exit per capsule reattive
         self._last_exit_type     = reason
