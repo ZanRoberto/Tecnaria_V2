@@ -544,22 +544,26 @@ def diretta_view():
     trades (entrati). Unica vista, in ordine di tempo. SOLO LETTURA.
     Auto-refresh ogni 3s lato browser."""
     try:
-        import time as _tm
+        import time as _tm, datetime as _dt2
         _cutoff = _tm.time() - 3*3600   # solo ultime 3 ore = questo run
-        # TAGLIATI dal cancello (questo run)
+        # trades.timestamp è TEXT in formato 'YYYY-MM-DD HH:MM:SS' (UTC).
+        # Filtro per stringa, non per epoch (erano formati diversi).
+        _cutoff_str = _dt2.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        _cutoff_str_3h = (_dt2.datetime.utcnow() - _dt2.timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S')
+        # TAGLIATI dal cancello (questo run) — ts_entry è epoch
         tagli = db_execute("""
             SELECT ts_entry, mfe_usd, block_reason
             FROM phantom_forensic
             WHERE block_reason='MINA_CANCELLO_SALITA' AND ts_entry > ?
             ORDER BY id DESC LIMIT 60
         """, [_cutoff], fetch=True) or []
-        # ENTRATI (trade veri, questo run)
+        # ENTRATI (trade veri, questo run) — timestamp è TEXT datetime
         entrati = db_execute("""
             SELECT timestamp, pnl, reason
             FROM trades
             WHERE event_type='M2_EXIT' AND timestamp > ?
             ORDER BY id DESC LIMIT 60
-        """, [_cutoff], fetch=True) or []
+        """, [_cutoff_str_3h], fetch=True) or []
 
         eventi = []
         for ts, mfe, _br in tagli:
