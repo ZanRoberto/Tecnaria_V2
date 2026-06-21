@@ -544,20 +544,22 @@ def diretta_view():
     trades (entrati). Unica vista, in ordine di tempo. SOLO LETTURA.
     Auto-refresh ogni 3s lato browser."""
     try:
-        # TAGLIATI dal cancello (ultimi 40)
+        import time as _tm
+        _cutoff = _tm.time() - 3*3600   # solo ultime 3 ore = questo run
+        # TAGLIATI dal cancello (questo run)
         tagli = db_execute("""
             SELECT ts_entry, mfe_usd, block_reason
             FROM phantom_forensic
-            WHERE block_reason='MINA_CANCELLO_SALITA'
-            ORDER BY id DESC LIMIT 40
-        """, [], fetch=True) or []
-        # ENTRATI (trade veri, ultimi 40)
+            WHERE block_reason='MINA_CANCELLO_SALITA' AND ts_entry > ?
+            ORDER BY id DESC LIMIT 60
+        """, [_cutoff], fetch=True) or []
+        # ENTRATI (trade veri, questo run)
         entrati = db_execute("""
             SELECT timestamp, pnl, reason
             FROM trades
-            WHERE event_type='M2_EXIT'
-            ORDER BY id DESC LIMIT 40
-        """, [], fetch=True) or []
+            WHERE event_type='M2_EXIT' AND timestamp > ?
+            ORDER BY id DESC LIMIT 60
+        """, [_cutoff], fetch=True) or []
 
         eventi = []
         for ts, mfe, _br in tagli:
@@ -610,10 +612,10 @@ td{{padding:6px 10px;border-bottom:1px solid #222}}
 .box{{display:inline-block;margin:6px 14px 6px 0;padding:10px 16px;border-radius:8px;background:#161b22}}
 .big{{font-size:28px;font-weight:bold}}
 </style></head><body>
-<h2>🔴 DIRETTA — TUTTO: tagliati e entrati (refresh 3s)</h2>
-<div class='box'><div class='big' style='color:#888'>{n_tagli}</div>TAGLIATI (femmine/trans)</div>
+<h2>🔴 DIRETTA — TUTTO: tagliati e entrati (ultime 3h · refresh 3s)</h2>
+<div class='box'><div class='big' style='color:#888'>{n_tagli}</div>FEMMINE/TRANS tagliati</div>
 <div class='box'><div class='big' style='color:#e67e22'>{n_trans}</div>TRANS tagliati</div>
-<div class='box'><div class='big' style='color:#2ecc71'>{n_entrati}</div>MASCHI ENTRATI</div>
+<div class='box'><div class='big' style='color:#2ecc71'>{n_entrati}</div>MASCHI ENTRATI (run)</div>
 <table><tr><td><b>ORA</b></td><td><b>STATO</b></td><td><b>TIPO</b></td><td><b>VALORE</b></td></tr>
 {''.join(righe_html)}
 </table>
