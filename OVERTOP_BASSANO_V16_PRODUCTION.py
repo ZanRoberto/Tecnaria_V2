@@ -7916,7 +7916,14 @@ class OvertopBassanoV16Production:
         def _ws_loop():
             while True:
                 try:
-                    self.ws.run_forever(ping_interval=20, ping_timeout=10)
+                    # FIX 20giu — ping/pong timeout: con ping_timeout=10 stretto,
+                    # su Render (server condiviso) il pong arriva tardi quando il
+                    # thread e' occupato -> Binance chiude (reconn=34 nei log).
+                    # Timeout piu' generoso (18s) + interval 20s = keepalive
+                    # robusto. Configurabile da ENV se serve ritararlo.
+                    _ping_int = int(os.environ.get("WS_PING_INTERVAL", "20"))
+                    _ping_to  = int(os.environ.get("WS_PING_TIMEOUT", "18"))
+                    self.ws.run_forever(ping_interval=_ping_int, ping_timeout=_ping_to)
                 except Exception as _wre:
                     log.error(f"[WS_LOOP_ERR] {_wre}")
                 self._ws_reconnect_count = getattr(self, '_ws_reconnect_count', 0) + 1
@@ -16579,6 +16586,23 @@ class OvertopBassanoV16Production:
                         pass
                     return 0.0
                 _hb_set("gf_drift",            _drift_vivo)
+                # gf_stato VIVO (20giu, Roberto): lo stato LIBERO/FUORI si
+                # scriveva SOLO dentro _evaluate_shadow_entry (cioe' solo se
+                # c'era un aggancio). Senza agganci restava "—" per sempre,
+                # anche con drift positivo. Qui lo calcolo a OGNI heartbeat dal
+                # drift vivo, cosi' la dashboard mostra sempre lo stato vero:
+                # LIBERO (drift sopra soglia, direzione ok) / FUORI_SHORT (drift
+                # sotto soglia, ribassista) / PIATTO (vicino a zero).
+                def _stato_vivo():
+                    try:
+                        _d = _drift_vivo()
+                        _soglia = float(os.environ.get("GF_DRIFT_SOGLIA", "-0.05"))
+                        if _d < _soglia:
+                            return "FUORI_SHORT"
+                        return "LIBERO"
+                    except Exception:
+                        return "—"
+                _hb_set("gf_stato",            _stato_vivo)
                 _hb_set("m2_buy_distance",     lambda: round(getattr(self.campo, '_last_soglia', 60) - getattr(self.campo, '_last_score', 0), 1))
                 _hb_set("m2_score_components", lambda: {
                     "seed":   round(min(1.0,max(0.0,(self.seed_scorer.score().get('score',0)-0.20)/0.60))*25, 1),
