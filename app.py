@@ -620,9 +620,22 @@ def diretta_view():
                 f"<tr><td>{_ora}</td><td>{_ico} {_stato}</td>"
                 f"<td style='color:{_col}'>{_tipo}</td><td>{_val}</td></tr>")
 
-        n_tagli = len(tagli)
         n_entrati = _entrati_run
-        n_trans = sum(1 for t in tagli if 1.5 < float(t[1] or 0) <= 5)
+        # CONTATORI = totali VERI del run (non limitati ai 60 mostrati).
+        # Query COUNT separate per tipo, su tutto il run (ultime 3h).
+        _r_fem = db_execute("""
+            SELECT COUNT(*) FROM phantom_forensic
+            WHERE block_reason='MINA_CANCELLO_SALITA' AND ts_entry > ?
+            AND mfe_usd <= 1.5
+        """, [_cutoff], fetch=True) or [[0]]
+        _r_trn = db_execute("""
+            SELECT COUNT(*) FROM phantom_forensic
+            WHERE block_reason='MINA_CANCELLO_SALITA' AND ts_entry > ?
+            AND mfe_usd > 1.5
+        """, [_cutoff], fetch=True) or [[0]]
+        n_femmine = _r_fem[0][0] if _r_fem else 0
+        n_trans   = _r_trn[0][0] if _r_trn else 0
+        n_tagli   = n_femmine + n_trans
 
         html = f"""<!DOCTYPE html><html><head><meta charset='utf-8'>
 <meta http-equiv='refresh' content='3'>
@@ -635,9 +648,9 @@ td{{padding:6px 10px;border-bottom:1px solid #222}}
 .big{{font-size:28px;font-weight:bold}}
 </style></head><body>
 <h2>🔴 DIRETTA — TUTTO: tagliati e entrati (ultime 3h · refresh 3s)</h2>
-<div class='box'><div class='big' style='color:#888'>{n_tagli}</div>FEMMINE/TRANS tagliati</div>
-<div class='box'><div class='big' style='color:#e67e22'>{n_trans}</div>TRANS tagliati</div>
-<div class='box'><div class='big' style='color:#2ecc71'>{n_entrati}</div>MASCHI ENTRATI (run)</div>
+<div class='box'><div class='big' style='color:#888'>{n_femmine}</div>FEMMINE tagliate (tot run)</div>
+<div class='box'><div class='big' style='color:#e67e22'>{n_trans}</div>TRANS tagliati (tot run)</div>
+<div class='box'><div class='big' style='color:#2ecc71'>{n_entrati}</div>MASCHI ENTRATI (tot run)</div>
 <table><tr><td><b>ORA</b></td><td><b>STATO</b></td><td><b>TIPO</b></td><td><b>VALORE</b></td></tr>
 {''.join(righe_html)}
 </table>
