@@ -12488,13 +12488,31 @@ class OvertopBassanoV16Production:
                     _grasso  = getattr(self, "_canc_max_usd", None) or 0.0
                     _sgonfio = getattr(self, "_canc_tick_da_max", None) or 0
                     _respiro = int(float(os.environ.get("CANCELLO_RESPIRO_TICK", "40")))
+                    # grasso CORRENTE ora (per misurare la discesa vera dal picco)
+                    try:
+                        _delta_ora = (price - self._rit_prezzo_aggancio) if getattr(self, "_rit_prezzo_aggancio", 0) else 0.0
+                        _exp_ora   = float(os.environ.get("EXPOSURE", "5000"))
+                        _grasso_ora = _delta_ora * (_exp_ora / self._rit_prezzo_aggancio) if getattr(self, "_rit_prezzo_aggancio", 0) else 0.0
+                    except Exception:
+                        _grasso_ora = _grasso
                     # mai salito: nessun grasso positivo in tutta l'osservazione
                     _mai_salito = (_grasso <= 0.0)
-                    # sgonfiata: ha smesso di fare nuovi massimi da troppi tick
-                    _si_sgonfia = (_sgonfio >= _respiro)
+                    # ════════════════════════════════════════════════════════════
+                    # FIX 21giu (Roberto): un MASCHIO salito a grasso alto (+8/+12)
+                    # che fa PAUSA in alto NON e' una femmina — e' un maschio a cui
+                    # va preso il grasso. Il vecchio "_sgonfio >= respiro" lo
+                    # tagliava solo perche' fermo N tick, anche se restava a +12.
+                    # ORA: si sgonfia (femmina) SOLO se il grasso CORRENTE e' sceso
+                    # sotto una frazione del picco (discesa vera). Un maschio che
+                    # tiene il grasso in alto PASSA. ENV CANCELLO_TIENI_PCT (default
+                    # 0.60): finche' il grasso corrente >= 60% del picco, e' vivo.
+                    # ════════════════════════════════════════════════════════════
+                    _tieni_pct = float(os.environ.get("CANCELLO_TIENI_PCT", "0.60"))
+                    _e_sceso = (_grasso > 0.0 and _grasso_ora < _grasso * _tieni_pct)
+                    _si_sgonfia = (_sgonfio >= _respiro) and _e_sceso
                     if _mai_salito or _si_sgonfia:
                         _motivo_f = ("mai salita (piatta)" if _mai_salito
-                                     else f"sgonfiata ({_sgonfio} tick senza nuovo max)")
+                                     else f"sgonfiata (grasso {_grasso_ora:.2f}$ sceso da picco {_grasso:.2f}$)")
                         self._log_m2("🐺",
                             f"FILTRO M/F: max salita +{_grasso:.2f}$ — "
                             f"{_motivo_f} = femmina/trans, NON apre")
