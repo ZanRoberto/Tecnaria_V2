@@ -12554,6 +12554,21 @@ class OvertopBassanoV16Production:
                     _tieni_pct = float(os.environ.get("CANCELLO_TIENI_PCT", "0.60"))
                     _e_sceso = (_grasso > 0.0 and _grasso_ora < _grasso * _tieni_pct)
                     _si_sgonfia = (_sgonfio >= _respiro) and _e_sceso
+                    # ════════════════════════════════════════════════════════════
+                    # RISCHIA (21giu, Roberto: "anche se sono trans vanno portati
+                    # dentro e preso il grasso, è inconcepibile lasciarlo"). Un
+                    # candidato salito a un grasso minimo (CANCELLO_GRASSO_MIN, def
+                    # 2.0$) NON va tagliato: va portato dentro e gli si prende il
+                    # grasso col trailing, qualunque etichetta abbia. Non si
+                    # distingue maschio da trans all'entrata (firma ambigua): se
+                    # sale e tiene il grasso minimo, ENTRA. Il trailing fa il resto.
+                    # ════════════════════════════════════════════════════════════
+                    _grasso_min = float(os.environ.get("CANCELLO_GRASSO_MIN", "2.0"))
+                    _ha_grasso_vivo = (_grasso_ora >= _grasso_min)
+                    if _ha_grasso_vivo:
+                        # tiene grasso sopra la soglia minima -> NON tagliare, ENTRA
+                        _si_sgonfia = False
+                        _mai_salito = False
                     if _mai_salito or _si_sgonfia:
                         _motivo_f = ("mai salita (piatta)" if _mai_salito
                                      else f"sgonfiata (grasso {_grasso_ora:.2f}$ sceso da picco {_grasso:.2f}$)")
