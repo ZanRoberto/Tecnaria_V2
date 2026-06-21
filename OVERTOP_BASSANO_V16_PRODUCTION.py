@@ -12059,14 +12059,31 @@ class OvertopBassanoV16Production:
                     # NESSUN return — il flow prosegue a SC (ZONA 3)
                 else:
                     # CASO B — score genuinamente sotto soglia, nessun veto campo.
-                    # Dittatore SCORE_SOTTO — rinviato a 5b da decisione Roberto.
-                    self._log_m2("🔇", f"SCORE_SOTTO: {score:.1f} vs {soglia:.1f}")
-                    if score > 50 and len(self._phantoms_open) < 5:
-                        self._record_phantom(price, f"SCORE_{score:.0f}_vs_{soglia:.0f}",
-                                             seed['score'], momentum, volatility, trend)
-                    _verbale["blocked_by"] = "DITTATORE_SCORE_SOTTO_rinviato_5b"
-                    self._log_constitutional(_verbale, "PRE_SC_VETO_SCORE_SOTTO_5B_PENDING")
-                    return
+                    # ════════════════════════════════════════════════════════════
+                    # SCAVALCO MASCHIO (21giu, Roberto: "togliamo lo score, non
+                    # ha più lo stesso valore nel nuovo modello"). Se il CANCELLO
+                    # ha confermato il maschio (N mosse su consecutive), lo score
+                    # NON deve bloccarlo: lo score è del vecchio mondo, eroso da
+                    # VERITAS/capsule/CM_LEARNED a 20-29 sotto soglia. Il maschio
+                    # entra sul MOVIMENTO confermato, non sullo score. Il return
+                    # sotto uccideva i maschi (log: SCORE_SOTTO 20-29 vs 34).
+                    # ENV SCORE_SCAVALCA_MASCHIO (default true) per spegnerlo.
+                    # ════════════════════════════════════════════════════════════
+                    _scava = os.environ.get("SCORE_SCAVALCA_MASCHIO", "true").lower() in ("true","1","yes")
+                    _e_maschio = bool(getattr(self, "_canc_maschio_ok", False))
+                    if _scava and _e_maschio:
+                        self._log_m2("🐺", f"MASCHIO SCAVALCA SCORE_SOTTO: {score:.1f} vs {soglia:.1f} "
+                                           f"— maschio confermato, lo score NON lo ferma → prosegue")
+                        # NESSUN return — il maschio prosegue verso l'entrata
+                    else:
+                        # Dittatore SCORE_SOTTO — rinviato a 5b da decisione Roberto.
+                        self._log_m2("🔇", f"SCORE_SOTTO: {score:.1f} vs {soglia:.1f}")
+                        if score > 50 and len(self._phantoms_open) < 5:
+                            self._record_phantom(price, f"SCORE_{score:.0f}_vs_{soglia:.0f}",
+                                                 seed['score'], momentum, volatility, trend)
+                        _verbale["blocked_by"] = "DITTATORE_SCORE_SOTTO_rinviato_5b"
+                        self._log_constitutional(_verbale, "PRE_SC_VETO_SCORE_SOTTO_5B_PENDING")
+                        return
 
             size = result.get('size', 0.3)
             # Se il Campo ha deposto, result['size'] è 0.0 (artefatto _veto).
