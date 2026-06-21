@@ -536,6 +536,94 @@ def bridge_status():
         return json.dumps(bridge.get_status(), indent=2), 200, {'Content-Type': 'application/json'}
     return json.dumps({"active": False, "reason": "bridge not initialized"}), 200, {'Content-Type': 'application/json'}
 
+@app.route('/diretta')
+def diretta_view():
+    """DIRETTA — la lista che mostra TUTTO: chi viene TAGLIATO e chi ENTRA.
+    (21giu, Roberto: 'voglio vedere tutto nella lista'). Endpoint NUOVO,
+    non tocca /seme_gate. Legge phantom_forensic (tagliati dal cancello) +
+    trades (entrati). Unica vista, in ordine di tempo. SOLO LETTURA.
+    Auto-refresh ogni 3s lato browser."""
+    try:
+        # TAGLIATI dal cancello (ultimi 40)
+        tagli = db_execute("""
+            SELECT ts_entry, mfe_usd, block_reason
+            FROM phantom_forensic
+            WHERE block_reason='MINA_CANCELLO_SALITA'
+            ORDER BY id DESC LIMIT 40
+        """, [], fetch=True) or []
+        # ENTRATI (trade veri, ultimi 40)
+        entrati = db_execute("""
+            SELECT timestamp, pnl, reason
+            FROM trades
+            WHERE event_type='M2_EXIT'
+            ORDER BY id DESC LIMIT 40
+        """, [], fetch=True) or []
+
+        eventi = []
+        for ts, mfe, _br in tagli:
+            try:
+                _ts = float(ts); _mfe = float(mfe or 0)
+            except Exception:
+                continue
+            # I tagliati sono femmine/trans: candidati che non salgono o si
+            # sgonfiano. Col cancello corretto un maschio NON viene tagliato.
+            _tipo = "trans" if _mfe > 1.5 else "femmina"
+            eventi.append((_ts, "TAGLIATO", _tipo, _mfe, None))
+        for ts, pnl, reason in entrati:
+            try:
+                _ts = float(ts); _pnl = float(pnl or 0)
+            except Exception:
+                continue
+            _tipo = "MASCHIO-VINTO" if _pnl > 0 else "perso"
+            eventi.append((_ts, "ENTRATO", _tipo, None, _pnl))
+
+        eventi.sort(key=lambda e: e[0], reverse=True)
+        eventi = eventi[:60]
+
+        import datetime as _dt
+        righe_html = []
+        for _ts, _stato, _tipo, _picco, _pnl in eventi:
+            _ora = _dt.datetime.fromtimestamp(_ts).strftime('%H:%M:%S')
+            if _stato == "TAGLIATO":
+                _col = "#888"
+                _val = f"picco +{_picco:.2f}$"
+                _ico = "🚫"
+            else:
+                _col = "#2ecc71" if (_pnl or 0) > 0 else "#e67e22"
+                _val = f"pnl {_pnl:+.2f}$"
+                _ico = "✅"
+            righe_html.append(
+                f"<tr><td>{_ora}</td><td>{_ico} {_stato}</td>"
+                f"<td style='color:{_col}'>{_tipo}</td><td>{_val}</td></tr>")
+
+        n_tagli = len(tagli)
+        n_entrati = len(entrati)
+        n_trans = sum(1 for t in tagli if 1.5 < float(t[1] or 0) <= 5)
+
+        html = f"""<!DOCTYPE html><html><head><meta charset='utf-8'>
+<meta http-equiv='refresh' content='3'>
+<title>DIRETTA OVERTOP</title>
+<style>
+body{{background:#0d1117;color:#e6edf3;font-family:monospace;padding:16px}}
+h2{{color:#2ecc71}} table{{width:100%;border-collapse:collapse}}
+td{{padding:6px 10px;border-bottom:1px solid #222}}
+.box{{display:inline-block;margin:6px 14px 6px 0;padding:10px 16px;border-radius:8px;background:#161b22}}
+.big{{font-size:28px;font-weight:bold}}
+</style></head><body>
+<h2>🔴 DIRETTA — TUTTO: tagliati e entrati (refresh 3s)</h2>
+<div class='box'><div class='big' style='color:#888'>{n_tagli}</div>TAGLIATI (femmine/trans)</div>
+<div class='box'><div class='big' style='color:#e67e22'>{n_trans}</div>TRANS tagliati</div>
+<div class='box'><div class='big' style='color:#2ecc71'>{n_entrati}</div>MASCHI ENTRATI</div>
+<table><tr><td><b>ORA</b></td><td><b>STATO</b></td><td><b>TIPO</b></td><td><b>VALORE</b></td></tr>
+{''.join(righe_html)}
+</table>
+<p style='color:#666'>phantom_forensic (tagliati) + trades (entrati) · solo lettura · {_dt.datetime.now().strftime('%H:%M:%S')}</p>
+</body></html>"""
+        return html, 200, {'Content-Type': 'text/html; charset=utf-8'}
+    except Exception as e:
+        return f"<html><body style='background:#0d1117;color:#e74c3c;font-family:monospace;padding:20px'>errore diretta: {e}</body></html>", 200, {'Content-Type': 'text/html'}
+
+
 @app.route('/seme_gate')
 def seme_gate_view():
     """Cruscotto SEME_GATE — VERITA' COMPLETA dai trade veri.
