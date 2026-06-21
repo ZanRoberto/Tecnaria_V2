@@ -571,13 +571,31 @@ def diretta_view():
             # sgonfiano. Col cancello corretto un maschio NON viene tagliato.
             _tipo = "trans" if _mfe > 1.5 else "femmina"
             eventi.append((_ts, "TAGLIATO", _tipo, _mfe, None))
+        import datetime as _dt2
+        import time as _tm2
+        _now_ep = _tm2.time()
+        _entrati_run = 0
         for ts, pnl, reason in entrati:
             try:
-                _ts = float(ts); _pnl = float(pnl or 0)
+                _pnl = float(pnl or 0)
             except Exception:
+                _pnl = 0.0
+            # timestamp puo' essere epoch (float) o stringa "YYYY-MM-DD HH:MM:SS"
+            _ts_ep = None
+            try:
+                _ts_ep = float(ts)
+            except Exception:
+                try:
+                    _ts_ep = _dt2.datetime.strptime(str(ts), "%Y-%m-%d %H:%M:%S").timestamp()
+                except Exception:
+                    _ts_ep = None
+            if _ts_ep is None:
                 continue
-            _tipo = "MASCHIO-VINTO" if _pnl > 0 else "perso"
-            eventi.append((_ts, "ENTRATO", _tipo, None, _pnl))
+            # conta come "entrato del run" SOLO se nelle ultime 3 ore
+            if _ts_ep > (_now_ep - 3*3600):
+                _entrati_run += 1
+                _tipo = "MASCHIO-VINTO" if _pnl > 0 else "perso"
+                eventi.append((_ts_ep, "ENTRATO", _tipo, None, _pnl))
 
         eventi.sort(key=lambda e: e[0], reverse=True)
         eventi = eventi[:60]
@@ -599,7 +617,7 @@ def diretta_view():
                 f"<td style='color:{_col}'>{_tipo}</td><td>{_val}</td></tr>")
 
         n_tagli = len(tagli)
-        n_entrati = len(entrati)
+        n_entrati = _entrati_run
         n_trans = sum(1 for t in tagli if 1.5 < float(t[1] or 0) <= 5)
 
         html = f"""<!DOCTYPE html><html><head><meta charset='utf-8'>
