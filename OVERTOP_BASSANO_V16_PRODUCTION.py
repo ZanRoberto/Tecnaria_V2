@@ -8830,6 +8830,33 @@ class OvertopBassanoV16Production:
                         # MASCHIO confermato: N movimenti su consecutivi -> entra
                         if self._canc_su_consec >= _mosse_n:
                             self._canc_maschio_ok = True
+                            # ════════════════════════════════════════════════════
+                            # ENTRATA DIRETTA (21giu, Roberto: "deve entrare SUBITO
+                            # non andare a trovare le cose morte"). Appena conferma
+                            # le N mosse su, APRE QUI, senza passare per
+                            # _evaluate_shadow_entry (score/VERITAS/capsule che lo
+                            # trattengono finche' si svuota -> maschio +5.34 tagliato
+                            # 16:21:51). Il movimento confermato E' la decisione.
+                            # ENV MASCHIO_ENTRA_DIRETTO (default true). FAIL-OPEN.
+                            # ════════════════════════════════════════════════════
+                            _entra_diretto = os.environ.get("MASCHIO_ENTRA_DIRETTO", "true").lower() == "true"
+                            _gia_aperto = bool(getattr(self, "_phantoms_open", None))
+                            if _entra_diretto and not _gia_aperto and not getattr(self, "_maschio_diretto_in_corso", False):
+                                try:
+                                    self._maschio_diretto_in_corso = True
+                                    _seed_q = self.seed_scorer.score()
+                                    _seed_v = _seed_q.get('score', 0.0) if _seed_q.get('reason') != 'insufficient_data' else 0.0
+                                    _dir_m = self.campo._direction
+                                    _fp_wr = self.oracolo.get_wr(momentum, volatility, trend, _dir_m)
+                                    self._log_m2("🐺", f"MASCHIO DIRETTO: {self._canc_su_consec} mosse su = ENTRA SUBITO (bypass veti)")
+                                    self._open_shadow_position(price, 99.0, 0.0, _seed_v, 0.3,
+                                                               momentum, volatility, trend,
+                                                               "MASCHIO_DIRETTO", _fp_wr)
+                                except Exception as _e_md:
+                                    log.error(f"[MASCHIO_DIRETTO_ERR] {_e_md}")
+                                finally:
+                                    self._maschio_diretto_in_corso = False
+                                _cancello_passa = False  # gia' aperto qui, non ripassare da evaluate
 
                         # FEMMINA/TRANS: N storni consecutivi -> taglio subito
                         if self._canc_giu_consec >= _mosse_n:
@@ -12459,7 +12486,7 @@ class OvertopBassanoV16Production:
             #       Si alza se passano ancora piatte, si abbassa se taglia maschi.
             # try/except totale, FAIL-OPEN: mai bloccare per errore del cancello.
             # ════════════════════════════════════════════════════════════════
-            if os.environ.get("CANCELLO_APERTURA_OFF", "false").lower() != "true":
+            if os.environ.get("CANCELLO_APERTURA_OFF", "false").lower() != "true" and not getattr(self, "_maschio_diretto_in_corso", False):
                 try:
                     # ════════════════════════════════════════════════════════════
                     # FILTRO MASCHIO/FEMMINA (19giu2026, Roberto) — REGOLA PURA.
