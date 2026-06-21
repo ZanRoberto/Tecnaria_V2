@@ -622,19 +622,32 @@ def diretta_view():
 
         n_entrati = _entrati_run
         # CONTATORI = totali VERI del run (non limitati ai 60 mostrati).
-        # Query COUNT separate per tipo, su tutto il run (ultime 3h).
+        # NB: db_execute con "COUNT" usa fetchone() -> ritorna tupla (N,), non lista.
+        def _count_one(_res):
+            try:
+                if _res is None:
+                    return 0
+                # fetchone -> (N,) ; fetchall -> [(N,)]
+                if isinstance(_res, (list, tuple)) and len(_res) > 0:
+                    _first = _res[0]
+                    if isinstance(_first, (list, tuple)):
+                        return int(_first[0])
+                    return int(_first)
+                return 0
+            except Exception:
+                return 0
         _r_fem = db_execute("""
             SELECT COUNT(*) FROM phantom_forensic
             WHERE block_reason='MINA_CANCELLO_SALITA' AND ts_entry > ?
             AND mfe_usd <= 1.5
-        """, [_cutoff], fetch=True) or [[0]]
+        """, [_cutoff], fetch=True)
         _r_trn = db_execute("""
             SELECT COUNT(*) FROM phantom_forensic
             WHERE block_reason='MINA_CANCELLO_SALITA' AND ts_entry > ?
             AND mfe_usd > 1.5
-        """, [_cutoff], fetch=True) or [[0]]
-        n_femmine = _r_fem[0][0] if _r_fem else 0
-        n_trans   = _r_trn[0][0] if _r_trn else 0
+        """, [_cutoff], fetch=True)
+        n_femmine = _count_one(_r_fem)
+        n_trans   = _count_one(_r_trn)
         n_tagli   = n_femmine + n_trans
 
         html = f"""<!DOCTYPE html><html><head><meta charset='utf-8'>
