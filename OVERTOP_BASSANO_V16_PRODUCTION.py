@@ -12529,7 +12529,7 @@ class OvertopBassanoV16Production:
                     # Niente soglia di valore: basta che salga e non si sgonfi.
                     # try/except FAIL-OPEN: mai bloccare per errore del filtro.
                     # ════════════════════════════════════════════════════════════
-                    _grasso  = getattr(self, "_canc_max_usd", None) or 0.0
+                    _grasso  = getattr(self, "_canc_max_usd", None) or getattr(self, "_rit_picco_pre", None) or 0.0
                     _sgonfio = getattr(self, "_canc_tick_da_max", None) or 0
                     _respiro = int(float(os.environ.get("CANCELLO_RESPIRO_TICK", "40")))
                     # grasso CORRENTE ora (per misurare la discesa vera dal picco)
