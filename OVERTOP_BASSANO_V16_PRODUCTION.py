@@ -12573,7 +12573,11 @@ class OvertopBassanoV16Production:
                         # ha RAGGIUNTO il grasso minimo -> NON tagliare, ENTRA
                         _si_sgonfia = False
                         _mai_salito = False
-                    if _mai_salito or _si_sgonfia:
+                    # 22giu (Roberto): RISCHIO PIENO. Si taglia SOLO chi non e' MAI
+                    # salito (piatta +0.00). Chi ha messo grasso ENTRA, senza calcolo
+                    # del 75%/sgonfiamento, qualunque etichetta. "E' salito -> dentro
+                    # e stop." Lo sgonfiamento si gestisce DOPO, da dentro (trailing).
+                    if _mai_salito:
                         _motivo_f = ("mai salita (piatta)" if _mai_salito
                                      else f"sgonfiata (grasso {_grasso_ora:.2f}$ sceso da picco {_grasso:.2f}$)")
                         self._log_m2("🐺",
