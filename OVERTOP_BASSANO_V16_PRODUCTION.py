@@ -12564,9 +12564,13 @@ class OvertopBassanoV16Production:
                     # sale e tiene il grasso minimo, ENTRA. Il trailing fa il resto.
                     # ════════════════════════════════════════════════════════════
                     _grasso_min = float(os.environ.get("CANCELLO_GRASSO_MIN", "2.0"))
-                    _ha_grasso_vivo = (_grasso_ora >= _grasso_min)
+                    # USA IL PICCO (_grasso = max raggiunto), NON il grasso corrente.
+                    # Un candidato salito a +2.78 va portato dentro anche se nel tick
+                    # del controllo è sceso a +2.0. Era il bug che tagliava i trans
+                    # a +2.44/+2.78 (picco sopra soglia ma grasso_ora basso).
+                    _ha_grasso_vivo = (_grasso >= _grasso_min)
                     if _ha_grasso_vivo:
-                        # tiene grasso sopra la soglia minima -> NON tagliare, ENTRA
+                        # ha RAGGIUNTO il grasso minimo -> NON tagliare, ENTRA
                         _si_sgonfia = False
                         _mai_salito = False
                     if _mai_salito or _si_sgonfia:
