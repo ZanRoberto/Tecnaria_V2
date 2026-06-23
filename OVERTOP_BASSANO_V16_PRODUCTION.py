@@ -11915,6 +11915,14 @@ class OvertopBassanoV16Production:
                     except Exception as _e_mat_p1:
                         log.debug(f"[MATRIGNA_HOOK_P1_ERR] {_e_mat_p1}")
 
+                # FIX 23giu (Roberto): P1 (vecchio mondo, apre su score/pattern)
+                # fa entrare FEMMINE peak-0 che vanno a -5 (KILLER_FEMMINA). I dati
+                # mostrano: ogni loss e' peak 0.0 entrato da P1, ogni win e' peak>0.6.
+                # Interruttore P1_OFF=true -> P1 non apre, entra SOLO MASCHIO_DIRETTO
+                # (che ora richiede grasso reale >= soglia). Reversibile.
+                if os.environ.get("P1_OFF", "false").lower() == "true":
+                    self._log_m2("🚫", "P1_OFF: apertura P1 disattivata (solo MASCHIO_DIRETTO)")
+                    return
                 self._open_shadow_position(price, score, soglia, seed, size,
                                             momentum, volatility, trend,
                                             matrimonio_name, fingerprint_wr)
