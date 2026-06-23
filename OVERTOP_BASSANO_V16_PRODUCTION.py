@@ -12481,6 +12481,14 @@ class OvertopBassanoV16Production:
             except Exception:
                 pass  # mai bloccare il bot per errori sinapsi
 
+            # FIX 23giu (Roberto): questo e' l'ingresso SCORE-BASED (vecchio mondo):
+            # apre se score > soglia, SENZA guardare il grasso. La femmina delle
+            # 12:00 (score 36.84>34, peak 0.0, -2.49, build 14a78c48) e' entrata
+            # DA QUI, non da P1 (gia' spento). Interruttore SCORE_ENTRY_OFF=true
+            # -> entra SOLO MASCHIO_DIRETTO (grasso reale). Reversibile.
+            if os.environ.get("SCORE_ENTRY_OFF", "false").lower() == "true":
+                self._log_m2("🚫", "SCORE_ENTRY_OFF: ingresso score-based disattivato (solo MASCHIO_DIRETTO)")
+                return
             self._open_shadow_position(price, score, soglia, seed, size,
                                         momentum, volatility, trend,
                                         matrimonio_name, fingerprint_wr)
