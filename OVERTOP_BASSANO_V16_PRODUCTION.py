@@ -8841,7 +8841,17 @@ class OvertopBassanoV16Production:
                         else:
                             _md_grasso = 0.0
                         _md_grasso_min = float(os.environ.get("CANCELLO_GRASSO_MIN", "1.5"))
-                        if self._canc_su_consec >= _mosse_n and _md_grasso >= _md_grasso_min:
+                        # FIX 23giu pomeriggio (Roberto: "abbiamo sbloccato i maschi
+                        # stamattina, attenzione"): il vincolo grasso QUI strozzava
+                        # i maschi in RANGE_DEAD (2 mosse su ma grasso istantaneo
+                        # <1.5 al tick -> non entravano, 0 trade per 50min). Le
+                        # femmine ora restano fuori grazie a P1_OFF+SCORE_ENTRY_OFF
+                        # (le loro porte), NON serve il grasso qui. Default: entra
+                        # su 2 mosse su (come stamattina che funzionava). Il vincolo
+                        # grasso si riattiva con MD_GRASSO_GATE=true se serve.
+                        _md_gate = os.environ.get("MD_GRASSO_GATE", "false").lower() == "true"
+                        _md_ok = (self._canc_su_consec >= _mosse_n) and (not _md_gate or _md_grasso >= _md_grasso_min)
+                        if _md_ok:
                             self._canc_maschio_ok = True
                             # ════════════════════════════════════════════════════
                             # ENTRATA DIRETTA (21giu, Roberto: "deve entrare SUBITO
