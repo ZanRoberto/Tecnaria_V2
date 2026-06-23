@@ -8840,7 +8840,13 @@ class OvertopBassanoV16Production:
                             # ENV MASCHIO_ENTRA_DIRETTO (default true). FAIL-OPEN.
                             # ════════════════════════════════════════════════════
                             _entra_diretto = os.environ.get("MASCHIO_ENTRA_DIRETTO", "true").lower() == "true"
-                            _gia_aperto = bool(getattr(self, "_phantoms_open", None))
+                            # FIX 23giu (Roberto): il blocco usava bool(lista) ->
+                            # bastava 1 phantom aperto per fermare MASCHIO_DIRETTO
+                            # PER SEMPRE (porta tappata dal primo trade). Il resto
+                            # del codice (12081, _close_phantom) ragiona su MAX 5
+                            # posizioni simultanee. Allineo: apre finche' < 5 aperte.
+                            _MAX_PH = 5
+                            _gia_aperto = (len(getattr(self, "_phantoms_open", []) or []) >= _MAX_PH)
                             if _entra_diretto and not _gia_aperto and not getattr(self, "_maschio_diretto_in_corso", False):
                                 try:
                                     self._maschio_diretto_in_corso = True
