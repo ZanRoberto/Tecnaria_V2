@@ -14311,6 +14311,7 @@ class OvertopBassanoV16Production:
                         # rientra: ha visto verde, resta protetto.
                         if (_eta_ap >= _ap_min_eta and _in_perdita
                                 and _mai_verde
+                                and os.environ.get("ANTIPRECIPIZIO_OFF", "false").lower() != "true"
                                 and not self._shadow.get("_ap_gia_tagliato")):
                             self._shadow["_ap_gia_tagliato"] = True
                             self._log("✂️", f"ANTIPRECIPIZIO taglia TRANS @ {_eta_ap:.0f}s: "
