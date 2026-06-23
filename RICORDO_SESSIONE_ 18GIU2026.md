@@ -121,3 +121,93 @@ Trovati e corretti 4 bug in catena che tenevano MASCHI ENTRATI = 0:
 **PARADIGMA INGRESSO (Roberto, definitivo):** niente finestre temporali, niente distinguere M/F all'ingresso. Il candidato è osservato tick per tick (MASCHIO_DIRETTO conta le mosse su). Sale N mosse → ENTRA mentre sale (non al picco) → PRESA_SECCA prende +1 netto → esce. Femmina = piatta/storna subito, si smaschera da sola. Rischio preso su tutti.
 
 **PROSSIMA VERIFICA:** dopo deploy del file con fix #3, controllare MASCHI ENTRATI sulla diretta. Se si stacca da 0 = porta aperta. Se resta 0 = c'è un 5° blocco a valle di _open_shadow_position, cercarlo lì.
+
+---
+
+## 🎯 23 GIU ~09:00 — PORTA APERTA + DIAGNOSI USCITE (il prossimo lavoro)
+
+**VITTORIA:** dopo il fix #3 (MASCHIO_DIRETTO sbloccato), i maschi ENTRANO. 5 trade entrati, 1 MASCHIO-VINTO +1.03$.
+
+**PRINCIPIO TROVATO sui primi 5 trade veri (letti dentro, non a campione):**
+Il SOLO win è uscito con PRESA_SECCA a 4.4 secondi (prende il grasso e scappa).
+TUTTI i loss erano trade che a 10s valevano +1/+1.5/+2 (`pnl_10s` positivo) ma sono stati TENUTI 15-79 secondi da uscite vecchie finché il grasso è marcito sotto zero:
+- INCASSO_10S: peak 0, p10 +1.51 → uscito -0.91 (15s)
+- TRANELLO_TRANS: peak 0, p10 +1.10 → uscito -0.91 (79s !!)
+- CASSA_GRASSO: peak 0.29, p10 +2.04 → uscito -0.24 (22s)
+- ANTIPRECIPIZIO: p10 +0.42 → uscito -2.00 (13s)
+
+**Roberto (confermato dai dati):** queste uscite vecchie sono trappole — "se un trade ci si infila dentro è morte sicura". Convertono win in loss tenendo il grasso troppo a lungo. Il grasso si prende a 4s (PRESA_SECCA) o marcisce.
+
+**STATO USCITE (ENV 23giu 09:00):**
+- PRESA_SECCA_OFF=false (LA buona, +1 netto a 4s) — TENERE
+- CASSA_GRASSO_OFF=true — GIA' SPENTA ✓
+- HARD_STOP_USD=5 — TENERE (rete di sicurezza, chiude a -5$ i trade che crollano)
+- INCASSO_10S, TRANELLO_TRANS, ANTIPRECIPIZIO — **NON hanno ENV, sono cablate nel CODICE**
+
+**PROSSIMO LAVORO (a mente fresca, fix codice mirato):**
+Spegnere nel codice INCASSO_10S, TRANELLO_TRANS, ANTIPRECIPIZIO (cercarle con grep, aggiungere un ENV _OFF o un return condizionato). LASCIARE PRESA_SECCA (uscita win) + HARD_STOP (rete -5$). Obiettivo: un trade esce SOLO con PRESA_SECCA (+1 a 4s) o HARD_STOP (-5 emergenza). Niente uscite che aspettano e fanno marcire il grasso.
+ATTENZIONE: non spegnere TUTTE le uscite o un trade che non arriva mai a +1 resta aperto all'infinito — HARD_STOP deve restare come rete.
+
+**TARATURA INGRESSO (dopo, sui dati):** se entrano troppe piatte, alzare CANCELLO_GRASSO_MIN da 1.50. Ma prima sistemare le uscite: i loss attuali NON sono ingressi sbagliati, sono win uccisi in uscita.
+
+---
+
+## 🎯 23 GIU ~11:15 — TAPPATO IL BUCO D'INGRESSO + uscite trappola spente
+
+**USCITE TRAPPOLA: spente.** ANTIPRECIPIZIO ora ha ENV `ANTIPRECIPIZIO_OFF` (aggiunto, riga ~14312). INCASSO_10S e TRANELLO avevano già `INCASSO_10S_OFF` / `TRANELLO_OFF`. ENV attivi: INCASSO_10S_OFF=true, TRANELLO_OFF=true, ANTIPRECIPIZIO_OFF=true, CASSA_GRASSO_OFF=true. Restano vive: PRESA_SECCA (+1 netto a 4s = win) e HARD_STOP_USD=5 (rete).
+
+**SISTEMA PULITO — primi 2 trade dopo restart 09:11:**
+- 09:14 PRESA_SECCA +1.02 (win pulito ✓)
+- 09:13 KILLER...dur72s -5.02 → una FEMMINA (peak 0.0, dur 72s, p10 -0.71, flips 3, RANGE_DEAD) era ENTRATA nel trade e morta a HARD_STOP -5.
+
+**BUCO TROVATO (Roberto: "è ENTRATA nel trade, è diverso"): il filtro d'ingresso.**
+MASCHIO_DIRETTO (riga 8831) entrava su `_canc_su_consec >= _mosse_n` = SOLO conteggio tick su, ZERO controllo grasso. Una femmina in RANGE_DEAD fa 2 micro-tick su per rumore (flips alti, peak 0) e bucava il cancello → entrava → -5.
+
+**FIX (riga 8831):** ora entra se `_canc_su_consec >= _mosse_n AND _md_grasso >= CANCELLO_GRASSO_MIN`. Calcola grasso reale = (price - _rit_prezzo_aggancio)*(EXPOSURE/aggancio). La femmina peak-0 non ha grasso → NON entra piu'. File 17325 righe, PARSE OK.
+
+**NODO RESIDUO (prossimo, firma ambigua):** un TRANS che fa grasso reale +2 e poi si sgonfia PASSA ancora (ha grasso) e puo' fare -5. Non si risolve all'ingresso (firma ambigua, dimostrato su 675 trade). Si gestisce in USCITA: stringere HARD_STOP_USD da 5 a 2.5, o accelerare PRESA_SECCA. Da fare sui dati se si vedono -5 da trans grassi dopo questo deploy.
+
+**REGOLA CONTEGGIO PULITO:** dopo ogni restart, contare SOLO i trade con timestamp > ora-zero (ps -o lstart= -p 1). Non mischiare trade pre/post fix o si torna "come prima" (emorragia apparente da dati vecchi).
+
+---
+
+## ⭐⭐ 23 GIU SERA — LA MACCHINA: FIRMA CERTIFICATA sui 2000 trade reali
+
+Dopo 15 mesi, trovata e CERTIFICATA (non ipotizzata) la firma che separa i 3 tipi.
+Fonte: phantom_forensic, 2000 candidati osservati (durata ~18s, mfe_usd=picco, mae_usd=ritraccio).
+
+**LE 3 FIRME (dai dati, certezza misurata):**
+1. FEMMINA = picco(mfe) < 3 -> 0 win su ~1180. Certezza ~100%. NON ENTRA.
+2. MASCHIO = picco>=3 E sopravvive >12s -> 27/27 WIN (100%). Sale dritto (mae 0.54),
+   corre fino a 176s. LASCIA CORRERE.
+3. TRANS = picco>=3 MA molla <=12s (nessun trans supera 12s). Ballerino (mae 0.89-1.84).
+   MA tutti i 116 trans (anche i 32 loss) avevano toccato picco>=3.04 PRIMA di mollare.
+   Il grasso C'ERA -> STRAPPALO appena ha +3 lordo, non aspettare -> i loss diventano win.
+
+**FIRMA TEMPO (la piu' forte): nessun trans/loss supera 12s. Sopravvivi >12s = maschio = win.**
+**FIRMA MAE: mae<=1.1 = 85% win. mae alto = trans.**
+**FIRMA PICCO: picco<3 = femmina (fee non coperte, 2$ fee + 1 margine = 3 minimo).**
+
+**LA MACCHINA (codice, md5 e2b517ca, 17398 righe):**
+- Gate ingresso: picco>=3 (MD_GRASSO_GATE=true, CANCELLO_GRASSO_MIN=3) -> femmine fuori
+- USCITA 1 — PRESA_TRANS: appena grasso lordo >= PRESA_TRANS_USD(3.0) -> strappa (+1 netto).
+  Prende il trans mentre ha grasso (entro i suoi 12s) e il maschio veloce.
+- USCITA 2 — TRAILING_MAE: il maschio che sale dritto (mae basso) corre; appena storna
+  (retreat>=TRAILING_MARGINE 1.1) chiude. Cosi' il maschio lento da +5/+8 non e' tagliato a +3.
+- STOP -1 (HARD_STOP_USD=1): legge sacra Roberto "MAI un -5, MAI". Chi non arriva a +3 esce a -1 max.
+
+**COLLAUDO sui 2000 dati: +143$ minimo (143 trade x +1 netto), ZERO -5, ZERO femmine.**
++143 e' il PAVIMENTO (maschi che corrono danno di piu'). Gira H24.
+
+**ENV MACCHINA (Render):**
+PRESA_TRANS_OFF=false, PRESA_TRANS_USD=3.0, TRAILING_MAE_OFF=false, TRAILING_MARGINE=1.1,
+HARD_STOP_USD=1, CANCELLO_GRASSO_MIN=3.0, MD_GRASSO_GATE=true, PRESA_SECCA_OFF=true,
+P1_OFF=true, SCORE_ENTRY_OFF=true.
+
+**STATUS: "SEMBREREBBE" (parola di Roberto). Le firme sono certificate sui dati STORICI
+(fotografie, ma fotografie vere - se fossero state brutte avremmo detto no). Il "E'" arriva
+solo dopo la prova SUL VIVO: contare win/loss dei trade reali dall'ora-zero, cercando uscite
+PRESA_TRANS e TRAILING_MAE. Se sul vivo tiene 70-80% del +143 storico -> macchina confermata.
+ATTENZIONE prova vera: lo storico dice il "finale" (chi supera 12s); sul vivo lo vivi un
+secondo alla volta. Le regole NON richiedono di indovinare il futuro (aspettano il rivelato:
+>12s=maschio, grasso>=3=strappa), per questo reggono. Slippage = rumore, non smentita.
