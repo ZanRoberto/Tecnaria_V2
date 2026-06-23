@@ -8828,7 +8828,48 @@ class OvertopBassanoV16Production:
                         self._canc_prezzo_prec = price
 
                         # MASCHIO confermato: N movimenti su consecutivi -> entra
-                        if self._canc_su_consec >= _mosse_n:
+                        # FIX 23giu (Roberto): NON basta il conteggio dei tick su.
+                        # Una femmina in RANGE_DEAD fa 2 micro-tick su per rumore
+                        # (peak 0, sign_flips alti) e bucava il cancello -> entrava
+                        # nel trade -> -5. Ora serve ANCHE grasso REALE in mano:
+                        # 2 mosse su E grasso_ora >= CANCELLO_GRASSO_MIN. La femmina
+                        # che rimbalza a zero grasso NON entra piu'.
+                        _md_aggancio = getattr(self, "_rit_prezzo_aggancio", None)
+                        if _md_aggancio:
+                            _md_exp = float(os.environ.get("EXPOSURE", "5000"))
+                            _md_grasso = (price - _md_aggancio) * (_md_exp / _md_aggancio)
+                        else:
+                            _md_grasso = 0.0
+                        _md_grasso_min = float(os.environ.get("CANCELLO_GRASSO_MIN", "1.5"))
+                        # FIX 23giu pomeriggio (Roberto: "abbiamo sbloccato i maschi
+                        # stamattina, attenzione"): il vincolo grasso QUI strozzava
+                        # i maschi in RANGE_DEAD (2 mosse su ma grasso istantaneo
+                        # <1.5 al tick -> non entravano, 0 trade per 50min). Le
+                        # femmine ora restano fuori grazie a P1_OFF+SCORE_ENTRY_OFF
+                        # (le loro porte), NON serve il grasso qui. Default: entra
+                        # su 2 mosse su (come stamattina che funzionava). Il vincolo
+                        # grasso si riattiva con MD_GRASSO_GATE=true se serve.
+                        _md_gate = os.environ.get("MD_GRASSO_GATE", "false").lower() == "true"
+                        # ════════════════════════════════════════════════════════
+                        # FIX 23giu NOTTE (Roberto, ERRORE TROVATO): MASCHIO_DIRETTO
+                        # entrava su 2 mosse su SENZA guardare il MAE. Ma il MAE E'
+                        # LA FIRMA: maschio mae basso (sale dritto), TRANS mae alto
+                        # (balla). Il trans ballerino faceva comunque 2 mosse su ed
+                        # ENTRAVA -> poi -2/-3. ORA: entra solo se NON ha ballato,
+                        # cioe' se durante l'osservazione non e' sceso sotto -MAE.
+                        # _rit_crollo_min = minimo $ toccato in osservazione (il mae).
+                        # ENV MD_MAE_MAX (default 1.0 = soglia certificata sui 2000
+                        # trade: mae<=1.1 maschio 85%). 0 = controllo spento.
+                        # ════════════════════════════════════════════════════════
+                        _md_mae_max = float(os.environ.get("MD_MAE_MAX", "1.0"))
+                        _md_crollo = getattr(self, "_rit_crollo_min", None)
+                        # mae ok se: controllo spento, o non ho un crollo, o il crollo
+                        # e' sopra -soglia (non sceso troppo = non ha ballato = maschio)
+                        _md_mae_ok = (_md_mae_max <= 0) or (_md_crollo is None) or (_md_crollo >= -_md_mae_max)
+                        _md_ok = (self._canc_su_consec >= _mosse_n) and (not _md_gate or _md_grasso >= _md_grasso_min) and _md_mae_ok
+                        if not _md_mae_ok and self._canc_su_consec >= _mosse_n:
+                            self._log_m2("📉", f"MAE FIRMA: candidato ha ballato (crollo {_md_crollo:.2f}$ < -{_md_mae_max:.1f}) = TRANS, NON entra")
+                        if _md_ok:
                             self._canc_maschio_ok = True
                             # ════════════════════════════════════════════════════
                             # ENTRATA DIRETTA (21giu, Roberto: "deve entrare SUBITO
@@ -8840,7 +8881,13 @@ class OvertopBassanoV16Production:
                             # ENV MASCHIO_ENTRA_DIRETTO (default true). FAIL-OPEN.
                             # ════════════════════════════════════════════════════
                             _entra_diretto = os.environ.get("MASCHIO_ENTRA_DIRETTO", "true").lower() == "true"
-                            _gia_aperto = bool(getattr(self, "_phantoms_open", None))
+                            # FIX 23giu (Roberto): il blocco usava bool(lista) ->
+                            # bastava 1 phantom aperto per fermare MASCHIO_DIRETTO
+                            # PER SEMPRE (porta tappata dal primo trade). Il resto
+                            # del codice (12081, _close_phantom) ragiona su MAX 5
+                            # posizioni simultanee. Allineo: apre finche' < 5 aperte.
+                            _MAX_PH = 5
+                            _gia_aperto = (len(getattr(self, "_phantoms_open", []) or []) >= _MAX_PH)
                             if _entra_diretto and not _gia_aperto and not getattr(self, "_maschio_diretto_in_corso", False):
                                 try:
                                     self._maschio_diretto_in_corso = True
@@ -8879,7 +8926,25 @@ class OvertopBassanoV16Production:
                 _cancello_passa = True   # FAIL-OPEN: mai bloccare per errore del cancello
 
             if _cancello_passa:
-                self._evaluate_shadow_entry(price, momentum, volatility, trend)
+                # FIX 23giu sera (Roberto: "tutta roba che non serve piu'") — BYPASS VERO.
+                # PROBLEMA dai log: MASCHIO_DIRETTO confermava ("ENTRA bypass veti") ma
+                # poi chiamava _evaluate_shadow_entry, che e' PIENA dei veti del vecchio
+                # mondo (VERITAS, CAPSULE block_score, SCORE_SOTTO score>=34, constitutional
+                # PRE_SC_VETO). In RANGE_DEAD lo score e' 18-29 < 34 -> bloccato SEMPRE ->
+                # 0 trade. Il "bypass veti" era finto. ORA: se il maschio e' confermato
+                # (_canc_maschio_ok), apre DIRETTO con _open_shadow_position, saltando
+                # del tutto _evaluate_shadow_entry e i suoi veti. Bypass VERO.
+                if getattr(self, "_canc_maschio_ok", False) and os.environ.get("MASCHIO_BYPASS_VERO", "true").lower() == "true":
+                    try:
+                        _seed_v = getattr(self, "_last_seed", 0.5)
+                        self._log_m2("🐺", "MASCHIO BYPASS VERO: apro diretto, salto VERITAS/CAPSULE/SCORE/CONST")
+                        self._open_shadow_position(price, 99.0, 0.0, _seed_v, 0.3,
+                                                    momentum, volatility, trend,
+                                                    "MASCHIO_DIRETTO", 0.5)
+                    except Exception as _e_mbv:
+                        log.error(f"[MASCHIO_BYPASS_ERR] {_e_mbv}")
+                else:
+                    self._evaluate_shadow_entry(price, momentum, volatility, trend)
 
         # -- PHANTOM TRACKER: aggiorna trade fantasma ogni tick ------------
         if self._phantoms_open:
@@ -11896,6 +11961,14 @@ class OvertopBassanoV16Production:
                     except Exception as _e_mat_p1:
                         log.debug(f"[MATRIGNA_HOOK_P1_ERR] {_e_mat_p1}")
 
+                # FIX 23giu (Roberto): P1 (vecchio mondo, apre su score/pattern)
+                # fa entrare FEMMINE peak-0 che vanno a -5 (KILLER_FEMMINA). I dati
+                # mostrano: ogni loss e' peak 0.0 entrato da P1, ogni win e' peak>0.6.
+                # Interruttore P1_OFF=true -> P1 non apre, entra SOLO MASCHIO_DIRETTO
+                # (che ora richiede grasso reale >= soglia). Reversibile.
+                if os.environ.get("P1_OFF", "false").lower() == "true":
+                    self._log_m2("🚫", "P1_OFF: apertura P1 disattivata (solo MASCHIO_DIRETTO)")
+                    return
                 self._open_shadow_position(price, score, soglia, seed, size,
                                             momentum, volatility, trend,
                                             matrimonio_name, fingerprint_wr)
@@ -12454,6 +12527,14 @@ class OvertopBassanoV16Production:
             except Exception:
                 pass  # mai bloccare il bot per errori sinapsi
 
+            # FIX 23giu (Roberto): questo e' l'ingresso SCORE-BASED (vecchio mondo):
+            # apre se score > soglia, SENZA guardare il grasso. La femmina delle
+            # 12:00 (score 36.84>34, peak 0.0, -2.49, build 14a78c48) e' entrata
+            # DA QUI, non da P1 (gia' spento). Interruttore SCORE_ENTRY_OFF=true
+            # -> entra SOLO MASCHIO_DIRETTO (grasso reale). Reversibile.
+            if os.environ.get("SCORE_ENTRY_OFF", "false").lower() == "true":
+                self._log_m2("🚫", "SCORE_ENTRY_OFF: ingresso score-based disattivato (solo MASCHIO_DIRETTO)")
+                return
             self._open_shadow_position(price, score, soglia, seed, size,
                                         momentum, volatility, trend,
                                         matrimonio_name, fingerprint_wr)
@@ -12563,23 +12644,35 @@ class OvertopBassanoV16Production:
                     # distingue maschio da trans all'entrata (firma ambigua): se
                     # sale e tiene il grasso minimo, ENTRA. Il trailing fa il resto.
                     # ════════════════════════════════════════════════════════════
-                    _grasso_min = float(os.environ.get("CANCELLO_GRASSO_MIN", "2.0"))
-                    # USA IL PICCO (_grasso = max raggiunto), NON il grasso corrente.
-                    # Un candidato salito a +2.78 va portato dentro anche se nel tick
-                    # del controllo è sceso a +2.0. Era il bug che tagliava i trans
-                    # a +2.44/+2.78 (picco sopra soglia ma grasso_ora basso).
-                    _ha_grasso_vivo = (_grasso >= _grasso_min)
+                    # FIX 23giu sera (Roberto): questo cancello usava CANCELLO_GRASSO_MIN,
+                    # ma quel valore ora vale 3 (gate FIRMA in osservazione). Usandolo
+                    # QUI strozzava l'apertura: il maschio al tick d'ingresso ha grasso
+                    # istantaneo piccolo (deve ancora salire) -> tagliato -> 0 trade.
+                    # La MACCHINA filtra in USCITA (PRESA_TRANS +3, stop -1), NON qui.
+                    # Quindi cancello apertura usa soglia PROPRIA bassa: entra chi ha
+                    # un minimo di grasso vivo, il resto lo decide l'uscita.
+                    _grasso_min = float(os.environ.get("CANCELLO_APERTURA_MIN", "0.0"))
+                    # ════════════════════════════════════════════════════════════
+                    # REGOLA ROBERTO (22giu sera): NON guardare il PICCO. Guarda il
+                    # GRASSO CHE HA ADESSO IN MANO (_grasso_ora). Se adesso ha grasso
+                    # >= soglia (def 2.0$, sopra le fee) -> ENTRA SUBITO e castra,
+                    # PROPRIO mentre si svuota dal massimo: e' il momento di prenderlo,
+                    # non di buttarlo. Il vecchio 75% faceva il contrario (vedeva
+                    # calare e tagliava) = buttava il grasso. ELIMINATO.
+                    # Si taglia SOLO chi ADESSO ha grasso sotto soglia o e' a zero.
+                    # ════════════════════════════════════════════════════════════
+                    _ha_grasso_vivo = (_grasso_ora >= _grasso_min)
                     if _ha_grasso_vivo:
-                        # ha RAGGIUNTO il grasso minimo -> NON tagliare, ENTRA
+                        # ha grasso vivo in mano ADESSO -> ENTRA, castra subito
                         _si_sgonfia = False
                         _mai_salito = False
-                    # 22giu (Roberto): RISCHIO PIENO. Si taglia SOLO chi non e' MAI
-                    # salito (piatta +0.00). Chi ha messo grasso ENTRA, senza calcolo
-                    # del 75%/sgonfiamento, qualunque etichetta. "E' salito -> dentro
-                    # e stop." Lo sgonfiamento si gestisce DOPO, da dentro (trailing).
-                    if _mai_salito:
-                        _motivo_f = ("mai salita (piatta)" if _mai_salito
-                                     else f"sgonfiata (grasso {_grasso_ora:.2f}$ sceso da picco {_grasso:.2f}$)")
+                        _taglia = False
+                    else:
+                        # adesso non ha grasso sopra soglia -> taglia (femmina/piatta
+                        # o gia' svuotato sotto la soglia che vale le fee)
+                        _taglia = True
+                    if _taglia:
+                        _motivo_f = (f"grasso ora {_grasso_ora:.2f}$ < {_grasso_min:.2f}$ (sotto soglia/svuotato)")
                         self._log_m2("🐺",
                             f"FILTRO M/F: max salita +{_grasso:.2f}$ — "
                             f"{_motivo_f} = femmina/trans, NON apre")
@@ -14183,26 +14276,51 @@ class OvertopBassanoV16Production:
             current_pnl = _sdelta * (5000.0 / self._shadow["price_entry"])  # lordo — fee al close
 
             # ════════════════════════════════════════════════════════════════
-            # ⭐ LA MACCHINA (firma MAE certificata su 2000 trade) — solo uscita.
-            # PRESA_TRANS: appena grasso lordo >= soglia (3.0 = +1 netto) -> incassa.
-            # Strappa il trans mentre ha grasso, prende il maschio veloce.
-            # TRAILING_MAE: il maschio che sale dritto (mae basso) corre; appena
-            # storna (retreat >= margine) chiude. ENV per spegnerle se serve.
+            # ⭐ LA MACCHINA (23giu2026, Roberto) — FIRMA CERTIFICATA su 2000 trade.
             # ════════════════════════════════════════════════════════════════
+            # SCOPERTA dai dati phantom_forensic (2000 candidati osservati):
+            #
+            #  MASCHIO = sopravvive OLTRE 12s con grasso -> 27/27 WIN (100%).
+            #            sale dritto (mae basso), corre fino a 176s. LASCIALO CORRERE.
+            #  TRANS   = grasso >=3 ma molla ENTRO 12s (nessun trans supera 12s).
+            #            ballerino (mae alto), MA tutti i 116 trans (anche i 32 loss)
+            #            avevano toccato picco >=3.04 PRIMA di mollare. Il grasso
+            #            C'ERA -> STRAPPALO appena ha +3 lordo (=+1 netto, fee pagate),
+            #            non aspettare che molli -> i loss diventano win.
+            #  FEMMINA = picco <3 -> non entra nemmeno (gate ingresso).
+            #
+            # REGOLA UNICA in uscita: appena il grasso lordo tocca PRESA_TRANS_USD
+            # (default 3.0 = +1 netto dopo 2$ fee) -> INCASSA SUBITO. Questo strappa
+            # il trans mentre ha il grasso (entro i suoi 12s) e prende anche il
+            # maschio veloce. Il maschio LENTO che invece continua a salire SENZA
+            # ritracciare (mae basso) viene lasciato correre dal trailing sotto.
+            # ════════════════════════════════════════════════════════════════
+            _fee_tot = self.TRADE_SIZE_USD * self.LEVERAGE * self.FEE_PCT * 2
             if os.environ.get("PRESA_TRANS_OFF", "false").lower() != "true":
-                _presa_trans = float(os.environ.get("PRESA_TRANS_USD", "3.0"))
+                _presa_trans = float(os.environ.get("PRESA_TRANS_USD", "3.0"))  # lordo (>=3 = +1 netto)
                 if current_pnl >= _presa_trans:
-                    _fee_tot = self.TRADE_SIZE_USD * self.LEVERAGE * self.FEE_PCT * 2
                     _netto = current_pnl - _fee_tot
-                    self._log_m2("💰", f"PRESA TRANS: +{current_pnl:.2f} lordo (+{_netto:.2f} netto) >= {_presa_trans:.1f} = STRAPPO")
+                    self._log_m2("💰",
+                        f"PRESA TRANS: grasso +{current_pnl:.2f}$ lordo (+{_netto:.2f} netto) "
+                        f">= {_presa_trans:.1f} = STRAPPO subito (trans/maschio-veloce)")
                     return self._close_shadow_trade(price, f"PRESA_TRANS_+{_netto:.1f}net")
+
+            # ════════════════════════════════════════════════════════════════
+            # TRAILING MAE — per il maschio che corre oltre la presa: se sale dritto
+            # (mae basso) lo lascia correre; appena storna (retreat >= margine) chiude.
+            # Cosi' il maschio lento da +5/+8 non viene tagliato dalla presa a +3 ma
+            # accompagnato fino allo storno. ENV: TRAILING_MAE_OFF, TRAILING_MARGINE.
+            # ════════════════════════════════════════════════════════════════
             if os.environ.get("TRAILING_MAE_OFF", "false").lower() != "true":
                 _tr_attiva  = float(os.environ.get("TRAILING_ATTIVA", "1.0"))
                 _tr_margine = float(os.environ.get("TRAILING_MARGINE", "1.1"))
-                _retreat_grasso = (self._shadow_max_price - price) * (5000.0 / self._shadow["price_entry"])
+                _retreat_grasso = retreat * (5000.0 / self._shadow["price_entry"])
                 if max_profit >= _tr_attiva and _retreat_grasso >= _tr_margine:
-                    self._log_m2("✂️", f"TRAILING MAE: picco +{max_profit:.2f} retreat {_retreat_grasso:.2f} >= {_tr_margine:.1f} = STORNA +{current_pnl:.2f}")
-                    return self._close_shadow_trade(price, f"TRAILING_MAE_p{max_profit:.1f}_i{current_pnl:.1f}")
+                    self._log_m2("✂️",
+                        f"TRAILING MAE: picco +{max_profit:.2f}$ retreat {_retreat_grasso:.2f}$ "
+                        f">= margine {_tr_margine:.1f} = STORNA, incasso +{current_pnl:.2f}$ lordo")
+                    return self._close_shadow_trade(price, f"TRAILING_MAE_picco{max_profit:.1f}_inc{current_pnl:.1f}")
+
 
             # ════════════════════════════════════════════════════════════════
             # MINA CASSA_GRASSO (12giu2026, Roberto) — CATTURA DEI FURBI.
@@ -14322,6 +14440,7 @@ class OvertopBassanoV16Production:
                         # rientra: ha visto verde, resta protetto.
                         if (_eta_ap >= _ap_min_eta and _in_perdita
                                 and _mai_verde
+                                and os.environ.get("ANTIPRECIPIZIO_OFF", "false").lower() != "true"
                                 and not self._shadow.get("_ap_gia_tagliato")):
                             self._shadow["_ap_gia_tagliato"] = True
                             self._log("✂️", f"ANTIPRECIPIZIO taglia TRANS @ {_eta_ap:.0f}s: "
