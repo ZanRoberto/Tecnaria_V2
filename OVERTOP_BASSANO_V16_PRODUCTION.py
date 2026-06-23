@@ -12608,7 +12608,14 @@ class OvertopBassanoV16Production:
                     # distingue maschio da trans all'entrata (firma ambigua): se
                     # sale e tiene il grasso minimo, ENTRA. Il trailing fa il resto.
                     # ════════════════════════════════════════════════════════════
-                    _grasso_min = float(os.environ.get("CANCELLO_GRASSO_MIN", "2.0"))
+                    # FIX 23giu sera (Roberto): questo cancello usava CANCELLO_GRASSO_MIN,
+                    # ma quel valore ora vale 3 (gate FIRMA in osservazione). Usandolo
+                    # QUI strozzava l'apertura: il maschio al tick d'ingresso ha grasso
+                    # istantaneo piccolo (deve ancora salire) -> tagliato -> 0 trade.
+                    # La MACCHINA filtra in USCITA (PRESA_TRANS +3, stop -1), NON qui.
+                    # Quindi cancello apertura usa soglia PROPRIA bassa: entra chi ha
+                    # un minimo di grasso vivo, il resto lo decide l'uscita.
+                    _grasso_min = float(os.environ.get("CANCELLO_APERTURA_MIN", "0.0"))
                     # ════════════════════════════════════════════════════════════
                     # REGOLA ROBERTO (22giu sera): NON guardare il PICCO. Guarda il
                     # GRASSO CHE HA ADESSO IN MANO (_grasso_ora). Se adesso ha grasso
