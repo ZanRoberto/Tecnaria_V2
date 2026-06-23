@@ -1,82 +1,123 @@
-# STATO OVERTOP V16 — 20 giugno 2026 SERA (v8)
-## Caricare all'INIZIO della prossima chat. Sostituisce v7.
+# APERTURA OVERTOP V16 — LEGGERE PRIMA DI TUTTO
+## Roberto Zan · Tecnaria_V2 · ultima revisione 22 giu 2026
 
-> **Claude: leggi TUTTO prima di toccare. La diagnosi vera è qui, trovata NEI LOG, non a tentoni.**
-> REGOLE: dati reali prima di modificare. File come download. Test import+py_compile prima di consegnare. UNA cosa per volta. MAI parlare di tempo/stanchezza/pause con Roberto. MAI indovinare schema DB. Claude NON accede al server: Roberto incolla output Web Shell. Roberto da cellulare: query UNA RIGA corta.
-
----
-
-## 🎯 LA DIAGNOSI VERA (20giu sera, trovata nei LOG RENDER — non più ipotesi)
-
-Roberto ha urlato per 40 ore "qualcosa blocca, non è il mercato". **AVEVA RAGIONE.** I log lo provano:
-
-**FATTO 1 — Il mercato NON è fermo.** Log: `TSUNAMI 30s:SCHIUMA(UP) 2min:SCHIUMA(UP) 10min:SCHIUMA(UP)` + `EVENT_PREBREAKOUT`. Il mercato si muove in SU. "Mercato piatto da 40 ore" era FALSO (era la dashboard che mostrava gf_drift/gf_stato morti — vedi sotto).
-
-**FATTO 2 — Lo score NON è 0. È 23-28, sotto la soglia.** Log: `SCORE_SOTTO: 23.1 vs 34.0`, `28.6 vs 34.0`. Il bot calcola, vede il movimento, ma lo score si ferma a 28 e non supera la soglia.
-
-**FATTO 3 (LA CAUSA) — Lo score è EROSO dai veti del vecchio mondo.** Log: `VERITAS dep: DEBOLE|BASSA|SIDEWAYS TOSSICO wr=18%`, `CAPSULE dep: block_score=200 reasons=[CTX_TOSSICO..., MAT_TOSSICO...]`, `[CM] BLOCCO LEARNED_CTX... WR=6%`. Questi organi (VERITAS, capsule, CM learned) **abbassano lo score** basandosi sullo storico di sconfitte in quel contesto. Lo score parte buono (seed era 20!) ma viene eroso a 28.
-
-**FATTO 4 (insight di Roberto, decisivo) — Lo score non è più il giudice giusto.** Roberto: "prima passava a 48, ora a 34 (più basso) non passa → NON è la soglia. Chi governa lo score non è quello che deve far passare i candidati." ESATTO. Abbassare SCORE_FLOOR non risolve, perché il problema non è il livello della soglia: è che lo score è ancora governato da VERITAS/capsule/fattori (vecchio mondo) invece di essere un puro filtro anti-rumore.
-
-**FATTO 5 — Il WebSocket cade di continuo.** Log: `[WS_ERROR] ping/pong timed out`, `reconn=34`. 34 riconnessioni. Causa: `ping_timeout=10` troppo stretto su Render → quando il thread è occupato il pong arriva tardi → Binance chiude. Dati a singhiozzo → score non si consolida. **FIX APPLICATO** nel file `9ef6b1e2`: ping_timeout allargato a 18s (ENV WS_PING_TIMEOUT). Da verificare che reconn smetta di crescere.
+> Claude: questo file esiste per UNA ragione: **non far ricominciare la sessione da zero.**
+> I 5 controlli qui sotto vanno fatti PRIMA di parlare di mine, cancelli, soglie o ENV.
+> Se salti i controlli e parti a teorizzare, stai sprecando il tempo di Roberto. Non farlo.
 
 ---
 
-## ❌ GLI INTERRUTTORI DI OGGI COPRONO SOLO PARTE DEI VETI
-Il problema per cui lo score resta eroso: gli interruttori messi oggi NON spengono i veti per intero.
-- `SC_CAPSULE_VOTO_OFF=true` → spegne SOLO il "voto" capsule (riga 6326). Il codice stesso dice (r.6321-6323): "NON tocca Veritas, NON tocca FP_TOSSICO, NON tocca il block altrove. Solo il VOTO."
-- `ATTRITO_OFF`, `VERITAS_OFF` → coprono alcuni return, ma VERITAS continua a comparire nei log come `dep` (deposto) e ad abbassare lo score.
-- I veti sono "DEPOSTI" (loggano, l'SC decide) ma "deposto" ≠ "spento": continuano a pesare sullo score.
+## ⛔ I 5 CONTROLLI D'APERTURA (in ordine, sempre, prima di qualsiasi proposta)
 
-**CONCLUSIONE:** il vecchio modello (VERITAS/capsule che giudicano sullo storico) e il nuovo (cancello sul movimento) convivono nello stesso file, e il vecchio STROZZA il nuovo PRIMA che arrivi al cancello. È la "dicotomia" che Roberto aveva individuato la mattina del 20giu.
+Roberto incolla l'output (Claude NON accede al server). Una riga per volta, corte (cellulare).
 
----
-
-## ✅ LA STRADA GIUSTA (prossima sessione, intervento strutturale lucido)
-NON tarare lo score. NON un altro interruttore a tentoni. La strada è:
-1. **Scollegare lo score dal giudizio.** Lo score deve diventare un filtro anti-rumore FISSO e BASSO (15-20): "c'è movimento o no". Punto.
-2. **Spegnere VERITAS + capsule learned + CM_LEARNED PER INTERO** (non "deposti"), mappando TUTTI i punti dove toccano lo score in un colpo solo, non uno per volta.
-3. Il candidato arriva al cancello appena c'è movimento minimo, senza erosione a monte.
-4. Il CANCELLO (FILTRO M/F, sul movimento) fa l'unico giudizio: maschio (sale, nuovi massimi) entra, femmina (piatta/si sgonfia) tagliata.
-5. Poi RACCOGLIERE trade nuovi puliti e leggerli (phantom_forensic per i blocchi del cancello, trades per i maschi entrati).
-
-**Il GRANDE PASSO (quando il modello regge):** estrarre campo+cancello in un file PULITO di poche centinaia di righe. Le 17.200 righe con VERITAS/capsule/SC/fattori sono ingovernabili — la prova è la giornata del 20giu: 10 file consegnati per cacciare freni sparsi in funzioni diverse.
-
----
-
-## 🔖 BUILD / FILE (20giu sera)
-- **Ultimo file:** `9ef6b1e2` = catena fix del 20giu (SCORE_FLOOR env r.1026, ATTRITO_OFF veti motore, BOOT_GUARD warmup RSI, SC_BLOCCA_EXPLOSIVE observer, SEME_GATE_OFF, SOGLIA_PIATTA in score_now+evaluate, gf_drift VIVO, gf_stato VIVO, WS ping_timeout 18s).
-- Cronologia MD5: f5152eb7 (verde base) → 2d346957 → dc116177 → 2fcb616f → 0118b249 (gf_drift) → b4fbd5d1 (gf_stato) → **9ef6b1e2 (WS ping, ULTIMO)**.
-- ⚠️ Verificare sempre `md5sum` sul container + `wc -l` (~17.200). DeepSeek una volta ha dato un file monco da 656 righe: NON caricare file sotto ~17.000 righe.
-- Launcher app.py `6c12b89e` stabile. Procfile `web: python app.py`. DB /var/data/trading_data.db.
-- **GATE PEAK (gate_peak_osserva) è SPENTO** (`GATE_PEAK_OFF=true`) — è il giudice VECCHIO, lasciarlo spento. Il giudice di Roberto è il FILTRO M/F / cancello (scrive in phantom_forensic con block_reason=MINA_CANCELLO_SALITA, NON in gate_peak_osserva).
-
----
-
-## 🩹 FIX DISPLAY FATTI OGGI (erano "tachimetri rotti")
-- **gf_drift** (r.16566): mostrava 0.000 morto (scritto solo dentro GF_DIREZIONE). Ora calcolato da _prices_long a ogni heartbeat → mostra drift vero.
-- **gf_stato** (LIBERO/FUORI): mostrava "—" permanente (scritto solo dentro _evaluate_shadow_entry, cioè solo durante un aggancio). Ora calcolato dal drift vivo a ogni heartbeat.
-- Questi NON erano blocchi di trading, solo display. Ma facevano credere a Roberto "mercato fermo/rotto" quando il bot girava.
-
----
-
-## 🎯 ENV ATTUALI (20giu sera)
+**1. QUALE FILE GIRA DAVVERO** — è la radice di metà dei loop.
 ```
-ATTRITO_OFF=true · CANCELLI_OBSERVER=true · VERITAS_OFF=true · MERCATO_MORTO_OFF=true
-SC_FP_TOSSICO_OFF=true · SC_CAPSULE_VOTO_OFF=true · SEME_GATE_OFF=true · LOSS_STREAK_OFF=true
-SOGLIA_PIATTA=true · SCORE_FLOOR=34 · CANCELLO_PICCO_MIN_USD=0.0 · CROMO_GATE_ON=false
-CANCELLO_APERTURA_OFF=false · CANCELLO_SALITA_OFF=false · CANCELLO_MOSSE=3 · CANCELLO_RESPIRO_TICK=40
-GF_DIREZIONE_OFF=false (LONG-only, NON spegnere)
-WS_WATCHDOG_SEC=60 · CONTORNO_OFF=true · WS_PING_TIMEOUT=18 (nuovo, opzionale)
-GATE_PEAK_OFF=true (gate vecchio, lasciare spento)
+md5sum OVERTOP_BASSANO*PRODUCTION.py; echo ---; grep -iE "OVERTOP_BASSANO.*PRODUCTION" app.py | grep -i import
 ```
-NB: questi interruttori NON bastano — VERITAS/capsule erodono ancora lo score (vedi diagnosi). Serve l'intervento strutturale.
+→ Nella cartella ci sono PIÙ file (`V16`, `(1)_V16`, `(V15)`). Il `(1)` è un download doppione.
+→ Il bot esegue SOLO quello che `app.py` importa. Se modifichi un file diverso da quello importato, **lavori su un cadavere mentre il bot ne esegue un altro.** È successo. `/diagnostic` si dichiarava V15 per questo.
+→ **REGOLA: si modifica SOLO il file che app.py importa. Verificare md5 PRIMA e DOPO ogni deploy.**
 
-## 📜 PROIBIZIONI
-MAI parlare di tempo/stanchezza. MAI distinguere M/F all'ingresso (firma ambigua). MAI SHORT (LONG-only). MAI veti con finestre/conteggi. Fee VERA $2.00/trade. MAI pacchettare. MAI riscrivere da zero. MAI indovinare schema DB. MAI dire a Roberto che ha scoperto qualcosa che nessuno ha pensato (onestà > carezza). MAI fare prove a caso: leggere i LOG RENDER per il perché.
+**2. DA QUANTO È SU IL PROCESSO** — giudicare solo i trade nati dopo l'avvio.
+```
+ps -o lstart=,etime= -p 1
+```
 
-## 📜 CADAVERI (NON riattivare)
-streak_4, Narratore, RSI/MACD, ZONA_MORTA, TRANELLO_FEE_ZERO, gate "3 morsi", CROMO.
+**3. STATO VIVO (non lo status, i contatori veri)**
+```
+sqlite3 /var/data/trading_data.db "SELECT (SELECT COUNT(*) FROM trades) trades, (SELECT COUNT(*) FROM phantom_forensic) tagli, (SELECT MAX(ts_entry) FROM phantom_forensic) ult_taglio, (SELECT COUNT(*) FROM curva_nascita) curve, (SELECT MAX(trade_ts) FROM curva_nascita) ult_curva;"
+```
+→ Se `ult_curva` è vecchia mentre `ult_taglio` è di adesso → **il film non si registra** (vedi nodo aperto sotto).
 
-## METODO CHE HA FUNZIONATO IL 20giu (tenerlo)
-La verità è venuta dai LOG RENDER (stdout, NON il file /var/data/trading.log che è vuoto, NON lo spioncino /trading/status che non espone momentum). Quando Roberto dice "qualcosa blocca", LEGGERE I LOG, non indovinare da status. I log dicono esattamente: TSUNAMI, VERITAS dep, CAPSULE dep, SCORE_SOTTO X vs Y, WS_ERROR. Quella è la telecamera vera.
+**4. ENV REALI DEL CANCELLO** — mai citarli a memoria, leggerli.
+```
+env | grep -iE "CANCELLO|MOSSE|GRASSO|PICCO|GATE|SOGLIA|SCORE|VERITAS|CAPSULE" | sort
+```
+
+**5. SCHEMA PRIMA DI OGNI SELECT** — mai indovinare nomi tabelle/colonne.
+```
+sqlite3 /var/data/trading_data.db ".tables"
+sqlite3 /var/data/trading_data.db "PRAGMA table_info(NOMETABELLA);"
+```
+
+---
+
+## 🎯 IL PARADIGMA D'INGRESSO (deciso da Roberto, NON rinegoziabile ogni volta)
+
+**NON c'è una finestra temporale. Non sono 10s, non sono 6s, non sono 15s. È un'OSSERVAZIONE.**
+
+- L'aggancio è osservazione a **costo zero** (no esposizione, no fee). Si guarda il candidato muoversi.
+- **Appena il candidato si comporta da maschio — cresce, fa il colpo, tiene il grasso — ENTRA.** Non si aspetta un timer.
+- Si entra **mentre sale**, PRIMA che sia grasso da iniziare la discesa. Al picco si è già in ritardo.
+- **Firma ambigua all'ingresso** (verificato su 675 trade): a 2 colpi NON sai con certezza se è maschio o trans/femmina. Si accetta il rischio: se sale e tiene il grasso minimo, ENTRA, **qualunque etichetta abbia.** Il trailing in uscita fa il resto — mangia il grasso e molla quando scende.
+- Quindi: **si prende rischio su tutti — maschi, trans, femmine.** Il filtro non è perfetto e non deve esserlo. Meglio entrare e lasciar decidere all'uscita, che tagliare a monte e perdere i maschi.
+
+**Cosa Claude NON deve più fare:** proporre di distinguere maschio/femmina all'ingresso; proporre finestre temporali fisse; proporre di tarare un gate in più; rimangiarsi questo paradigma a ogni chat.
+
+---
+
+## 🔴 IL NODO APERTO AL 22 GIU (da chiudere, non da riscoprire)
+
+**Contraddizione codice vs dati nel FILTRO M/F (`MINA_CANCELLO_SALITA`, riga ~12588 del file V16):**
+
+- Il codice dice: se il **picco** (`_grasso`) ha toccato `CANCELLO_GRASSO_MIN` (1.50) → `_ha_grasso_vivo=True` → **NON taglia, ENTRA.**
+- I dati dicono: candidati con picco **+4.22 / +3.84 / +3.57** vengono **TAGLIATI** con `MINA_CANCELLO_SALITA`.
+- Inoltre: **137 tagliati a picco ≥1.5, di cui 68 (49,6%) sarebbero stati WIN** — maschi veri buttati.
+
+**Codice e dati si contraddicono → il file che gira NON è il file che leggiamo** (vedi Controllo 1).
+**O** il film (`curva_nascita`) è fermo dal 19 giu perché `_save_curva_nascita` (chiamata unica riga ~14996) è agganciata all'EXIT di un trade entrato: se nessun trade entra, niente curva → si decide alla cieca.
+
+**PROSSIMO PASSO CONCRETO (uno, mirato):**
+1. Controllo 1 → stabilire il file vivo.
+2. Sul file vivo, confermare che la mina taglia sul **grasso corrente** invece che sul **picco** (è il bug descritto nel commento del codice come "già corretto" — ma forse corretto solo nel file morto).
+3. Spostare il salvataggio `curva_nascita` a MONTE del cancello (registrare OGNI candidato osservato, entri o no) → così il film dei maschi tagliati esiste.
+4. UN fix per volta, md5 prima/dopo, test import, deploy, verifica che MASCHI ENTRATI sulla diretta smetta di stare a 0.
+
+---
+
+## 📌 DATI DURI GIÀ DIMOSTRATI (non rifare le query, sono questi)
+- 137 tagli a picco ≥1.5 da `MINA_CANCELLO_SALITA`; 68 WIN / 69 LOSS (monetina → la mina non separa).
+- Su `phantom_forensic` (la foto) maschi e capre hanno medie identiche: durata ~10.7s, MAE ~0.3. **La foto non separa.**
+- `curva_nascita` (il film, tick per tick `[t,pnl,mfe]`) è l'unico posto dove si separano — ma è ferma al 19 giu.
+- ENV verificati 22 giu: `CANCELLO_MOSSE=2`, `CANCELLO_GRASSO_MIN=1.50`, `GATE_PEAK_OFF=true` (gate vecchio, spento).
+
+---
+
+## 🧭 REGOLE DI METODO (perché i loop nascono quando si rompono)
+- **Dati reali prima di modificare.** Mai patch al buio, mai ENV cambiato senza prova.
+- **md5 prima e dopo ogni deploy.** È il controllo che chiude il loop del "file sbagliato".
+- **Un fix = un file = un test (import, non solo py_compile) = un deploy verificato.** Mai pacchettare.
+- **Schema DB sempre letto, mai indovinato.**
+- **Onestà nuda.** Se codice e dati si contraddicono, dirlo subito, non costruirci sopra una teoria.
+- **Claude NON accede al server.** Roberto incolla. Query corte (cellulare).
+- **Cadaveri da non riattivare:** streak_4, Narratore, RSI/MACD, ZONA_MORTA, CROMO, gate "3 morsi", SHORT (LONG-only).
+
+---
+
+## ▶️ COME SI APRE LA PROSSIMA CHAT
+Roberto allega questo file e scrive: **"Apertura OVERTOP. Fai i 5 controlli."**
+Claude esegue i 5 controlli (chiede gli output), poi — e solo dopo — riparte dal NODO APERTO.
+Niente teoria prima dei 5 controlli. Niente riscoperta di ciò che è già scritto qui.
+
+---
+
+## 🔥 SESSIONE 22-23 GIUGNO — CATENA FIX (caricata su Render)
+
+Trovati e corretti 4 bug in catena che tenevano MASCHI ENTRATI = 0:
+
+1. **`_grasso` cieco** (riga 12532): leggeva `_canc_max_usd`, variabile MAI scritta da nessuno → grasso sempre 0 → tutto "piatto" → tagliato. FIX: fallback su `_rit_picco_pre` (osservatore vivo, in dollari giusti).
+
+2. **75% / `_si_sgonfia` all'ingresso** (riga 12576): tagliava i maschi al primo respiro (scendi sotto il 75% del picco = buttato). Roberto: "il maschio non si sgonfia, e se cala un po' è il momento di PRENDERLO non di buttarlo". FIX: ingresso ora guarda `_grasso_ora >= CANCELLO_GRASSO_MIN` (grasso ADESSO in mano), non il picco né lo sgonfiamento.
+
+3. **`MASCHIO_DIRETTO` tappato** (riga 8843) — IL NODO VERO: `_gia_aperto = bool(_phantoms_open)` → bastava 1 sola posizione aperta per bloccare MASCHIO_DIRETTO PER SEMPRE. Il motore loggava "ENTRA SUBITO" fino a 32 mosse ma non apriva mai. FIX: `len(_phantoms_open) >= 5` (allineato al resto del codice che ragiona su max 5 posizioni). `_close_phantom` (16134) fa il pop correttamente, timeout 60s.
+
+4. **PRESA_SECCA spenta** (ENV `PRESA_SECCA_OFF=true`): l'UNICO schema vincente (18/18 win, +20$) era disattivato. Riacceso `PRESA_SECCA_OFF=false`. `PRESA_SECCA_USD=1.0` = +1$ NETTO in tasca (fee già dentro), va bene così.
+
+**AUDIT vecchio mondo (754 trade chiusi):** P1/P2/score aprono su grasso 0 (esempio: score 71, peak_pnl 0.0 → loss). Uscite dominanti = ANTIPRECIPIZIO (-298$, 0 win), ZONA_MORTA (~-380$, 0 win), HARD_STOP (-99$). Totale vecchio mondo ≈ -1000$. Unica cosa positiva = PRESA_SECCA. CONCLUSIONE: P1/P2/score come giudici d'ingresso vanno spenti (confermato dai dati, non a intuizione). DA FARE: spegnere uno alla volta, con prova, NON in blocco.
+
+**ENV stato 23giu mattina:** MASCHIO_ENTRA_DIRETTO=true, CANCELLO_MOSSE=2, CANCELLO_SALITA_OFF=false, PRESA_SECCA_OFF=false (riacceso), PRESA_SECCA_USD=1.0, CANCELLO_GRASSO_MIN=1.50, GATE_PEAK_OFF=true.
+
+**PARADIGMA INGRESSO (Roberto, definitivo):** niente finestre temporali, niente distinguere M/F all'ingresso. Il candidato è osservato tick per tick (MASCHIO_DIRETTO conta le mosse su). Sale N mosse → ENTRA mentre sale (non al picco) → PRESA_SECCA prende +1 netto → esce. Femmina = piatta/storna subito, si smaschera da sola. Rischio preso su tutti.
+
+**PROSSIMA VERIFICA:** dopo deploy del file con fix #3, controllare MASCHI ENTRATI sulla diretta. Se si stacca da 0 = porta aperta. Se resta 0 = c'è un 5° blocco a valle di _open_shadow_position, cercarlo lì.
