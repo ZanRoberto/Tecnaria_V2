@@ -8828,7 +8828,20 @@ class OvertopBassanoV16Production:
                         self._canc_prezzo_prec = price
 
                         # MASCHIO confermato: N movimenti su consecutivi -> entra
-                        if self._canc_su_consec >= _mosse_n:
+                        # FIX 23giu (Roberto): NON basta il conteggio dei tick su.
+                        # Una femmina in RANGE_DEAD fa 2 micro-tick su per rumore
+                        # (peak 0, sign_flips alti) e bucava il cancello -> entrava
+                        # nel trade -> -5. Ora serve ANCHE grasso REALE in mano:
+                        # 2 mosse su E grasso_ora >= CANCELLO_GRASSO_MIN. La femmina
+                        # che rimbalza a zero grasso NON entra piu'.
+                        _md_aggancio = getattr(self, "_rit_prezzo_aggancio", None)
+                        if _md_aggancio:
+                            _md_exp = float(os.environ.get("EXPOSURE", "5000"))
+                            _md_grasso = (price - _md_aggancio) * (_md_exp / _md_aggancio)
+                        else:
+                            _md_grasso = 0.0
+                        _md_grasso_min = float(os.environ.get("CANCELLO_GRASSO_MIN", "1.5"))
+                        if self._canc_su_consec >= _mosse_n and _md_grasso >= _md_grasso_min:
                             self._canc_maschio_ok = True
                             # ════════════════════════════════════════════════════
                             # ENTRATA DIRETTA (21giu, Roberto: "deve entrare SUBITO
