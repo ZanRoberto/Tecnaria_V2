@@ -14233,6 +14233,53 @@ class OvertopBassanoV16Production:
             current_pnl = _sdelta * (5000.0 / self._shadow["price_entry"])  # lordo — fee al close
 
             # ════════════════════════════════════════════════════════════════
+            # ⭐ LA MACCHINA (23giu2026, Roberto) — FIRMA CERTIFICATA su 2000 trade.
+            # ════════════════════════════════════════════════════════════════
+            # SCOPERTA dai dati phantom_forensic (2000 candidati osservati):
+            #
+            #  MASCHIO = sopravvive OLTRE 12s con grasso -> 27/27 WIN (100%).
+            #            sale dritto (mae basso), corre fino a 176s. LASCIALO CORRERE.
+            #  TRANS   = grasso >=3 ma molla ENTRO 12s (nessun trans supera 12s).
+            #            ballerino (mae alto), MA tutti i 116 trans (anche i 32 loss)
+            #            avevano toccato picco >=3.04 PRIMA di mollare. Il grasso
+            #            C'ERA -> STRAPPALO appena ha +3 lordo (=+1 netto, fee pagate),
+            #            non aspettare che molli -> i loss diventano win.
+            #  FEMMINA = picco <3 -> non entra nemmeno (gate ingresso).
+            #
+            # REGOLA UNICA in uscita: appena il grasso lordo tocca PRESA_TRANS_USD
+            # (default 3.0 = +1 netto dopo 2$ fee) -> INCASSA SUBITO. Questo strappa
+            # il trans mentre ha il grasso (entro i suoi 12s) e prende anche il
+            # maschio veloce. Il maschio LENTO che invece continua a salire SENZA
+            # ritracciare (mae basso) viene lasciato correre dal trailing sotto.
+            # ════════════════════════════════════════════════════════════════
+            _fee_tot = self.TRADE_SIZE_USD * self.LEVERAGE * self.FEE_PCT * 2
+            if os.environ.get("PRESA_TRANS_OFF", "false").lower() != "true":
+                _presa_trans = float(os.environ.get("PRESA_TRANS_USD", "3.0"))  # lordo (>=3 = +1 netto)
+                if current_pnl >= _presa_trans:
+                    _netto = current_pnl - _fee_tot
+                    self._log_m2("💰",
+                        f"PRESA TRANS: grasso +{current_pnl:.2f}$ lordo (+{_netto:.2f} netto) "
+                        f">= {_presa_trans:.1f} = STRAPPO subito (trans/maschio-veloce)")
+                    return self._close_shadow_trade(price, f"PRESA_TRANS_+{_netto:.1f}net")
+
+            # ════════════════════════════════════════════════════════════════
+            # TRAILING MAE — per il maschio che corre oltre la presa: se sale dritto
+            # (mae basso) lo lascia correre; appena storna (retreat >= margine) chiude.
+            # Cosi' il maschio lento da +5/+8 non viene tagliato dalla presa a +3 ma
+            # accompagnato fino allo storno. ENV: TRAILING_MAE_OFF, TRAILING_MARGINE.
+            # ════════════════════════════════════════════════════════════════
+            if os.environ.get("TRAILING_MAE_OFF", "false").lower() != "true":
+                _tr_attiva  = float(os.environ.get("TRAILING_ATTIVA", "1.0"))
+                _tr_margine = float(os.environ.get("TRAILING_MARGINE", "1.1"))
+                _retreat_grasso = retreat * (5000.0 / self._shadow["price_entry"])
+                if max_profit >= _tr_attiva and _retreat_grasso >= _tr_margine:
+                    self._log_m2("✂️",
+                        f"TRAILING MAE: picco +{max_profit:.2f}$ retreat {_retreat_grasso:.2f}$ "
+                        f">= margine {_tr_margine:.1f} = STORNA, incasso +{current_pnl:.2f}$ lordo")
+                    return self._close_shadow_trade(price, f"TRAILING_MAE_picco{max_profit:.1f}_inc{current_pnl:.1f}")
+
+
+            # ════════════════════════════════════════════════════════════════
             # MINA CASSA_GRASSO (12giu2026, Roberto) — CATTURA DEI FURBI.
             # ════════════════════════════════════════════════════════════════
             # Sui dati (574 trade chiusi, di cui 440 LOSS):
