@@ -8908,7 +8908,25 @@ class OvertopBassanoV16Production:
                 _cancello_passa = True   # FAIL-OPEN: mai bloccare per errore del cancello
 
             if _cancello_passa:
-                self._evaluate_shadow_entry(price, momentum, volatility, trend)
+                # FIX 23giu sera (Roberto: "tutta roba che non serve piu'") — BYPASS VERO.
+                # PROBLEMA dai log: MASCHIO_DIRETTO confermava ("ENTRA bypass veti") ma
+                # poi chiamava _evaluate_shadow_entry, che e' PIENA dei veti del vecchio
+                # mondo (VERITAS, CAPSULE block_score, SCORE_SOTTO score>=34, constitutional
+                # PRE_SC_VETO). In RANGE_DEAD lo score e' 18-29 < 34 -> bloccato SEMPRE ->
+                # 0 trade. Il "bypass veti" era finto. ORA: se il maschio e' confermato
+                # (_canc_maschio_ok), apre DIRETTO con _open_shadow_position, saltando
+                # del tutto _evaluate_shadow_entry e i suoi veti. Bypass VERO.
+                if getattr(self, "_canc_maschio_ok", False) and os.environ.get("MASCHIO_BYPASS_VERO", "true").lower() == "true":
+                    try:
+                        _seed_v = getattr(self, "_last_seed", 0.5)
+                        self._log_m2("🐺", "MASCHIO BYPASS VERO: apro diretto, salto VERITAS/CAPSULE/SCORE/CONST")
+                        self._open_shadow_position(price, 99.0, 0.0, _seed_v, 0.3,
+                                                    momentum, volatility, trend,
+                                                    "MASCHIO_DIRETTO", 0.5)
+                    except Exception as _e_mbv:
+                        log.error(f"[MASCHIO_BYPASS_ERR] {_e_mbv}")
+                else:
+                    self._evaluate_shadow_entry(price, momentum, volatility, trend)
 
         # -- PHANTOM TRACKER: aggiorna trade fantasma ogni tick ------------
         if self._phantoms_open:
