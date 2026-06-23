@@ -12564,22 +12564,27 @@ class OvertopBassanoV16Production:
                     # sale e tiene il grasso minimo, ENTRA. Il trailing fa il resto.
                     # ════════════════════════════════════════════════════════════
                     _grasso_min = float(os.environ.get("CANCELLO_GRASSO_MIN", "2.0"))
-                    # USA IL PICCO (_grasso = max raggiunto), NON il grasso corrente.
-                    # Un candidato salito a +2.78 va portato dentro anche se nel tick
-                    # del controllo è sceso a +2.0. Era il bug che tagliava i trans
-                    # a +2.44/+2.78 (picco sopra soglia ma grasso_ora basso).
-                    _ha_grasso_vivo = (_grasso >= _grasso_min)
+                    # ════════════════════════════════════════════════════════════
+                    # REGOLA ROBERTO (22giu sera): NON guardare il PICCO. Guarda il
+                    # GRASSO CHE HA ADESSO IN MANO (_grasso_ora). Se adesso ha grasso
+                    # >= soglia (def 2.0$, sopra le fee) -> ENTRA SUBITO e castra,
+                    # PROPRIO mentre si svuota dal massimo: e' il momento di prenderlo,
+                    # non di buttarlo. Il vecchio 75% faceva il contrario (vedeva
+                    # calare e tagliava) = buttava il grasso. ELIMINATO.
+                    # Si taglia SOLO chi ADESSO ha grasso sotto soglia o e' a zero.
+                    # ════════════════════════════════════════════════════════════
+                    _ha_grasso_vivo = (_grasso_ora >= _grasso_min)
                     if _ha_grasso_vivo:
-                        # ha RAGGIUNTO il grasso minimo -> NON tagliare, ENTRA
+                        # ha grasso vivo in mano ADESSO -> ENTRA, castra subito
                         _si_sgonfia = False
                         _mai_salito = False
-                    # 22giu (Roberto): RISCHIO PIENO. Si taglia SOLO chi non e' MAI
-                    # salito (piatta +0.00). Chi ha messo grasso ENTRA, senza calcolo
-                    # del 75%/sgonfiamento, qualunque etichetta. "E' salito -> dentro
-                    # e stop." Lo sgonfiamento si gestisce DOPO, da dentro (trailing).
-                    if _mai_salito:
-                        _motivo_f = ("mai salita (piatta)" if _mai_salito
-                                     else f"sgonfiata (grasso {_grasso_ora:.2f}$ sceso da picco {_grasso:.2f}$)")
+                        _taglia = False
+                    else:
+                        # adesso non ha grasso sopra soglia -> taglia (femmina/piatta
+                        # o gia' svuotato sotto la soglia che vale le fee)
+                        _taglia = True
+                    if _taglia:
+                        _motivo_f = (f"grasso ora {_grasso_ora:.2f}$ < {_grasso_min:.2f}$ (sotto soglia/svuotato)")
                         self._log_m2("🐺",
                             f"FILTRO M/F: max salita +{_grasso:.2f}$ — "
                             f"{_motivo_f} = femmina/trans, NON apre")
