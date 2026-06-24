@@ -8918,41 +8918,28 @@ class OvertopBassanoV16Production:
                         # CAVALCO la salita verso 3+. Il picco 3 e' cio' che il maschio
                         # FARA' dopo che sono dentro, NON il biglietto d'ingresso.
                         # ════════════════════════════════════════════════════════
-                        _md_entry_min = float(os.environ.get("MD_ENTRY_MIN", "1.0"))
+                        # ════════════════════════════════════════════════════════
+                        # ⭐ FILTRO PROVATO SUI DATI (24giu, simula2 su 388 trade reali)
+                        # WIN 95 (+190), LOSS 293 (-826), totale ENTRA-TUTTO = -636.
+                        # Filtro MFE>=0 (il candidato e' andato in positivo almeno una
+                        # volta durante l'osservazione): entra 140, prende TUTTI E 95 i
+                        # win (win_persi=0), totale +98. Delta +734$.
+                        # La FEMMINA non va MAI in positivo (MFE~0) -> scartata.
+                        # SMENTITI e RIMOSSI: i 12s (_md_eta_ok/_md_tiene_ok tagliavano
+                        # i maschi lenti, win_persi 33-83) e il gate mosse_su.
+                        # Vedi VERITA_BLINDATA_OVERTOP.md. NON reintrodurre i 12s.
+                        # ════════════════════════════════════════════════════════
+                        _md_mfe_min = float(os.environ.get("MD_MFE_MIN", "0.0"))
                         _md_picco = getattr(self, "_canc_picco_proprio", 0.0)
-                        # entra se: ha un grasso minimo (non e' femmina piatta a 0)
-                        # MA basso (non aspetto il 3 = non entro in cima)
-                        _md_picco_ok = (_md_entry_min <= 0) or (_md_picco >= _md_entry_min)
-                        # il maschio e' confermato da: sale dritto (mae_ok, crollo basso)
-                        # + mosse su consecutive + grasso minimo. NON serve picco 3.
-                        # ════════════════════════════════════════════════════════
-                        # REGOLA 12 SECONDI (strategia Roberto, validata): il maschio
-                        # si dichiara quando l'MFE CRESCE e TIENE oltre i ~12s. Il
-                        # trans/femmina fa picco PRECOCE (sotto 12s) e si SVUOTA. Il
-                        # trade 10:24 (mfe_trade 0.0) era un trans: 3 mosse su veloci,
-                        # poi collassato. Entrando su "3 mosse su" senza la tenuta dei
-                        # 12s, ho preso il trans. CORREZIONE: entra solo se
-                        #   (a) l'osservazione dura da >= TIENE_SEC (default 12s) E
-                        #   (b) l'MFE TIENE: grasso ORA >= picco * TIENE_PCT (non si e'
-                        #       svuotato dal picco = sta reggendo, non collassando)
-                        # ════════════════════════════════════════════════════════
-                        _tiene_sec = float(os.environ.get("MD_TIENE_SEC", "12"))
-                        _tiene_pct = float(os.environ.get("MD_TIENE_PCT", "0.70"))
-                        _nasc_ts   = getattr(self, "_canc_nascita_ts", None)
-                        _eta_oss   = (time.time() - _nasc_ts) if _nasc_ts else 0.0
-                        # tiene: il grasso attuale e' ancora vicino al picco (non svuotato)
-                        _md_tiene_ok = (_md_grasso >= _md_picco * _tiene_pct) if _md_picco > 0 else False
-                        # eta: l'osservazione e' maturata oltre i 12s (non picco precoce)
-                        _md_eta_ok = (_eta_oss >= _tiene_sec)
-                        _md_ok = (self._canc_su_consec >= _mosse_n) and (not _md_gate or _md_grasso >= _md_grasso_min) and _md_mae_ok and _md_picco_ok and _md_eta_ok and _md_tiene_ok
-                        if not _md_picco_ok and self._canc_su_consec >= _mosse_n:
-                            self._log_m2("🚺", f"FEMMINA: grasso +{_md_picco:.2f}$ < {_md_entry_min:.1f} = piatta, NON entra")
-                        if not _md_mae_ok and self._canc_su_consec >= _mosse_n:
-                            self._log_m2("📉", f"MAE FIRMA: candidato ha ballato (crollo {_md_crollo:.2f}$ < -{_md_mae_max:.1f}) = TRANS, NON entra")
-                        if _md_picco_ok and _md_mae_ok and self._canc_su_consec >= _mosse_n and not _md_eta_ok:
-                            self._log_m2("⏳", f"ATTENDO 12s: oss {_eta_oss:.0f}s < {_tiene_sec:.0f}s — MFE non ancora maturo (picco precoce = sospetto trans)")
-                        if _md_picco_ok and _md_mae_ok and _md_eta_ok and not _md_tiene_ok:
-                            self._log_m2("🔁", f"TRANS: MFE NON TIENE — grasso {_md_grasso:.2f}$ sceso sotto {_tiene_pct:.0%} del picco {_md_picco:.2f}$ = si svuota, NON entra")
+                        # UNICO filtro d'ingresso: ha mostrato grasso positivo (MFE>=soglia)
+                        _md_mfe_ok = (_md_picco >= _md_mfe_min)
+                        _md_ok = _md_mfe_ok and _md_mae_ok
+                        # _md_mae_ok (sale dritto) resta come guardia anti-trans-ballerino.
+                        # ENV MD_MFE_MIN: 0.0=prudente(+98,0 persi) | 1.0=aggressivo(+146,-30)
+                        if not _md_mfe_ok:
+                            self._log_m2("🚺", f"FEMMINA: MFE +{_md_picco:.2f}$ < {_md_mfe_min:.1f} = non sale, NON entra")
+                        if _md_mfe_ok and not _md_mae_ok:
+                            self._log_m2("📉", f"TRANS: ha ballato (crollo {_md_crollo:.2f}$ < -{_md_mae_max:.1f}), NON entra")
                         if _md_ok:
                             self._canc_maschio_ok = True
                             # ════════════════════════════════════════════════════
@@ -9040,7 +9027,7 @@ class OvertopBassanoV16Production:
                 # firme proprie la fermano. Metal detector nel muro, non un flag.
                 _pb_picco = getattr(self, "_canc_picco_proprio", 0.0)
                 _pb_crollo = getattr(self, "_canc_crollo_proprio", 0.0)
-                _pb_picco_min = float(os.environ.get("MD_ENTRY_MIN", "1.0"))
+                _pb_picco_min = float(os.environ.get("MD_MFE_MIN", "0.0"))
                 _pb_mae_max = float(os.environ.get("MD_MAE_MAX", "1.0"))
                 _pb_firme_ok = (_pb_picco >= _pb_picco_min) and (_pb_crollo >= -_pb_mae_max)
                 if getattr(self, "_canc_maschio_ok", False) and _pb_firme_ok and os.environ.get("MASCHIO_BYPASS_VERO", "true").lower() == "true":
