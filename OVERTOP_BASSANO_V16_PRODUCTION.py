@@ -14400,14 +14400,41 @@ class OvertopBassanoV16Production:
             # ritracciare (mae basso) viene lasciato correre dal trailing sotto.
             # ════════════════════════════════════════════════════════════════
             _fee_tot = self.TRADE_SIZE_USD * self.LEVERAGE * self.FEE_PCT * 2
+            # ════════════════════════════════════════════════════════════════
+            # ⭐ DISTINZIONE MASCHIO/TRANS (24giu, Roberto) — CON ETICHETTA.
+            # A +3 NON strappo subito (era l'errore: castravo i maschi veri che
+            # correvano). Aspetto di vedere il COMPORTAMENTO dopo +3:
+            #   - se CONTINUA a fare nuovi massimi (sale ancora) = MASCHIO VERO
+            #     -> NON strappo, lo lascio correre al trailing (corsa massima)
+            #   - se CEDE dal picco (storna oltre margine) = TRANS che molla
+            #     -> STRAPPO ORA il grasso che resta, etichetta TRANS_STRAPPATO
+            # L'etichetta nel reason ci dice CHE COSA era: cosi leggiamo i trade
+            # senza errori (maschio corso vs trans strappato).
+            # ════════════════════════════════════════════════════════════════
             if os.environ.get("PRESA_TRANS_OFF", "false").lower() != "true":
-                _presa_trans = float(os.environ.get("PRESA_TRANS_USD", "3.0"))  # lordo (>=3 = +1 netto)
-                if current_pnl >= _presa_trans:
-                    _netto = current_pnl - _fee_tot
-                    self._log_m2("💰",
-                        f"PRESA TRANS: grasso +{current_pnl:.2f}$ lordo (+{_netto:.2f} netto) "
-                        f">= {_presa_trans:.1f} = STRAPPO subito (trans/maschio-veloce)")
-                    return self._close_shadow_trade(price, f"PRESA_TRANS_+{_netto:.1f}net")
+                _presa_trans = float(os.environ.get("PRESA_TRANS_USD", "3.0"))  # lordo soglia attivazione
+                # soglia che separa TRANS da MASCHIO: se cede da un picco BASSO
+                # (<= TRANS_PICCO_MAX) = trans che molla subito. Se cede da picco
+                # ALTO (oltre) = maschio che ha corso -> lascia al trailing.
+                _trans_picco_max = float(os.environ.get("TRANS_PICCO_MAX", "4.5"))
+                _cede_dal_picco = max_profit - current_pnl
+                _trans_cede = float(os.environ.get("TRANS_CEDE_USD", "0.5"))
+                if max_profit >= _presa_trans:
+                    # ha superato +3. Distinguo dal PICCO raggiunto + se cede:
+                    if _cede_dal_picco >= _trans_cede and max_profit <= _trans_picco_max:
+                        # cede da picco BASSO (~3-4.5) -> TRANS che molla -> strappo
+                        _netto = current_pnl - _fee_tot
+                        self._log_m2("🔁",
+                            f"TRANS: picco basso +{max_profit:.2f}$ cede a +{current_pnl:.2f}$ "
+                            f"= STRAPPO trans (+{_netto:.2f}net)")
+                        return self._close_shadow_trade(price, f"TRANS_STRAPPATO_+{_netto:.1f}net_picco{max_profit:.1f}")
+                    else:
+                        # picco ALTO (maschio che corre) o non cede ancora -> LASCIA
+                        # CORRERE. Il trailing sotto lo chiude quando storna davvero.
+                        self._log_m2("🐺",
+                            f"MASCHIO: picco +{max_profit:.2f}$ a +{current_pnl:.2f}$ "
+                            f"= LASCIO CORRERE (no strappo, picco alto o sale ancora)")
+                        # nessun return: prosegue al trailing
 
             # ════════════════════════════════════════════════════════════════
             # TRAILING MAE — per il maschio che corre oltre la presa: se sale dritto
@@ -14423,7 +14450,7 @@ class OvertopBassanoV16Production:
                     self._log_m2("✂️",
                         f"TRAILING MAE: picco +{max_profit:.2f}$ retreat {_retreat_grasso:.2f}$ "
                         f">= margine {_tr_margine:.1f} = STORNA, incasso +{current_pnl:.2f}$ lordo")
-                    return self._close_shadow_trade(price, f"TRAILING_MAE_picco{max_profit:.1f}_inc{current_pnl:.1f}")
+                    return self._close_shadow_trade(price, f"MASCHIO_CORSA_picco{max_profit:.1f}_inc{current_pnl:.1f}")
 
 
             # ════════════════════════════════════════════════════════════════
