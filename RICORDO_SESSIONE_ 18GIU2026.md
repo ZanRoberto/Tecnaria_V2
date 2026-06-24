@@ -141,3 +141,56 @@ USCITA (resta come gestione del grasso, NON come filtro d'ingresso):
 
 FINE. Questo file è la chiusura dell'incubo. I dati hanno parlato.
 Non rifare la fatica. Esegui, fai girare in paper, poi live.
+
+═══════════════════════════════════════════════════════════════════════
+## ⭐ AGGIORNAMENTO SERA 24giu — SCOPERTE SUL VIVO (frontiera di domani)
+═══════════════════════════════════════════════════════════════════════
+
+Il filtro MFE e' GIUSTO (provato, +146). Ma sul VIVO sono emersi due nodi
+nel CODICE (non nella logica). La logica applicata bene NON perde: il difetto
+e' nell'applicazione (porte multiple), non nella regola.
+
+### NODO 1 — PORTE MULTIPLE D'INGRESSO (il vero buco)
+Il sistema ha PIU' porte che aprono posizione (_open_shadow_position chiamata
+da: riga ~8980, ~9047 MASCHIO BYPASS VERO, ~12089, ~12661). NON tutte
+controllano il filtro MFE>=1. Prova vivente: trade 24giu 19:54:46 entrato con
+picco REALE 0.664 (sotto soglia 1.0) = FEMMINA SFUGGITA. Doveva essere scartato.
+Il log diceva "picco2.7" ma la curva_nascita diceva 0.664 (il 2.7 e' max_profit
+dell'uscita, NON il picco d'osservazione: due valori diversi, non confonderli).
+
+AUDIT OBBLIGATORIO (domani, a mente fresca, NON a toppe stanche):
+1. Mappare TUTTE le chiamate a _open_shadow_position (le porte).
+2. Chiuderle tutte tranne UNA.
+3. Su quell'unica porta: il filtro MFE>=MD_MFE_MIN, una volta sola.
+Finche' ci sono porte multiple, il filtro giusto NON protegge: le femmine
+sfuggono dalle porte che lo saltano. UNA PORTA, UN FILTRO.
+
+### NODO 2 — BLOCCO LONG-ONLY (Grande Fratello) era SPENTO
+Regola madre: in fase SHORT/ribassista il bot STA FUORI (zero trade = corretto).
+Il "Grande Fratello" (riga ~12843+) blocca in short E accende la spia dashboard
+(gf_stato: FUORI_SHORT / LIBERO). MA era saltato da MACCHINA_PURA=true
+(girava solo "if not _pura_gf"). Risultato: 15 LONG aperti mentre il prezzo
+colava 59847->59313. FIX (file 1275a442): il GF gira SEMPRE, anche in macchina
+pura, perche' LONG-only NON e' vecchio cervello, e' fondamentale.
+Verificato: il GF fa return PRIMA dell'apertura (12877 prima di 14016).
+
+### CATEGORIE DELLA PERDITA (Roberto — la griglia per leggere OGNI loss)
+La logica applicata bene non perde. Se perde, il loss e' SOLO una di queste:
+1. FEMMINA SFUGGITA: entrata senza MFE>=soglia (porta che salta il filtro).
+2. TRANS PENETRATO con MAE/MFE INGANNEVOLI: picco finto, sale e balla subito.
+3. TRANS/MASCHIO NON CHIUSO IN TEMPO: aveva grasso, non strappato prima che
+   sparisse (colpa USCITA).
+Non ci sono altri "se" e "ma". Ogni loss si classifica qui leggendo curva_nascita.
+Il trade 19:54 (-0.47) = categoria 1, femmina sfuggita da porta non protetta.
+
+### STATO FILE
+- 1275a442 = ultimo deployato: filtro MFE + GF sempre attivo (LONG-only vero).
+  NON crasha (il TICK_CRASH 19:49 era transitorio all'avvio, restart risolto).
+- Nodo aperto: porte multiple (NODO 1) — la femmina 0.664 ne e' la prova.
+- ENV vivo: MD_MFE_MIN=1.0 (aggressivo, +146 sui dati storici).
+
+### REGOLA PER CLAUDE (da non dimenticare)
+NON guardare la perdita (sintomo). Guardare PERCHE' E' ENTRATO (causa).
+Leggere curva_nascita del trade, classificare nella griglia sopra.
+La logica e' di Roberto ed e' giusta. I buchi sono nel codice di Claude.
+Lavoro = chiudere i buchi (porte multiple), NON ripensare la logica.
