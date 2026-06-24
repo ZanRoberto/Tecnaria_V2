@@ -12779,7 +12779,11 @@ class OvertopBassanoV16Production:
             #   GF_DIREZIONE_OFF=true  → guardiano spento (default false=attivo)
             #   GF_DRIFT_SOGLIA=-0.05  → soglia % (più vicino a 0 = più severo)
             # ════════════════════════════════════════════════════════════════
-            if os.environ.get("GF_DIREZIONE_OFF", "false").lower() != "true":
+            # FIX 24giu (Roberto): GF_DIREZIONE e' un guardiano VECCHIO dentro
+            # _open_shadow_position che bloccava il maschio DOPO "ENTRA SUBITO"
+            # (logga ma non apre). Con MACCHINA_PURA non interviene.
+            _pura_gf = os.environ.get("MACCHINA_PURA", "true").lower() == "true"
+            if not _pura_gf and os.environ.get("GF_DIREZIONE_OFF", "false").lower() != "true":
                 _gf_dir = getattr(self.campo, "_direction", "LONG")
                 if _gf_dir == "LONG":
                     _gf_soglia = float(os.environ.get("GF_DRIFT_SOGLIA", "-0.05"))
@@ -12846,7 +12850,11 @@ class OvertopBassanoV16Production:
             # passare al cancello, che decide sul movimento. REVERSIBILE.
             SEME_GATE_SOGLIA = float(getattr(self, "SEME_GATE_SOGLIA", 0.60))
             _sh = list(getattr(self.campo, "_seed_history", []))[-5:]
-            if len(_sh) >= 2 and os.environ.get("SEME_GATE_OFF","false").lower() != "true":
+            # FIX 24giu (Roberto): SEME_GATE guardiano VECCHIO (398 false-female sui
+            # dati, narrazione smentita). Bloccava il maschio dopo "ENTRA SUBITO".
+            # Con MACCHINA_PURA non interviene.
+            _pura_seme = os.environ.get("MACCHINA_PURA", "true").lower() == "true"
+            if not _pura_seme and len(_sh) >= 2 and os.environ.get("SEME_GATE_OFF","false").lower() != "true":
                 _seme_medio = (_sh[0] + _sh[-1]) / 2.0
                 if _seme_medio < SEME_GATE_SOGLIA:
                     self._log("🚫", f"SEME_GATE BLOCCO femmina: seme={_seme_medio:.3f} "
@@ -12888,7 +12896,11 @@ class OvertopBassanoV16Production:
             # ⚠ Costa 2 maschi grossi tagliati (vp1.48/+7.74, cp0.74/+6.48). Baratto
             #   accettato da Roberto: blocca ~90$ di trans, sacrifica ~14$ di maschi.
             # ⚠ TUTTO tarato su 28 trade. Validare alla prossima raccolta sui NUOVI.
-            CROMO_GATE_ON   = os.environ.get("CROMO_GATE_ON", "true").lower() == "true"
+            # FIX 24giu (Roberto): CROMO guardiano VECCHIO (anti-fee non anti-trans,
+            # 2638 trade bloccati 0 crash evitati). Bloccava il maschio dopo
+            # "ENTRA SUBITO". Con MACCHINA_PURA non interviene.
+            _pura_cromo = os.environ.get("MACCHINA_PURA", "true").lower() == "true"
+            CROMO_GATE_ON   = (not _pura_cromo) and os.environ.get("CROMO_GATE_ON", "true").lower() == "true"
             CROMO_VPRESS_MIN = float(os.environ.get("CROMO_VPRESS_MIN", "0.46"))
             CROMO_VPRESS_MAX = float(os.environ.get("CROMO_VPRESS_MAX", "1.13"))
             CROMO_COMP_MAX   = float(os.environ.get("CROMO_COMP_MAX", "0.64"))
