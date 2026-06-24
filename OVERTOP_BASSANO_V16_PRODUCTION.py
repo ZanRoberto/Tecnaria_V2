@@ -8783,7 +8783,17 @@ class OvertopBassanoV16Production:
                 _soglia_now = getattr(self.campo, "_last_soglia", 0.0) or 0.0
                 _segnale_vivo = (_score_now >= _soglia_now and _soglia_now > 0)
 
-                if _segnale_vivo:
+                # ════════════════════════════════════════════════════════════
+                # FIX 24giu (Roberto: "in short restiamo FUORI dal trade").
+                # Il sistema gira campo._direction a SHORT in TRENDING_BEAR (mercato
+                # che scende). Il bot e' LONG-ONLY: in fase SHORT NON deve agganciare.
+                # MASCHIO_DIRETTO (bypass) saltava questo controllo e apriva LONG anche
+                # in ribasso -> 15 LONG mentre il prezzo colava 59847->59313, tutti loss.
+                # ORA: aggancia SOLO se la direzione del mercato e' LONG. In fase
+                # ribassista resta FUORI = comportamento corretto LONG-only.
+                _dir_mercato = getattr(getattr(self, "campo", None), "_direction", "LONG")
+                _long_ok = (_dir_mercato == "LONG") or (os.environ.get("LONG_ONLY_GATE_OFF", "false").lower() == "true")
+                if _segnale_vivo and _long_ok:
                     # NASCITA candidato: primo tick in cui il segnale e' vivo
                     # dopo un periodo di silenzio -> fisso il prezzo di nascita
                     # e azzero i contatori di comportamento.
@@ -12830,8 +12840,11 @@ class OvertopBassanoV16Production:
             # FIX 24giu (Roberto): GF_DIREZIONE e' un guardiano VECCHIO dentro
             # _open_shadow_position che bloccava il maschio DOPO "ENTRA SUBITO"
             # (logga ma non apre). Con MACCHINA_PURA non interviene.
-            _pura_gf = os.environ.get("MACCHINA_PURA", "true").lower() == "true"
-            if not _pura_gf and os.environ.get("GF_DIREZIONE_OFF", "false").lower() != "true":
+            # FIX 24giu: il Grande Fratello (blocco LONG-only + spia FUORI_SHORT/LIBERO)
+            # gira SEMPRE, anche in MACCHINA_PURA. La regola "in short si sta fuori"
+            # NON e' vecchio cervello: e' fondamentale (Roberto). Prima _pura_gf la
+            # saltava -> il bot apriva LONG mentre il mercato colava. Ora no.
+            if os.environ.get("GF_DIREZIONE_OFF", "false").lower() != "true":
                 _gf_dir = getattr(self.campo, "_direction", "LONG")
                 if _gf_dir == "LONG":
                     _gf_soglia = float(os.environ.get("GF_DRIFT_SOGLIA", "-0.05"))
