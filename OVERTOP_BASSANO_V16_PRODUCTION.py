@@ -12986,6 +12986,15 @@ class OvertopBassanoV16Production:
             #   calano. Reversibile in un colpo: RITARDO_INGRESSO_SEC=0.
             # ════════════════════════════════════════════════════════════════
             _rit_sec = float(os.environ.get("RITARDO_INGRESSO_SEC", "4"))
+            # FIX 24giu (Roberto): TUTTO questo blocco "ritardo" e' il vecchio sistema
+            # di mine (MINA_MAE, ANTIISTERIA, ANTICORDATA, CONTRO, RIPIENO, GATE...)
+            # che bloccavano il maschio DOPO "ENTRA SUBITO" (logga ma non apre).
+            # Con MACCHINA_PURA il maschio e' gia' stato giudicato dalle firme
+            # (picco/mae propri): NON deve incontrare nessuna di queste mine vecchie.
+            # Le salto TUTTE in un colpo.
+            _pura_rit = os.environ.get("MACCHINA_PURA", "true").lower() == "true"
+            if _pura_rit:
+                _rit_sec = 0   # macchina pura: nessuna mina del vecchio sistema ritardo
             if _rit_sec > 0:
                 _rit_now      = time.time()
                 _rit_gap      = float(os.environ.get("RITARDO_RESET_GAP", "3.0"))
