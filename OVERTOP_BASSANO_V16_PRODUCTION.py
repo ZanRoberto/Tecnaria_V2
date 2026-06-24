@@ -7403,8 +7403,14 @@ class OvertopBassanoV16Production:
         # Genera capsule figlie adattogene per ogni firma di mercato.
         # Al boot legge winning_signatures+trades.data_json e popola.
         # ═══════════════════════════════════════════════════════════════
+        # 24giu (Roberto: "togliere quello che non puo' portare al risultato,
+        # inutile inseguire fantasmi"). La MATRIGNA decideva dentro
+        # _evaluate_shadow_entry, che e' STACCATO (zero chiamate). Quindi non
+        # blocca piu' nulla. Ma si caricava ancora all'avvio (64 capsule, log,
+        # memoria) = cadavere che si sveglia a vuoto. RIMOSSO del tutto: non si
+        # istanzia piu'. self.matrigna resta None. Un solo cervello, il nuovo.
         self.matrigna = None
-        if _CAP_MATRIGNA_AVAILABLE:
+        if False and _CAP_MATRIGNA_AVAILABLE:  # MATRIGNA MORTA — non caricare
             try:
                 self.matrigna = CapsulaMatrigna(db_path=DB_PATH)
                 _stato_mat = self.matrigna.get_verdetto()
@@ -8898,14 +8904,29 @@ class OvertopBassanoV16Production:
                         # femmine picco<1.0 = 0 win su 1180; maschi/trans 2.5-3+).
                         # ENV MD_PICCO_MIN. 0 = controllo spento.
                         # ════════════════════════════════════════════════════════
-                        _md_picco_min = float(os.environ.get("MD_PICCO_MIN", "3.0"))
-                        # FIX 24giu: leggo il picco PROPRIO (non _rit_picco_pre che il
-                        # filtro vecchio azzera a None -> maschi scartati col grasso).
+                        # ════════════════════════════════════════════════════════
+                        # CAMBIO STRATEGIA 24giu (Roberto, ANAMNESI trade 10:24):
+                        # ERRORE: entravo quando picco_proprio >= 3 = IN CIMA. Il
+                        # candidato saliva 0->3.2 in osservazione, io aspettavo il 3
+                        # ed entravo a 3.2 -> da li' storna -> -1.23 (preso lo
+                        # SVUOTAMENTO, persa tutta la salita).
+                        # CORREZIONE: il maschio si CONFERMA dal salire DRITTO
+                        # (crollo basso/0), che si vede SUBITO, non dall'aver fatto 3.
+                        # Entro appena confermato dritto, a grasso BASSO (MD_ENTRY_MIN,
+                        # default 1.0 = sopra zero per escludere femmina piatta), e
+                        # CAVALCO la salita verso 3+. Il picco 3 e' cio' che il maschio
+                        # FARA' dopo che sono dentro, NON il biglietto d'ingresso.
+                        # ════════════════════════════════════════════════════════
+                        _md_entry_min = float(os.environ.get("MD_ENTRY_MIN", "1.0"))
                         _md_picco = getattr(self, "_canc_picco_proprio", 0.0)
-                        _md_picco_ok = (_md_picco_min <= 0) or (_md_picco >= _md_picco_min)
+                        # entra se: ha un grasso minimo (non e' femmina piatta a 0)
+                        # MA basso (non aspetto il 3 = non entro in cima)
+                        _md_picco_ok = (_md_entry_min <= 0) or (_md_picco >= _md_entry_min)
+                        # il maschio e' confermato da: sale dritto (mae_ok, crollo basso)
+                        # + mosse su consecutive + grasso minimo. NON serve picco 3.
                         _md_ok = (self._canc_su_consec >= _mosse_n) and (not _md_gate or _md_grasso >= _md_grasso_min) and _md_mae_ok and _md_picco_ok
                         if not _md_picco_ok and self._canc_su_consec >= _mosse_n:
-                            self._log_m2("🚺", f"FEMMINA: picco osservazione +{_md_picco:.2f}$ < {_md_picco_min:.1f} = non sale, NON entra")
+                            self._log_m2("🚺", f"FEMMINA: grasso +{_md_picco:.2f}$ < {_md_entry_min:.1f} = piatta, NON entra")
                         if not _md_mae_ok and self._canc_su_consec >= _mosse_n:
                             self._log_m2("📉", f"MAE FIRMA: candidato ha ballato (crollo {_md_crollo:.2f}$ < -{_md_mae_max:.1f}) = TRANS, NON entra")
                         if _md_ok:
@@ -8995,7 +9016,7 @@ class OvertopBassanoV16Production:
                 # firme proprie la fermano. Metal detector nel muro, non un flag.
                 _pb_picco = getattr(self, "_canc_picco_proprio", 0.0)
                 _pb_crollo = getattr(self, "_canc_crollo_proprio", 0.0)
-                _pb_picco_min = float(os.environ.get("MD_PICCO_MIN", "3.0"))
+                _pb_picco_min = float(os.environ.get("MD_ENTRY_MIN", "1.0"))
                 _pb_mae_max = float(os.environ.get("MD_MAE_MAX", "1.0"))
                 _pb_firme_ok = (_pb_picco >= _pb_picco_min) and (_pb_crollo >= -_pb_mae_max)
                 if getattr(self, "_canc_maschio_ok", False) and _pb_firme_ok and os.environ.get("MASCHIO_BYPASS_VERO", "true").lower() == "true":
