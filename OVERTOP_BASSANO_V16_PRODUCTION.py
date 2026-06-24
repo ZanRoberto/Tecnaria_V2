@@ -15621,6 +15621,12 @@ class OvertopBassanoV16Production:
                           # V16: peak intra-trade
                           "peak_pnl":     round(self._trade_peak_pnl, 4),
                           "build":        BUILD_MD5,   # marchio di versione (quale codice ha prodotto il trade)
+                          # ⭐ I NOSTRI ELEMENTI (24giu, Roberto): la FIRMA all'ingresso.
+                          # Il nostro sistema si basa su QUESTI, non su momentum/regime/peak_pnl.
+                          # picco_oss = grasso massimo in osservazione (doveva essere >=3 = alfa)
+                          # crollo_oss = quanto sceso sotto nascita (il MAE = la firma)
+                          "picco_oss":   round(float(getattr(self, "_canc_picco_proprio", 0.0) or 0.0), 3),
+                          "crollo_oss":  round(float(getattr(self, "_canc_crollo_proprio", 0.0) or 0.0), 3),
                           "peak_delta_s": round(self._trade_peak_ts - self._shadow_entry_time, 1)
                                          if self._trade_peak_ts and self._shadow_entry_time else 0,
                           # CARICA VIVA (29mag, Roberto): traiettoria del seed
