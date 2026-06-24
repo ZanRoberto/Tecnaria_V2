@@ -12631,6 +12631,12 @@ class OvertopBassanoV16Production:
         Registra tutti i dati necessari per l'exit e il tracking.
         """
         try:
+            # FIX 24giu (Roberto): MASCHIO_DIRETTO passa seed come FLOAT (0.3), ma
+            # questa funzione fa seed.get(...) in vari punti -> CRASH 'float object
+            # has no attribute get' -> il trade NON si apriva (OPEN_SHADOW_ERROR).
+            # Normalizzo: se seed e' un float/numero, lo avvolgo in dict.
+            if not isinstance(seed, dict):
+                seed = {"score": float(seed) if seed is not None else 0.0}
             if getattr(self, "_maschio_diretto_in_corso", False):
                 self._log_m2("🔍", f"OPEN chiamata (maschio): price={price:.1f} score={score} — entro nella funzione")
             # ════════════════════════════════════════════════════════════════
