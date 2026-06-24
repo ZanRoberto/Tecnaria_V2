@@ -9007,8 +9007,14 @@ class OvertopBassanoV16Production:
                                                     "MASCHIO_DIRETTO", 0.5)
                     except Exception as _e_mbv:
                         log.error(f"[MASCHIO_BYPASS_ERR] {_e_mbv}")
-                else:
-                    self._evaluate_shadow_entry(price, momentum, volatility, trend)
+                # ════════════════════════════════════════════════════════════
+                # 24giu (Roberto): CERVELLO VECCHIO STACCATO. Prima qui c'era
+                # 'else: self._evaluate_shadow_entry(...)' che faceva cadere ogni
+                # candidato non-maschio nel vecchio mondo (score/veti/matrigne/
+                # capsule). Era la fessura da cui rispuntavano i fantasmi all'
+                # infinito. RIMOSSO. Se MASCHIO_DIRETTO non apre, il candidato
+                # MUORE qui. Una sola via: o e' un alfa (MASCHIO_DIRETTO) o niente.
+                # ════════════════════════════════════════════════════════════
 
         # -- PHANTOM TRACKER: aggiorna trade fantasma ogni tick ------------
         if self._phantoms_open:
@@ -12606,7 +12612,9 @@ class OvertopBassanoV16Production:
             # era false=APERTA. Con MACCHINA_PURA NON apre MAI, cablato.
             _pura_sc = os.environ.get("MACCHINA_PURA", "true").lower() == "true"
             if _pura_sc or os.environ.get("SCORE_ENTRY_OFF", "true").lower() == "true":
-                self._log_m2("🚫", "SCORE-ENTRY CHIUSA (macchina pura): entra solo MASCHIO_DIRETTO")
+                # log silenziato 24giu (Roberto): stampava a OGNI candidato debole,
+                # decine di righe inutili che intasavano i log e nascondevano gli
+                # eventi veri (maschi, trans, trade). La porta e' chiusa per design.
                 return
             self._open_shadow_position(price, score, soglia, seed, size,
                                         momentum, volatility, trend,
