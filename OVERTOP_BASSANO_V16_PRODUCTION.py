@@ -8787,6 +8787,14 @@ class OvertopBassanoV16Production:
                         self._canc_su_consec    = 0       # movimenti su consecutivi
                         self._canc_giu_consec   = 0       # movimenti giu consecutivi
                         self._canc_maschio_ok   = False   # ha gia' confermato maschio?
+                        # FIX 24giu (Roberto): MASCHIO_DIRETTO si tiene picco e crollo
+                        # PROPRI, dal prezzo di nascita, INDIPENDENTI da _rit_picco_pre
+                        # che il filtro vecchio dentro _oracolo_interno_tick AZZERA a
+                        # None (-> maschi scartati col grasso). Calcolo qui, sul prezzo,
+                        # senza dipendere da valori che un altro cervello sporca.
+                        self._canc_nascita_prezzo = price  # prezzo di nascita proprio
+                        self._canc_picco_proprio  = 0.0    # max grasso $ visto (proprio)
+                        self._canc_crollo_proprio = 0.0    # min $ sotto nascita (proprio mae)
 
                     # ════════════════════════════════════════════════════════════
                     # 🐺 REGOLA ROBERTO (19giu2026) — SOLO IL COMPORTAMENTO PRIMA
@@ -8827,6 +8835,18 @@ class OvertopBassanoV16Production:
                         # price == _prec: tick piatto, non muove i contatori
                         self._canc_prezzo_prec = price
 
+                        # FIX 24giu: aggiorno picco/crollo PROPRI (grasso $ dal prezzo
+                        # di nascita), indipendenti dal filtro vecchio. Questi sono i
+                        # valori che le firme leggeranno (non _rit_picco_pre sporcato).
+                        _cn_nascita = getattr(self, "_canc_nascita_prezzo", None)
+                        if _cn_nascita:
+                            _cn_exp = float(os.environ.get("EXPOSURE", "5000"))
+                            _cn_grasso = (price - _cn_nascita) * (_cn_exp / _cn_nascita)
+                            if _cn_grasso > getattr(self, "_canc_picco_proprio", 0.0):
+                                self._canc_picco_proprio = _cn_grasso
+                            if _cn_grasso < getattr(self, "_canc_crollo_proprio", 0.0):
+                                self._canc_crollo_proprio = _cn_grasso
+
                         # MASCHIO confermato: N movimenti su consecutivi -> entra
                         # FIX 23giu (Roberto): NON basta il conteggio dei tick su.
                         # Una femmina in RANGE_DEAD fa 2 micro-tick su per rumore
@@ -8862,11 +8882,30 @@ class OvertopBassanoV16Production:
                         # trade: mae<=1.1 maschio 85%). 0 = controllo spento.
                         # ════════════════════════════════════════════════════════
                         _md_mae_max = float(os.environ.get("MD_MAE_MAX", "1.0"))
-                        _md_crollo = getattr(self, "_rit_crollo_min", None)
-                        # mae ok se: controllo spento, o non ho un crollo, o il crollo
-                        # e' sopra -soglia (non sceso troppo = non ha ballato = maschio)
-                        _md_mae_ok = (_md_mae_max <= 0) or (_md_crollo is None) or (_md_crollo >= -_md_mae_max)
-                        _md_ok = (self._canc_su_consec >= _mosse_n) and (not _md_gate or _md_grasso >= _md_grasso_min) and _md_mae_ok
+                        # FIX 24giu: leggo il crollo PROPRIO (non _rit_crollo_min che
+                        # il filtro vecchio azzera). _canc_crollo_proprio = min $ sotto
+                        # nascita, calcolato da MASCHIO_DIRETTO stesso, mai sporcato.
+                        _md_crollo = getattr(self, "_canc_crollo_proprio", 0.0)
+                        # mae ok se: controllo spento, o il crollo e' sopra -soglia
+                        # (non sceso troppo = non ha ballato = maschio)
+                        _md_mae_ok = (_md_mae_max <= 0) or (_md_crollo >= -_md_mae_max)
+                        # ════════════════════════════════════════════════════════
+                        # FEMMINA FUORI (24giu, Roberto: "la femmina e' la piu' chiara,
+                        # non sale. Se passa e' perche' il flusso lo consente").
+                        # La femmina ha picco ~0 (non sale mai). Entra solo chi ha
+                        # fatto un PICCO osservazione >= MD_PICCO_MIN. La femmina,
+                        # che non sale, resta fuori dal flusso. Default 2.0 (sui dati:
+                        # femmine picco<1.0 = 0 win su 1180; maschi/trans 2.5-3+).
+                        # ENV MD_PICCO_MIN. 0 = controllo spento.
+                        # ════════════════════════════════════════════════════════
+                        _md_picco_min = float(os.environ.get("MD_PICCO_MIN", "3.0"))
+                        # FIX 24giu: leggo il picco PROPRIO (non _rit_picco_pre che il
+                        # filtro vecchio azzera a None -> maschi scartati col grasso).
+                        _md_picco = getattr(self, "_canc_picco_proprio", 0.0)
+                        _md_picco_ok = (_md_picco_min <= 0) or (_md_picco >= _md_picco_min)
+                        _md_ok = (self._canc_su_consec >= _mosse_n) and (not _md_gate or _md_grasso >= _md_grasso_min) and _md_mae_ok and _md_picco_ok
+                        if not _md_picco_ok and self._canc_su_consec >= _mosse_n:
+                            self._log_m2("🚺", f"FEMMINA: picco osservazione +{_md_picco:.2f}$ < {_md_picco_min:.1f} = non sale, NON entra")
                         if not _md_mae_ok and self._canc_su_consec >= _mosse_n:
                             self._log_m2("📉", f"MAE FIRMA: candidato ha ballato (crollo {_md_crollo:.2f}$ < -{_md_mae_max:.1f}) = TRANS, NON entra")
                         if _md_ok:
@@ -8903,15 +8942,30 @@ class OvertopBassanoV16Production:
                                     log.error(f"[MASCHIO_DIRETTO_ERR] {_e_md}")
                                 finally:
                                     self._maschio_diretto_in_corso = False
+                                # FIX 24giu (Roberto: "la porta che il maschio ha
+                                # lasciato aperta"): azzero il flag SUBITO dopo
+                                # l'apertura. Restava True -> la Porta B (8976) lo
+                                # trovava al tick dopo e faceva entrare il candidato
+                                # SUCCESSIVO (femmina/trans magro) senza firme. BUCO.
+                                # Il flag ha fatto il suo lavoro: spento.
+                                self._canc_maschio_ok = False
                                 _cancello_passa = False  # gia' aperto qui, non ripassare da evaluate
 
                         # FEMMINA/TRANS: N storni consecutivi -> taglio subito
-                        if self._canc_giu_consec >= _mosse_n:
+                        # FIX 24giu (Roberto: "fallo correre, dargli tempo, non
+                        # ucciderlo come femmina"). Il maschio vero PARTE ROSSO e
+                        # risale TARDI (dati: t_peak WIN ~33s): mentre matura la carne
+                        # fa ritracciamenti. Se taglio a 3 storni come le mosse, lo
+                        # ammazzo al primo respiro. Lo storno ha soglia PROPRIA piu'
+                        # larga (CANCELLO_STORNI, default 5): do tempo al maschio lento
+                        # di ritracciare e ripartire, senza ucciderlo come femmina.
+                        _storni_n = int(float(os.environ.get("CANCELLO_STORNI", "5")))
+                        if self._canc_giu_consec >= _storni_n:
                             _cancello_passa = False
                             self._canc_maschio_ok = False
                             self._log_m2("🐺",
                                 f"CANCELLO: STORNA — {self._canc_giu_consec} movimenti "
-                                f"giu di fila = si svuota = femmina/trans, TAGLIO")
+                                f"giu di fila (>={_storni_n}) = si svuota davvero, TAGLIO")
 
                         # DEFAULT NEGATO: passa SOLO chi ha confermato maschio.
                         # Chi non ha ancora N mosse su (sta nascendo, o e' piatto)
@@ -8934,7 +8988,17 @@ class OvertopBassanoV16Production:
                 # 0 trade. Il "bypass veti" era finto. ORA: se il maschio e' confermato
                 # (_canc_maschio_ok), apre DIRETTO con _open_shadow_position, saltando
                 # del tutto _evaluate_shadow_entry e i suoi veti. Bypass VERO.
-                if getattr(self, "_canc_maschio_ok", False) and os.environ.get("MASCHIO_BYPASS_VERO", "true").lower() == "true":
+                # FIX 24giu (Roberto): la Porta B NON si fida piu' del solo flag.
+                # Ricontrolla le firme PROPRIE del candidato ATTUALE (picco>=soglia,
+                # crollo>=-soglia). Cosi anche se il flag restasse True da un maschio
+                # precedente, una femmina/trans magro al tick dopo NON passa: le sue
+                # firme proprie la fermano. Metal detector nel muro, non un flag.
+                _pb_picco = getattr(self, "_canc_picco_proprio", 0.0)
+                _pb_crollo = getattr(self, "_canc_crollo_proprio", 0.0)
+                _pb_picco_min = float(os.environ.get("MD_PICCO_MIN", "3.0"))
+                _pb_mae_max = float(os.environ.get("MD_MAE_MAX", "1.0"))
+                _pb_firme_ok = (_pb_picco >= _pb_picco_min) and (_pb_crollo >= -_pb_mae_max)
+                if getattr(self, "_canc_maschio_ok", False) and _pb_firme_ok and os.environ.get("MASCHIO_BYPASS_VERO", "true").lower() == "true":
                     try:
                         _seed_v = getattr(self, "_last_seed", 0.5)
                         self._log_m2("🐺", "MASCHIO BYPASS VERO: apro diretto, salto VERITAS/CAPSULE/SCORE/CONST")
@@ -11966,8 +12030,13 @@ class OvertopBassanoV16Production:
                 # mostrano: ogni loss e' peak 0.0 entrato da P1, ogni win e' peak>0.6.
                 # Interruttore P1_OFF=true -> P1 non apre, entra SOLO MASCHIO_DIRETTO
                 # (che ora richiede grasso reale >= soglia). Reversibile.
-                if os.environ.get("P1_OFF", "false").lower() == "true":
-                    self._log_m2("🚫", "P1_OFF: apertura P1 disattivata (solo MASCHIO_DIRETTO)")
+                # FIX 24giu (Roberto "metal detector"): P1 e' una PORTA LATERALE.
+                # Con MACCHINA_PURA attiva NON deve aprire MAI, cablato — non un ENV
+                # che ti dimentichi (default era false=APERTA, il buco). Le femmine
+                # entravano da qui scavalcando MASCHIO_DIRETTO.
+                _pura = os.environ.get("MACCHINA_PURA", "true").lower() == "true"
+                if _pura or os.environ.get("P1_OFF", "true").lower() == "true":
+                    self._log_m2("🚫", "P1 CHIUSA (macchina pura): entra solo MASCHIO_DIRETTO")
                     return
                 self._open_shadow_position(price, score, soglia, seed, size,
                                             momentum, volatility, trend,
@@ -12532,8 +12601,12 @@ class OvertopBassanoV16Production:
             # 12:00 (score 36.84>34, peak 0.0, -2.49, build 14a78c48) e' entrata
             # DA QUI, non da P1 (gia' spento). Interruttore SCORE_ENTRY_OFF=true
             # -> entra SOLO MASCHIO_DIRETTO (grasso reale). Reversibile.
-            if os.environ.get("SCORE_ENTRY_OFF", "false").lower() == "true":
-                self._log_m2("🚫", "SCORE_ENTRY_OFF: ingresso score-based disattivato (solo MASCHIO_DIRETTO)")
+            # FIX 24giu (Roberto "metal detector"): porta SCORE-BASED laterale.
+            # Da QUI entrava la femmina delle 12:00 (score 36.84, peak 0). Default
+            # era false=APERTA. Con MACCHINA_PURA NON apre MAI, cablato.
+            _pura_sc = os.environ.get("MACCHINA_PURA", "true").lower() == "true"
+            if _pura_sc or os.environ.get("SCORE_ENTRY_OFF", "true").lower() == "true":
+                self._log_m2("🚫", "SCORE-ENTRY CHIUSA (macchina pura): entra solo MASCHIO_DIRETTO")
                 return
             self._open_shadow_position(price, score, soglia, seed, size,
                                         momentum, volatility, trend,
@@ -14323,6 +14396,24 @@ class OvertopBassanoV16Production:
 
 
             # ════════════════════════════════════════════════════════════════
+            # ⭐ MACCHINA PURA (24giu, Roberto) — INTERRUTTORE UNICO.
+            # Roberto: "non esistono antiprecipizio o cagate varie". Sotto questo
+            # punto c'erano 20 uscite vecchie (CASSA_GRASSO, ANTIPRECIPIZIO,
+            # PRESA_SECCA, INCASSO_10S, TRANELLO_TRANS, DECEL, LOCK, EVAPORATION,
+            # KILLER, FRENO, DIVORZIO, TIMEOUT...) che chiudevano i trade al posto
+            # della logica vera e la DEVIAVANO ("fa tutto tranne quello che voglio").
+            # Con MACCHINA_PURA=true (default), NESSUNA di queste interviene.
+            # Restano SOLO le 3 uscite della macchina, gia' valutate SOPRA:
+            #   - HARD_STOP  -> rete (mai -5)
+            #   - PRESA_TRANS -> strappa il trans/grasso SUBITO, fee pagate
+            #   - TRAILING_MAE -> corsa del maschio (mae basso)
+            # ════════════════════════════════════════════════════════════════
+            if os.environ.get("MACCHINA_PURA", "true").lower() == "true":
+                return None  # nessuna uscita vecchia: la macchina ha gia' deciso sopra
+
+
+
+            # ════════════════════════════════════════════════════════════════
             # MINA CASSA_GRASSO (12giu2026, Roberto) — CATTURA DEI FURBI.
             # ════════════════════════════════════════════════════════════════
             # Sui dati (574 trade chiusi, di cui 440 LOSS):
@@ -15304,6 +15395,18 @@ class OvertopBassanoV16Production:
                 _p = list(self.campo._prices_long)
                 _ia_drift = (sum(_p[-50:])/50 - sum(_p[:50])/50) / (sum(_p[:50])/50) * 100
 
+            # FIX 24giu (Roberto: "un maschio vero che ha perso NON va etichettato
+            # come femmina"). Salvo il picco PROPRIO raggiunto in osservazione + il
+            # sesso, cosi la lista distingue:
+            #   MASCHIO-LOSS = ha fatto picco da maschio (>=3) ma ha perso (sfortuna)
+            #   FEMMINA      = non e' mai salita (picco <3)
+            # Sono morti DIVERSI: confonderli rende la lista cieca.
+            _picco_oss = round(float(getattr(self, "_canc_picco_proprio", 0.0) or 0.0), 2)
+            _md_picco_min_cls = float(os.environ.get("MD_PICCO_MIN", "3.0"))
+            if _picco_oss >= _md_picco_min_cls:
+                _sesso = "MASCHIO" if is_win else "MASCHIO_LOSS"
+            else:
+                _sesso = "FEMMINA"
             self.realtime_engine.registra_trade({
                 'matrimonio': self._shadow_matrimonio,
                 'pnl':        pnl,
@@ -15315,6 +15418,8 @@ class OvertopBassanoV16Production:
                 'drift':      round(_ia_drift, 4),
                 'score':      self._shadow.get('score', 0) if self._shadow else 0,
                 'exit_reason': reason,
+                'picco_oss':  _picco_oss,   # picco proprio raggiunto in osservazione
+                'sesso':      _sesso,        # MASCHIO / MASCHIO_LOSS / FEMMINA
             })
 
             # -- LOG ANALYZER - stats per matrimonio includono M2 -------------
