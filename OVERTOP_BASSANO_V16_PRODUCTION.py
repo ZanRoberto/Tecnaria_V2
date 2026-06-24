@@ -12631,6 +12631,8 @@ class OvertopBassanoV16Production:
         Registra tutti i dati necessari per l'exit e il tracking.
         """
         try:
+            if getattr(self, "_maschio_diretto_in_corso", False):
+                self._log_m2("🔍", f"OPEN chiamata (maschio): price={price:.1f} score={score} — entro nella funzione")
             # ════════════════════════════════════════════════════════════════
             # 🐺 CANCELLO SALITA @ APERTURA (18giu2026, Roberto — IL VERO COLLO
             #     DI BOTTIGLIA, blindato). PRIMA di TUTTO, anche del Grande Fratello.
@@ -13600,6 +13602,8 @@ class OvertopBassanoV16Production:
                     self._log("⏱️", f"RITARDO ingresso: confermato dopo "
                                     f"{_rit_atteso:.1f}s, entro @ ${price:.1f}")
 
+            if getattr(self, "_maschio_diretto_in_corso", False):
+                self._log_m2("✅", f"OPEN: arrivato all'apertura, creo il trade ORA (price={price:.1f})")
             self._shadow = {
                 "price_entry":   price,
                 "nato_ts":       time.time(),   # istante di nascita, per filmato 10s/20s
