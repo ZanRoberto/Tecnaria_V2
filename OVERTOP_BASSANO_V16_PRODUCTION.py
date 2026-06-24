@@ -8799,6 +8799,7 @@ class OvertopBassanoV16Production:
                         # None (-> maschi scartati col grasso). Calcolo qui, sul prezzo,
                         # senza dipendere da valori che un altro cervello sporca.
                         self._canc_nascita_prezzo = price  # prezzo di nascita proprio
+                        self._canc_nascita_ts     = time.time()  # quando nasce l'osservazione (per regola 12s)
                         self._canc_picco_proprio  = 0.0    # max grasso $ visto (proprio)
                         self._canc_crollo_proprio = 0.0    # min $ sotto nascita (proprio mae)
 
@@ -8924,11 +8925,34 @@ class OvertopBassanoV16Production:
                         _md_picco_ok = (_md_entry_min <= 0) or (_md_picco >= _md_entry_min)
                         # il maschio e' confermato da: sale dritto (mae_ok, crollo basso)
                         # + mosse su consecutive + grasso minimo. NON serve picco 3.
-                        _md_ok = (self._canc_su_consec >= _mosse_n) and (not _md_gate or _md_grasso >= _md_grasso_min) and _md_mae_ok and _md_picco_ok
+                        # ════════════════════════════════════════════════════════
+                        # REGOLA 12 SECONDI (strategia Roberto, validata): il maschio
+                        # si dichiara quando l'MFE CRESCE e TIENE oltre i ~12s. Il
+                        # trans/femmina fa picco PRECOCE (sotto 12s) e si SVUOTA. Il
+                        # trade 10:24 (mfe_trade 0.0) era un trans: 3 mosse su veloci,
+                        # poi collassato. Entrando su "3 mosse su" senza la tenuta dei
+                        # 12s, ho preso il trans. CORREZIONE: entra solo se
+                        #   (a) l'osservazione dura da >= TIENE_SEC (default 12s) E
+                        #   (b) l'MFE TIENE: grasso ORA >= picco * TIENE_PCT (non si e'
+                        #       svuotato dal picco = sta reggendo, non collassando)
+                        # ════════════════════════════════════════════════════════
+                        _tiene_sec = float(os.environ.get("MD_TIENE_SEC", "12"))
+                        _tiene_pct = float(os.environ.get("MD_TIENE_PCT", "0.70"))
+                        _nasc_ts   = getattr(self, "_canc_nascita_ts", None)
+                        _eta_oss   = (time.time() - _nasc_ts) if _nasc_ts else 0.0
+                        # tiene: il grasso attuale e' ancora vicino al picco (non svuotato)
+                        _md_tiene_ok = (_md_grasso >= _md_picco * _tiene_pct) if _md_picco > 0 else False
+                        # eta: l'osservazione e' maturata oltre i 12s (non picco precoce)
+                        _md_eta_ok = (_eta_oss >= _tiene_sec)
+                        _md_ok = (self._canc_su_consec >= _mosse_n) and (not _md_gate or _md_grasso >= _md_grasso_min) and _md_mae_ok and _md_picco_ok and _md_eta_ok and _md_tiene_ok
                         if not _md_picco_ok and self._canc_su_consec >= _mosse_n:
                             self._log_m2("🚺", f"FEMMINA: grasso +{_md_picco:.2f}$ < {_md_entry_min:.1f} = piatta, NON entra")
                         if not _md_mae_ok and self._canc_su_consec >= _mosse_n:
                             self._log_m2("📉", f"MAE FIRMA: candidato ha ballato (crollo {_md_crollo:.2f}$ < -{_md_mae_max:.1f}) = TRANS, NON entra")
+                        if _md_picco_ok and _md_mae_ok and self._canc_su_consec >= _mosse_n and not _md_eta_ok:
+                            self._log_m2("⏳", f"ATTENDO 12s: oss {_eta_oss:.0f}s < {_tiene_sec:.0f}s — MFE non ancora maturo (picco precoce = sospetto trans)")
+                        if _md_picco_ok and _md_mae_ok and _md_eta_ok and not _md_tiene_ok:
+                            self._log_m2("🔁", f"TRANS: MFE NON TIENE — grasso {_md_grasso:.2f}$ sceso sotto {_tiene_pct:.0%} del picco {_md_picco:.2f}$ = si svuota, NON entra")
                         if _md_ok:
                             self._canc_maschio_ok = True
                             # ════════════════════════════════════════════════════
