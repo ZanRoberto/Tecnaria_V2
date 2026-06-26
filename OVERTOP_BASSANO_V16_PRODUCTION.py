@@ -9037,9 +9037,10 @@ class OvertopBassanoV16Production:
                 _pb_firme_ok = (_pb_picco >= _pb_picco_min) and (_pb_crollo >= -_pb_mae_max)
                 # PORTA B DISATTIVATA (24giu sera): era il doppione di P3 che leggeva
                 # il picco in un momento diverso -> fessura da cui sfuggiva la femmina
-                # 0.664. Ora apre SOLO la porta unica sopra. Per riattivarla (debug):
-                # MASCHIO_BYPASS_VERO=true. Default FALSE = chiusa.
-                if getattr(self, "_canc_maschio_ok", False) and _pb_firme_ok and os.environ.get("MASCHIO_BYPASS_VERO", "false").lower() == "true":
+                # 0.664. Ora apre SOLO la porta unica sopra. CHIUSA NEL CODICE
+                # (and False) il 26giu: era la 2a porta senza cattura picco ->
+                # trade con etichetta FEMMINA falsa (picco azzerato). UNA PORTA SOLA.
+                if False and getattr(self, "_canc_maschio_ok", False) and _pb_firme_ok and os.environ.get("MASCHIO_BYPASS_VERO", "false").lower() == "true":
                     try:
                         _seed_v = getattr(self, "_last_seed", 0.5)
                         self._log_m2("🐺", "MASCHIO BYPASS VERO: apro diretto, salto VERITAS/CAPSULE/SCORE/CONST")
@@ -13664,6 +13665,11 @@ class OvertopBassanoV16Production:
                 self._log_m2("✅", f"OPEN: arrivato all'apertura, creo il trade ORA (price={price:.1f})")
             self._shadow = {
                 "price_entry":   price,
+                # FIX picco azzerato (per-posizione, non variabile condivisa):
+                # catturo il picco/crollo PROPRI di QUESTO trade dentro _shadow,
+                # immune a sovrascritture da osservazioni/posizioni successive.
+                "picco_ingresso_reale":  round(float(getattr(self, "_canc_picco_proprio", 0.0) or 0.0), 3),
+                "crollo_ingresso_reale": round(float(getattr(self, "_canc_crollo_proprio", 0.0) or 0.0), 3),
                 "nato_ts":       time.time(),   # istante di nascita, per filmato 10s/20s
                 "pnl_10s":       None,           # fotografia PnL a 10 secondi (riempita dopo)
                 "pnl_20s":       None,           # fotografia PnL a 20 secondi (riempita dopo)
@@ -14502,7 +14508,8 @@ class OvertopBassanoV16Production:
                     self._log_m2("✂️",
                         f"TRAILING MAE: picco +{max_profit:.2f}$ retreat {_retreat_grasso:.2f}$ "
                         f">= margine {_tr_margine:.1f} = STORNA, incasso +{current_pnl:.2f}$ lordo")
-                    return self._close_shadow_trade(price, f"MASCHIO_CORSA_picco{max_profit:.1f}_inc{current_pnl:.1f}")
+                    _esito_tr = "CORSA_VINTA" if current_pnl > 0 else "TRANS_SVUOTATO"
+                    return self._close_shadow_trade(price, f"{_esito_tr}_picco{max_profit:.1f}_inc{current_pnl:.1f}")
 
 
             # ════════════════════════════════════════════════════════════════
@@ -15513,11 +15520,11 @@ class OvertopBassanoV16Production:
             # Sono morti DIVERSI: confonderli rende la lista cieca.
             # FIX: leggo il picco VERO catturato all'ingresso (_trade_picco_ingresso),
             # NON _canc_picco_proprio che e' azzerato dalla nuova osservazione.
-            _picco_oss = round(float(getattr(self, "_trade_picco_ingresso", None) or getattr(self, "_canc_picco_proprio", 0.0) or 0.0), 2)
+            _picco_oss = round(float((self._shadow.get("picco_ingresso_reale", 0.0) if isinstance(getattr(self, "_shadow", None), dict) else 0.0) or 0.0), 2)
             # soglia sesso = soglia d'ingresso (chi e' ENTRATO ha picco>=soglia, NON e' femmina)
             _md_picco_min_cls = float(os.environ.get("MD_MFE_MIN", "1.0"))
             if _picco_oss >= _md_picco_min_cls:
-                _sesso = "MASCHIO" if is_win else "MASCHIO_LOSS"
+                _sesso = "MASCHIO" if is_win else "TRANS"
             else:
                 _sesso = "FEMMINA"
             self.realtime_engine.registra_trade({
@@ -15532,7 +15539,7 @@ class OvertopBassanoV16Production:
                 'score':      self._shadow.get('score', 0) if self._shadow else 0,
                 'exit_reason': reason,
                 'picco_oss':  _picco_oss,   # picco proprio raggiunto in osservazione
-                'sesso':      _sesso,        # MASCHIO / MASCHIO_LOSS / FEMMINA
+                'sesso':      _sesso,        # MASCHIO(vince) / TRANS(entra ma perde) / FEMMINA(non sale)
             })
 
             # -- LOG ANALYZER - stats per matrimonio includono M2 -------------
@@ -15707,8 +15714,8 @@ class OvertopBassanoV16Production:
                           # Il nostro sistema si basa su QUESTI, non su momentum/regime/peak_pnl.
                           # picco_oss = grasso massimo in osservazione (doveva essere >=3 = alfa)
                           # crollo_oss = quanto sceso sotto nascita (il MAE = la firma)
-                          "picco_oss":   round(float(getattr(self, "_canc_picco_proprio", 0.0) or 0.0), 3),
-                          "crollo_oss":  round(float(getattr(self, "_canc_crollo_proprio", 0.0) or 0.0), 3),
+                          "picco_oss":   round(float((self._shadow.get("picco_ingresso_reale", 0.0) if isinstance(getattr(self, "_shadow", None), dict) else 0.0) or 0.0), 3),
+                          "crollo_oss":  round(float((self._shadow.get("crollo_ingresso_reale", 0.0) if isinstance(getattr(self, "_shadow", None), dict) else 0.0) or 0.0), 3),
                           "peak_delta_s": round(self._trade_peak_ts - self._shadow_entry_time, 1)
                                          if self._trade_peak_ts and self._shadow_entry_time else 0,
                           # CARICA VIVA (29mag, Roberto): traiettoria del seed
