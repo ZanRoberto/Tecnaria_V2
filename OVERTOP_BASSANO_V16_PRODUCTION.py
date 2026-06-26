@@ -8950,33 +8950,26 @@ class OvertopBassanoV16Production:
                             self._log_m2("🚺", f"FEMMINA: MFE +{_md_picco:.2f}$ < {_md_mfe_min:.1f} = non sale, NON entra")
                         if _md_mfe_ok and not _md_mae_ok:
                             self._log_m2("📉", f"TRANS: ha ballato (crollo {_md_crollo:.2f}$ < -{_md_mae_max:.1f}), NON entra")
+                        # ════════════════════════════════════════════════════════
+                        # PORTA UNICA D'INGRESSO (24giu sera, riscrittura Roberto:
+                        # "una porta sola, niente merda stratificata"). UNA lettura
+                        # del picco/crollo PROPRI del candidato ATTUALE, UN filtro
+                        # (MFE>=soglia E MAE basso), UNA apertura. Niente flag che
+                        # sopravvive al tick (era la fessura: P3 e P4 leggevano il
+                        # picco in 2 momenti diversi -> femmina 0.664 sfuggita).
+                        # ════════════════════════════════════════════════════════
                         if _md_ok:
                             self._canc_maschio_ok = True
-                            # ════════════════════════════════════════════════════
-                            # ENTRATA DIRETTA (21giu, Roberto: "deve entrare SUBITO
-                            # non andare a trovare le cose morte"). Appena conferma
-                            # le N mosse su, APRE QUI, senza passare per
-                            # _evaluate_shadow_entry (score/VERITAS/capsule che lo
-                            # trattengono finche' si svuota -> maschio +5.34 tagliato
-                            # 16:21:51). Il movimento confermato E' la decisione.
-                            # ENV MASCHIO_ENTRA_DIRETTO (default true). FAIL-OPEN.
-                            # ════════════════════════════════════════════════════
-                            _entra_diretto = os.environ.get("MASCHIO_ENTRA_DIRETTO", "true").lower() == "true"
-                            # FIX 23giu (Roberto): il blocco usava bool(lista) ->
-                            # bastava 1 phantom aperto per fermare MASCHIO_DIRETTO
-                            # PER SEMPRE (porta tappata dal primo trade). Il resto
-                            # del codice (12081, _close_phantom) ragiona su MAX 5
-                            # posizioni simultanee. Allineo: apre finche' < 5 aperte.
                             _MAX_PH = 5
                             _gia_aperto = (len(getattr(self, "_phantoms_open", []) or []) >= _MAX_PH)
-                            if _entra_diretto and not _gia_aperto and not getattr(self, "_maschio_diretto_in_corso", False):
+                            _dir_ok = (self.campo._direction == "LONG") or (os.environ.get("LONG_ONLY_GATE_OFF", "false").lower() == "true")
+                            if (not _gia_aperto) and _dir_ok and (not getattr(self, "_maschio_diretto_in_corso", False)):
                                 try:
                                     self._maschio_diretto_in_corso = True
                                     _seed_q = self.seed_scorer.score()
                                     _seed_v = _seed_q.get('score', 0.0) if _seed_q.get('reason') != 'insufficient_data' else 0.0
-                                    _dir_m = self.campo._direction
-                                    _fp_wr = self.oracolo.get_wr(momentum, volatility, trend, _dir_m)
-                                    self._log_m2("🐺", f"MASCHIO DIRETTO: {self._canc_su_consec} mosse su = ENTRA SUBITO (bypass veti)")
+                                    _fp_wr = self.oracolo.get_wr(momentum, volatility, trend, self.campo._direction)
+                                    self._log_m2("🐺", f"MASCHIO: picco +{_md_picco:.2f}$ crollo {_md_crollo:.2f}$ = ENTRA (porta unica, filtro MFE+MAE passato)")
                                     self._open_shadow_position(price, 99.0, 0.0, _seed_v, 0.3,
                                                                momentum, volatility, trend,
                                                                "MASCHIO_DIRETTO", _fp_wr)
@@ -8984,14 +8977,10 @@ class OvertopBassanoV16Production:
                                     log.error(f"[MASCHIO_DIRETTO_ERR] {_e_md}")
                                 finally:
                                     self._maschio_diretto_in_corso = False
-                                # FIX 24giu (Roberto: "la porta che il maschio ha
-                                # lasciato aperta"): azzero il flag SUBITO dopo
-                                # l'apertura. Restava True -> la Porta B (8976) lo
-                                # trovava al tick dopo e faceva entrare il candidato
-                                # SUCCESSIVO (femmina/trans magro) senza firme. BUCO.
-                                # Il flag ha fatto il suo lavoro: spento.
-                                self._canc_maschio_ok = False
-                                _cancello_passa = False  # gia' aperto qui, non ripassare da evaluate
+                            elif not _dir_ok:
+                                self._log_m2("🛡️", "FUORI: mercato SHORT, porta unica chiusa (LONG-only)")
+                            self._canc_maschio_ok = False
+                            _cancello_passa = False  # gia' deciso qui, non ripassare
 
                         # FEMMINA/TRANS: N storni consecutivi -> taglio subito
                         # FIX 24giu (Roberto: "fallo correre, dargli tempo, non
@@ -9040,7 +9029,11 @@ class OvertopBassanoV16Production:
                 _pb_picco_min = float(os.environ.get("MD_MFE_MIN", "0.0"))
                 _pb_mae_max = float(os.environ.get("MD_MAE_MAX", "1.0"))
                 _pb_firme_ok = (_pb_picco >= _pb_picco_min) and (_pb_crollo >= -_pb_mae_max)
-                if getattr(self, "_canc_maschio_ok", False) and _pb_firme_ok and os.environ.get("MASCHIO_BYPASS_VERO", "true").lower() == "true":
+                # PORTA B DISATTIVATA (24giu sera): era il doppione di P3 che leggeva
+                # il picco in un momento diverso -> fessura da cui sfuggiva la femmina
+                # 0.664. Ora apre SOLO la porta unica sopra. Per riattivarla (debug):
+                # MASCHIO_BYPASS_VERO=true. Default FALSE = chiusa.
+                if getattr(self, "_canc_maschio_ok", False) and _pb_firme_ok and os.environ.get("MASCHIO_BYPASS_VERO", "false").lower() == "true":
                     try:
                         _seed_v = getattr(self, "_last_seed", 0.5)
                         self._log_m2("🐺", "MASCHIO BYPASS VERO: apro diretto, salto VERITAS/CAPSULE/SCORE/CONST")
