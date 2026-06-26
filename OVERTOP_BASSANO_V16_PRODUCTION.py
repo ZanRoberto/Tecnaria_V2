@@ -8970,6 +8970,12 @@ class OvertopBassanoV16Production:
                                     _seed_v = _seed_q.get('score', 0.0) if _seed_q.get('reason') != 'insufficient_data' else 0.0
                                     _fp_wr = self.oracolo.get_wr(momentum, volatility, trend, self.campo._direction)
                                     self._log_m2("🐺", f"MASCHIO: picco +{_md_picco:.2f}$ crollo {_md_crollo:.2f}$ = ENTRA (porta unica, filtro MFE+MAE passato)")
+                                    # FIX bug picco_oss azzerato (NODO blindato): catturo il
+                                    # picco VERO d'ingresso ORA, prima che una nuova osservazione
+                                    # resetti _canc_picco_proprio a 0. Cosi la lista/dashboard
+                                    # mostra il picco reale e l'etichetta sesso e' corretta.
+                                    self._trade_picco_ingresso = float(_md_picco)
+                                    self._trade_crollo_ingresso = float(_md_crollo)
                                     self._open_shadow_position(price, 99.0, 0.0, _seed_v, 0.3,
                                                                momentum, volatility, trend,
                                                                "MASCHIO_DIRETTO", _fp_wr)
@@ -15505,8 +15511,11 @@ class OvertopBassanoV16Production:
             #   MASCHIO-LOSS = ha fatto picco da maschio (>=3) ma ha perso (sfortuna)
             #   FEMMINA      = non e' mai salita (picco <3)
             # Sono morti DIVERSI: confonderli rende la lista cieca.
-            _picco_oss = round(float(getattr(self, "_canc_picco_proprio", 0.0) or 0.0), 2)
-            _md_picco_min_cls = float(os.environ.get("MD_PICCO_MIN", "3.0"))
+            # FIX: leggo il picco VERO catturato all'ingresso (_trade_picco_ingresso),
+            # NON _canc_picco_proprio che e' azzerato dalla nuova osservazione.
+            _picco_oss = round(float(getattr(self, "_trade_picco_ingresso", None) or getattr(self, "_canc_picco_proprio", 0.0) or 0.0), 2)
+            # soglia sesso = soglia d'ingresso (chi e' ENTRATO ha picco>=soglia, NON e' femmina)
+            _md_picco_min_cls = float(os.environ.get("MD_MFE_MIN", "1.0"))
             if _picco_oss >= _md_picco_min_cls:
                 _sesso = "MASCHIO" if is_win else "MASCHIO_LOSS"
             else:
