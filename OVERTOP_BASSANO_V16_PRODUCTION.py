@@ -13688,7 +13688,7 @@ class OvertopBassanoV16Production:
                 # FIX picco azzerato (per-posizione, non variabile condivisa):
                 # catturo il picco/crollo PROPRI di QUESTO trade dentro _shadow,
                 # immune a sovrascritture da osservazioni/posizioni successive.
-                "picco_ingresso_reale":  round(float(getattr(self, "_canc_picco_proprio", 0.0) or 0.0), 3),
+                "picco_ingresso_reale":  round(float(getattr(self, "_trade_picco_ingresso", None) or getattr(self, "_canc_picco_proprio", 0.0) or 0.0), 3),
                 "crollo_ingresso_reale": round(float(getattr(self, "_canc_crollo_proprio", 0.0) or 0.0), 3),
                 "nato_ts":       time.time(),   # istante di nascita, per filmato 10s/20s
                 "pnl_10s":       None,           # fotografia PnL a 10 secondi (riempita dopo)
