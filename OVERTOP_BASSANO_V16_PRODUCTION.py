@@ -8812,6 +8812,7 @@ class OvertopBassanoV16Production:
                         self._canc_nascita_ts     = time.time()  # quando nasce l'osservazione (per regola 12s)
                         self._canc_picco_proprio  = 0.0    # max grasso $ visto (proprio)
                         self._canc_crollo_proprio = 0.0    # min $ sotto nascita (proprio mae)
+                        self._canc_traccia_post   = None   # traccia dinamica post-picco (azzerata a ogni nascita)
 
                     # ════════════════════════════════════════════════════════════
                     # 🐺 REGOLA ROBERTO (19giu2026) — SOLO IL COMPORTAMENTO PRIMA
@@ -8873,6 +8874,19 @@ class OvertopBassanoV16Production:
                                 self._canc_tick_salita = 0
                             self._canc_grasso_prec = _cn_grasso
                             self._canc_grasso_ora = _cn_grasso
+                            # TRACCIAMENTO DINAMICA POST-PICCO (Roberto 27giu: "traccialo,
+                            # misuralo, decidi"). Quando ha raggiunto la soglia, registro
+                            # tick per tick il grasso: questa traccia E' la dinamica vera
+                            # del movimento dopo il picco. Da qui si misura se TIENE (maschio)
+                            # o CROLLA (trans/femmina) - sui fatti, non su una soglia inventata.
+                            _cn_soglia_traccia = float(os.environ.get("MD_MFE_MIN", "2.0"))
+                            if self._canc_picco_proprio >= _cn_soglia_traccia:
+                                if not hasattr(self, "_canc_traccia_post") or self._canc_traccia_post is None:
+                                    self._canc_traccia_post = []
+                                    self._canc_picco_al_via = float(self._canc_picco_proprio)
+                                # registro: (grasso ora, picco finora) - max 40 tick
+                                if len(self._canc_traccia_post) < 40:
+                                    self._canc_traccia_post.append(round(_cn_grasso, 3))
 
                         # MASCHIO confermato: N movimenti su consecutivi -> entra
                         # FIX 23giu (Roberto): NON basta il conteggio dei tick su.
@@ -8963,20 +8977,22 @@ class OvertopBassanoV16Production:
                         # -> NON entra (visto a costo zero, prima del trade).
                         # Il trade 928 (TRANS picco 3.01, -3.03) entrava a soglia secca:
                         # con la conferma sarebbe stato scartato (era gia' crollato).
-                        _md_nascita = getattr(self, "_canc_nascita_prezzo", None)
-                        if _md_nascita:
-                            _md_grasso_ora = (price - _md_nascita) * (5000.0 / _md_nascita)
-                        else:
-                            _md_grasso_ora = _md_picco
                         _md_conferma = float(os.environ.get("MD_CONFERMA", "0.7"))
                         # ha raggiunto la soglia di picco?
                         _md_picco_ok = (_md_picco >= _md_mfe_min)
-                        # si conferma ORA? (il grasso attuale non e' crollato dal picco)
-                        _md_tiene = (_md_grasso_ora >= _md_picco * _md_conferma)
+                        # TIENE NEL TEMPO? Misuro sulla TRACCIA post-picco (Roberto:
+                        # "traccialo, misuralo, decidi"). Il maschio tiene per piu' tick
+                        # sopra la soglia di conferma; trans/femmina crollano subito.
+                        _md_traccia = getattr(self, "_canc_traccia_post", None) or []
+                        _md_soglia_tenuta = _md_picco * _md_conferma
+                        _md_tick_tenuti = int(os.environ.get("MD_TICK_TENUTI", "3"))
+                        # conto quanti degli ultimi tick tracciati tengono sopra la soglia
+                        _md_ultimi = _md_traccia[-_md_tick_tenuti:] if len(_md_traccia) >= _md_tick_tenuti else _md_traccia
+                        _md_tiene = (len(_md_ultimi) >= _md_tick_tenuti) and all(g >= _md_soglia_tenuta for g in _md_ultimi)
                         _md_mfe_ok = _md_picco_ok and _md_tiene
                         _md_ok = _md_mfe_ok
                         if _md_picco_ok and not _md_tiene:
-                            self._log_m2("📉", f"TRANS: picco {_md_picco:.2f}$ ma ORA {_md_grasso_ora:.2f}$ (crollato sotto {_md_picco*_md_conferma:.2f}) = NON conferma, NON entra")
+                            self._log_m2("📉", f"NON conferma: picco {_md_picco:.2f}$ ma traccia {_md_ultimi} sotto {_md_soglia_tenuta:.2f} (crolla o non tiene {_md_tick_tenuti}tick) = scarto trans/femmina")
                         elif not _md_picco_ok:
                             self._log_m2("🚺", f"NON entra: MFE {_md_picco:.2f}$ < {_md_mfe_min:.1f} (non ha fatto grasso)")
                         # ════════════════════════════════════════════════════════
@@ -13707,6 +13723,7 @@ class OvertopBassanoV16Production:
                 # catturo il picco/crollo PROPRI di QUESTO trade dentro _shadow,
                 # immune a sovrascritture da osservazioni/posizioni successive.
                 "picco_ingresso_reale":  round(float(getattr(self, "_trade_picco_ingresso", None) or getattr(self, "_canc_picco_proprio", 0.0) or 0.0), 3),
+                "traccia_post_picco":  (getattr(self, "_canc_traccia_post", None) or [])[:40],
                 "crollo_ingresso_reale": round(float(getattr(self, "_canc_crollo_proprio", 0.0) or 0.0), 3),
                 "nato_ts":       time.time(),   # istante di nascita, per filmato 10s/20s
                 "pnl_10s":       None,           # fotografia PnL a 10 secondi (riempita dopo)
