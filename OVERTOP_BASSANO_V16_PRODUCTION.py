@@ -8954,12 +8954,30 @@ class OvertopBassanoV16Production:
                         # FILTRO PROVATO SUI DATI REALI (415 trade, 27giu): il picco
                         # d'osservazione (MFE) >= soglia. Con MFE>=2: 50 trade entrano,
                         # 41 win/+157, 9 loss/-17 = 82% WR, +140 totale.
-                        # SMENTITI dai dati e RIMOSSI: MAE stretto, "salita dritta",
-                        # "grasso attuale" (il MAE della curva non separa maschi da trans,
-                        # provato 27giu). Resta SOLO il MFE: la firma originale di Roberto.
-                        _md_mfe_ok = (_md_picco >= _md_mfe_min)
+                        # SMENTITI dai dati e RIMOSSI: MAE stretto, "salita dritta".
+                        # ─────────────────────────────────────────────────────────
+                        # REGOLA ROBERTO 27giu (CONFERMA POST-PICCO): non basta toccare
+                        # la soglia. Dopo il picco, osservo ANCORA a esposizione zero:
+                        # entro SOLO se il grasso ATTUALE si conferma (non e' crollato
+                        # dal picco). Maschio tiene/sale -> entra. Trans crolla dal picco
+                        # -> NON entra (visto a costo zero, prima del trade).
+                        # Il trade 928 (TRANS picco 3.01, -3.03) entrava a soglia secca:
+                        # con la conferma sarebbe stato scartato (era gia' crollato).
+                        _md_nascita = getattr(self, "_canc_nascita_prezzo", None)
+                        if _md_nascita:
+                            _md_grasso_ora = (price - _md_nascita) * (5000.0 / _md_nascita)
+                        else:
+                            _md_grasso_ora = _md_picco
+                        _md_conferma = float(os.environ.get("MD_CONFERMA", "0.7"))
+                        # ha raggiunto la soglia di picco?
+                        _md_picco_ok = (_md_picco >= _md_mfe_min)
+                        # si conferma ORA? (il grasso attuale non e' crollato dal picco)
+                        _md_tiene = (_md_grasso_ora >= _md_picco * _md_conferma)
+                        _md_mfe_ok = _md_picco_ok and _md_tiene
                         _md_ok = _md_mfe_ok
-                        if not _md_mfe_ok:
+                        if _md_picco_ok and not _md_tiene:
+                            self._log_m2("📉", f"TRANS: picco {_md_picco:.2f}$ ma ORA {_md_grasso_ora:.2f}$ (crollato sotto {_md_picco*_md_conferma:.2f}) = NON conferma, NON entra")
+                        elif not _md_picco_ok:
                             self._log_m2("🚺", f"NON entra: MFE {_md_picco:.2f}$ < {_md_mfe_min:.1f} (non ha fatto grasso)")
                         # ════════════════════════════════════════════════════════
                         # PORTA UNICA D'INGRESSO (24giu sera, riscrittura Roberto:
@@ -8980,7 +8998,7 @@ class OvertopBassanoV16Production:
                                     _seed_q = self.seed_scorer.score()
                                     _seed_v = _seed_q.get('score', 0.0) if _seed_q.get('reason') != 'insufficient_data' else 0.0
                                     _fp_wr = self.oracolo.get_wr(momentum, volatility, trend, self.campo._direction)
-                                    self._log_m2("🐺", f"MASCHIO: MFE +{_md_picco:.2f}$ >= {_md_mfe_min:.1f} = ENTRA (ha fatto grasso)")
+                                    self._log_m2("🐺", f"MASCHIO CONFERMATO: picco {_md_picco:.2f}$, tiene a {_md_grasso_ora:.2f}$ = ENTRA (confermato dopo il picco)")
                                     # FIX bug picco_oss azzerato (NODO blindato): catturo il
                                     # picco VERO d'ingresso ORA, prima che una nuova osservazione
                                     # resetti _canc_picco_proprio a 0. Cosi la lista/dashboard
