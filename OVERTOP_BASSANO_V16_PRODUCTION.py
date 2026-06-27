@@ -8863,6 +8863,16 @@ class OvertopBassanoV16Production:
                                 self._canc_picco_proprio = _cn_grasso
                             if _cn_grasso < getattr(self, "_canc_crollo_proprio", 0.0):
                                 self._canc_crollo_proprio = _cn_grasso
+                            # CONTATORE SALITA DRITTA (firma del maschio, provata su stress test):
+                            # tick consecutivi in cui il grasso SALE. Il maschio sale dritto
+                            # (contatore alto); il trans sale a strappo e ricade (si azzera).
+                            _cn_grasso_prec = getattr(self, "_canc_grasso_prec", None)
+                            if _cn_grasso_prec is not None and _cn_grasso > _cn_grasso_prec:
+                                self._canc_tick_salita = getattr(self, "_canc_tick_salita", 0) + 1
+                            else:
+                                self._canc_tick_salita = 0
+                            self._canc_grasso_prec = _cn_grasso
+                            self._canc_grasso_ora = _cn_grasso
 
                         # MASCHIO confermato: N movimenti su consecutivi -> entra
                         # FIX 23giu (Roberto): NON basta il conteggio dei tick su.
@@ -8898,7 +8908,7 @@ class OvertopBassanoV16Production:
                         # ENV MD_MAE_MAX (default 1.0 = soglia certificata sui 2000
                         # trade: mae<=1.1 maschio 85%). 0 = controllo spento.
                         # ════════════════════════════════════════════════════════
-                        _md_mae_max = float(os.environ.get("MD_MAE_MAX", "1.0"))
+                        _md_mae_max = float(os.environ.get("MD_MAE_MAX", "0.5"))
                         # FIX 24giu: leggo il crollo PROPRIO (non _rit_crollo_min che
                         # il filtro vecchio azzera). _canc_crollo_proprio = min $ sotto
                         # nascita, calcolato da MASCHIO_DIRETTO stesso, mai sporcato.
@@ -8939,17 +8949,18 @@ class OvertopBassanoV16Production:
                         # i maschi lenti, win_persi 33-83) e il gate mosse_su.
                         # Vedi VERITA_BLINDATA_OVERTOP.md. NON reintrodurre i 12s.
                         # ════════════════════════════════════════════════════════
-                        _md_mfe_min = float(os.environ.get("MD_MFE_MIN", "0.0"))
+                        _md_mfe_min = float(os.environ.get("MD_MFE_MIN", "2.0"))
                         _md_picco = getattr(self, "_canc_picco_proprio", 0.0)
-                        # UNICO filtro d'ingresso: ha mostrato grasso positivo (MFE>=soglia)
+                        # FILTRO PROVATO SUI DATI REALI (415 trade, 27giu): il picco
+                        # d'osservazione (MFE) >= soglia. Con MFE>=2: 50 trade entrano,
+                        # 41 win/+157, 9 loss/-17 = 82% WR, +140 totale.
+                        # SMENTITI dai dati e RIMOSSI: MAE stretto, "salita dritta",
+                        # "grasso attuale" (il MAE della curva non separa maschi da trans,
+                        # provato 27giu). Resta SOLO il MFE: la firma originale di Roberto.
                         _md_mfe_ok = (_md_picco >= _md_mfe_min)
-                        _md_ok = _md_mfe_ok and _md_mae_ok
-                        # _md_mae_ok (sale dritto) resta come guardia anti-trans-ballerino.
-                        # ENV MD_MFE_MIN: 0.0=prudente(+98,0 persi) | 1.0=aggressivo(+146,-30)
+                        _md_ok = _md_mfe_ok
                         if not _md_mfe_ok:
-                            self._log_m2("🚺", f"FEMMINA: MFE +{_md_picco:.2f}$ < {_md_mfe_min:.1f} = non sale, NON entra")
-                        if _md_mfe_ok and not _md_mae_ok:
-                            self._log_m2("📉", f"TRANS: ha ballato (crollo {_md_crollo:.2f}$ < -{_md_mae_max:.1f}), NON entra")
+                            self._log_m2("🚺", f"NON entra: MFE {_md_picco:.2f}$ < {_md_mfe_min:.1f} (non ha fatto grasso)")
                         # ════════════════════════════════════════════════════════
                         # PORTA UNICA D'INGRESSO (24giu sera, riscrittura Roberto:
                         # "una porta sola, niente merda stratificata"). UNA lettura
@@ -8969,13 +8980,22 @@ class OvertopBassanoV16Production:
                                     _seed_q = self.seed_scorer.score()
                                     _seed_v = _seed_q.get('score', 0.0) if _seed_q.get('reason') != 'insufficient_data' else 0.0
                                     _fp_wr = self.oracolo.get_wr(momentum, volatility, trend, self.campo._direction)
-                                    self._log_m2("🐺", f"MASCHIO: picco +{_md_picco:.2f}$ crollo {_md_crollo:.2f}$ = ENTRA (porta unica, filtro MFE+MAE passato)")
+                                    self._log_m2("🐺", f"MASCHIO: MFE +{_md_picco:.2f}$ >= {_md_mfe_min:.1f} = ENTRA (ha fatto grasso)")
                                     # FIX bug picco_oss azzerato (NODO blindato): catturo il
                                     # picco VERO d'ingresso ORA, prima che una nuova osservazione
                                     # resetti _canc_picco_proprio a 0. Cosi la lista/dashboard
                                     # mostra il picco reale e l'etichetta sesso e' corretta.
                                     self._trade_picco_ingresso = float(_md_picco)
                                     self._trade_crollo_ingresso = float(_md_crollo)
+                                    # MISURATORE LATENZA (leggero, solo log): ms tra aggancio e ingresso.
+                                    # Il numero che dice se il bot entra tardi (grasso gia' evaporato).
+                                    try:
+                                        _ag_ts_lat = getattr(self, "_rit_aggancio_ts", None)
+                                        if _ag_ts_lat:
+                                            _lat_ms = (time.time() - _ag_ts_lat) * 1000.0
+                                            self._log_m2("⏱️", f"LATENZA aggancio->ingresso: {_lat_ms:.0f}ms (picco oss {_md_picco:.2f}$)")
+                                    except Exception:
+                                        pass
                                     self._open_shadow_position(price, 99.0, 0.0, _seed_v, 0.3,
                                                                momentum, volatility, trend,
                                                                "MASCHIO_DIRETTO", _fp_wr)
@@ -15715,6 +15735,7 @@ class OvertopBassanoV16Production:
                           # picco_oss = grasso massimo in osservazione (doveva essere >=3 = alfa)
                           # crollo_oss = quanto sceso sotto nascita (il MAE = la firma)
                           "picco_oss":   round(float((self._shadow.get("picco_ingresso_reale", 0.0) if isinstance(getattr(self, "_shadow", None), dict) else 0.0) or 0.0), 3),
+                          "sesso":       _sesso,
                           "crollo_oss":  round(float((self._shadow.get("crollo_ingresso_reale", 0.0) if isinstance(getattr(self, "_shadow", None), dict) else 0.0) or 0.0), 3),
                           "peak_delta_s": round(self._trade_peak_ts - self._shadow_entry_time, 1)
                                          if self._trade_peak_ts and self._shadow_entry_time else 0,
