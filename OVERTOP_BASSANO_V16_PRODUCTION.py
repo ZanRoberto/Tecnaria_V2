@@ -9001,11 +9001,21 @@ class OvertopBassanoV16Production:
                         _md_ultimi = _md_traccia[-_md_tick_tenuti:] if len(_md_traccia) >= _md_tick_tenuti else _md_traccia
                         _md_tiene = (len(_md_ultimi) >= _md_tick_tenuti) and all(g >= _md_soglia_tenuta for g in _md_ultimi)
                         _md_mfe_ok = _md_picco_ok and _md_tiene
-                        _md_ok = _md_mfe_ok
+                        # FILTRO SALITA DRITTA (29giu, Roberto: "3 crescite consecutive
+                        # che la femmina non tiene"). Il maschio sale passo dopo passo:
+                        # _canc_tick_salita conta i tick consecutivi in cui il grasso
+                        # cresce — alto = salita dritta, basso = spike/rumore/femmina.
+                        # ENV MD_TICK_SALITA_MIN (default 3). 0 = filtro spento.
+                        _md_salita_min = int(float(os.environ.get("MD_TICK_SALITA_MIN", "3")))
+                        _md_tick_sal   = getattr(self, "_canc_tick_salita", 0)
+                        _md_salita_ok  = (_md_salita_min <= 0) or (_md_tick_sal >= _md_salita_min)
+                        _md_ok = _md_mfe_ok and _md_salita_ok
                         if _md_picco_ok and not _md_tiene:
                             self._log_m2("📉", f"NON conferma: picco {_md_picco:.2f}$ ma traccia {_md_ultimi} sotto {_md_soglia_tenuta:.2f} (crolla o non tiene {_md_tick_tenuti}tick) = scarto trans/femmina")
                         elif not _md_picco_ok:
                             self._log_m2("🚺", f"NON entra: MFE {_md_picco:.2f}$ < {_md_mfe_min:.1f} (non ha fatto grasso)")
+                        elif _md_mfe_ok and not _md_salita_ok:
+                            self._log_m2("📉", f"NON conferma: salita non dritta — {_md_tick_sal} tick su consecutivi < {_md_salita_min} (spike o femmina che non tiene)")
                         # ════════════════════════════════════════════════════════
                         # PORTA UNICA D'INGRESSO (24giu sera, riscrittura Roberto:
                         # "una porta sola, niente merda stratificata"). UNA lettura
