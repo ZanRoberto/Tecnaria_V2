@@ -9048,6 +9048,16 @@ class OvertopBassanoV16Production:
                                     # CANC_STATS: trade confermato e aperto
                                     _cs_ref = getattr(self, '_canc_stats', None)
                                     if _cs_ref: _cs_ref['conf'] += 1
+                                    # FIX 29giu (Roberto — raffica): candidato consumato.
+                                    # Chiudi l'osservazione subito dopo l'apertura: il prossimo
+                                    # tick NON deve ri-confermare lo stesso candidato e aprire
+                                    # un secondo phantom sullo stesso movimento.
+                                    # Causa del bug: _canc_in_osservazione restava True,
+                                    # _canc_picco_proprio ancora >= soglia -> 10-17 phantom
+                                    # aperti sullo stesso movimento in 1 secondo.
+                                    self._canc_in_osservazione = False
+                                    self._canc_traccia_post    = None
+                                    self._canc_picco_proprio   = 0.0
                                 except Exception as _e_md:
                                     log.error(f"[MASCHIO_DIRETTO_ERR] {_e_md}")
                                 finally:
