@@ -8813,6 +8813,12 @@ class OvertopBassanoV16Production:
                         self._canc_picco_proprio  = 0.0    # max grasso $ visto (proprio)
                         self._canc_crollo_proprio = 0.0    # min $ sotto nascita (proprio mae)
                         self._canc_traccia_post   = None   # traccia dinamica post-picco (azzerata a ogni nascita)
+                        # CANC_STATS: init contatore alla prima osservazione, reset flag per questo candidato
+                        if not hasattr(self, '_canc_stats') or self._canc_stats is None:
+                            self._canc_stats = {'ts': time.time(), 'cand': 0, 'storna': 0, 'gf': 0, 'mfe_ok': 0, 'conf': 0, 'mfe_list': []}
+                        self._canc_stats['cand'] += 1
+                        self._cs_storna_flag = False   # conta storna solo una volta per candidato
+                        self._cs_mfe_flag    = False   # conta mfe_ok solo una volta per candidato
 
                     # ════════════════════════════════════════════════════════════
                     # 🐺 REGOLA ROBERTO (19giu2026) — SOLO IL COMPORTAMENTO PRIMA
@@ -8980,6 +8986,11 @@ class OvertopBassanoV16Production:
                         _md_conferma = float(os.environ.get("MD_CONFERMA", "0.7"))
                         # ha raggiunto la soglia di picco?
                         _md_picco_ok = (_md_picco >= _md_mfe_min)
+                        # CANC_STATS: prima volta che raggiunge la soglia MFE
+                        if _md_picco_ok and not getattr(self, '_cs_mfe_flag', False):
+                            self._cs_mfe_flag = True
+                            _cs_ref = getattr(self, '_canc_stats', None)
+                            if _cs_ref: _cs_ref['mfe_ok'] += 1
                         # TIENE NEL TEMPO? Misuro sulla TRACCIA post-picco (Roberto:
                         # "traccialo, misuralo, decidi"). Il maschio tiene per piu' tick
                         # sopra la soglia di conferma; trans/femmina crollano subito.
@@ -9033,12 +9044,18 @@ class OvertopBassanoV16Production:
                                     self._open_shadow_position(price, 99.0, 0.0, _seed_v, 0.3,
                                                                momentum, volatility, trend,
                                                                "MASCHIO_DIRETTO", _fp_wr)
+                                    # CANC_STATS: trade confermato e aperto
+                                    _cs_ref = getattr(self, '_canc_stats', None)
+                                    if _cs_ref: _cs_ref['conf'] += 1
                                 except Exception as _e_md:
                                     log.error(f"[MASCHIO_DIRETTO_ERR] {_e_md}")
                                 finally:
                                     self._maschio_diretto_in_corso = False
                             elif not _dir_ok:
                                 self._log_m2("🛡️", "FUORI: mercato SHORT, porta unica chiusa (LONG-only)")
+                                # CANC_STATS: bloccato da GF direzione
+                                _cs_ref = getattr(self, '_canc_stats', None)
+                                if _cs_ref: _cs_ref['gf'] += 1
                             self._canc_maschio_ok = False
                             _cancello_passa = False  # gia' deciso qui, non ripassare
 
@@ -9057,6 +9074,11 @@ class OvertopBassanoV16Production:
                             self._log_m2("🐺",
                                 f"CANCELLO: STORNA — {self._canc_giu_consec} movimenti "
                                 f"giu di fila (>={_storni_n}) = si svuota davvero, TAGLIO")
+                            # CANC_STATS: stornato (conta solo la prima volta per questa osservazione)
+                            if not getattr(self, '_cs_storna_flag', False):
+                                self._cs_storna_flag = True
+                                _cs_ref = getattr(self, '_canc_stats', None)
+                                if _cs_ref: _cs_ref['storna'] += 1
 
                         # DEFAULT NEGATO: passa SOLO chi ha confermato maschio.
                         # Chi non ha ancora N mosse su (sta nascendo, o e' piatto)
@@ -9066,9 +9088,67 @@ class OvertopBassanoV16Production:
                 else:
                     # segnale sparito: il candidato e' finito, chiudo l'osservazione
                     self._canc_in_osservazione = False
+                    # CANC_STATS: registra il max MFE raggiunto da questo candidato
+                    _cs_ref = getattr(self, '_canc_stats', None)
+                    if _cs_ref is not None:
+                        _cs_ref['mfe_list'].append(round(getattr(self, '_canc_picco_proprio', 0.0), 2))
             except Exception as _e_canc:
                 log.debug(f"[CANCELLO_SALITA_ERR] {_e_canc}")
                 _cancello_passa = True   # FAIL-OPEN: mai bloccare per errore del cancello
+
+            # ════════════════════════════════════════════════════════════
+            # CANC_STATS — flush periodico (ogni CANC_STATS_MIN minuti, default 5)
+            # Risponde alla domanda: "no trade per mercato piatto o filtro troppo stretto?"
+            # Leggi il log cercando [M2] 📊 CANC_STATS.
+            # ════════════════════════════════════════════════════════════
+            try:
+                _cs = getattr(self, '_canc_stats', None)
+                if _cs is not None:
+                    _cs_interval = float(os.environ.get('CANC_STATS_MIN', '5')) * 60
+                    if (time.time() - _cs['ts']) >= _cs_interval:
+                        _n_cand = _cs['cand']
+                        _mfe_l  = _cs['mfe_list']
+                        _mfe_min_cfg = float(os.environ.get('MD_MFE_MIN', '2.0'))
+                        # distribuzione MFE per bucket
+                        def _bkt(lst, lo, hi): return sum(1 for x in lst if lo <= x < hi)
+                        _bk = [
+                            _bkt(_mfe_l, 0.0, 0.5),
+                            _bkt(_mfe_l, 0.5, 1.0),
+                            _bkt(_mfe_l, 1.0, 1.5),
+                            _bkt(_mfe_l, 1.5, 2.0),
+                            _bkt(_mfe_l, 2.0, 2.5),
+                            sum(1 for x in _mfe_l if x >= 2.5),
+                        ]
+                        _avg_mfe = (sum(_mfe_l) / len(_mfe_l)) if _mfe_l else 0.0
+                        _max_mfe = max(_mfe_l) if _mfe_l else 0.0
+                        # verdetto automatico
+                        if _n_cand == 0:
+                            _verd = "SILENZIO_TOTALE (nessun segnale)"
+                        elif _n_cand > 0 and _cs['storna'] >= _n_cand * 0.7:
+                            _verd = "FEMMINE_DOMINANTI (mercato piatto/ribassista)"
+                        elif _cs['mfe_ok'] == 0 and _avg_mfe > 0:
+                            _verd = f"SOGLIA_IRRAGGIUNGIBILE (avg_mfe={_avg_mfe:.1f}$ < soglia={_mfe_min_cfg}$)"
+                        elif _cs['mfe_ok'] > 0 and _cs['conf'] == 0:
+                            _verd = "CONFERMA_STRINGE (raggiunge soglia ma non tiene 3 tick)"
+                        elif _cs['gf'] > 0 and _cs['conf'] == 0:
+                            _verd = "GF_RIBASSISTA (mercato in SHORT, LONG bloccato)"
+                        elif _cs['conf'] > 0:
+                            _verd = f"OK ({_cs['conf']} trade entrati)"
+                        else:
+                            _verd = "ANALISI_INSUFFICIENTE"
+                        _iv = int(_cs_interval // 60)
+                        self._log_m2("📊", (
+                            f"CANC_STATS {_iv}min | "
+                            f"candidati={_n_cand} stornati={_cs['storna']} "
+                            f"mfe_ok={_cs['mfe_ok']} confermati={_cs['conf']} gf_fuori={_cs['gf']} | "
+                            f"MFE dist: <0.5$={_bk[0]} 0.5-1$={_bk[1]} 1-1.5$={_bk[2]} "
+                            f"1.5-2$={_bk[3]} 2-2.5$={_bk[4]} >2.5$={_bk[5]} | "
+                            f"avg={_avg_mfe:.1f}$ max={_max_mfe:.1f}$ → {_verd}"
+                        ))
+                        # reset per il prossimo intervallo
+                        self._canc_stats = {'ts': time.time(), 'cand': 0, 'storna': 0, 'gf': 0, 'mfe_ok': 0, 'conf': 0, 'mfe_list': []}
+            except Exception as _e_cs:
+                log.debug(f"[CANC_STATS_ERR] {_e_cs}")
 
             if _cancello_passa:
                 # FIX 23giu sera (Roberto: "tutta roba che non serve piu'") — BYPASS VERO.
