@@ -9001,11 +9001,21 @@ class OvertopBassanoV16Production:
                         _md_ultimi = _md_traccia[-_md_tick_tenuti:] if len(_md_traccia) >= _md_tick_tenuti else _md_traccia
                         _md_tiene = (len(_md_ultimi) >= _md_tick_tenuti) and all(g >= _md_soglia_tenuta for g in _md_ultimi)
                         _md_mfe_ok = _md_picco_ok and _md_tiene
-                        _md_ok = _md_mfe_ok
+                        # FILTRO SALITA DRITTA (29giu, Roberto: "3 crescite consecutive
+                        # che la femmina non tiene"). Il maschio sale passo dopo passo:
+                        # _canc_tick_salita conta i tick consecutivi in cui il grasso
+                        # cresce — alto = salita dritta, basso = spike/rumore/femmina.
+                        # ENV MD_TICK_SALITA_MIN (default 3). 0 = filtro spento.
+                        _md_salita_min = int(float(os.environ.get("MD_TICK_SALITA_MIN", "3")))
+                        _md_tick_sal   = getattr(self, "_canc_tick_salita", 0)
+                        _md_salita_ok  = (_md_salita_min <= 0) or (_md_tick_sal >= _md_salita_min)
+                        _md_ok = _md_mfe_ok and _md_salita_ok
                         if _md_picco_ok and not _md_tiene:
                             self._log_m2("📉", f"NON conferma: picco {_md_picco:.2f}$ ma traccia {_md_ultimi} sotto {_md_soglia_tenuta:.2f} (crolla o non tiene {_md_tick_tenuti}tick) = scarto trans/femmina")
                         elif not _md_picco_ok:
                             self._log_m2("🚺", f"NON entra: MFE {_md_picco:.2f}$ < {_md_mfe_min:.1f} (non ha fatto grasso)")
+                        elif _md_mfe_ok and not _md_salita_ok:
+                            self._log_m2("📉", f"NON conferma: salita non dritta — {_md_tick_sal} tick su consecutivi < {_md_salita_min} (spike o femmina che non tiene)")
                         # ════════════════════════════════════════════════════════
                         # PORTA UNICA D'INGRESSO (24giu sera, riscrittura Roberto:
                         # "una porta sola, niente merda stratificata"). UNA lettura
@@ -9025,6 +9035,7 @@ class OvertopBassanoV16Production:
                                     _seed_q = self.seed_scorer.score()
                                     _seed_v = _seed_q.get('score', 0.0) if _seed_q.get('reason') != 'insufficient_data' else 0.0
                                     _fp_wr = self.oracolo.get_wr(momentum, volatility, trend, self.campo._direction)
+                                    _md_grasso_ora = getattr(self, '_canc_grasso_ora', _md_picco)
                                     self._log_m2("🐺", f"MASCHIO CONFERMATO: picco {_md_picco:.2f}$, tiene a {_md_grasso_ora:.2f}$ = ENTRA (confermato dopo il picco)")
                                     # FIX bug picco_oss azzerato (NODO blindato): catturo il
                                     # picco VERO d'ingresso ORA, prima che una nuova osservazione
@@ -9047,6 +9058,16 @@ class OvertopBassanoV16Production:
                                     # CANC_STATS: trade confermato e aperto
                                     _cs_ref = getattr(self, '_canc_stats', None)
                                     if _cs_ref: _cs_ref['conf'] += 1
+                                    # FIX 29giu (Roberto — raffica): candidato consumato.
+                                    # Chiudi l'osservazione subito dopo l'apertura: il prossimo
+                                    # tick NON deve ri-confermare lo stesso candidato e aprire
+                                    # un secondo phantom sullo stesso movimento.
+                                    # Causa del bug: _canc_in_osservazione restava True,
+                                    # _canc_picco_proprio ancora >= soglia -> 10-17 phantom
+                                    # aperti sullo stesso movimento in 1 secondo.
+                                    self._canc_in_osservazione = False
+                                    self._canc_traccia_post    = None
+                                    self._canc_picco_proprio   = 0.0
                                 except Exception as _e_md:
                                     log.error(f"[MASCHIO_DIRETTO_ERR] {_e_md}")
                                 finally:
@@ -13817,6 +13838,10 @@ class OvertopBassanoV16Production:
                 "regime_entry":  self._regime_current,
                 "matrimonio":    matrimonio_name,
                 "fingerprint_wr": round(fingerprint_wr, 3),
+                # FIX 29giu (Roberto): salva la soglia MD_MFE_MIN usata ALL'ENTRATA.
+                # Alla chiusura, la classificazione SESSO usa QUESTA, non il valore
+                # corrente dell'ENV (che potrebbe essere cambiato → label sbagliata).
+                "md_mfe_min_entry": float(os.environ.get("MD_MFE_MIN", "2.0")),
                 "seed":          round(seed.get('score', 0), 3),
                 # ════════════════════════════════════════════════════════════
                 # SEME D'INGRESSO (4giu, Roberto: "tutto questo PRIMA del trade")
@@ -14512,13 +14537,17 @@ class OvertopBassanoV16Production:
                     _max_sv = (_ep_sv - self._shadow_min_price) * (5000.0 / _ep_sv)
                 else:
                     _max_sv = (self._shadow_max_price - _ep_sv) * (5000.0 / _ep_sv)
-                _tg_sv = float(os.environ.get("TRAIL_GIU_USD", "0.5"))
-                _vm_sv = float(os.environ.get("VERDE_MIN_USD", "2.5"))
-                if _tg_sv > 0 and _cur_sv >= _vm_sv and (_max_sv - _cur_sv) >= _tg_sv:
-                    _sc_sv = _max_sv - _cur_sv
-                    _st_sv = "CRESC" if _sc_sv < 0.4 else "CEDE"
+                _vm_sv = float(os.environ.get("VERDE_MIN_USD",   "2.5"))  # lordo min per "verde genuino"
+                _vf_sv = float(os.environ.get("VERDE_FLOOR_USD", "2.0"))  # lordo floor: non tornare rosso
+                # FIX 30giu (Roberto): VERDE_FLOOR.
+                # PRIMA (bug): _cur_sv >= _vm_sv — richiedeva che il CORRENTE fosse >= $2.5.
+                #   Un tick veloce portava il lordo da $3 a $1.5 → condizione falsa → NON scattava.
+                # ORA: controlla _max_sv (irremovibile). Se il trade ha MAI toccato lordo >= _vm_sv
+                #   E ora il corrente scende sotto _vf_sv → chiudi SUBITO, il verde non diventa rosso.
+                # _tg_sv / TRAIL_GIU_USD non usato più: il floor è deterministico, non un trailing.
+                if _max_sv >= _vm_sv and _cur_sv < _vf_sv:
                     self._close_shadow_trade(price,
-                        f"SALVA_VERDE*{_cur_sv:+.1f}_dapicco{_max_sv:+.1f}_{_st_sv}")
+                        f"VERDE_FLOOR_max{_max_sv:+.1f}_cur{_cur_sv:+.1f}_floor{_vf_sv}")
                     return
 
             if duration >= MIN_HOLD_SECONDS:
@@ -15657,7 +15686,9 @@ class OvertopBassanoV16Production:
             # NON _canc_picco_proprio che e' azzerato dalla nuova osservazione.
             _picco_oss = round(float((self._shadow.get("picco_ingresso_reale", 0.0) if isinstance(getattr(self, "_shadow", None), dict) else 0.0) or 0.0), 2)
             # soglia sesso = soglia d'ingresso (chi e' ENTRATO ha picco>=soglia, NON e' femmina)
-            _md_picco_min_cls = float(os.environ.get("MD_MFE_MIN", "1.0"))
+            # FIX 29giu: legge la soglia salvata ALL'ENTRATA (non il valore corrente dell'ENV).
+            _md_picco_min_cls = self._shadow.get("md_mfe_min_entry",
+                                    float(os.environ.get("MD_MFE_MIN", "1.0"))) if self._shadow else float(os.environ.get("MD_MFE_MIN", "1.0"))
             if _picco_oss >= _md_picco_min_cls:
                 _sesso = "MASCHIO" if is_win else "TRANS"
             else:
