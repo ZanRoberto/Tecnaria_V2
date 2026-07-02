@@ -12979,6 +12979,72 @@ class OvertopBassanoV16Production:
                     # FAIL-OPEN: in caso di errore prosegue (non blocca)
 
             # ════════════════════════════════════════════════════════════════
+            # 🌍 CAMPO_ESTERNO — gate kline pre-entrata (luglio2026, Roberto)
+            # simula27 (walk-forward + OOS + permutation p=0.000):
+            # accel>20 AND mom>0 AND t5m>200 → +33.9$ su 20 trade filtrati.
+            # FAIL-OPEN: se Binance non risponde in 3s, entro comunque.
+            # ENV: CAMPO_ESTERNO_OFF=true  → disabilita gate
+            #      CAMPO_ACCEL_MIN (default 20)
+            #      CAMPO_MOM_MIN   (default 0)
+            #      CAMPO_T5M_MIN   (default 200)
+            # ════════════════════════════════════════════════════════════════
+            if os.environ.get("CAMPO_ESTERNO_OFF", "false").lower() != "true" \
+                    and not getattr(self, "_maschio_diretto_in_corso", False):
+                try:
+                    import urllib.request as _ur, urllib.parse as _up
+                    _ce_ts_ms  = int(time.time() * 1000)
+                    _ce_params = _up.urlencode({
+                        "symbol": "BTCUSDC", "interval": "1m",
+                        "endTime": _ce_ts_ms, "limit": 6,
+                    })
+                    with _ur.urlopen(
+                        f"https://api.binance.com/api/v3/klines?{_ce_params}",
+                        timeout=3
+                    ) as _ce_r:
+                        _ce_klines = json.loads(_ce_r.read())
+                    if _ce_klines and len(_ce_klines) >= 5:
+                        _ce_c     = [float(k[4]) for k in _ce_klines]
+                        _ce_t5m   = _ce_c[-1] - _ce_c[0]
+                        _ce_mom   = _ce_c[-1] - _ce_c[-2]
+                        _ce_accel = _ce_mom - (_ce_c[-3] - _ce_c[-4])
+                        _ce_a_min = float(os.environ.get("CAMPO_ACCEL_MIN", "20"))
+                        _ce_m_min = float(os.environ.get("CAMPO_MOM_MIN",    "0"))
+                        _ce_t_min = float(os.environ.get("CAMPO_T5M_MIN",  "200"))
+                        _ce_passa = (_ce_accel > _ce_a_min and
+                                     _ce_mom   > _ce_m_min and
+                                     _ce_t5m   > _ce_t_min)
+                        _ce_log   = (f"accel={_ce_accel:+.1f}>{_ce_a_min} "
+                                     f"mom={_ce_mom:+.1f}>{_ce_m_min} "
+                                     f"t5m={_ce_t5m:+.1f}>{_ce_t_min}")
+                        if _ce_passa:
+                            print(f"[CAMPO_ESTERNO] PASSA: {_ce_log}")
+                            try:
+                                self._ritardo_stats["campo_esterno_pass"] = \
+                                    self._ritardo_stats.get("campo_esterno_pass", 0) + 1
+                            except Exception:
+                                pass
+                        else:
+                            print(f"[CAMPO_ESTERNO] BLOCCA: {_ce_log}")
+                            try:
+                                self._ritardo_stats["campo_esterno_block"] = \
+                                    self._ritardo_stats.get("campo_esterno_block", 0) + 1
+                            except Exception:
+                                pass
+                            try:
+                                self._record_phantom(
+                                    price, "MINA_CAMPO_ESTERNO",
+                                    float(seed.get("score", 0) or 0)
+                                    if isinstance(seed, dict) else 0.0,
+                                    str(momentum), str(volatility), str(trend))
+                            except Exception:
+                                pass
+                            return  # NON APRE — campo esterno sfavorevole
+                    else:
+                        print(f"[CAMPO_ESTERNO] kline insufficienti — FAIL-OPEN")
+                except Exception as _ce_err:
+                    print(f"[CAMPO_ESTERNO] {_ce_err} — FAIL-OPEN")
+
+            # ════════════════════════════════════════════════════════════════
             # 🛡️ GRANDE FRATELLO DIREZIONE (GF) — 8giu, Roberto
             # ════════════════════════════════════════════════════════════════
             # Regola UNICA, sopra a tutto: se la spinta del mercato è giù
