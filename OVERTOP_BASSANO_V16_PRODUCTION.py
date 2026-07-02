@@ -13040,9 +13040,11 @@ class OvertopBassanoV16Production:
                                 pass
                             return  # NON APRE — campo esterno sfavorevole
                     else:
-                        print(f"[CAMPO_ESTERNO] kline insufficienti — FAIL-OPEN")
+                        print(f"[CAMPO_ESTERNO] kline insufficienti — FAIL-CLOSED")
+                        return  # NON APRE — campo non verificabile
                 except Exception as _ce_err:
-                    print(f"[CAMPO_ESTERNO] {_ce_err} — FAIL-OPEN")
+                    print(f"[CAMPO_ESTERNO] {_ce_err} — FAIL-CLOSED")
+                    return  # NON APRE — campo non verificabile
 
             # ════════════════════════════════════════════════════════════════
             # 🛡️ GRANDE FRATELLO DIREZIONE (GF) — 8giu, Roberto
