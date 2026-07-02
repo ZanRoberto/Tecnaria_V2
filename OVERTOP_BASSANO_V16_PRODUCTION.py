@@ -12988,8 +12988,7 @@ class OvertopBassanoV16Production:
             #      CAMPO_MOM_MIN   (default 0)
             #      CAMPO_T5M_MIN   (default 200)
             # ════════════════════════════════════════════════════════════════
-            if os.environ.get("CAMPO_ESTERNO_OFF", "false").lower() != "true" \
-                    and not getattr(self, "_maschio_diretto_in_corso", False):
+            if os.environ.get("CAMPO_ESTERNO_OFF", "false").lower() != "true":
                 try:
                     import urllib.request as _ur, urllib.parse as _up
                     _ce_ts_ms  = int(time.time() * 1000)
